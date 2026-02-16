@@ -2,6 +2,73 @@ use std::borrow::Cow;
 
 use crate::event::{Event, Tag, TagEnd};
 
+fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
+    // Quick check: if none of the trigger characters are present, return borrowed
+    if !text.contains('-') && !text.contains('.') && !text.contains('(') {
+        return Cow::Borrowed(text);
+    }
+
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut result: Option<String> = None;
+    let mut i = 0;
+    let mut copied_up_to = 0;
+
+    while i < len {
+        let replacement: Option<(&str, usize)> = match bytes[i] {
+            b'-' if i + 2 < len && bytes[i + 1] == b'-' && bytes[i + 2] == b'-' => {
+                Some(("\u{2014}", 3)) // em-dash
+            }
+            b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
+                Some(("\u{2013}", 2)) // en-dash
+            }
+            b'.' if i + 2 < len && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' => {
+                Some(("\u{2026}", 3)) // ellipsis
+            }
+            b'(' if i + 2 < len
+                && bytes[i + 1] == b'C'
+                && bytes[i + 2] == b')'
+                && !matches!(bytes.get(i + 3), Some(b'A'..=b'Z' | b'a'..=b'z')) =>
+            {
+                Some(("\u{00A9}", 3)) // copyright
+            }
+            b'(' if i + 2 < len
+                && bytes[i + 1] == b'R'
+                && bytes[i + 2] == b')'
+                && !matches!(bytes.get(i + 3), Some(b'A'..=b'Z' | b'a'..=b'z')) =>
+            {
+                Some(("\u{00AE}", 3)) // registered
+            }
+            b'(' if i + 4 <= len
+                && bytes[i + 1] == b'T'
+                && bytes[i + 2] == b'M'
+                && bytes[i + 3] == b')' =>
+            {
+                Some(("\u{2122}", 4)) // trademark
+            }
+            _ => None,
+        };
+
+        if let Some((repl, skip)) = replacement {
+            let buf = result.get_or_insert_with(|| String::with_capacity(len));
+            buf.push_str(&text[copied_up_to..i]);
+            buf.push_str(repl);
+            i += skip;
+            copied_up_to = i;
+        } else {
+            i += 1;
+        }
+    }
+
+    match result {
+        Some(mut buf) => {
+            buf.push_str(&text[copied_up_to..]);
+            Cow::Owned(buf)
+        }
+        None => Cow::Borrowed(text),
+    }
+}
+
 pub struct InlineParser;
 
 impl InlineParser {
@@ -51,6 +118,18 @@ impl<'a> InlineState<'a> {
             let b = self.input.as_bytes()[self.pos];
 
             match b {
+                // Escape typographic patterns: \--- \-- \... \(C) \(R) \(TM)
+                b'\\' if self.typographic_escape_len() > 0 => {
+                    self.flush_text(text_start, self.pos, events);
+                    let skip = self.typographic_escape_len();
+                    self.advance_by(1); // skip backslash
+                    let pattern_start = self.pos;
+                    self.advance_by(skip);
+                    // Emit pattern as plain text, bypassing typographic replacements
+                    events.push(Event::Text(Cow::Borrowed(&self.input[pattern_start..self.pos])));
+                    text_start = self.pos;
+                }
+
                 // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
                 b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
                     self.flush_text(text_start, self.pos, events);
@@ -194,7 +273,26 @@ impl<'a> InlineState<'a> {
 
     fn flush_text(&self, start: usize, end: usize, events: &mut Vec<Event<'a>>) {
         if start < end {
-            events.push(Event::Text(Cow::Borrowed(&self.input[start..end])));
+            let text = &self.input[start..end];
+            events.push(Event::Text(apply_typographic_replacements(text)));
+        }
+    }
+
+    /// Returns the length of a typographic pattern following a backslash, or 0 if none.
+    fn typographic_escape_len(&self) -> usize {
+        let bytes = self.input.as_bytes();
+        let p = self.pos + 1; // position after backslash
+        if p >= bytes.len() {
+            return 0;
+        }
+        match bytes[p] {
+            b'-' if p + 1 < bytes.len() && bytes[p + 1] == b'-' => {
+                if p + 2 < bytes.len() && bytes[p + 2] == b'-' { 3 } else { 2 }
+            }
+            b'.' if p + 2 < bytes.len() && bytes[p + 1] == b'.' && bytes[p + 2] == b'.' => 3,
+            b'(' if p + 2 < bytes.len() && bytes[p + 2] == b')' && (bytes[p + 1] == b'C' || bytes[p + 1] == b'R') => 3,
+            b'(' if p + 3 < bytes.len() && bytes[p + 1] == b'T' && bytes[p + 2] == b'M' && bytes[p + 3] == b')' => 4,
+            _ => 0,
         }
     }
 
@@ -840,6 +938,109 @@ mod tests {
             Event::Text(Cow::Borrowed("and italic")),
             Event::End(TagEnd::Emphasis),
             Event::End(TagEnd::Strong),
+        ]);
+    }
+
+    // Typographic replacement tests
+
+    #[test]
+    fn test_typographic_em_dash() {
+        let events = parse("hello---world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_en_dash() {
+        let events = parse("hello--world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("hello\u{2013}world".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_ellipsis() {
+        let events = parse("wait...");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("wait\u{2026}".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_copyright() {
+        let events = parse("(C) 2024");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("\u{00A9} 2024".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_registered() {
+        let events = parse("Name(R)");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("Name\u{00AE}".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_trademark() {
+        let events = parse("Brand(TM)");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("Brand\u{2122}".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_no_match() {
+        let result = apply_typographic_replacements("hello world");
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_typographic_mixed() {
+        let events = parse("(C) 2024---all rights...");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("\u{00A9} 2024\u{2014}all rights\u{2026}".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_en_dash_no_replacement() {
+        let events = parse("hello \\-- world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("--")),
+            Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_em_dash_no_replacement() {
+        let events = parse("hello \\--- world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("---")),
+            Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_ellipsis_no_replacement() {
+        let events = parse("wait\\...");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("wait")),
+            Event::Text(Cow::Borrowed("...")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_copyright_no_replacement() {
+        let events = parse("\\(C) 2024");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(C)")),
+            Event::Text(Cow::Borrowed(" 2024")),
         ]);
     }
 }
