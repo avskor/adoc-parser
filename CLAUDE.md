@@ -8,7 +8,7 @@ Use context7 MCP server to fetch up-to-date documentation for libraries and fram
 
 ## Workflow
 
-Each new task starts in a new git branch off main.
+Each new task starts in a new git branch off main. Run `cargo clippy --workspace` before every commit and fix all warnings.
 
 ## Build & Test Commands
 
