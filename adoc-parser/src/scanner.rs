@@ -316,6 +316,16 @@ pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
     Some((n, rest[1..].trim()))
 }
 
+pub fn parse_checklist_marker(text: &str) -> (Option<bool>, &str) {
+    if let Some(rest) = text.strip_prefix("[x] ") {
+        (Some(true), rest)
+    } else if let Some(rest) = text.strip_prefix("[ ] ") {
+        (Some(false), rest)
+    } else {
+        (None, text)
+    }
+}
+
 pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
@@ -596,5 +606,15 @@ mod tests {
             is_callout_list_item("<3>"),
             Some((3, ""))
         );
+    }
+
+    #[test]
+    fn test_parse_checklist_marker() {
+        assert_eq!(parse_checklist_marker("[x] Task"), (Some(true), "Task"));
+        assert_eq!(parse_checklist_marker("[ ] Task"), (Some(false), "Task"));
+        assert_eq!(parse_checklist_marker("Regular"), (None, "Regular"));
+        assert_eq!(parse_checklist_marker("[x]no space"), (None, "[x]no space"));
+        assert_eq!(parse_checklist_marker("[ ]no space"), (None, "[ ]no space"));
+        assert_eq!(parse_checklist_marker("[x] "), (Some(true), ""));
     }
 }

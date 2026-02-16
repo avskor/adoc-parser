@@ -70,9 +70,9 @@ pub enum Tag<'a> {
     BlockTitle,
 
     // Lists
-    UnorderedList,
+    UnorderedList { has_checklist: bool },
     OrderedList,
-    ListItem { depth: u8 },
+    ListItem { depth: u8, checked: Option<bool> },
     DescriptionList,
     DescriptionTerm,
     DescriptionDescription,
@@ -171,7 +171,7 @@ impl<'a> Tag<'a> {
             Tag::DelimitedBlock { .. } => TagEnd::DelimitedBlock,
             Tag::SourceBlock { .. } => TagEnd::SourceBlock,
             Tag::BlockTitle => TagEnd::BlockTitle,
-            Tag::UnorderedList => TagEnd::UnorderedList,
+            Tag::UnorderedList { .. } => TagEnd::UnorderedList,
             Tag::OrderedList => TagEnd::OrderedList,
             Tag::ListItem { .. } => TagEnd::ListItem,
             Tag::DescriptionList => TagEnd::DescriptionList,

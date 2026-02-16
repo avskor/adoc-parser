@@ -303,13 +303,22 @@ impl HtmlRenderer {
             Tag::BlockTitle => {
                 output.push_str("<div class=\"title\">");
             }
-            Tag::UnorderedList => {
+            Tag::UnorderedList { has_checklist: true } => {
+                output.push_str("<ul class=\"checklist\">\n");
+            }
+            Tag::UnorderedList { has_checklist: false } => {
                 output.push_str("<ul>\n");
             }
             Tag::OrderedList => {
                 output.push_str("<ol>\n");
             }
-            Tag::ListItem { .. } => {
+            Tag::ListItem { checked: Some(true), .. } => {
+                output.push_str("<li><input type=\"checkbox\" disabled checked> ");
+            }
+            Tag::ListItem { checked: Some(false), .. } => {
+                output.push_str("<li><input type=\"checkbox\" disabled> ");
+            }
+            Tag::ListItem { checked: None, .. } => {
                 output.push_str("<li>");
             }
             Tag::DescriptionList => {
@@ -883,5 +892,30 @@ mod tests {
         assert!(html.contains("<b class=\"conum\">(1)</b><b class=\"conum\">(2)</b>"));
         assert!(html.contains("<li><p>First</p></li>"));
         assert!(html.contains("<li><p>Second</p></li>"));
+    }
+
+    #[test]
+    fn test_checklist_html() {
+        let html = to_html("* [x] Done\n* [ ] Todo");
+        assert!(html.contains("<ul class=\"checklist\">"));
+        assert!(html.contains("<li><input type=\"checkbox\" disabled checked> Done</li>"));
+        assert!(html.contains("<li><input type=\"checkbox\" disabled> Todo</li>"));
+        assert!(html.contains("</ul>"));
+    }
+
+    #[test]
+    fn test_checklist_mixed_html() {
+        let html = to_html("* [x] Checked\n* Regular\n* [ ] Unchecked");
+        assert!(html.contains("<ul class=\"checklist\">"));
+        assert!(html.contains("<li><input type=\"checkbox\" disabled checked> Checked</li>"));
+        assert!(html.contains("<li>Regular</li>"));
+        assert!(html.contains("<li><input type=\"checkbox\" disabled> Unchecked</li>"));
+    }
+
+    #[test]
+    fn test_regular_list_no_checklist_class() {
+        let html = to_html("* item 1\n* item 2");
+        assert!(html.contains("<ul>"));
+        assert!(!html.contains("checklist"));
     }
 }

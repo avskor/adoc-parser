@@ -843,6 +843,8 @@ impl<'a> BlockScanner<'a> {
         self.advance();
         let title_events = self.take_pending_block_title();
 
+        let (checked, actual_text) = scanner::parse_checklist_marker(text);
+
         let close_events = self.close_list_items_for_depth(depth);
 
         let need_new_list = !self.is_in_list_at_depth(depth, true);
@@ -851,14 +853,14 @@ impl<'a> BlockScanner<'a> {
             self.context_stack.push(BlockContext::UnorderedList { depth });
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(text)));
-            self.push_event(Event::Start(Tag::ListItem { depth }));
-            self.push_event(Event::Start(Tag::UnorderedList));
+            self.push_event(Event::Text(Cow::Borrowed(actual_text)));
+            self.push_event(Event::Start(Tag::ListItem { depth, checked }));
+            self.push_event(Event::Start(Tag::UnorderedList { has_checklist: checked.is_some() }));
         } else {
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(text)));
-            self.push_event(Event::Start(Tag::ListItem { depth }));
+            self.push_event(Event::Text(Cow::Borrowed(actual_text)));
+            self.push_event(Event::Start(Tag::ListItem { depth, checked }));
         }
 
         for ev in close_events.into_iter().rev() {
@@ -883,13 +885,13 @@ impl<'a> BlockScanner<'a> {
             self.context_stack.push(BlockContext::ListItem { depth });
 
             self.push_event(Event::Text(Cow::Borrowed(text)));
-            self.push_event(Event::Start(Tag::ListItem { depth }));
+            self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
             self.push_event(Event::Start(Tag::OrderedList));
         } else {
             self.context_stack.push(BlockContext::ListItem { depth });
 
             self.push_event(Event::Text(Cow::Borrowed(text)));
-            self.push_event(Event::Start(Tag::ListItem { depth }));
+            self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
         }
 
         for ev in close_events.into_iter().rev() {
@@ -1150,8 +1152,8 @@ mod tests {
         let input = "* item\n+\nContinued.";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::Start(Tag::UnorderedList),
-            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
             Event::Text(Cow::Borrowed("item")),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Continued.")),
@@ -1166,8 +1168,8 @@ mod tests {
         let input = "* item\n+\nPara one.\n+\nPara two.";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::Start(Tag::UnorderedList),
-            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
             Event::Text(Cow::Borrowed("item")),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Para one.")),
@@ -1185,8 +1187,8 @@ mod tests {
         let input = "* item\n+\n----\ncode\n----";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::Start(Tag::UnorderedList),
-            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
             Event::Text(Cow::Borrowed("item")),
             Event::Start(Tag::DelimitedBlock { kind: crate::event::DelimitedBlockKind::Listing }),
             Event::Text(Cow::Borrowed("code")),
@@ -1582,5 +1584,47 @@ mod tests {
             Event::End(TagEnd::CalloutListItem),
             Event::End(TagEnd::CalloutList),
         ]);
+    }
+
+    #[test]
+    fn test_checklist_basic() {
+        let input = "* [x] done\n* [ ] todo";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: true }),
+            Event::Start(Tag::ListItem { depth: 1, checked: Some(true) }),
+            Event::Text(Cow::Borrowed("done")),
+            Event::End(TagEnd::ListItem),
+            Event::Start(Tag::ListItem { depth: 1, checked: Some(false) }),
+            Event::Text(Cow::Borrowed("todo")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_checklist_mixed() {
+        let input = "* [x] checked\n* regular\n* [ ] unchecked";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: true }),
+            Event::Start(Tag::ListItem { depth: 1, checked: Some(true) }),
+            Event::Text(Cow::Borrowed("checked")),
+            Event::End(TagEnd::ListItem),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("regular")),
+            Event::End(TagEnd::ListItem),
+            Event::Start(Tag::ListItem { depth: 1, checked: Some(false) }),
+            Event::Text(Cow::Borrowed("unchecked")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_checklist_regular_list_no_checklist() {
+        let input = "* item 1\n* item 2";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::Start(Tag::UnorderedList { has_checklist: false }));
     }
 }

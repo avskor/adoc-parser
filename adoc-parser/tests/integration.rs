@@ -92,11 +92,11 @@ fn test_document_header_with_attributes() {
 fn test_unordered_list() {
     let events = parse("* First\n* Second\n* Third");
 
-    assert_eq!(events[0], Event::Start(Tag::UnorderedList));
-    assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1 }));
+    assert_eq!(events[0], Event::Start(Tag::UnorderedList { has_checklist: false }));
+    assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1, checked: None }));
     assert_eq!(events[2], Event::Text(Cow::Borrowed("First")));
     assert_eq!(events[3], Event::End(TagEnd::ListItem));
-    assert_eq!(events[4], Event::Start(Tag::ListItem { depth: 1 }));
+    assert_eq!(events[4], Event::Start(Tag::ListItem { depth: 1, checked: None }));
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn test_ordered_list() {
     let events = parse(". Alpha\n. Beta\n. Gamma");
 
     assert_eq!(events[0], Event::Start(Tag::OrderedList));
-    assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1 }));
+    assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1, checked: None }));
     assert_eq!(events[2], Event::Text(Cow::Borrowed("Alpha")));
 }
 
