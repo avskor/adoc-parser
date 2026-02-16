@@ -27,6 +27,8 @@ pub struct BlockScanner<'a> {
     pending_block_title: Option<&'a str>,
     header_emitted: bool,
     body_started: bool,
+    in_continuation: bool,
+    had_blank_line: bool,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -40,6 +42,8 @@ impl<'a> BlockScanner<'a> {
             pending_block_title: None,
             header_emitted: false,
             body_started: false,
+            in_continuation: false,
+            had_blank_line: false,
         }
     }
 
@@ -67,6 +71,7 @@ impl<'a> BlockScanner<'a> {
         while let Some(line) = self.current_line() {
             if scanner::is_blank(line) {
                 self.advance();
+                self.had_blank_line = true;
             } else {
                 break;
             }
@@ -149,6 +154,42 @@ impl<'a> BlockScanner<'a> {
         })
     }
 
+    /// Close all list-related contexts from the top of the stack.
+    /// Returns close events in emission order.
+    fn close_list_contexts(&mut self) -> Vec<Event<'a>> {
+        let mut events = Vec::new();
+        while let Some(ctx) = self.context_stack.last() {
+            match ctx {
+                BlockContext::ListItem { .. } => {
+                    events.push(Event::End(TagEnd::ListItem));
+                    self.context_stack.pop();
+                }
+                BlockContext::UnorderedList { .. } => {
+                    events.push(Event::End(TagEnd::UnorderedList));
+                    self.context_stack.pop();
+                }
+                BlockContext::OrderedList { .. } => {
+                    events.push(Event::End(TagEnd::OrderedList));
+                    self.context_stack.pop();
+                }
+                BlockContext::DescriptionListEntry { .. } => {
+                    events.push(Event::End(TagEnd::DescriptionDescription));
+                    self.context_stack.pop();
+                }
+                BlockContext::DescriptionList { .. } => {
+                    events.push(Event::End(TagEnd::DescriptionList));
+                    self.context_stack.pop();
+                }
+                BlockContext::CalloutList => {
+                    events.push(Event::End(TagEnd::CalloutList));
+                    self.context_stack.pop();
+                }
+                _ => break,
+            }
+        }
+        events
+    }
+
     fn scan_next_block(&mut self) -> Option<Event<'a>> {
         self.skip_blank_lines();
 
@@ -191,6 +232,29 @@ impl<'a> BlockScanner<'a> {
             return self.scan_attribute_only_header();
         }
 
+        // Block attribute `[...]` — checked before body_started to allow metadata before header
+        if let Some(attr_str) = scanner::is_block_attribute(line) {
+            // If in list context with preceding blank line (not via continuation), close list
+            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return self.event_buffer.pop();
+            }
+            self.advance();
+            self.had_blank_line = false;
+            self.pending_block_attrs = Some(BlockAttributes::parse(attr_str));
+            return self.scan_next_block();
+        }
+
+        // Block title `.Title` — checked before body_started
+        if let Some(title) = scanner::is_block_title(line) {
+            self.advance();
+            self.pending_block_title = Some(title);
+            return self.scan_next_block();
+        }
+
         // From here on, we're in the document body
         self.body_started = true;
 
@@ -201,20 +265,6 @@ impl<'a> BlockScanner<'a> {
                 name: Cow::Borrowed(name),
                 value: Cow::Borrowed(value),
             });
-        }
-
-        // Block attribute `[...]`
-        if let Some(attr_str) = scanner::is_block_attribute(line) {
-            self.advance();
-            self.pending_block_attrs = Some(BlockAttributes::parse(attr_str));
-            return self.scan_next_block();
-        }
-
-        // Block title `.Title`
-        if let Some(title) = scanner::is_block_title(line) {
-            self.advance();
-            self.pending_block_title = Some(title);
-            return self.scan_next_block();
         }
 
         // Thematic break `'''`
@@ -274,6 +324,15 @@ impl<'a> BlockScanner<'a> {
 
         // Delimited block
         if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
+            // If in list context (and not via list continuation), close list first
+            if self.is_in_list_context() && !self.in_continuation {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return self.event_buffer.pop();
+            }
+            self.in_continuation = false;
             return self.scan_delimited_block(delim_type, delim_len);
         }
 
@@ -307,7 +366,10 @@ impl<'a> BlockScanner<'a> {
         if scanner::is_list_continuation(line) {
             self.advance();
             if self.is_in_list_context() {
-                return self.scan_next_block();
+                self.in_continuation = true;
+                let result = self.scan_next_block();
+                self.in_continuation = false;
+                return result;
             }
             // Outside list context, emit as a single-line paragraph
             self.push_event(Event::End(TagEnd::Paragraph));
@@ -329,6 +391,15 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Regular paragraph
+        // If in list context with pending block attrs (not continuation), close list first —
+        // block attribute line followed by a paragraph interrupts the list
+        if self.is_in_list_context() && !self.in_continuation && self.pending_block_attrs.is_some() {
+            let close_events = self.close_list_contexts();
+            for ev in close_events.into_iter().rev() {
+                self.push_event(ev);
+            }
+            return self.event_buffer.pop();
+        }
         self.scan_paragraph()
     }
 
@@ -353,8 +424,8 @@ impl<'a> BlockScanner<'a> {
                 });
                 self.advance();
             } else {
-                header_events.push(Event::Text(Cow::Borrowed(line)));
-                self.advance();
+                // Non-attribute, non-blank line ends the header
+                break;
             }
         }
 
@@ -492,6 +563,7 @@ impl<'a> BlockScanner<'a> {
         }
 
         self.advance();
+        let list_close_events = self.close_list_contexts();
         let close_events = self.close_sections_for_level(level);
 
         let id = self.pending_block_attrs
@@ -515,6 +587,11 @@ impl<'a> BlockScanner<'a> {
 
         // Close events emitted before section opening
         for ev in close_events.into_iter().rev() {
+            self.push_event(ev);
+        }
+
+        // List close events emitted before section close events
+        for ev in list_close_events.into_iter().rev() {
             self.push_event(ev);
         }
 
@@ -1140,9 +1217,22 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
-        let close_events = self.close_list_items_for_depth(depth);
+        let mut close_events = self.close_list_items_for_depth(depth);
 
-        let need_new_list = !self.is_in_list_at_depth(depth, true);
+        let mut need_new_list = !self.is_in_list_at_depth(depth, true);
+
+        // If pending block attrs and same-depth list exists, force new list
+        // (block attribute line between same-depth items starts a new list)
+        if !need_new_list && self.pending_block_attrs.is_some() {
+            // Close the existing UnorderedList at this depth
+            if let Some(BlockContext::UnorderedList { depth: d }) = self.context_stack.last() {
+                if *d == depth {
+                    close_events.push(Event::End(TagEnd::UnorderedList));
+                    self.context_stack.pop();
+                    need_new_list = true;
+                }
+            }
+        }
 
         // Push text events in reverse (bottom of stack = last to emit)
         // Order: first text, then SoftBreak + continuation lines
@@ -1170,6 +1260,7 @@ impl<'a> BlockScanner<'a> {
         self.push_title_then_events(title_events);
 
         self.pending_block_attrs = None;
+        self.had_blank_line = false;
         self.event_buffer.pop()
     }
 
@@ -1177,9 +1268,20 @@ impl<'a> BlockScanner<'a> {
         self.advance();
         let title_events = self.take_pending_block_title();
 
-        let close_events = self.close_list_items_for_depth(depth);
+        let mut close_events = self.close_list_items_for_depth(depth);
 
-        let need_new_list = !self.is_in_list_at_depth(depth, false);
+        let mut need_new_list = !self.is_in_list_at_depth(depth, false);
+
+        // If pending block attrs and same-depth list exists, force new list
+        if !need_new_list && self.pending_block_attrs.is_some() {
+            if let Some(BlockContext::OrderedList { depth: d }) = self.context_stack.last() {
+                if *d == depth {
+                    close_events.push(Event::End(TagEnd::OrderedList));
+                    self.context_stack.pop();
+                    need_new_list = true;
+                }
+            }
+        }
 
         if need_new_list {
             self.context_stack.push(BlockContext::OrderedList { depth });
