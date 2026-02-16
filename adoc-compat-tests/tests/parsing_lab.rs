@@ -52,17 +52,6 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/listing/implicit-source-style",
     "block/listing/inherited-implicit-source-style",
     "block/listing/source-style-with-default-language",
-    // Listing: alternate delimiter content mangled
-    "block/listing/containing-alternate-delimiter",
-    // Listing: empty line content not preserved
-    "block/listing/single-empty-line",
-    "block/listing/leading-empty-line",
-    "block/listing/trailing-empty-line",
-    "block/listing/containing-empty-lines",
-    // Listing: unclosed blocks
-    "block/listing/unclosed-",
-    // Listing: alternate delimiter length
-    "block/listing/alternate-delimiter",
     // Image — attribute list parsing
     "block/image/",
     // Complex list features with metadata
@@ -115,11 +104,6 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/paragraph/sole-list-continuation",
     // Paragraph with config
     "block/paragraph/paragraph-empty-lines-paragraph-",
-    // Admonition: delimited form not detected by parser
-    "block/admonition/delimited-with-paragraph",
-    // Admonition with style attribute
-    "block/admonition/paragraph-with-style",
-    "block/admonition/shortest-shorthand-form",
     // Description list complex features
     "block/dlist/attached-block",
     "block/dlist/attached-paragraphs",
@@ -135,11 +119,11 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/dlist/multiple-terms",
     // Document-level tests
     "block/document/",
-    // Literal: indented paragraphs — parser preserves original indentation
-    "block/literal/indented-",
     // Attached indented blocks — parser preserves leading space
     "block/list/unordered/attached-indented-block-",
     "block/list/ordered/attached-indented-block",
+    // Literal: [normal] style on indented block converts to Paragraph
+    "block/literal/indented-with-normal-style",
     // Literal: source style creates Literal instead of Listing
     "block/literal/source-style-with-language",
     // Sidebar: orphaned metadata creates extra block

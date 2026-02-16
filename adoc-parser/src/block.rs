@@ -9,7 +9,7 @@ use crate::scanner;
 #[derive(Debug, Clone)]
 pub enum BlockContext {
     Section { level: u8 },
-    DelimitedBlock { kind: scanner::DelimiterType, delimiter_len: usize },
+    DelimitedBlock { kind: scanner::DelimiterType, delimiter_len: usize, admonition_kind: Option<AdmonitionKind> },
     UnorderedList { depth: u8 },
     OrderedList { depth: u8 },
     ListItem { depth: u8 },
@@ -101,8 +101,12 @@ impl<'a> BlockScanner<'a> {
                 BlockContext::ListItem { .. } => {
                     events.push(Event::End(TagEnd::ListItem));
                 }
-                BlockContext::DelimitedBlock { .. } => {
-                    events.push(Event::End(TagEnd::DelimitedBlock));
+                BlockContext::DelimitedBlock { admonition_kind, .. } => {
+                    if admonition_kind.is_some() {
+                        events.push(Event::End(TagEnd::Admonition));
+                    } else {
+                        events.push(Event::End(TagEnd::DelimitedBlock));
+                    }
                 }
                 BlockContext::DescriptionList { .. } => {
                     events.push(Event::End(TagEnd::DescriptionList));
@@ -558,14 +562,31 @@ impl<'a> BlockScanner<'a> {
             return self.scan_next_block();
         }
 
-        self.push_event(Event::End(TagEnd::Paragraph));
-        for (i, &pline) in para_lines.iter().enumerate().rev() {
-            if i < para_lines.len() - 1 {
-                self.push_event(Event::SoftBreak);
+        // Check for admonition style from block attributes
+        let admonition_kind = self.pending_block_attrs.as_ref()
+            .and_then(|a| a.admonition_kind());
+
+        if let Some(kind) = admonition_kind {
+            self.push_event(Event::End(TagEnd::Admonition));
+            self.push_event(Event::End(TagEnd::Paragraph));
+            for (i, &pline) in para_lines.iter().enumerate().rev() {
+                if i < para_lines.len() - 1 {
+                    self.push_event(Event::SoftBreak);
+                }
+                self.push_event(Event::Text(Cow::Borrowed(pline)));
             }
-            self.push_event(Event::Text(Cow::Borrowed(pline)));
+            self.push_event(Event::Start(Tag::Paragraph));
+            self.push_event(Event::Start(Tag::Admonition { kind }));
+        } else {
+            self.push_event(Event::End(TagEnd::Paragraph));
+            for (i, &pline) in para_lines.iter().enumerate().rev() {
+                if i < para_lines.len() - 1 {
+                    self.push_event(Event::SoftBreak);
+                }
+                self.push_event(Event::Text(Cow::Borrowed(pline)));
+            }
+            self.push_event(Event::Start(Tag::Paragraph));
         }
-        self.push_event(Event::Start(Tag::Paragraph));
         self.push_title_then_events(title_events);
 
         self.pending_block_attrs = None;
@@ -588,12 +609,20 @@ impl<'a> BlockScanner<'a> {
             return self.scan_next_block();
         }
 
+        // Compute minimum common indent
+        let min_indent = lines.iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+
         self.push_event(Event::End(TagEnd::LiteralParagraph));
         for (i, &pline) in lines.iter().enumerate().rev() {
             if i < lines.len() - 1 {
                 self.push_event(Event::SoftBreak);
             }
-            self.push_event(Event::Text(Cow::Borrowed(pline)));
+            let stripped = if pline.len() >= min_indent { &pline[min_indent..] } else { pline };
+            self.push_event(Event::Text(Cow::Borrowed(stripped)));
         }
         self.push_event(Event::Start(Tag::LiteralParagraph));
         self.push_title_then_events(title_events);
@@ -672,14 +701,32 @@ impl<'a> BlockScanner<'a> {
 
         if is_verbatim {
             let mut content_lines: Vec<&'a str> = Vec::new();
+            let mut closed = false;
             while let Some(line) = self.current_line() {
                 if let Some((dt, dl)) = scanner::is_delimiter(line)
                     && dt == delim_type && dl == delim_len {
                         self.advance();
+                        closed = true;
                         break;
                 }
                 content_lines.push(line);
                 self.advance();
+            }
+
+            // For unclosed blocks, trim trailing empty lines (artifacts of split_lines)
+            if !closed {
+                while content_lines.last().is_some_and(|l| l.is_empty()) {
+                    content_lines.pop();
+                }
+            }
+
+            // Handle single empty line in closed blocks: emit "\n" instead of ""
+            if closed && content_lines.len() == 1 && content_lines[0].is_empty() {
+                self.push_event(Event::End(TagEnd::DelimitedBlock));
+                self.push_event(Event::Text(Cow::Borrowed("\n")));
+                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                self.push_title_then_events(title_events);
+                return self.event_buffer.pop();
             }
 
             // Push content (bottom of buffer)
@@ -699,11 +746,23 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Structural blocks (example, sidebar, quote, open): recursively parse content
+        // Check for admonition style on Example blocks
+        let adm_kind = if delim_type == scanner::DelimiterType::Example {
+            block_attrs.admonition_kind()
+        } else {
+            None
+        };
+
         self.context_stack.push(BlockContext::DelimitedBlock {
             kind: delim_type,
             delimiter_len: delim_len,
+            admonition_kind: adm_kind.clone(),
         });
-        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+        if let Some(ak) = adm_kind {
+            self.push_event(Event::Start(Tag::Admonition { kind: ak }));
+        } else {
+            self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+        }
         self.push_title_then_events(title_events);
         self.event_buffer.pop()
     }
@@ -939,7 +998,7 @@ impl<'a> BlockScanner<'a> {
             && let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
                 // Check context stack for matching delimited block
                 for (i, ctx) in self.context_stack.iter().enumerate().rev() {
-                    if let BlockContext::DelimitedBlock { kind, delimiter_len } = ctx
+                    if let BlockContext::DelimitedBlock { kind, delimiter_len, .. } = ctx
                         && *kind == delim_type && *delimiter_len == delim_len {
                             self.advance(); // consume delimiter
                             // Close everything up to and including this block
@@ -950,8 +1009,12 @@ impl<'a> BlockScanner<'a> {
                                         BlockContext::Section { level } => {
                                             events.push(Event::End(TagEnd::Section { level }));
                                         }
-                                        BlockContext::DelimitedBlock { .. } => {
-                                            events.push(Event::End(TagEnd::DelimitedBlock));
+                                        BlockContext::DelimitedBlock { admonition_kind, .. } => {
+                                            if admonition_kind.is_some() {
+                                                events.push(Event::End(TagEnd::Admonition));
+                                            } else {
+                                                events.push(Event::End(TagEnd::DelimitedBlock));
+                                            }
                                         }
                                         BlockContext::UnorderedList { .. } => {
                                             events.push(Event::End(TagEnd::UnorderedList));

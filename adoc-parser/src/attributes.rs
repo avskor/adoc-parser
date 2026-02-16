@@ -113,6 +113,17 @@ impl BlockAttributes {
         attrs
     }
 
+    pub fn admonition_kind(&self) -> Option<crate::event::AdmonitionKind> {
+        match self.positional.first().map(|s| s.as_str())? {
+            "NOTE" => Some(crate::event::AdmonitionKind::Note),
+            "TIP" => Some(crate::event::AdmonitionKind::Tip),
+            "IMPORTANT" => Some(crate::event::AdmonitionKind::Important),
+            "WARNING" => Some(crate::event::AdmonitionKind::Warning),
+            "CAUTION" => Some(crate::event::AdmonitionKind::Caution),
+            _ => None,
+        }
+    }
+
     pub fn source_language(&self) -> Option<&str> {
         if self.positional.first().map(|s| s.as_str()) == Some("source") {
             self.positional.get(1).map(|s| s.as_str())
