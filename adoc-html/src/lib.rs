@@ -31,11 +31,7 @@ impl HtmlRenderer {
                 Event::Start(tag) => self.start_tag(output, &tag),
                 Event::End(tag_end) => self.end_tag(output, &tag_end),
                 Event::Text(text) => {
-                    if self.in_source_block {
-                        html_escape(output, &text);
-                    } else {
-                        html_escape(output, &text);
-                    }
+                    html_escape(output, &text);
                 }
                 Event::Code(code) => {
                     output.push_str("<code>");
@@ -43,11 +39,7 @@ impl HtmlRenderer {
                     output.push_str("</code>");
                 }
                 Event::SoftBreak => {
-                    if self.in_source_block {
-                        output.push('\n');
-                    } else {
-                        output.push('\n');
-                    }
+                    output.push('\n');
                 }
                 Event::HardBreak => {
                     output.push_str("<br>\n");

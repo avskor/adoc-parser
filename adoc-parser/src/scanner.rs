@@ -163,10 +163,9 @@ pub fn is_list_marker_ordered(line: &str) -> Option<(u8, &str)> {
 pub fn is_admonition(line: &str) -> Option<(&str, &str)> {
     let labels = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
     for label in &labels {
-        if let Some(rest) = line.strip_prefix(label) {
-            if let Some(rest) = rest.strip_prefix(": ") {
+        if let Some(rest) = line.strip_prefix(label)
+            && let Some(rest) = rest.strip_prefix(": ") {
                 return Some((label, rest.trim()));
-            }
         }
     }
     None
@@ -193,11 +192,10 @@ pub fn generate_id(title: &str) -> String {
         if ch.is_alphanumeric() {
             id.push(ch.to_ascii_lowercase());
             prev_was_separator = false;
-        } else if ch == ' ' || ch == '-' || ch == '_' {
-            if !prev_was_separator {
+        } else if (ch == ' ' || ch == '-' || ch == '_')
+            && !prev_was_separator {
                 id.push('_');
                 prev_was_separator = true;
-            }
         }
     }
     if id.ends_with('_') && id.len() > 1 {

@@ -143,10 +143,9 @@ impl<'a> BlockScanner<'a> {
         };
 
         // Document header detection: first line is `= Title`
-        if self.pos == 0 && !self.header_emitted {
-            if let Some((1, title)) = scanner::strip_section_marker(line) {
+        if self.pos == 0 && !self.header_emitted
+            && let Some((1, title)) = scanner::strip_section_marker(line) {
                 return self.scan_document_header(title);
-            }
         }
 
         // Attribute entry `:name: value`
@@ -425,10 +424,9 @@ impl<'a> BlockScanner<'a> {
         if delim_type == scanner::DelimiterType::Comment {
             while let Some(line) = self.current_line() {
                 self.advance();
-                if let Some((dt, dl)) = scanner::is_delimiter(line) {
-                    if dt == delim_type && dl == delim_len {
+                if let Some((dt, dl)) = scanner::is_delimiter(line)
+                    && dt == delim_type && dl == delim_len {
                         break;
-                    }
                 }
             }
             return self.scan_next_block();
@@ -453,11 +451,10 @@ impl<'a> BlockScanner<'a> {
         if is_verbatim {
             let mut content_lines: Vec<&'a str> = Vec::new();
             while let Some(line) = self.current_line() {
-                if let Some((dt, dl)) = scanner::is_delimiter(line) {
-                    if dt == delim_type && dl == delim_len {
+                if let Some((dt, dl)) = scanner::is_delimiter(line)
+                    && dt == delim_type && dl == delim_len {
                         self.advance();
                         break;
-                    }
                 }
                 content_lines.push(line);
                 self.advance();
@@ -498,11 +495,10 @@ impl<'a> BlockScanner<'a> {
     ) -> Option<Event<'a>> {
         let mut content_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
-            if let Some((dt, dl)) = scanner::is_delimiter(line) {
-                if dt == delim_type && dl == delim_len {
+            if let Some((dt, dl)) = scanner::is_delimiter(line)
+                && dt == delim_type && dl == delim_len {
                     self.advance();
                     break;
-                }
             }
             content_lines.push(line);
             self.advance();
@@ -614,12 +610,12 @@ impl<'a> BlockScanner<'a> {
 
     /// Check if we're inside a delimited block and if the current line closes it
     fn check_close_delimited_block(&mut self) -> bool {
-        if let Some(line) = self.current_line() {
-            if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
+        if let Some(line) = self.current_line()
+            && let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
                 // Check context stack for matching delimited block
                 for (i, ctx) in self.context_stack.iter().enumerate().rev() {
-                    if let BlockContext::DelimitedBlock { kind, delimiter_len } = ctx {
-                        if *kind == delim_type && *delimiter_len == delim_len {
+                    if let BlockContext::DelimitedBlock { kind, delimiter_len } = ctx
+                        && *kind == delim_type && *delimiter_len == delim_len {
                             self.advance(); // consume delimiter
                             // Close everything up to and including this block
                             let mut events = Vec::new();
@@ -648,10 +644,8 @@ impl<'a> BlockScanner<'a> {
                                 self.event_buffer.push(ev);
                             }
                             return true;
-                        }
                     }
                 }
-            }
         }
         false
     }

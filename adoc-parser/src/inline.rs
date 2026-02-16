@@ -393,7 +393,7 @@ impl<'a> InlineState<'a> {
             target: Cow::Borrowed(target),
             label: label.clone(),
         }));
-        let display = label.unwrap_or_else(|| Cow::Borrowed(target));
+        let display = label.unwrap_or(Cow::Borrowed(target));
         events.push(Event::Text(display));
         events.push(Event::End(TagEnd::CrossReference));
 

@@ -61,7 +61,7 @@ impl BlockAttributes {
         }
 
         if let Some(rest) = attr_str.strip_prefix('#') {
-            if let Some(end) = rest.find(|c: char| c == '.' || c == '%' || c == ',') {
+            if let Some(end) = rest.find(['.', '%', ',']) {
                 attrs.id = Some(rest[..end].to_string());
             } else {
                 attrs.id = Some(rest.to_string());
@@ -77,12 +77,12 @@ impl BlockAttributes {
             }
             if let Some((key, value)) = part.split_once('=') {
                 attrs.named.insert(key.trim().to_string(), value.trim().to_string());
-            } else if part.starts_with('.') {
-                attrs.roles.push(part[1..].to_string());
-            } else if part.starts_with('#') {
-                attrs.id = Some(part[1..].to_string());
-            } else if part.starts_with('%') {
-                attrs.options.push(part[1..].to_string());
+            } else if let Some(stripped) = part.strip_prefix('.') {
+                attrs.roles.push(stripped.to_string());
+            } else if let Some(stripped) = part.strip_prefix('#') {
+                attrs.id = Some(stripped.to_string());
+            } else if let Some(stripped) = part.strip_prefix('%') {
+                attrs.options.push(stripped.to_string());
             } else {
                 attrs.positional.push(part.to_string());
             }
