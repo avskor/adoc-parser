@@ -176,6 +176,9 @@ impl HtmlRenderer {
             Tag::TableBody => {
                 output.push_str("<tbody>\n");
             }
+            Tag::TableFoot => {
+                output.push_str("<tfoot>\n");
+            }
             Tag::TableRow => {
                 output.push_str("<tr>\n");
             }
@@ -301,6 +304,9 @@ impl HtmlRenderer {
             }
             TagEnd::TableBody => {
                 output.push_str("</tbody>\n");
+            }
+            TagEnd::TableFoot => {
+                output.push_str("</tfoot>\n");
             }
             TagEnd::TableRow => {
                 output.push_str("</tr>\n");
@@ -544,5 +550,33 @@ mod tests {
         assert!(html.contains("<td>Cell 4</td>"));
         assert!(html.contains("</tbody>"));
         assert!(html.contains("</table>"));
+    }
+
+    #[test]
+    fn test_table_with_cols_html() {
+        let html = to_html("[cols=\"2\"]\n|===\n| A\n| B\n| C\n| D\n|===");
+        assert!(html.contains("<table>"));
+        assert!(html.contains("<tbody>"));
+        // Should have 2 rows of 2 cells
+        let td_count = html.matches("<td>").count();
+        assert_eq!(td_count, 4);
+        let tr_count = html.matches("<tr>").count();
+        assert_eq!(tr_count, 2);
+        assert!(html.contains("</tbody>"));
+        assert!(html.contains("</table>"));
+    }
+
+    #[test]
+    fn test_table_footer_html() {
+        let html = to_html("[%footer]\n|===\n| A | B\n| F1 | F2\n|===");
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>A</td>"));
+        assert!(html.contains("<td>B</td>"));
+        assert!(html.contains("</tbody>"));
+        assert!(html.contains("<tfoot>"));
+        assert!(html.contains("<td>F1</td>"));
+        assert!(html.contains("<td>F2</td>"));
+        assert!(html.contains("</tfoot>"));
+        assert!(!html.contains("<thead>"));
     }
 }

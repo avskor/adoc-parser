@@ -3,6 +3,25 @@ use std::collections::HashMap;
 
 use crate::event::CowStr;
 
+fn split_respecting_quotes(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct AttributeStore {
@@ -69,14 +88,17 @@ impl BlockAttributes {
             }
         }
 
-        let parts: Vec<&str> = attr_str.split(',').collect();
-        for part in parts.iter() {
+        let parts = split_respecting_quotes(attr_str);
+        for part in &parts {
             let part = part.trim();
             if part.is_empty() {
                 continue;
             }
             if let Some((key, value)) = part.split_once('=') {
-                attrs.named.insert(key.trim().to_string(), value.trim().to_string());
+                let value = value.trim();
+                // Strip surrounding quotes from value
+                let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
+                attrs.named.insert(key.trim().to_string(), value.to_string());
             } else if let Some(stripped) = part.strip_prefix('.') {
                 attrs.roles.push(stripped.to_string());
             } else if let Some(stripped) = part.strip_prefix('#') {
@@ -101,6 +123,19 @@ impl BlockAttributes {
 
     pub fn is_source_block(&self) -> bool {
         self.positional.first().map(|s| s.as_str()) == Some("source")
+    }
+
+    pub fn table_cols_count(&self) -> Option<usize> {
+        let val = self.named.get("cols")?;
+        let trimmed = val.trim();
+        if let Ok(n) = trimmed.parse::<usize>() {
+            return Some(n);
+        }
+        Some(trimmed.split(',').count())
+    }
+
+    pub fn has_option(&self, name: &str) -> bool {
+        self.options.iter().any(|o| o == name)
     }
 }
 
@@ -140,5 +175,28 @@ mod tests {
     fn test_block_attributes_empty() {
         let attrs = BlockAttributes::new();
         assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn test_table_cols_count() {
+        let attrs = BlockAttributes::parse("cols=\"3\"");
+        assert_eq!(attrs.table_cols_count(), Some(3));
+
+        let attrs = BlockAttributes::parse("cols=\"1,1,1\"");
+        assert_eq!(attrs.table_cols_count(), Some(3));
+
+        let attrs = BlockAttributes::new();
+        assert_eq!(attrs.table_cols_count(), None);
+    }
+
+    #[test]
+    fn test_has_option() {
+        let attrs = BlockAttributes::parse("%header");
+        assert!(attrs.has_option("header"));
+        assert!(!attrs.has_option("footer"));
+
+        let attrs = BlockAttributes::parse("%header,%footer");
+        assert!(attrs.has_option("header"));
+        assert!(attrs.has_option("footer"));
     }
 }

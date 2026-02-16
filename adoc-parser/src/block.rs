@@ -350,6 +350,7 @@ impl<'a> BlockScanner<'a> {
     fn scan_table(&mut self) -> Option<Event<'a>> {
         self.advance(); // skip opening |===
         let title_events = self.take_pending_block_title();
+        let block_attrs = self.pending_block_attrs.take().unwrap_or_default();
 
         // Collect lines until closing |=== or EOF
         let mut content_lines: Vec<&'a str> = Vec::new();
@@ -383,13 +384,14 @@ impl<'a> BlockScanner<'a> {
         }
 
         if all_cells.is_empty() {
-            self.pending_block_attrs = None;
             self.push_title_then_events(title_events);
             return self.event_buffer.pop().or_else(|| self.scan_next_block());
         }
 
-        // Determine number of columns from first data line
-        let num_cols = {
+        // Determine number of columns: from cols attribute or first data line
+        let num_cols = if let Some(n) = block_attrs.table_cols_count() {
+            n
+        } else {
             let mut cols = 0;
             for &line in &content_lines {
                 if scanner::is_blank(line) {
@@ -403,23 +405,56 @@ impl<'a> BlockScanner<'a> {
             if cols == 0 { 1 } else { cols }
         };
 
-        // Determine if there's a header: first row is header if blank line follows it
-        let has_header = first_blank_after_first_row && cells_before_blank == num_cols;
+        // Determine header: %header option OR blank line after first row
+        let has_header = block_attrs.has_option("header")
+            || (first_blank_after_first_row && cells_before_blank == num_cols);
 
-        // Group cells into rows of num_cols
+        // Determine footer: %footer option
+        let has_footer = block_attrs.has_option("footer");
+
+        // Split cells into header, body, footer
         let header_cells = if has_header {
-            &all_cells[..num_cols]
+            &all_cells[..num_cols.min(all_cells.len())]
         } else {
-            &[]
+            &[][..]
         };
-        let body_cells = if has_header {
-            &all_cells[num_cols..]
+        let remaining = if has_header {
+            &all_cells[num_cols.min(all_cells.len())..]
         } else {
             &all_cells[..]
+        };
+        // Footer is the last complete row of remaining cells
+        let (body_cells, footer_cells) = if has_footer && remaining.len() >= num_cols {
+            let footer_start = remaining.len() - (remaining.len() % num_cols).max(0);
+            // Take the last full row
+            let footer_start = if footer_start == remaining.len() {
+                remaining.len() - num_cols
+            } else {
+                // Incomplete last row — no footer
+                remaining.len()
+            };
+            (&remaining[..footer_start], &remaining[footer_start..])
+        } else {
+            (remaining, &[][..])
         };
 
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
+
+        // TableFoot
+        if !footer_cells.is_empty() {
+            self.push_event(Event::End(TagEnd::TableFoot));
+            for row in footer_cells.chunks(num_cols).rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                for &cell in row.iter().rev() {
+                    self.push_event(Event::End(TagEnd::TableCell));
+                    self.push_event(Event::Text(Cow::Borrowed(cell)));
+                    self.push_event(Event::Start(Tag::TableCell));
+                }
+                self.push_event(Event::Start(Tag::TableRow));
+            }
+            self.push_event(Event::Start(Tag::TableFoot));
+        }
 
         // TableBody
         if !body_cells.is_empty() {
@@ -452,7 +487,6 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Start(Tag::Table));
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1215,6 +1249,134 @@ mod tests {
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_cols_attribute() {
+        let input = "[cols=\"2\"]\n|===\n| A\n| B\n| C\n| D\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("D")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_header_option() {
+        let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableHead),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("H1")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("H2")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableHead),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C1")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C2")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_footer_option() {
+        let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::Start(Tag::TableFoot),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("F1")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("F2")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableFoot),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_header_footer_combined() {
+        let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableHead),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("H1")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("H2")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableHead),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C1")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C2")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::Start(Tag::TableFoot),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("F1")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("F2")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableFoot),
             Event::End(TagEnd::Table),
         ]);
     }
