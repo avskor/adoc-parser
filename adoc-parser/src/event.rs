@@ -26,6 +26,10 @@ pub enum Event<'a> {
         id: CowStr<'a>,
     },
     Toc,
+    Include {
+        path: CowStr<'a>,
+        attrs: CowStr<'a>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

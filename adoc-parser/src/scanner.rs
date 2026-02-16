@@ -246,6 +246,22 @@ pub fn is_toc_macro(line: &str) -> bool {
     line.trim() == "toc::[]"
 }
 
+pub fn is_include_directive(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("include::")?;
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.rfind(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let path = &rest[..bracket_start];
+    if path.is_empty() {
+        return None;
+    }
+    let attrs = &rest[bracket_start + 1..bracket_end];
+    Some((path, attrs))
+}
+
 pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
@@ -436,6 +452,27 @@ mod tests {
         assert!(!is_toc_macro("toc::[levels=3]"));
         assert!(!is_toc_macro(""));
         assert!(!is_toc_macro("something toc::[]"));
+    }
+
+    #[test]
+    fn test_is_include_directive() {
+        assert_eq!(
+            is_include_directive("include::file.adoc[]"),
+            Some(("file.adoc", ""))
+        );
+        assert_eq!(
+            is_include_directive("include::sub/path.adoc[leveloffset=+1]"),
+            Some(("sub/path.adoc", "leveloffset=+1"))
+        );
+        assert_eq!(
+            is_include_directive("include::chapter.adoc[leveloffset=+1,lines=1..10]"),
+            Some(("chapter.adoc", "leveloffset=+1,lines=1..10"))
+        );
+        assert_eq!(is_include_directive("include::[]"), None); // empty path
+        assert_eq!(is_include_directive("include::file.adoc"), None); // no brackets
+        assert_eq!(is_include_directive("not include::file[]"), None); // not at start
+        assert_eq!(is_include_directive("include::file.adoc]["), None); // malformed
+        assert_eq!(is_include_directive(""), None);
     }
 
     #[test]

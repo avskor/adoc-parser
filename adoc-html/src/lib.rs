@@ -125,6 +125,11 @@ impl HtmlRenderer {
                 Event::Toc => {
                     self.toc_insert_position = Some(output.len());
                 }
+                Event::Include { path, .. } => {
+                    output.push_str("<!-- include::");
+                    html_escape(output, &path);
+                    output.push_str("[] -->\n");
+                }
             }
         }
 
@@ -820,6 +825,18 @@ mod tests {
         let toc_pos = html.find("<div id=\"toc\"").unwrap();
         let before_pos = html.find("Before</h2>").unwrap();
         assert!(toc_pos > before_pos, "TOC should appear after the Before heading");
+    }
+
+    #[test]
+    fn test_unresolved_include_html() {
+        let html = to_html("include::chapter.adoc[]");
+        assert_eq!(html, "<!-- include::chapter.adoc[] -->\n");
+    }
+
+    #[test]
+    fn test_unresolved_include_with_special_chars_html() {
+        let html = to_html("include::path/to/<file>.adoc[]");
+        assert_eq!(html, "<!-- include::path/to/&lt;file&gt;.adoc[] -->\n");
     }
 
     #[test]

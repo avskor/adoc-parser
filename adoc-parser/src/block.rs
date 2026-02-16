@@ -208,6 +208,15 @@ impl<'a> BlockScanner<'a> {
             return Some(Event::Toc);
         }
 
+        // Include directive `include::path[attrs]`
+        if let Some((path, attrs)) = scanner::is_include_directive(line) {
+            self.advance();
+            return Some(Event::Include {
+                path: Cow::Borrowed(path),
+                attrs: Cow::Borrowed(attrs),
+            });
+        }
+
         // Block image `image::path[alt]`
         if let Some((target, alt)) = scanner::is_block_image(line) {
             self.advance();
@@ -518,6 +527,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_admonition(line).is_some()
                 || scanner::is_block_image(line).is_some()
                 || scanner::is_toc_macro(line)
+                || scanner::is_include_directive(line).is_some()
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_attribute_entry(line).is_some()
@@ -1414,6 +1424,48 @@ mod tests {
             Event::Toc,
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_include_directive() {
+        let input = "include::chapter.adoc[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Include {
+                path: Cow::Borrowed("chapter.adoc"),
+                attrs: Cow::Borrowed(""),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_include_directive_with_attrs() {
+        let input = "include::sub/file.adoc[leveloffset=+1]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Include {
+                path: Cow::Borrowed("sub/file.adoc"),
+                attrs: Cow::Borrowed("leveloffset=+1"),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_include_breaks_paragraph() {
+        let input = "Some text.\ninclude::file.adoc[]\nMore text.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Some text.")),
+            Event::End(TagEnd::Paragraph),
+            Event::Include {
+                path: Cow::Borrowed("file.adoc"),
+                attrs: Cow::Borrowed(""),
+            },
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("More text.")),
             Event::End(TagEnd::Paragraph),
         ]);
     }
