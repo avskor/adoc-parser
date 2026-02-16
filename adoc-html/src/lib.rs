@@ -462,6 +462,18 @@ mod tests {
     }
 
     #[test]
+    fn test_list_continuation_html() {
+        let html = to_html("* item\n+\nContinued.");
+        assert!(html.contains("<li>item<p>Continued.</p>"));
+    }
+
+    #[test]
+    fn test_description_list_continuation_html() {
+        let html = to_html("Term:: desc\n+\nMore.");
+        assert!(html.contains("<dd>desc<p>More.</p>"));
+    }
+
+    #[test]
     fn test_inline_passthrough_html() {
         let html = to_html("hello +++<b>bold</b>+++ world");
         assert!(html.contains("hello <b>bold</b> world"));

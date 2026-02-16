@@ -238,6 +238,10 @@ pub fn is_description_list_marker(line: &str) -> Option<(u8, &str, &str)> {
     None
 }
 
+pub fn is_list_continuation(line: &str) -> bool {
+    line.trim() == "+"
+}
+
 pub fn generate_id(title: &str) -> String {
     let mut id = String::with_capacity(title.len() + 1);
     id.push('_');
@@ -362,6 +366,16 @@ mod tests {
         assert_eq!(is_block_title(".My Title"), Some("My Title"));
         assert_eq!(is_block_title("..not"), None);
         assert_eq!(is_block_title(". space"), None);
+    }
+
+    #[test]
+    fn test_is_list_continuation() {
+        assert!(is_list_continuation("+"));
+        assert!(is_list_continuation("  +  "));
+        assert!(!is_list_continuation("++"));
+        assert!(!is_list_continuation("+ text"));
+        assert!(!is_list_continuation(""));
+        assert!(!is_list_continuation("++++"));
     }
 
     #[test]

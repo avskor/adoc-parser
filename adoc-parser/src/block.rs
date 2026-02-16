@@ -133,6 +133,12 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    fn is_in_list_context(&self) -> bool {
+        self.context_stack.iter().rev().any(|ctx| {
+            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. })
+        })
+    }
+
     fn scan_next_block(&mut self) -> Option<Event<'a>> {
         self.skip_blank_lines();
 
@@ -238,6 +244,15 @@ impl<'a> BlockScanner<'a> {
         // Description list
         if let Some((depth, term, desc)) = scanner::is_description_list_marker(line) {
             return self.scan_description_list_item(depth, term, desc);
+        }
+
+        // List continuation `+`
+        if scanner::is_list_continuation(line) {
+            self.advance();
+            if self.is_in_list_context() {
+                return self.scan_next_block();
+            }
+            return self.scan_next_block();
         }
 
         // Literal paragraph (leading space)
@@ -346,6 +361,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_block_title(line).is_some()
                 || scanner::is_line_comment(line)
                 || scanner::is_description_list_marker(line).is_some()
+                || scanner::is_list_continuation(line)
             {
                 break;
             }
@@ -900,6 +916,57 @@ mod tests {
             Event::Start(Tag::DescriptionDescription),
             Event::End(TagEnd::DescriptionDescription),
             Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_list_continuation_paragraph() {
+        let input = "* item\n+\nContinued.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList),
+            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Text(Cow::Borrowed("item")),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Continued.")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_list_continuation_multiple() {
+        let input = "* item\n+\nPara one.\n+\nPara two.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList),
+            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Text(Cow::Borrowed("item")),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Para one.")),
+            Event::End(TagEnd::Paragraph),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Para two.")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_list_continuation_with_delimited_block() {
+        let input = "* item\n+\n----\ncode\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList),
+            Event::Start(Tag::ListItem { depth: 1 }),
+            Event::Text(Cow::Borrowed("item")),
+            Event::Start(Tag::DelimitedBlock { kind: crate::event::DelimitedBlockKind::Listing }),
+            Event::Text(Cow::Borrowed("code")),
+            Event::End(TagEnd::DelimitedBlock),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
         ]);
     }
 
