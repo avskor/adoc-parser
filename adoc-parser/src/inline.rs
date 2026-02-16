@@ -262,6 +262,14 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Footnote macro: footnote:[text] or footnote:id[text] or footnote:id[]
+                b'f' if self.remaining().starts_with("footnote:") => {
+                    if self.try_footnote_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Attribute reference {name}
                 b'{' => {
                     if self.try_attribute_reference(events, &mut text_start) {
@@ -591,6 +599,65 @@ impl<'a> InlineState<'a> {
         events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
 
         self.pos = start_pos + 5 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_footnote_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_prefix = start_pos + 9; // skip "footnote:"
+        let rest = &self.input[after_prefix..];
+
+        if rest.is_empty() {
+            return false;
+        }
+
+        // Determine if anonymous (starts with '[') or named (id before '[')
+        let (id, bracket_rest) = if rest.starts_with('[') {
+            (None, rest)
+        } else {
+            let bracket_pos = match rest.find('[') {
+                Some(p) => p,
+                None => return false,
+            };
+            let id = &rest[..bracket_pos];
+            if id.is_empty() {
+                return false;
+            }
+            (Some(id), &rest[bracket_pos..])
+        };
+
+        // bracket_rest starts with '['
+        let bracket_end = match bracket_rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &bracket_rest[1..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+
+        if let (Some(id_str), true) = (id, content.is_empty()) {
+            // footnote:id[] — reference to existing footnote
+            events.push(Event::FootnoteRef {
+                id: Cow::Borrowed(id_str),
+            });
+        } else {
+            // footnote:[text] or footnote:id[text]
+            events.push(Event::Footnote {
+                id: id.map(Cow::Borrowed),
+                text: Cow::Borrowed(content),
+            });
+        }
+
+        // Calculate full consumed length
+        let id_len = id.map_or(0, |s| s.len());
+        // "footnote:" + id + "[" + content + "]"
+        self.pos = after_prefix + id_len + 1 + bracket_end;
         *text_start = self.pos;
         true
     }
@@ -1226,6 +1293,42 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello ")),
             Event::Text(Cow::Borrowed("+text+ world")),
+        ]);
+    }
+
+    // Footnote tests
+
+    #[test]
+    fn test_footnote_basic() {
+        let events = parse("footnote:[text]");
+        assert_eq!(events, vec![
+            Event::Footnote { id: None, text: Cow::Borrowed("text") },
+        ]);
+    }
+
+    #[test]
+    fn test_footnote_named() {
+        let events = parse("footnote:fn1[text]");
+        assert_eq!(events, vec![
+            Event::Footnote { id: Some(Cow::Borrowed("fn1")), text: Cow::Borrowed("text") },
+        ]);
+    }
+
+    #[test]
+    fn test_footnote_ref() {
+        let events = parse("footnote:fn1[]");
+        assert_eq!(events, vec![
+            Event::FootnoteRef { id: Cow::Borrowed("fn1") },
+        ]);
+    }
+
+    #[test]
+    fn test_footnote_in_sentence() {
+        let events = parse("Hello footnote:[note] world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Hello ")),
+            Event::Footnote { id: None, text: Cow::Borrowed("note") },
+            Event::Text(Cow::Borrowed(" world")),
         ]);
     }
 }

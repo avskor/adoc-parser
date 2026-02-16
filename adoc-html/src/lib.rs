@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use adoc_parser::{Event, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind};
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
@@ -15,6 +16,9 @@ pub fn to_html(input: &str) -> String {
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
+    footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
+    footnote_counter: usize,
+    named_footnotes: HashMap<String, usize>, // id → number
 }
 
 impl HtmlRenderer {
@@ -22,6 +26,9 @@ impl HtmlRenderer {
         Self {
             tag_stack: Vec::new(),
             in_source_block: false,
+            footnotes: Vec::new(),
+            footnote_counter: 0,
+            named_footnotes: HashMap::new(),
         }
     }
 
@@ -61,8 +68,54 @@ impl HtmlRenderer {
                     output.push_str(&name);
                     output.push('}');
                 }
+                Event::Footnote { id, text } => {
+                    self.footnote_counter += 1;
+                    let num = self.footnote_counter;
+                    if let Some(ref id) = id {
+                        self.named_footnotes.insert(id.to_string(), num);
+                    }
+                    self.footnotes.push((num, id.as_ref().map(|s| s.to_string()), text.to_string()));
+                    output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
+                    output.push_str(&num.to_string());
+                    output.push_str("\" href=\"#_footnotedef_");
+                    output.push_str(&num.to_string());
+                    output.push_str("\">");
+                    output.push_str(&num.to_string());
+                    output.push_str("</a>]</sup>");
+                }
+                Event::FootnoteRef { id } => {
+                    if let Some(&num) = self.named_footnotes.get(id.as_ref()) {
+                        output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
+                        output.push_str(&num.to_string());
+                        output.push_str("\" href=\"#_footnotedef_");
+                        output.push_str(&num.to_string());
+                        output.push_str("\">");
+                        output.push_str(&num.to_string());
+                        output.push_str("</a>]</sup>");
+                    }
+                }
             }
         }
+
+        if !self.footnotes.is_empty() {
+            self.render_footnotes(output);
+        }
+    }
+
+    fn render_footnotes(&self, output: &mut String) {
+        output.push_str("<div id=\"footnotes\">\n<hr>\n");
+        for (num, _id, text) in &self.footnotes {
+            output.push_str("<div class=\"footnote\" id=\"_footnotedef_");
+            output.push_str(&num.to_string());
+            output.push_str("\">\n<a href=\"#_footnoteref_");
+            output.push_str(&num.to_string());
+            output.push_str("\">");
+            output.push_str(&num.to_string());
+            output.push_str("</a>. ");
+            html_escape(output, text);
+            output.push_str("\n</div>\n");
+        }
+        output.push_str("</div>\n");
     }
 
     fn start_tag(&mut self, output: &mut String, tag: &Tag) {
@@ -578,5 +631,39 @@ mod tests {
         assert!(html.contains("<td>F2</td>"));
         assert!(html.contains("</tfoot>"));
         assert!(!html.contains("<thead>"));
+    }
+
+    #[test]
+    fn test_footnote_html() {
+        let html = to_html("Hello footnote:[This is a note] world.");
+        assert!(html.contains("<sup class=\"footnote\">[<a id=\"_footnoteref_1\" href=\"#_footnotedef_1\">1</a>]</sup>"));
+        assert!(html.contains("<div id=\"footnotes\">"));
+        assert!(html.contains("<hr>"));
+        assert!(html.contains("<div class=\"footnote\" id=\"_footnotedef_1\">"));
+        assert!(html.contains("<a href=\"#_footnoteref_1\">1</a>. This is a note"));
+    }
+
+    #[test]
+    fn test_footnote_named_html() {
+        let html = to_html("First footnote:fn1[Named note] and again footnote:fn1[].");
+        // Definition
+        assert!(html.contains("<sup class=\"footnote\">[<a id=\"_footnoteref_1\" href=\"#_footnotedef_1\">1</a>]</sup>"));
+        // Reference should use the same number
+        let refs: Vec<_> = html.match_indices("_footnoteref_1").collect();
+        assert!(refs.len() >= 2, "Expected at least 2 references to footnote 1, got {}", refs.len());
+    }
+
+    #[test]
+    fn test_footnote_multiple_html() {
+        let html = to_html("A footnote:[First] B footnote:[Second] C footnote:[Third].");
+        assert!(html.contains("_footnoteref_1"));
+        assert!(html.contains("_footnoteref_2"));
+        assert!(html.contains("_footnoteref_3"));
+        assert!(html.contains("_footnotedef_1"));
+        assert!(html.contains("_footnotedef_2"));
+        assert!(html.contains("_footnotedef_3"));
+        assert!(html.contains(">1</a>. First"));
+        assert!(html.contains(">2</a>. Second"));
+        assert!(html.contains(">3</a>. Third"));
     }
 }

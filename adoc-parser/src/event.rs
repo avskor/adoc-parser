@@ -18,6 +18,13 @@ pub enum Event<'a> {
         value: CowStr<'a>,
     },
     AttributeReference(CowStr<'a>),
+    Footnote {
+        id: Option<CowStr<'a>>,
+        text: CowStr<'a>,
+    },
+    FootnoteRef {
+        id: CowStr<'a>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
