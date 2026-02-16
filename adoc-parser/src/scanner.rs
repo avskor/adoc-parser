@@ -189,6 +189,55 @@ pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
     Some((target, alt))
 }
 
+pub fn is_description_list_marker(line: &str) -> Option<(u8, &str, &str)> {
+    let trimmed = line.trim_end();
+    // Find the first occurrence of "::" that is a valid marker
+    // We need to find 2-4 consecutive colons where:
+    // - term before is non-empty (trimmed)
+    // - after colons: end of line or space followed by description
+    let bytes = trimmed.as_bytes();
+    let len = bytes.len();
+
+    let mut i = 0;
+    while i < len {
+        if bytes[i] == b':' && i + 1 < len && bytes[i + 1] == b':' {
+            // Count consecutive colons
+            let colon_start = i;
+            let mut colon_count = 0;
+            while i < len && bytes[i] == b':' {
+                colon_count += 1;
+                i += 1;
+            }
+
+            if !(2..=4).contains(&colon_count) {
+                continue;
+            }
+
+            let term = trimmed[..colon_start].trim();
+            if term.is_empty() {
+                continue;
+            }
+
+            // After colons: must be end of line or space
+            if i < len && bytes[i] != b' ' {
+                continue;
+            }
+
+            let desc = if i < len {
+                trimmed[i..].trim_start()
+            } else {
+                ""
+            };
+
+            let depth = (colon_count - 1) as u8;
+            return Some((depth, term, desc));
+        }
+        i += 1;
+    }
+
+    None
+}
+
 pub fn generate_id(title: &str) -> String {
     let mut id = String::with_capacity(title.len() + 1);
     id.push('_');
@@ -313,5 +362,29 @@ mod tests {
         assert_eq!(is_block_title(".My Title"), Some("My Title"));
         assert_eq!(is_block_title("..not"), None);
         assert_eq!(is_block_title(". space"), None);
+    }
+
+    #[test]
+    fn test_is_description_list_marker() {
+        assert_eq!(
+            is_description_list_marker("CPU:: The brain"),
+            Some((1, "CPU", "The brain"))
+        );
+        assert_eq!(
+            is_description_list_marker("Speed::: Fast"),
+            Some((2, "Speed", "Fast"))
+        );
+        assert_eq!(
+            is_description_list_marker("Term::::"),
+            Some((3, "Term", ""))
+        );
+        assert_eq!(is_description_list_marker(":: no term"), None);
+        assert_eq!(is_description_list_marker("just text"), None);
+        assert_eq!(is_description_list_marker("::::: too many"), None);
+        assert_eq!(is_description_list_marker("a::b"), None); // no space after ::
+        assert_eq!(
+            is_description_list_marker("Term::"),
+            Some((1, "Term", ""))
+        );
     }
 }

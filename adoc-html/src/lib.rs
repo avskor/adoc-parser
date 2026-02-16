@@ -144,6 +144,15 @@ impl HtmlRenderer {
             Tag::ListItem { .. } => {
                 output.push_str("<li>");
             }
+            Tag::DescriptionList => {
+                output.push_str("<dl>\n");
+            }
+            Tag::DescriptionTerm => {
+                output.push_str("<dt>");
+            }
+            Tag::DescriptionDescription => {
+                output.push_str("<dd>");
+            }
             Tag::Admonition { kind } => {
                 let label = match kind {
                     AdmonitionKind::Note => "Note",
@@ -253,6 +262,15 @@ impl HtmlRenderer {
             }
             TagEnd::ListItem => {
                 output.push_str("</li>\n");
+            }
+            TagEnd::DescriptionList => {
+                output.push_str("</dl>\n");
+            }
+            TagEnd::DescriptionTerm => {
+                output.push_str("</dt>\n");
+            }
+            TagEnd::DescriptionDescription => {
+                output.push_str("</dd>\n");
             }
             TagEnd::Admonition => {
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
@@ -423,6 +441,24 @@ mod tests {
     fn test_document_header() {
         let html = to_html("= My Document\n\nContent.");
         assert!(html.contains("<h1>My Document</h1>"));
+    }
+
+    #[test]
+    fn test_description_list_html() {
+        let html = to_html("CPU:: The brain\nRAM:: Memory");
+        assert_eq!(
+            html,
+            "<dl>\n<dt>CPU</dt>\n<dd>The brain</dd>\n<dt>RAM</dt>\n<dd>Memory</dd>\n</dl>\n"
+        );
+    }
+
+    #[test]
+    fn test_nested_description_list_html() {
+        let html = to_html("CPU:: The brain\nSpeed::: Fast");
+        assert_eq!(
+            html,
+            "<dl>\n<dt>CPU</dt>\n<dd>The brain<dl>\n<dt>Speed</dt>\n<dd>Fast</dd>\n</dl>\n</dd>\n</dl>\n"
+        );
     }
 
     #[test]

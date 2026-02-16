@@ -13,6 +13,8 @@ pub enum BlockContext {
     UnorderedList { depth: u8 },
     OrderedList { depth: u8 },
     ListItem { depth: u8 },
+    DescriptionList { depth: u8 },
+    DescriptionListEntry { depth: u8 },
 }
 
 pub struct BlockScanner<'a> {
@@ -100,6 +102,12 @@ impl<'a> BlockScanner<'a> {
                 }
                 BlockContext::DelimitedBlock { .. } => {
                     events.push(Event::End(TagEnd::DelimitedBlock));
+                }
+                BlockContext::DescriptionList { .. } => {
+                    events.push(Event::End(TagEnd::DescriptionList));
+                }
+                BlockContext::DescriptionListEntry { .. } => {
+                    events.push(Event::End(TagEnd::DescriptionDescription));
                 }
             }
         }
@@ -227,6 +235,11 @@ impl<'a> BlockScanner<'a> {
             return self.scan_ordered_list_item(depth, text);
         }
 
+        // Description list
+        if let Some((depth, term, desc)) = scanner::is_description_list_marker(line) {
+            return self.scan_description_list_item(depth, term, desc);
+        }
+
         // Literal paragraph (leading space)
         if line.starts_with(' ') || line.starts_with('\t') {
             return self.scan_literal_paragraph();
@@ -332,6 +345,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_block_title(line).is_some()
                 || scanner::is_line_comment(line)
+                || scanner::is_description_list_marker(line).is_some()
             {
                 break;
             }
@@ -553,6 +567,69 @@ impl<'a> BlockScanner<'a> {
         false
     }
 
+    fn close_description_entries_for_depth(&mut self, target_depth: u8) -> Vec<Event<'a>> {
+        let mut events = Vec::new();
+        loop {
+            match self.context_stack.last() {
+                Some(BlockContext::DescriptionListEntry { depth }) if *depth >= target_depth => {
+                    events.push(Event::End(TagEnd::DescriptionDescription));
+                    self.context_stack.pop();
+                }
+                _ => break,
+            }
+        }
+        events
+    }
+
+    fn is_in_description_list_at_depth(&self, depth: u8) -> bool {
+        for ctx in self.context_stack.iter().rev() {
+            match ctx {
+                BlockContext::DescriptionList { depth: d } if *d == depth => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn scan_description_list_item(
+        &mut self,
+        depth: u8,
+        term: &'a str,
+        desc: &'a str,
+    ) -> Option<Event<'a>> {
+        self.advance();
+        let title_events = self.take_pending_block_title();
+
+        let close_events = self.close_description_entries_for_depth(depth);
+
+        let need_new_list = !self.is_in_description_list_at_depth(depth);
+
+        if need_new_list {
+            self.context_stack.push(BlockContext::DescriptionList { depth });
+        }
+        self.context_stack.push(BlockContext::DescriptionListEntry { depth });
+
+        // Event buffer (bottom to top for FIFO via pop):
+        if !desc.is_empty() {
+            self.push_event(Event::Text(Cow::Borrowed(desc)));
+        }
+        self.push_event(Event::Start(Tag::DescriptionDescription));
+        self.push_event(Event::End(TagEnd::DescriptionTerm));
+        self.push_event(Event::Text(Cow::Borrowed(term)));
+        self.push_event(Event::Start(Tag::DescriptionTerm));
+        if need_new_list {
+            self.push_event(Event::Start(Tag::DescriptionList));
+        }
+
+        for ev in close_events.into_iter().rev() {
+            self.push_event(ev);
+        }
+        self.push_title_then_events(title_events);
+
+        self.pending_block_attrs = None;
+        self.event_buffer.pop()
+    }
+
     fn scan_unordered_list_item(&mut self, depth: u8, text: &'a str) -> Option<Event<'a>> {
         self.advance();
         let title_events = self.take_pending_block_title();
@@ -643,6 +720,12 @@ impl<'a> BlockScanner<'a> {
                                         }
                                         BlockContext::ListItem { .. } => {
                                             events.push(Event::End(TagEnd::ListItem));
+                                        }
+                                        BlockContext::DescriptionList { .. } => {
+                                            events.push(Event::End(TagEnd::DescriptionList));
+                                        }
+                                        BlockContext::DescriptionListEntry { .. } => {
+                                            events.push(Event::End(TagEnd::DescriptionDescription));
                                         }
                                     }
                                 }
@@ -780,6 +863,43 @@ mod tests {
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Hello.")),
             Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_simple_description_list() {
+        let input = "CPU:: The brain\nRAM:: Memory";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("CPU")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("The brain")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("RAM")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("Memory")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_description_list_empty_desc() {
+        let input = "Term::";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("Term")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
         ]);
     }
 

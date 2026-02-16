@@ -60,6 +60,9 @@ pub enum Tag<'a> {
     UnorderedList,
     OrderedList,
     ListItem { depth: u8 },
+    DescriptionList,
+    DescriptionTerm,
+    DescriptionDescription,
 
     // Admonitions
     Admonition { kind: AdmonitionKind },
@@ -100,6 +103,9 @@ pub enum TagEnd {
     UnorderedList,
     OrderedList,
     ListItem,
+    DescriptionList,
+    DescriptionTerm,
+    DescriptionDescription,
 
     Admonition,
 
@@ -134,6 +140,9 @@ impl<'a> Tag<'a> {
             Tag::UnorderedList => TagEnd::UnorderedList,
             Tag::OrderedList => TagEnd::OrderedList,
             Tag::ListItem { .. } => TagEnd::ListItem,
+            Tag::DescriptionList => TagEnd::DescriptionList,
+            Tag::DescriptionTerm => TagEnd::DescriptionTerm,
+            Tag::DescriptionDescription => TagEnd::DescriptionDescription,
             Tag::Admonition { .. } => TagEnd::Admonition,
             Tag::BlockImage { .. } => TagEnd::BlockImage,
             Tag::InlineImage { .. } => TagEnd::InlineImage,
