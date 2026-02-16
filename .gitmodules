@@ -1,0 +1,3 @@
+[submodule "vendor/asciidoc-parsing-lab"]
+	path = vendor/asciidoc-parsing-lab
+	url = https://github.com/opendevise/asciidoc-parsing-lab.git
