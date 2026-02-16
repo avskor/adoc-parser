@@ -62,6 +62,9 @@ pub enum Tag<'a> {
     Section { level: u8 },
     SectionTitle { level: u8, id: CowStr<'a> },
 
+    // Standalone heading (discrete or inside delimited block)
+    Heading { level: u8 },
+
     // Block elements
     Paragraph,
     LiteralParagraph,
@@ -118,6 +121,8 @@ pub enum TagEnd {
     Section { level: u8 },
     SectionTitle,
 
+    Heading { level: u8 },
+
     Paragraph,
     LiteralParagraph,
     DelimitedBlock,
@@ -166,6 +171,7 @@ impl<'a> Tag<'a> {
             Tag::DocumentTitle => TagEnd::DocumentTitle,
             Tag::Section { level } => TagEnd::Section { level: *level },
             Tag::SectionTitle { .. } => TagEnd::SectionTitle,
+            Tag::Heading { level } => TagEnd::Heading { level: *level },
             Tag::Paragraph => TagEnd::Paragraph,
             Tag::LiteralParagraph => TagEnd::LiteralParagraph,
             Tag::DelimitedBlock { .. } => TagEnd::DelimitedBlock,

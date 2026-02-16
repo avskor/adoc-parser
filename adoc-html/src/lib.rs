@@ -253,6 +253,12 @@ impl HtmlRenderer {
                 html_escape(output, id);
                 output.push_str("\">");
             }
+            Tag::Heading { level } => {
+                let h = section_level_to_h(*level);
+                output.push_str("<h");
+                output.push_str(&h.to_string());
+                output.push('>');
+            }
             Tag::Section { .. } => {
                 output.push_str("<div class=\"sect\">\n");
             }
@@ -440,6 +446,12 @@ impl HtmlRenderer {
                 }
                 let level = self.find_section_level();
                 let h = section_level_to_h(level);
+                output.push_str("</h");
+                output.push_str(&h.to_string());
+                output.push_str(">\n");
+            }
+            TagEnd::Heading { level } => {
+                let h = section_level_to_h(*level);
                 output.push_str("</h");
                 output.push_str(&h.to_string());
                 output.push_str(">\n");

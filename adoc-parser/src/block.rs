@@ -26,6 +26,7 @@ pub struct BlockScanner<'a> {
     pending_block_attrs: Option<BlockAttributes>,
     pending_block_title: Option<&'a str>,
     header_emitted: bool,
+    body_started: bool,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -38,6 +39,7 @@ impl<'a> BlockScanner<'a> {
             pending_block_attrs: None,
             pending_block_title: None,
             header_emitted: false,
+            body_started: false,
         }
     }
 
@@ -171,18 +173,26 @@ impl<'a> BlockScanner<'a> {
             }
         };
 
-        // Document header detection: first line is `= Title`
-        if self.pos == 0 && !self.header_emitted
-            && let Some((1, title)) = scanner::strip_section_marker(line) {
+        // Document header detection: `= Title` before any body content
+        // Skip if [discrete] attribute is pending — treat as discrete heading instead
+        if !self.header_emitted && !self.body_started
+            && let Some((1, title)) = scanner::strip_section_marker(line)
+            && !self.pending_block_attrs.as_ref().is_some_and(|a| {
+                a.positional.first().is_some_and(|s| s == "discrete")
+            })
+        {
                 return self.scan_document_header(title);
         }
 
-        // Attribute-only document header: starts with attribute entries but no `= Title`
-        if self.pos == 0 && !self.header_emitted
+        // Attribute-only document header: starts with attribute entries but no `= Title` yet
+        if !self.header_emitted && !self.body_started
             && scanner::is_attribute_entry(line).is_some()
         {
             return self.scan_attribute_only_header();
         }
+
+        // From here on, we're in the document body
+        self.body_started = true;
 
         // Attribute entry `:name: value`
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
@@ -377,8 +387,49 @@ impl<'a> BlockScanner<'a> {
 
     /// Scan an attribute-only document header (no `= Title`).
     /// Collects leading attribute entries and wraps them in Header events.
+    /// If a `= Title` is encountered after attributes, transitions to a full document header.
     fn scan_attribute_only_header(&mut self) -> Option<Event<'a>> {
         self.header_emitted = true;
+        let mut header_events: Vec<Event<'a>> = Vec::new();
+
+        while let Some(line) = self.current_line() {
+            if scanner::is_blank(line) {
+                self.advance();
+                // After blank, check if next non-blank line is `= Title`
+                continue;
+            }
+            if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                header_events.push(Event::Attribute {
+                    name: Cow::Borrowed(name),
+                    value: Cow::Borrowed(value),
+                });
+                self.advance();
+            } else if let Some((1, title)) = scanner::strip_section_marker(line) {
+                // Found `= Title` after attributes — transition to full document header
+                self.advance();
+                return self.scan_document_header_with_pre_attrs(title, header_events);
+            } else {
+                break;
+            }
+        }
+
+        self.push_event(Event::End(TagEnd::Header));
+        for ev in header_events.into_iter().rev() {
+            self.push_event(ev);
+        }
+
+        Some(Event::Start(Tag::Header))
+    }
+
+    /// Scan a document header that has attribute entries collected before the `= Title`.
+    fn scan_document_header_with_pre_attrs(
+        &mut self,
+        title: &'a str,
+        pre_attrs: Vec<Event<'a>>,
+    ) -> Option<Event<'a>> {
+        let id = scanner::generate_id(title);
+
+        // Collect header content lines after the title
         let mut header_events: Vec<Event<'a>> = Vec::new();
 
         while let Some(line) = self.current_line() {
@@ -393,19 +444,53 @@ impl<'a> BlockScanner<'a> {
                 });
                 self.advance();
             } else {
-                break;
+                header_events.push(Event::Text(Cow::Borrowed(line)));
+                self.advance();
             }
         }
 
+        // Check if :toc: is in any of the events
+        let has_toc = pre_attrs.iter().chain(header_events.iter()).any(|ev| {
+            matches!(ev, Event::Attribute { name, .. } if name == "toc")
+        });
+
+        if has_toc {
+            self.push_event(Event::Toc);
+        }
         self.push_event(Event::End(TagEnd::Header));
         for ev in header_events.into_iter().rev() {
+            self.push_event(ev);
+        }
+        self.push_event(Event::End(TagEnd::SectionTitle));
+        self.push_event(Event::End(TagEnd::DocumentTitle));
+        self.push_event(Event::Text(Cow::Borrowed(title)));
+        self.push_event(Event::Start(Tag::DocumentTitle));
+        self.push_event(Event::Start(Tag::SectionTitle {
+            level: 0,
+            id: Cow::Owned(id),
+        }));
+        // Pre-attributes go before the section title
+        for ev in pre_attrs.into_iter().rev() {
             self.push_event(ev);
         }
 
         Some(Event::Start(Tag::Header))
     }
 
+    fn is_inside_delimited_block(&self) -> bool {
+        self.context_stack.iter().any(|ctx| matches!(ctx, BlockContext::DelimitedBlock { .. }))
+    }
+
     fn scan_section(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
+        let is_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
+            a.positional.first().is_some_and(|s| s == "discrete")
+        });
+        let inside_delimited = self.is_inside_delimited_block();
+
+        if is_discrete || inside_delimited {
+            return self.scan_discrete_heading(level, title);
+        }
+
         self.advance();
         let close_events = self.close_sections_for_level(level);
 
@@ -434,6 +519,20 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Title events emitted first
+        self.push_title_then_events(title_events);
+
+        self.event_buffer.pop()
+    }
+
+    fn scan_discrete_heading(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
+        self.advance();
+        self.pending_block_attrs = None;
+        let title_events = self.take_pending_block_title();
+
+        // Emit: Start(Heading) Text(title) End(Heading) — no context push
+        self.push_event(Event::End(TagEnd::Heading { level }));
+        self.push_event(Event::Text(Cow::Borrowed(title)));
+        self.push_event(Event::Start(Tag::Heading { level }));
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1000,27 +1099,68 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    /// Check if a line is a continuation of a list item principal (not a block element or new list item).
+    fn is_list_continuation_line(&self, line: &str) -> bool {
+        !scanner::is_blank(line)
+            && scanner::strip_section_marker(line).is_none()
+            && scanner::is_delimiter(line).is_none()
+            && scanner::is_list_marker_unordered(line).is_none()
+            && scanner::is_list_marker_ordered(line).is_none()
+            && scanner::is_admonition(line).is_none()
+            && scanner::is_block_image(line).is_none()
+            && !scanner::is_toc_macro(line)
+            && scanner::is_include_directive(line).is_none()
+            && !scanner::is_thematic_break(line)
+            && !scanner::is_page_break(line)
+            && scanner::is_attribute_entry(line).is_none()
+            && scanner::is_block_attribute(line).is_none()
+            && scanner::is_block_title(line).is_none()
+            && !scanner::is_line_comment(line)
+            && scanner::is_description_list_marker(line).is_none()
+            && scanner::is_callout_list_item(line).is_none()
+            && !scanner::is_list_continuation(line)
+            && !scanner::is_table_delimiter(line)
+            && !line.starts_with(' ') && !line.starts_with('\t')
+    }
+
     fn scan_unordered_list_item(&mut self, depth: u8, text: &'a str) -> Option<Event<'a>> {
         self.advance();
         let title_events = self.take_pending_block_title();
 
         let (checked, actual_text) = scanner::parse_checklist_marker(text);
 
+        // Collect wrapped continuation lines
+        let mut continuation_lines: Vec<&'a str> = Vec::new();
+        while let Some(line) = self.current_line() {
+            if self.is_list_continuation_line(line) {
+                continuation_lines.push(line);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
         let close_events = self.close_list_items_for_depth(depth);
 
         let need_new_list = !self.is_in_list_at_depth(depth, true);
+
+        // Push text events in reverse (bottom of stack = last to emit)
+        // Order: first text, then SoftBreak + continuation lines
+        for &cline in continuation_lines.iter().rev() {
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
+            self.push_event(Event::SoftBreak);
+        }
+        self.push_event(Event::Text(Cow::Borrowed(actual_text)));
 
         if need_new_list {
             self.context_stack.push(BlockContext::UnorderedList { depth });
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(actual_text)));
             self.push_event(Event::Start(Tag::ListItem { depth, checked }));
             self.push_event(Event::Start(Tag::UnorderedList { has_checklist: checked.is_some() }));
         } else {
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(actual_text)));
             self.push_event(Event::Start(Tag::ListItem { depth, checked }));
         }
 

@@ -108,6 +108,10 @@ enum BuildFrame {
     CalloutListItem {
         children: Vec<AsgNode>,
     },
+    Heading {
+        level: u8,
+        inlines: Vec<AsgNode>,
+    },
     Anchor,
     CrossReference,
 }
@@ -138,6 +142,10 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                         }
                         BuildFrame::SectionTitle { inlines: vec![] }
                     }
+                    Tag::Heading { level } => BuildFrame::Heading {
+                        level,
+                        inlines: vec![],
+                    },
                     Tag::Paragraph => BuildFrame::Paragraph { inlines: vec![] },
                     Tag::LiteralParagraph => BuildFrame::LiteralParagraph { inlines: vec![] },
                     Tag::UnorderedList { .. } => BuildFrame::UnorderedList { items: vec![] },
@@ -296,6 +304,13 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
             let merged = merge_adjacent_text(inlines);
             Some(AsgNode::Paragraph {
                 inlines: merged,
+            })
+        }
+        BuildFrame::Heading { level, inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Heading {
+                level: (level.saturating_sub(1)) as u64,
+                title: merged,
             })
         }
         BuildFrame::Section { level, title, blocks } => {
@@ -579,6 +594,7 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         }
         BuildFrame::CalloutList { items } => items.push(node),
         BuildFrame::CalloutListItem { children } => children.push(node),
+        BuildFrame::Heading { inlines, .. } => inlines.push(node),
         BuildFrame::Table
         | BuildFrame::TableHead
         | BuildFrame::TableBody

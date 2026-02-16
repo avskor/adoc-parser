@@ -145,6 +145,10 @@ pub fn is_attribute_entry(line: &str) -> Option<(&str, &str)> {
 
 pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
+    // Hyphen marker: `- text` (depth 1)
+    if let Some(rest) = trimmed.strip_prefix("- ") {
+        return Some((1, rest.trim_start()));
+    }
     let stars = count_leading(trimmed, '*');
     if stars == 0 {
         return None;
@@ -158,6 +162,13 @@ pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
 
 pub fn is_list_marker_ordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
+    // Numbered marker: `N. text` (depth 1)
+    if let Some(dot_pos) = trimmed.find(". ") {
+        let prefix = &trimmed[..dot_pos];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            return Some((1, trimmed[dot_pos + 2..].trim_start()));
+        }
+    }
     let dots = count_leading(trimmed, '.');
     if dots == 0 {
         return None;
@@ -194,6 +205,10 @@ pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
         return None;
     }
     let target = &rest[..bracket_start];
+    // Empty target: not a valid block image
+    if target.is_empty() {
+        return None;
+    }
     let alt = &rest[bracket_start + 1..bracket_end];
     Some((target, alt))
 }
@@ -310,11 +325,16 @@ pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
     if close < 2 {
         return None;
     }
-    let digits = &trimmed[1..close];
-    if !digits.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let n = digits.parse::<u32>().ok()?;
+    let inner = &trimmed[1..close];
+    // Autonumbered: `<.>` → number 0 (will be assigned by caller)
+    let n = if inner == "." {
+        0
+    } else {
+        if !inner.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        inner.parse::<u32>().ok()?
+    };
     let rest = &trimmed[close + 1..];
     if rest.is_empty() {
         return Some((n, ""));

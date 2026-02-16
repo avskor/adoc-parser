@@ -25,27 +25,14 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/document/preamble",
     // Header: attribute entries ordering, authors, adjacency
     "block/header/adjacent-to-body",
-    "block/header/attribute-entries-above-title",
-    "block/header/attribute-entries-around-title",
     "block/header/author",
-    "block/header/empty-lines-above",
-    // Discrete headings and heading-specific features
-    "block/heading/heading-adjacent-paragraph",
-    "block/heading/heading-only",
-    "block/heading/heading-paragraph",
-    "block/heading/implicit-when-inside-block",
-    "block/heading/level-0-at-top",
+    // Discrete headings: leveloffset and title-attribute
     "block/heading/leveloffset",
     "block/heading/title-attribute",
-    // Image: empty target
-    "block/image/empty-target",
     // Callout list: advanced features
     "block/list/callout/attached-paragraph",
-    "block/list/callout/autonumbered",
     // Ordered list: metadata, markers, nesting
     "block/list/ordered/adjacent-with-metadata",
-    "block/list/ordered/implicit-start-from-marker",
-    "block/list/ordered/numbered-marker",
     "block/list/ordered/principal-interrupted",
     "block/list/ordered/separated-by-block-attribute-line",
     "block/list/ordered/unlimited-nesting",
@@ -57,13 +44,11 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/list/unordered/attached-paragraph-plus-only",
     "block/list/unordered/block-attached-to-",
     "block/list/unordered/continue-",
-    "block/list/unordered/hyphen-marker",
     "block/list/unordered/isolated-marker",
     "block/list/unordered/list-continuation-as-attached-paragraph",
     "block/list/unordered/separated-by-block-attribute-line",
     "block/list/unordered/sibling-indented-with-metadata",
     "block/list/unordered/unlimited-nesting",
-    "block/list/unordered/wrapped-principal",
     // Section: leveloffset processing
     "block/section/leveloffset-input",
     "block/section/relative-leveloffset",
