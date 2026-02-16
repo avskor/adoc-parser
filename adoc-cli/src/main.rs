@@ -144,8 +144,9 @@ fn run(cli: Cli) -> Result<(), String> {
         seen.insert(canonical);
     }
     let resolved = resolve_includes(&input, base_dir, 0, &mut seen)?;
+    let preprocessed = adoc_parser::preprocess(&resolved);
 
-    let html = adoc_html::to_html(&resolved);
+    let html = adoc_html::to_html(&preprocessed);
 
     match &cli.output {
         Some(path) => fs::write(path, &html)
