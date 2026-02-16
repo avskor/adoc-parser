@@ -8,6 +8,7 @@ pub enum Event<'a> {
     End(TagEnd),
     Text(CowStr<'a>),
     Code(CowStr<'a>),
+    InlinePassthrough(CowStr<'a>),
     SoftBreak,
     HardBreak,
     ThematicBreak,

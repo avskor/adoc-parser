@@ -33,6 +33,9 @@ impl HtmlRenderer {
                 Event::Text(text) => {
                     html_escape(output, &text);
                 }
+                Event::InlinePassthrough(text) => {
+                    output.push_str(&text);
+                }
                 Event::Code(code) => {
                     output.push_str("<code>");
                     html_escape(output, &code);
@@ -420,5 +423,11 @@ mod tests {
     fn test_document_header() {
         let html = to_html("= My Document\n\nContent.");
         assert!(html.contains("<h1>My Document</h1>"));
+    }
+
+    #[test]
+    fn test_inline_passthrough_html() {
+        let html = to_html("hello +++<b>bold</b>+++ world");
+        assert!(html.contains("hello <b>bold</b> world"));
     }
 }

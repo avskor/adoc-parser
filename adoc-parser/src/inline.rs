@@ -130,8 +130,8 @@ impl<'a> InlineState<'a> {
                     text_start = self.pos;
                 }
 
-                // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
-                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
+                // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\ \+
+                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'+')) => {
                     self.flush_text(text_start, self.pos, events);
                     self.advance_by(1); // skip backslash
                     text_start = self.pos;
@@ -144,6 +144,22 @@ impl<'a> InlineState<'a> {
                     self.advance_by(2);
                     events.push(Event::HardBreak);
                     text_start = self.pos;
+                }
+
+                // Triple-plus passthrough: +++text+++
+                b'+' if self.peek_at(1) == Some(b'+') && self.peek_at(2) == Some(b'+') => {
+                    if self.try_triple_plus_passthrough(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Single-plus passthrough: +text+
+                b'+' => {
+                    if self.try_single_plus_passthrough(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
                 }
 
                 // Unconstrained formatting: double markers
@@ -217,6 +233,14 @@ impl<'a> InlineState<'a> {
                 // Cross-reference <<id>> or <<id,label>>
                 b'<' if self.peek_at(1) == Some(b'<') => {
                     if self.try_cross_reference(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Pass macro: pass:[text]
+                b'p' if self.remaining().starts_with("pass:") => {
+                    if self.try_pass_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -466,6 +490,109 @@ impl<'a> InlineState<'a> {
             i += 1;
         }
         None
+    }
+
+    fn try_triple_plus_passthrough(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_open = start_pos + 3; // skip "+++"
+
+        let rest = &self.input[after_open..];
+        let close = match rest.find("+++") {
+            Some(c) => c,
+            None => return false,
+        };
+
+        if close == 0 {
+            return false;
+        }
+
+        let inner = &rest[..close];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+
+        self.pos = after_open + close + 3;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_single_plus_passthrough(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+
+        // Must not be followed by another '+' (that would be ++ or +++)
+        if self.peek_at(1) == Some(b'+') {
+            return false;
+        }
+
+        let after_open = start_pos + 1; // skip "+"
+        if after_open >= self.input.len() {
+            return false;
+        }
+
+        // Find closing single '+' that is not part of '++' or '+++'
+        let bytes = &self.input.as_bytes()[after_open..];
+        let mut close = None;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'+' && i > 0 {
+                // Check it's not preceded by '+' or followed by '+'
+                let preceded_by_plus = bytes.get(i.wrapping_sub(1)).copied() == Some(b'+');
+                let followed_by_plus = bytes.get(i + 1).copied() == Some(b'+');
+                if !preceded_by_plus && !followed_by_plus {
+                    close = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let close = match close {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let inner = &self.input[after_open..after_open + close];
+
+        self.flush_text(*text_start, start_pos, events);
+        // Single-plus: emit as plain Text (no inline parsing, no typographic replacements)
+        events.push(Event::Text(Cow::Borrowed(inner)));
+
+        self.pos = after_open + close + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_pass_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 5..]; // skip "pass:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let inner = &rest[1..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+
+        self.pos = start_pos + 5 + bracket_end + 1;
+        *text_start = self.pos;
+        true
     }
 
     fn try_cross_reference(
@@ -1041,6 +1168,64 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("(C)")),
             Event::Text(Cow::Borrowed(" 2024")),
+        ]);
+    }
+
+    // Passthrough tests
+
+    #[test]
+    fn test_single_plus_passthrough() {
+        let events = parse("hello +*not bold*+ world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("*not bold*")),
+            Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    #[test]
+    fn test_triple_plus_passthrough() {
+        let events = parse("hello +++<b>raw</b>+++ world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::InlinePassthrough(Cow::Borrowed("<b>raw</b>")),
+            Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    #[test]
+    fn test_pass_macro() {
+        let events = parse("hello pass:[<em>raw</em>] world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::InlinePassthrough(Cow::Borrowed("<em>raw</em>")),
+            Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    #[test]
+    fn test_single_plus_no_typographic() {
+        let events = parse("+(C) 2024+");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(C) 2024")),
+        ]);
+    }
+
+    #[test]
+    fn test_passthrough_empty() {
+        // Empty ++ should not match as passthrough
+        let events = parse("hello ++ world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ++ world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_plus_no_passthrough() {
+        let events = parse("hello \\+text+ world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("+text+ world")),
         ]);
     }
 }
