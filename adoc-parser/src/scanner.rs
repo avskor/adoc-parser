@@ -262,6 +262,60 @@ pub fn is_include_directive(line: &str) -> Option<(&str, &str)> {
     Some((path, attrs))
 }
 
+pub fn strip_callout_markers(line: &str) -> (&str, Vec<u32>) {
+    let mut numbers = Vec::new();
+    let mut end = line.len();
+
+    loop {
+        let trimmed = line[..end].trim_end();
+        if !trimmed.ends_with('>') {
+            break;
+        }
+        let open = match trimmed[..trimmed.len() - 1].rfind('<') {
+            Some(pos) => pos,
+            None => break,
+        };
+        let digits = &trimmed[open + 1..trimmed.len() - 1];
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+        match digits.parse::<u32>() {
+            Ok(n) => {
+                numbers.push(n);
+                end = open;
+            }
+            Err(_) => break,
+        }
+    }
+
+    numbers.reverse();
+    (&line[..end], numbers)
+}
+
+pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('<') {
+        return None;
+    }
+    let close = trimmed.find('>')?;
+    if close < 2 {
+        return None;
+    }
+    let digits = &trimmed[1..close];
+    if !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let n = digits.parse::<u32>().ok()?;
+    let rest = &trimmed[close + 1..];
+    if rest.is_empty() {
+        return Some((n, ""));
+    }
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    Some((n, rest[1..].trim()))
+}
+
 pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
@@ -499,6 +553,48 @@ mod tests {
         assert_eq!(
             parse_table_cells("| single"),
             Some(vec!["single"])
+        );
+    }
+
+    #[test]
+    fn test_strip_callout_markers() {
+        assert_eq!(
+            strip_callout_markers("require 'sinatra' <1>"),
+            ("require 'sinatra' ", vec![1])
+        );
+        assert_eq!(
+            strip_callout_markers("code <1> <2>"),
+            ("code ", vec![1, 2])
+        );
+        assert_eq!(
+            strip_callout_markers("no callouts"),
+            ("no callouts", vec![])
+        );
+        assert_eq!(
+            strip_callout_markers("<1>"),
+            ("", vec![1])
+        );
+        assert_eq!(
+            strip_callout_markers("code <12>"),
+            ("code ", vec![12])
+        );
+    }
+
+    #[test]
+    fn test_is_callout_list_item() {
+        assert_eq!(
+            is_callout_list_item("<1> Library import"),
+            Some((1, "Library import"))
+        );
+        assert_eq!(
+            is_callout_list_item("<12> Two digits"),
+            Some((12, "Two digits"))
+        );
+        assert_eq!(is_callout_list_item("not a callout"), None);
+        assert_eq!(is_callout_list_item("<1>no space"), None);
+        assert_eq!(
+            is_callout_list_item("<3>"),
+            Some((3, ""))
         );
     }
 }

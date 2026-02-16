@@ -122,6 +122,11 @@ impl HtmlRenderer {
                         output.push_str("</a>]</sup>");
                     }
                 }
+                Event::CalloutRef(num) => {
+                    output.push_str("<b class=\"conum\">(");
+                    output.push_str(&num.to_string());
+                    output.push_str(")</b>");
+                }
                 Event::Toc => {
                     self.toc_insert_position = Some(output.len());
                 }
@@ -316,6 +321,12 @@ impl HtmlRenderer {
             Tag::DescriptionDescription => {
                 output.push_str("<dd>");
             }
+            Tag::CalloutList => {
+                output.push_str("<div class=\"colist arabic\">\n<ol>\n");
+            }
+            Tag::CalloutListItem { .. } => {
+                output.push_str("<li><p>");
+            }
             Tag::Admonition { kind } => {
                 let label = match kind {
                     AdmonitionKind::Note => "Note",
@@ -461,6 +472,12 @@ impl HtmlRenderer {
             }
             TagEnd::DescriptionDescription => {
                 output.push_str("</dd>\n");
+            }
+            TagEnd::CalloutList => {
+                output.push_str("</ol>\n</div>\n");
+            }
+            TagEnd::CalloutListItem => {
+                output.push_str("</p></li>\n");
             }
             TagEnd::Admonition => {
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
@@ -844,5 +861,27 @@ mod tests {
         let input = "= Document Title\n\n== Section\n\nContent.";
         let html = to_html(input);
         assert!(!html.contains("<div id=\"toc\""));
+    }
+
+    #[test]
+    fn test_source_block_callouts_html() {
+        let input = "[source,ruby]\n----\nrequire 'sinatra' <1>\nget '/hi' do <2>\n  \"Hello World!\" <3>\nend\n----\n<1> Library import\n<2> URL mapping\n<3> Response";
+        let html = to_html(input);
+        assert!(html.contains("<b class=\"conum\">(1)</b>"));
+        assert!(html.contains("<b class=\"conum\">(2)</b>"));
+        assert!(html.contains("<b class=\"conum\">(3)</b>"));
+        assert!(html.contains("<div class=\"colist arabic\">"));
+        assert!(html.contains("<li><p>Library import</p></li>"));
+        assert!(html.contains("<li><p>URL mapping</p></li>"));
+        assert!(html.contains("<li><p>Response</p></li>"));
+    }
+
+    #[test]
+    fn test_callout_multiple_per_line_html() {
+        let input = "[source]\n----\ncode <1> <2>\n----\n<1> First\n<2> Second";
+        let html = to_html(input);
+        assert!(html.contains("<b class=\"conum\">(1)</b><b class=\"conum\">(2)</b>"));
+        assert!(html.contains("<li><p>First</p></li>"));
+        assert!(html.contains("<li><p>Second</p></li>"));
     }
 }

@@ -25,6 +25,7 @@ pub enum Event<'a> {
     FootnoteRef {
         id: CowStr<'a>,
     },
+    CalloutRef(u32),
     Toc,
     Include {
         path: CowStr<'a>,
@@ -75,6 +76,8 @@ pub enum Tag<'a> {
     DescriptionList,
     DescriptionTerm,
     DescriptionDescription,
+    CalloutList,
+    CalloutListItem { number: u32 },
 
     // Admonitions
     Admonition { kind: AdmonitionKind },
@@ -127,6 +130,8 @@ pub enum TagEnd {
     DescriptionList,
     DescriptionTerm,
     DescriptionDescription,
+    CalloutList,
+    CalloutListItem,
 
     Admonition,
 
@@ -172,6 +177,8 @@ impl<'a> Tag<'a> {
             Tag::DescriptionList => TagEnd::DescriptionList,
             Tag::DescriptionTerm => TagEnd::DescriptionTerm,
             Tag::DescriptionDescription => TagEnd::DescriptionDescription,
+            Tag::CalloutList => TagEnd::CalloutList,
+            Tag::CalloutListItem { .. } => TagEnd::CalloutListItem,
             Tag::Admonition { .. } => TagEnd::Admonition,
             Tag::Table => TagEnd::Table,
             Tag::TableHead => TagEnd::TableHead,

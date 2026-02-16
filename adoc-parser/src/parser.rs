@@ -7,6 +7,7 @@ use crate::inline::InlineParser;
 pub struct Parser<'a> {
     block_scanner: BlockScanner<'a>,
     inline_buffer: Vec<Event<'a>>,
+    in_source_block: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -14,6 +15,7 @@ impl<'a> Parser<'a> {
         Self {
             block_scanner: BlockScanner::new(input),
             inline_buffer: Vec::new(),
+            in_source_block: false,
         }
     }
 }
@@ -28,8 +30,18 @@ impl<'a> Iterator for Parser<'a> {
 
         let event = self.block_scanner.next()?;
 
+        match &event {
+            Event::Start(crate::event::Tag::SourceBlock { .. }) => {
+                self.in_source_block = true;
+            }
+            Event::End(crate::event::TagEnd::SourceBlock) => {
+                self.in_source_block = false;
+            }
+            _ => {}
+        }
+
         match event {
-            Event::Text(Cow::Borrowed(s)) => {
+            Event::Text(Cow::Borrowed(s)) if !self.in_source_block => {
                 let events = InlineParser::parse_str(s);
                 if events.len() == 1 {
                     Some(events.into_iter().next().unwrap())

@@ -15,6 +15,7 @@ pub enum BlockContext {
     ListItem { depth: u8 },
     DescriptionList { depth: u8 },
     DescriptionListEntry { depth: u8 },
+    CalloutList,
 }
 
 pub struct BlockScanner<'a> {
@@ -108,6 +109,9 @@ impl<'a> BlockScanner<'a> {
                 }
                 BlockContext::DescriptionListEntry { .. } => {
                     events.push(Event::End(TagEnd::DescriptionDescription));
+                }
+                BlockContext::CalloutList => {
+                    events.push(Event::End(TagEnd::CalloutList));
                 }
             }
         }
@@ -249,6 +253,11 @@ impl<'a> BlockScanner<'a> {
         if scanner::is_line_comment(line) {
             self.advance();
             return self.scan_next_block();
+        }
+
+        // Callout list
+        if let Some((number, text)) = scanner::is_callout_list_item(line) {
+            return self.scan_callout_list_item(number, text);
         }
 
         // Unordered list
@@ -535,6 +544,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_block_title(line).is_some()
                 || scanner::is_line_comment(line)
                 || scanner::is_description_list_marker(line).is_some()
+                || scanner::is_callout_list_item(line).is_some()
                 || scanner::is_list_continuation(line)
                 || scanner::is_table_delimiter(line)
             {
@@ -721,7 +731,15 @@ impl<'a> BlockScanner<'a> {
             if i < content_lines.len() - 1 {
                 self.push_event(Event::SoftBreak);
             }
-            self.push_event(Event::Text(Cow::Borrowed(cline)));
+            let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
+            if callout_nums.is_empty() {
+                self.push_event(Event::Text(Cow::Borrowed(cline)));
+            } else {
+                for &n in callout_nums.iter().rev() {
+                    self.push_event(Event::CalloutRef(n));
+                }
+                self.push_event(Event::Text(Cow::Borrowed(stripped)));
+            }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
         self.push_title_then_events(title_events);
@@ -883,6 +901,36 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    fn is_in_callout_list(&self) -> bool {
+        self.context_stack.iter().rev().any(|ctx| matches!(ctx, BlockContext::CalloutList))
+    }
+
+    fn scan_callout_list_item(&mut self, number: u32, text: &'a str) -> Option<Event<'a>> {
+        self.advance();
+        let title_events = self.take_pending_block_title();
+
+        let need_new_list = !self.is_in_callout_list();
+
+        if need_new_list {
+            self.context_stack.push(BlockContext::CalloutList);
+        }
+
+        // Buffer (bottom to top for FIFO via pop):
+        self.push_event(Event::End(TagEnd::CalloutListItem));
+        if !text.is_empty() {
+            self.push_event(Event::Text(Cow::Borrowed(text)));
+        }
+        self.push_event(Event::Start(Tag::CalloutListItem { number }));
+        if need_new_list {
+            self.push_event(Event::Start(Tag::CalloutList));
+        }
+
+        self.push_title_then_events(title_events);
+
+        self.pending_block_attrs = None;
+        self.event_buffer.pop()
+    }
+
     /// Check if we're inside a delimited block and if the current line closes it
     fn check_close_delimited_block(&mut self) -> bool {
         if let Some(line) = self.current_line()
@@ -917,6 +965,9 @@ impl<'a> BlockScanner<'a> {
                                         }
                                         BlockContext::DescriptionListEntry { .. } => {
                                             events.push(Event::End(TagEnd::DescriptionDescription));
+                                        }
+                                        BlockContext::CalloutList => {
+                                            events.push(Event::End(TagEnd::CalloutList));
                                         }
                                     }
                                 }
@@ -1482,5 +1533,54 @@ mod tests {
         let input = "= My Document\n\nContent.";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert!(!events.contains(&Event::Toc));
+    }
+
+    #[test]
+    fn test_source_block_with_callouts() {
+        let input = "[source,ruby]\n----\nrequire 'sinatra' <1>\nget '/hi' do <2>\n  \"Hello World!\" <3>\nend\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::SourceBlock { language: Some(Cow::Owned("ruby".into())) }),
+            Event::Text(Cow::Borrowed("require 'sinatra' ")),
+            Event::CalloutRef(1),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("get '/hi' do ")),
+            Event::CalloutRef(2),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("  \"Hello World!\" ")),
+            Event::CalloutRef(3),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("end")),
+            Event::End(TagEnd::SourceBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_source_block_multiple_callouts() {
+        let input = "[source]\n----\ncode <1> <2>\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::SourceBlock { language: None }),
+            Event::Text(Cow::Borrowed("code ")),
+            Event::CalloutRef(1),
+            Event::CalloutRef(2),
+            Event::End(TagEnd::SourceBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_callout_list() {
+        let input = "<1> Library import\n<2> URL mapping";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::CalloutList),
+            Event::Start(Tag::CalloutListItem { number: 1 }),
+            Event::Text(Cow::Borrowed("Library import")),
+            Event::End(TagEnd::CalloutListItem),
+            Event::Start(Tag::CalloutListItem { number: 2 }),
+            Event::Text(Cow::Borrowed("URL mapping")),
+            Event::End(TagEnd::CalloutListItem),
+            Event::End(TagEnd::CalloutList),
+        ]);
     }
 }
