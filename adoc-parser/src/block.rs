@@ -202,6 +202,12 @@ impl<'a> BlockScanner<'a> {
             return self.scan_section(level, title);
         }
 
+        // TOC macro `toc::[]`
+        if scanner::is_toc_macro(line) {
+            self.advance();
+            return Some(Event::Toc);
+        }
+
         // Block image `image::path[alt]`
         if let Some((target, alt)) = scanner::is_block_image(line) {
             self.advance();
@@ -295,8 +301,17 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
+        // Check if :toc: attribute is present in header events
+        let has_toc = header_events.iter().any(|ev| {
+            matches!(ev, Event::Attribute { name, .. } if name == "toc")
+        });
+
         // Build buffer in reverse pop order:
-        // Start(Header) -> Start(SectionTitle) -> Start(DocTitle) -> Text -> End(DocTitle) -> End(SectionTitle) -> [header content] -> End(Header)
+        // Start(Header) -> Start(SectionTitle) -> Start(DocTitle) -> Text -> End(DocTitle) -> End(SectionTitle) -> [header content] -> End(Header) -> [Toc]
+        // Toc is pushed first (bottom of stack), emitted last — right after End(Header)
+        if has_toc {
+            self.push_event(Event::Toc);
+        }
         self.push_event(Event::End(TagEnd::Header));
         for ev in header_events.into_iter().rev() {
             self.push_event(ev);
@@ -502,6 +517,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_list_marker_ordered(line).is_some()
                 || scanner::is_admonition(line).is_some()
                 || scanner::is_block_image(line).is_some()
+                || scanner::is_toc_macro(line)
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_attribute_entry(line).is_some()
@@ -1148,6 +1164,7 @@ mod tests {
             Event::End(TagEnd::SectionTitle),
             Event::Attribute { name: Cow::Borrowed("toc"), value: Cow::Borrowed("left") },
             Event::End(TagEnd::Header),
+            Event::Toc,
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
@@ -1379,5 +1396,39 @@ mod tests {
             Event::End(TagEnd::TableFoot),
             Event::End(TagEnd::Table),
         ]);
+    }
+
+    #[test]
+    fn test_toc_event_after_header() {
+        let input = "= My Document\n:toc:\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Header),
+            Event::Start(Tag::SectionTitle { level: 0, id: Cow::Owned("_my_document".into()) }),
+            Event::Start(Tag::DocumentTitle),
+            Event::Text(Cow::Borrowed("My Document")),
+            Event::End(TagEnd::DocumentTitle),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute { name: Cow::Borrowed("toc"), value: Cow::Borrowed("") },
+            Event::End(TagEnd::Header),
+            Event::Toc,
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_toc_macro() {
+        let input = "toc::[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![Event::Toc]);
+    }
+
+    #[test]
+    fn test_no_toc_without_attribute() {
+        let input = "= My Document\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.contains(&Event::Toc));
     }
 }

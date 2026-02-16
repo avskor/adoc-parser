@@ -25,6 +25,7 @@ pub enum Event<'a> {
     FootnoteRef {
         id: CowStr<'a>,
     },
+    Toc,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -242,6 +242,10 @@ pub fn is_list_continuation(line: &str) -> bool {
     line.trim() == "+"
 }
 
+pub fn is_toc_macro(line: &str) -> bool {
+    line.trim() == "toc::[]"
+}
+
 pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
@@ -422,6 +426,16 @@ mod tests {
             is_description_list_marker("Term::"),
             Some((1, "Term", ""))
         );
+    }
+
+    #[test]
+    fn test_is_toc_macro() {
+        assert!(is_toc_macro("toc::[]"));
+        assert!(is_toc_macro("  toc::[]  "));
+        assert!(!is_toc_macro("toc::"));
+        assert!(!is_toc_macro("toc::[levels=3]"));
+        assert!(!is_toc_macro(""));
+        assert!(!is_toc_macro("something toc::[]"));
     }
 
     #[test]

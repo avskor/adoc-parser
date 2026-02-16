@@ -13,12 +13,23 @@ pub fn to_html(input: &str) -> String {
     output
 }
 
+struct TocEntry {
+    level: u8,
+    id: String,
+    title: String,
+}
+
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
     footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
     footnote_counter: usize,
     named_footnotes: HashMap<String, usize>, // id → number
+    toc_entries: Vec<TocEntry>,
+    toc_insert_position: Option<usize>,
+    toc_levels: u8,
+    in_section_title: bool,
+    current_toc_entry: Option<TocEntry>,
 }
 
 impl HtmlRenderer {
@@ -29,6 +40,11 @@ impl HtmlRenderer {
             footnotes: Vec::new(),
             footnote_counter: 0,
             named_footnotes: HashMap::new(),
+            toc_entries: Vec::new(),
+            toc_insert_position: None,
+            toc_levels: 2,
+            in_section_title: false,
+            current_toc_entry: None,
         }
     }
 
@@ -38,12 +54,20 @@ impl HtmlRenderer {
                 Event::Start(tag) => self.start_tag(output, &tag),
                 Event::End(tag_end) => self.end_tag(output, &tag_end),
                 Event::Text(text) => {
+                    if self.in_section_title
+                        && let Some(ref mut entry) = self.current_toc_entry {
+                            entry.title.push_str(&text);
+                    }
                     html_escape(output, &text);
                 }
                 Event::InlinePassthrough(text) => {
                     output.push_str(&text);
                 }
                 Event::Code(code) => {
+                    if self.in_section_title
+                        && let Some(ref mut entry) = self.current_toc_entry {
+                            entry.title.push_str(&code);
+                    }
                     output.push_str("<code>");
                     html_escape(output, &code);
                     output.push_str("</code>");
@@ -60,7 +84,11 @@ impl HtmlRenderer {
                 Event::PageBreak => {
                     output.push_str("<div style=\"page-break-after: always;\"></div>\n");
                 }
-                Event::Attribute { .. } => {
+                Event::Attribute { ref name, ref value, .. } => {
+                    if name == "toclevels"
+                        && let Ok(n) = value.parse::<u8>() {
+                            self.toc_levels = n;
+                    }
                     // Attributes are metadata, not rendered
                 }
                 Event::AttributeReference(name) => {
@@ -94,7 +122,15 @@ impl HtmlRenderer {
                         output.push_str("</a>]</sup>");
                     }
                 }
+                Event::Toc => {
+                    self.toc_insert_position = Some(output.len());
+                }
             }
+        }
+
+        if let Some(pos) = self.toc_insert_position {
+            let toc_html = self.generate_toc();
+            output.insert_str(pos, &toc_html);
         }
 
         if !self.footnotes.is_empty() {
@@ -118,6 +154,67 @@ impl HtmlRenderer {
         output.push_str("</div>\n");
     }
 
+    fn generate_toc(&self) -> String {
+        let min_level: u8 = 2;
+        let max_level = min_level + self.toc_levels - 1;
+
+        let entries: Vec<&TocEntry> = self.toc_entries.iter()
+            .filter(|e| e.level >= min_level && e.level <= max_level)
+            .collect();
+
+        if entries.is_empty() {
+            return String::new();
+        }
+
+        let mut toc = String::new();
+        toc.push_str("<div id=\"toc\" class=\"toc\">\n");
+        toc.push_str("<div id=\"toctitle\">Table of Contents</div>\n");
+
+        let mut current_level = min_level;
+        toc.push_str("<ul>\n");
+
+        for entry in &entries {
+            let level = entry.level;
+
+            // Open nested lists
+            while current_level < level {
+                toc.push_str("<ul>\n");
+                current_level += 1;
+            }
+
+            // Close nested lists
+            while current_level > level {
+                toc.push_str("</li>\n</ul>\n");
+                current_level -= 1;
+            }
+
+            // Close previous item at same level (not for the very first entry)
+            if current_level == level && toc.ends_with("</ul>\n") {
+                // Just opened a list, no previous item to close
+            } else if current_level == level {
+                toc.push_str("</li>\n");
+            }
+
+            toc.push_str("<li><a href=\"#");
+            html_escape(&mut toc, &entry.id);
+            toc.push_str("\">");
+            html_escape(&mut toc, &entry.title);
+            toc.push_str("</a>\n");
+
+            current_level = level;
+        }
+
+        // Close remaining open lists
+        while current_level > min_level {
+            toc.push_str("</li>\n</ul>\n");
+            current_level -= 1;
+        }
+        toc.push_str("</li>\n</ul>\n");
+        toc.push_str("</div>\n");
+
+        toc
+    }
+
     fn start_tag(&mut self, output: &mut String, tag: &Tag) {
         let tag_end = tag.to_end();
         self.tag_stack.push(tag_end);
@@ -131,6 +228,14 @@ impl HtmlRenderer {
                 output.push_str("<h1>");
             }
             Tag::SectionTitle { level, id } => {
+                if *level >= 2 {
+                    self.in_section_title = true;
+                    self.current_toc_entry = Some(TocEntry {
+                        level: *level,
+                        id: id.to_string(),
+                        title: String::new(),
+                    });
+                }
                 let h = section_level_to_h(*level);
                 output.push_str("<h");
                 output.push_str(&h.to_string());
@@ -302,6 +407,12 @@ impl HtmlRenderer {
                 output.push_str("</h1>\n");
             }
             TagEnd::SectionTitle => {
+                if self.in_section_title {
+                    if let Some(entry) = self.current_toc_entry.take() {
+                        self.toc_entries.push(entry);
+                    }
+                    self.in_section_title = false;
+                }
                 let level = self.find_section_level();
                 let h = section_level_to_h(level);
                 output.push_str("</h");
@@ -665,5 +776,56 @@ mod tests {
         assert!(html.contains(">1</a>. First"));
         assert!(html.contains(">2</a>. Second"));
         assert!(html.contains(">3</a>. Third"));
+    }
+
+    #[test]
+    fn test_toc_html() {
+        let input = "= Document Title\n:toc:\n\n== Section One\n\nContent.\n\n== Section Two\n\nMore content.";
+        let html = to_html(input);
+        assert!(html.contains("<div id=\"toc\" class=\"toc\">"));
+        assert!(html.contains("<div id=\"toctitle\">Table of Contents</div>"));
+        assert!(html.contains("<a href=\"#_section_one\">Section One</a>"));
+        assert!(html.contains("<a href=\"#_section_two\">Section Two</a>"));
+        assert!(html.contains("</ul>"));
+        assert!(html.contains("</div>"));
+    }
+
+    #[test]
+    fn test_toc_levels() {
+        let input = "= Document Title\n:toc:\n:toclevels: 3\n\n== Level 2\n\n=== Level 3\n\n==== Level 4\n\n===== Level 5";
+        let html = to_html(input);
+        assert!(html.contains("<a href=\"#_level_2\">Level 2</a>"));
+        assert!(html.contains("<a href=\"#_level_3\">Level 3</a>"));
+        assert!(html.contains("<a href=\"#_level_4\">Level 4</a>"));
+        // Level 5 should NOT be in TOC (toclevels: 3 → levels 2..4)
+        assert!(!html.contains("<a href=\"#_level_5\">Level 5</a>"));
+    }
+
+    #[test]
+    fn test_toc_default_levels() {
+        let input = "= Document Title\n:toc:\n\n== Level 2\n\n=== Level 3\n\n==== Level 4";
+        let html = to_html(input);
+        assert!(html.contains("<a href=\"#_level_2\">Level 2</a>"));
+        assert!(html.contains("<a href=\"#_level_3\">Level 3</a>"));
+        // Default toclevels: 2 → levels 2..3, so level 4 should NOT be in TOC
+        assert!(!html.contains("<a href=\"#_level_4\">Level 4</a>"));
+    }
+
+    #[test]
+    fn test_toc_macro_html() {
+        let input = "= Document Title\n\n== Before\n\ntoc::[]\n\n== After";
+        let html = to_html(input);
+        assert!(html.contains("<div id=\"toc\" class=\"toc\">"));
+        // TOC should be placed where toc::[] macro is (after "Before" section start)
+        let toc_pos = html.find("<div id=\"toc\"").unwrap();
+        let before_pos = html.find("Before</h2>").unwrap();
+        assert!(toc_pos > before_pos, "TOC should appear after the Before heading");
+    }
+
+    #[test]
+    fn test_no_toc_without_attribute() {
+        let input = "= Document Title\n\n== Section\n\nContent.";
+        let html = to_html(input);
+        assert!(!html.contains("<div id=\"toc\""));
     }
 }
