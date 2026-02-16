@@ -220,6 +220,11 @@ impl<'a> BlockScanner<'a> {
             return self.scan_admonition(label, text);
         }
 
+        // Table `|===`
+        if scanner::is_table_delimiter(line) {
+            return self.scan_table();
+        }
+
         // Delimited block
         if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
             return self.scan_delimited_block(delim_type, delim_len);
@@ -342,6 +347,115 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    fn scan_table(&mut self) -> Option<Event<'a>> {
+        self.advance(); // skip opening |===
+        let title_events = self.take_pending_block_title();
+
+        // Collect lines until closing |=== or EOF
+        let mut content_lines: Vec<&'a str> = Vec::new();
+        while let Some(line) = self.current_line() {
+            if scanner::is_table_delimiter(line) {
+                self.advance();
+                break;
+            }
+            content_lines.push(line);
+            self.advance();
+        }
+
+        // Parse cells from content lines, tracking blank line positions
+        let mut all_cells: Vec<&'a str> = Vec::new();
+        let mut first_blank_after_first_row = false;
+        let mut cells_before_blank: usize = 0;
+        let mut found_first_data = false;
+
+        for &line in &content_lines {
+            if scanner::is_blank(line) {
+                if found_first_data && !first_blank_after_first_row {
+                    first_blank_after_first_row = true;
+                    cells_before_blank = all_cells.len();
+                }
+                continue;
+            }
+            found_first_data = true;
+            if let Some(cells) = scanner::parse_table_cells(line) {
+                all_cells.extend(cells);
+            }
+        }
+
+        if all_cells.is_empty() {
+            self.pending_block_attrs = None;
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop().or_else(|| self.scan_next_block());
+        }
+
+        // Determine number of columns from first data line
+        let num_cols = {
+            let mut cols = 0;
+            for &line in &content_lines {
+                if scanner::is_blank(line) {
+                    continue;
+                }
+                if let Some(cells) = scanner::parse_table_cells(line) {
+                    cols = cells.len();
+                    break;
+                }
+            }
+            if cols == 0 { 1 } else { cols }
+        };
+
+        // Determine if there's a header: first row is header if blank line follows it
+        let has_header = first_blank_after_first_row && cells_before_blank == num_cols;
+
+        // Group cells into rows of num_cols
+        let header_cells = if has_header {
+            &all_cells[..num_cols]
+        } else {
+            &[]
+        };
+        let body_cells = if has_header {
+            &all_cells[num_cols..]
+        } else {
+            &all_cells[..]
+        };
+
+        // Build events in reverse (buffer is a stack, pop from top)
+        self.push_event(Event::End(TagEnd::Table));
+
+        // TableBody
+        if !body_cells.is_empty() {
+            self.push_event(Event::End(TagEnd::TableBody));
+            for row in body_cells.chunks(num_cols).rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                for &cell in row.iter().rev() {
+                    self.push_event(Event::End(TagEnd::TableCell));
+                    self.push_event(Event::Text(Cow::Borrowed(cell)));
+                    self.push_event(Event::Start(Tag::TableCell));
+                }
+                self.push_event(Event::Start(Tag::TableRow));
+            }
+            self.push_event(Event::Start(Tag::TableBody));
+        }
+
+        // TableHead
+        if has_header {
+            self.push_event(Event::End(TagEnd::TableHead));
+            self.push_event(Event::End(TagEnd::TableRow));
+            for &cell in header_cells.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableHeaderCell));
+                self.push_event(Event::Text(Cow::Borrowed(cell)));
+                self.push_event(Event::Start(Tag::TableHeaderCell));
+            }
+            self.push_event(Event::Start(Tag::TableRow));
+            self.push_event(Event::Start(Tag::TableHead));
+        }
+
+        self.push_event(Event::Start(Tag::Table));
+        self.push_title_then_events(title_events);
+
+        self.pending_block_attrs = None;
+        self.event_buffer.pop()
+    }
+
     fn scan_paragraph(&mut self) -> Option<Event<'a>> {
         let title_events = self.take_pending_block_title();
         let mut para_lines: Vec<&'a str> = Vec::new();
@@ -362,6 +476,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_line_comment(line)
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_list_continuation(line)
+                || scanner::is_table_delimiter(line)
             {
                 break;
             }
@@ -1002,6 +1117,105 @@ mod tests {
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_simple_table() {
+        let input = "|===\n| A | B\n| C | D\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("D")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_with_header() {
+        let input = "|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableHead),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("Header 1")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell),
+            Event::Text(Cow::Borrowed("Header 2")),
+            Event::End(TagEnd::TableHeaderCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableHead),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("Cell 1")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("Cell 2")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("Cell 3")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("Cell 4")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_single_column_per_line() {
+        let input = "|===\n| A\n| B\n| C\n| D\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        // num_cols = 1 (first line has 1 cell), so 4 rows of 1 cell each
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell),
+            Event::Text(Cow::Borrowed("D")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
         ]);
     }
 }

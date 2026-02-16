@@ -67,6 +67,14 @@ pub enum Tag<'a> {
     // Admonitions
     Admonition { kind: AdmonitionKind },
 
+    // Tables
+    Table,
+    TableHead,
+    TableBody,
+    TableRow,
+    TableCell,
+    TableHeaderCell,
+
     // Media
     BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
     InlineImage { target: CowStr<'a>, alt: CowStr<'a> },
@@ -109,6 +117,13 @@ pub enum TagEnd {
 
     Admonition,
 
+    Table,
+    TableHead,
+    TableBody,
+    TableRow,
+    TableCell,
+    TableHeaderCell,
+
     BlockImage,
     InlineImage,
 
@@ -144,6 +159,12 @@ impl<'a> Tag<'a> {
             Tag::DescriptionTerm => TagEnd::DescriptionTerm,
             Tag::DescriptionDescription => TagEnd::DescriptionDescription,
             Tag::Admonition { .. } => TagEnd::Admonition,
+            Tag::Table => TagEnd::Table,
+            Tag::TableHead => TagEnd::TableHead,
+            Tag::TableBody => TagEnd::TableBody,
+            Tag::TableRow => TagEnd::TableRow,
+            Tag::TableCell => TagEnd::TableCell,
+            Tag::TableHeaderCell => TagEnd::TableHeaderCell,
             Tag::BlockImage { .. } => TagEnd::BlockImage,
             Tag::InlineImage { .. } => TagEnd::InlineImage,
             Tag::Strong => TagEnd::Strong,

@@ -242,6 +242,28 @@ pub fn is_list_continuation(line: &str) -> bool {
     line.trim() == "+"
 }
 
+pub fn is_table_delimiter(line: &str) -> bool {
+    line.trim() == "|==="
+}
+
+pub fn parse_table_cells(line: &str) -> Option<Vec<&str>> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('|') {
+        return None;
+    }
+    let mut cells = Vec::new();
+    // Split by '|', skip the first empty segment before the leading '|'
+    let parts: Vec<&str> = trimmed[1..].split('|').collect();
+    for part in &parts {
+        let cell = part.trim();
+        if !cell.is_empty() {
+            cells.push(cell);
+        }
+    }
+    // If the last part was empty (trailing '|'), it's already skipped above
+    Some(cells)
+}
+
 pub fn generate_id(title: &str) -> String {
     let mut id = String::with_capacity(title.len() + 1);
     id.push('_');
@@ -399,6 +421,33 @@ mod tests {
         assert_eq!(
             is_description_list_marker("Term::"),
             Some((1, "Term", ""))
+        );
+    }
+
+    #[test]
+    fn test_is_table_delimiter() {
+        assert!(is_table_delimiter("|==="));
+        assert!(is_table_delimiter("  |===  "));
+        assert!(!is_table_delimiter("|===="));
+        assert!(!is_table_delimiter("===="));
+        assert!(!is_table_delimiter("|== "));
+        assert!(!is_table_delimiter(""));
+    }
+
+    #[test]
+    fn test_parse_table_cells() {
+        assert_eq!(
+            parse_table_cells("| A | B | C"),
+            Some(vec!["A", "B", "C"])
+        );
+        assert_eq!(
+            parse_table_cells("| A | B |"),
+            Some(vec!["A", "B"])
+        );
+        assert_eq!(parse_table_cells("no pipe"), None);
+        assert_eq!(
+            parse_table_cells("| single"),
+            Some(vec!["single"])
         );
     }
 }

@@ -167,6 +167,24 @@ impl HtmlRenderer {
                 output.push_str(label);
                 output.push_str("</div>\n</td>\n<td class=\"content\">\n");
             }
+            Tag::Table => {
+                output.push_str("<table>\n");
+            }
+            Tag::TableHead => {
+                output.push_str("<thead>\n");
+            }
+            Tag::TableBody => {
+                output.push_str("<tbody>\n");
+            }
+            Tag::TableRow => {
+                output.push_str("<tr>\n");
+            }
+            Tag::TableCell => {
+                output.push_str("<td>");
+            }
+            Tag::TableHeaderCell => {
+                output.push_str("<th>");
+            }
             Tag::BlockImage { target, alt } => {
                 output.push_str("<div class=\"imageblock\">\n<div class=\"content\">\n<img src=\"");
                 html_escape(output, target);
@@ -274,6 +292,24 @@ impl HtmlRenderer {
             }
             TagEnd::Admonition => {
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
+            }
+            TagEnd::Table => {
+                output.push_str("</table>\n");
+            }
+            TagEnd::TableHead => {
+                output.push_str("</thead>\n");
+            }
+            TagEnd::TableBody => {
+                output.push_str("</tbody>\n");
+            }
+            TagEnd::TableRow => {
+                output.push_str("</tr>\n");
+            }
+            TagEnd::TableCell => {
+                output.push_str("</td>\n");
+            }
+            TagEnd::TableHeaderCell => {
+                output.push_str("</th>\n");
             }
             TagEnd::BlockImage => {
                 output.push_str("</div>\n");
@@ -477,5 +513,36 @@ mod tests {
     fn test_inline_passthrough_html() {
         let html = to_html("hello +++<b>bold</b>+++ world");
         assert!(html.contains("hello <b>bold</b> world"));
+    }
+
+    #[test]
+    fn test_table_html() {
+        let html = to_html("|===\n| A | B\n| C | D\n|===");
+        assert!(html.contains("<table>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<tr>"));
+        assert!(html.contains("<td>A</td>"));
+        assert!(html.contains("<td>B</td>"));
+        assert!(html.contains("<td>C</td>"));
+        assert!(html.contains("<td>D</td>"));
+        assert!(html.contains("</tbody>"));
+        assert!(html.contains("</table>"));
+        assert!(!html.contains("<thead>"));
+    }
+
+    #[test]
+    fn test_table_with_header_html() {
+        let html = to_html("|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===");
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Header 1</th>"));
+        assert!(html.contains("<th>Header 2</th>"));
+        assert!(html.contains("</thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Cell 1</td>"));
+        assert!(html.contains("<td>Cell 2</td>"));
+        assert!(html.contains("<td>Cell 3</td>"));
+        assert!(html.contains("<td>Cell 4</td>"));
+        assert!(html.contains("</tbody>"));
+        assert!(html.contains("</table>"));
     }
 }
