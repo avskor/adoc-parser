@@ -150,6 +150,13 @@ impl<'a> BlockScanner<'a> {
     fn scan_next_block(&mut self) -> Option<Event<'a>> {
         self.skip_blank_lines();
 
+        // Check if current line closes a delimited block
+        if self.check_close_delimited_block() {
+            // Discard pending block attributes — they have no target block
+            self.pending_block_attrs = None;
+            return self.event_buffer.pop();
+        }
+
         let line = match self.current_line() {
             Some(l) => l,
             None => {
@@ -168,6 +175,13 @@ impl<'a> BlockScanner<'a> {
         if self.pos == 0 && !self.header_emitted
             && let Some((1, title)) = scanner::strip_section_marker(line) {
                 return self.scan_document_header(title);
+        }
+
+        // Attribute-only document header: starts with attribute entries but no `= Title`
+        if self.pos == 0 && !self.header_emitted
+            && scanner::is_attribute_entry(line).is_some()
+        {
+            return self.scan_attribute_only_header();
         }
 
         // Attribute entry `:name: value`
@@ -285,11 +299,22 @@ impl<'a> BlockScanner<'a> {
             if self.is_in_list_context() {
                 return self.scan_next_block();
             }
-            return self.scan_next_block();
+            // Outside list context, emit as a single-line paragraph
+            self.push_event(Event::End(TagEnd::Paragraph));
+            self.push_event(Event::Text(Cow::Borrowed("+")));
+            self.push_event(Event::Start(Tag::Paragraph));
+            return self.event_buffer.pop();
         }
 
-        // Literal paragraph (leading space)
+        // Literal paragraph (leading space), unless [normal] style overrides
         if line.starts_with(' ') || line.starts_with('\t') {
+            let is_normal_style = self
+                .pending_block_attrs
+                .as_ref()
+                .is_some_and(|a| a.positional.first().is_some_and(|s| s == "normal"));
+            if is_normal_style {
+                return self.scan_normal_indented_paragraph();
+            }
             return self.scan_literal_paragraph();
         }
 
@@ -346,6 +371,36 @@ impl<'a> BlockScanner<'a> {
             level: 0,
             id: Cow::Owned(id),
         }));
+
+        Some(Event::Start(Tag::Header))
+    }
+
+    /// Scan an attribute-only document header (no `= Title`).
+    /// Collects leading attribute entries and wraps them in Header events.
+    fn scan_attribute_only_header(&mut self) -> Option<Event<'a>> {
+        self.header_emitted = true;
+        let mut header_events: Vec<Event<'a>> = Vec::new();
+
+        while let Some(line) = self.current_line() {
+            if scanner::is_blank(line) {
+                self.advance();
+                break;
+            }
+            if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                header_events.push(Event::Attribute {
+                    name: Cow::Borrowed(name),
+                    value: Cow::Borrowed(value),
+                });
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.push_event(Event::End(TagEnd::Header));
+        for ev in header_events.into_iter().rev() {
+            self.push_event(ev);
+        }
 
         Some(Event::Start(Tag::Header))
     }
@@ -593,6 +648,50 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    /// Scan indented text as a regular paragraph (when `[normal]` style is set).
+    fn scan_normal_indented_paragraph(&mut self) -> Option<Event<'a>> {
+        let title_events = self.take_pending_block_title();
+        let mut lines: Vec<&'a str> = Vec::new();
+
+        while let Some(line) = self.current_line() {
+            if scanner::is_blank(line) || (!line.starts_with(' ') && !line.starts_with('\t')) {
+                break;
+            }
+            lines.push(line);
+            self.advance();
+        }
+
+        if lines.is_empty() {
+            return self.scan_next_block();
+        }
+
+        // Strip common indent and emit as regular paragraph
+        let min_indent = lines
+            .iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+
+        self.push_event(Event::End(TagEnd::Paragraph));
+        for (i, &pline) in lines.iter().enumerate().rev() {
+            if i < lines.len() - 1 {
+                self.push_event(Event::SoftBreak);
+            }
+            let stripped = if pline.len() >= min_indent {
+                &pline[min_indent..]
+            } else {
+                pline
+            };
+            self.push_event(Event::Text(Cow::Borrowed(stripped)));
+        }
+        self.push_event(Event::Start(Tag::Paragraph));
+        self.push_title_then_events(title_events);
+
+        self.pending_block_attrs = None;
+        self.event_buffer.pop()
+    }
+
     fn scan_literal_paragraph(&mut self) -> Option<Event<'a>> {
         let title_events = self.take_pending_block_title();
         let mut lines: Vec<&'a str> = Vec::new();
@@ -665,8 +764,11 @@ impl<'a> BlockScanner<'a> {
 
         let block_attrs = self.pending_block_attrs.take().unwrap_or_default();
 
-        // Check for source block
-        if (delim_type == scanner::DelimiterType::Listing) && block_attrs.is_source_block() {
+        // Check for source block (applies to both listing `----` and literal `....` delimiters)
+        if (delim_type == scanner::DelimiterType::Listing
+            || delim_type == scanner::DelimiterType::Literal)
+            && block_attrs.is_source_block()
+        {
             let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
             return self.scan_source_block(delim_type, delim_len, language, title_events);
         }

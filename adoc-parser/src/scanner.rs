@@ -111,9 +111,18 @@ pub fn is_block_title(line: &str) -> Option<&str> {
 }
 
 pub fn is_block_attribute(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() > 2 {
-        Some(&trimmed[1..trimmed.len() - 1])
+    let trimmed = line.trim_end();
+    // Block attribute lines must not have leading whitespace
+    if trimmed.starts_with(' ') || trimmed.starts_with('\t') {
+        return None;
+    }
+    if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        // Reject if content starts with space (e.g. `[ id=idname ]`)
+        if !inner.is_empty() && inner.starts_with(' ') {
+            return None;
+        }
+        Some(inner)
     } else {
         None
     }
@@ -453,7 +462,8 @@ mod tests {
     #[test]
     fn test_is_block_attribute() {
         assert_eq!(is_block_attribute("[source,rust]"), Some("source,rust"));
-        assert_eq!(is_block_attribute("[]"), None);
+        assert_eq!(is_block_attribute("[]"), Some(""));
+        assert_eq!(is_block_attribute("[ id=idname ]"), None);
         assert_eq!(is_block_attribute("not block attr"), None);
     }
 

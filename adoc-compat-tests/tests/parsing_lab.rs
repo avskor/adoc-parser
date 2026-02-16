@@ -2,134 +2,71 @@ use std::path::{Path, PathBuf};
 
 use adoc_compat_tests::asg::AsgNode;
 use adoc_compat_tests::builder::build_asg;
-use adoc_parser::Parser;
+use adoc_parser::{Parser, preprocess};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
 const SKIP_PATTERNS: &[&str] = &[
-    // Include directives require file I/O
-    "block/include/",
-    // Conditional directives — partial support
-    "block/conditional/",
-    // Attribute resolution in headers
-    "block/header/reference-",
-    "block/header/redefined-",
-    "block/header/escaped-",
-    "block/header/negated-",
-    "block/header/suppressed-",
-    "block/header/attribute-entries-",
-    // Author parsing in header
-    "block/header/author",
-    // Header with empty lines above (parser requires pos==0)
-    "block/header/empty-lines-above",
-    // Header adjacent to body — parser doesn't stop header at non-attribute line
-    "block/header/adjacent-to-body",
-    // Attribute list parsing
-    "block/attrlist/",
-    // Attribute entries in body
-    "block/attributes/",
-    // Leveloffset
-    "block/section/leveloffset",
-    "block/section/bogus-leveloffset",
-    "block/section/relative-leveloffset",
-    "block/heading/leveloffset",
-    // Title attribute on section/heading
-    "block/section/title-attribute",
-    "block/heading/title-attribute",
-    // Tests with config files often require special options
-    "block/section/title-body-",
-    "block/section/title-adjacent-body-",
-    // Discrete headings — parser doesn't distinguish heading vs section
-    "block/heading/heading-only",
-    "block/heading/heading-paragraph",
-    "block/heading/heading-adjacent-paragraph",
-    // Heading level-0 at top (becomes document title)
-    "block/heading/level-0-at-top",
-    // Heading implicit when inside block
-    "block/heading/implicit-when-inside-block",
-    // Source style requiring attribute resolution
-    "block/listing/source-style",
-    "block/listing/implicit-source-style",
-    "block/listing/inherited-implicit-source-style",
-    "block/listing/source-style-with-default-language",
-    // Image — attribute list parsing
-    "block/image/",
-    // Complex list features with metadata
-    "block/list/unordered/attached-block-with-metadata",
-    "block/list/unordered/attached-indented-block-with-metadata",
-    "block/list/unordered/attached-orphaned-metadata",
-    "block/list/unordered/adjacent-with-metadata",
-    "block/list/unordered/nested-with-metadata",
-    "block/list/unordered/sibling-indented-with-metadata",
-    "block/list/unordered/separated-by-block-attribute-line",
-    // Wrapped principal — parser can't distinguish from attached paragraph
-    "block/list/unordered/wrapped-principal",
-    // Adjacent delimited block requires attribute processing
-    "block/list/unordered/adjacent-delimited-block",
-    // Unlimited nesting — parser doesn't pop back to ancestor correctly
-    "block/list/unordered/unlimited-nesting",
-    // Ancestor depth handling issues in parser
-    "block/list/unordered/ancestor-dlist-like",
-    "block/list/unordered/ancestor-with-nested-marker",
-    "block/list/ordered/unlimited-nesting",
-    // List continuation edge cases
-    "block/list/unordered/list-continuation-as-attached-paragraph",
-    "block/list/unordered/trailing-list-continuation",
-    "block/list/unordered/attached-paragraph-plus-only",
-    // Attached paragraphs
-    "block/list/unordered/attached-paragraphs-",
-    // Hyphen marker
-    "block/list/unordered/hyphen-marker",
-    // Isolated marker
-    "block/list/unordered/isolated-marker",
-    // Block attached to ancestor/parent
-    "block/list/unordered/block-attached-to-",
-    // Continue ancestor/parent
-    "block/list/unordered/continue-",
-    "block/list/ordered/adjacent-with-metadata",
-    "block/list/ordered/nested-with-metadata",
-    "block/list/ordered/separated-by-block-attribute-line",
-    "block/list/ordered/start-",
-    "block/list/ordered/numbered-marker",
-    "block/list/ordered/implicit-start-from-marker",
-    "block/list/ordered/list-continuation-between-siblings",
-    "block/list/ordered/principal-interrupted",
-    "block/list/ordered/ventilated",
-    // Callout lists
-    "block/list/callout/",
-    // Paragraph separated by block attribute line
-    "block/paragraph/separated-by-block-attribute-line",
-    // Paragraph separated by list continuation
-    "block/paragraph/separated-by-list-continuation",
-    "block/paragraph/sole-list-continuation",
-    // Paragraph with config
-    "block/paragraph/paragraph-empty-lines-paragraph-",
+    // Attribute entries in body (requires Unknown(attributes) node)
+    "block/attributes/in-block",
+    // Leveloffset in body — requires heading vs section distinction + leveloffset
+    "block/attributes/leveloffset-in-body",
     // Description list complex features
-    "block/dlist/attached-block",
-    "block/dlist/attached-paragraphs",
+    "block/dlist/ancestor-list-like",
+    "block/dlist/attached-block-no-principal",
     "block/dlist/indented-principal-below-term",
     "block/dlist/indented-sibling-following-nested-list",
-    "block/dlist/list-continuation-between-siblings",
-    "block/dlist/ancestor-list-like",
-    "block/dlist/parent-list-indented-marker",
-    "block/dlist/nested",
-    // Dlist: wrapped principal (continuation lines)
-    "block/dlist/wrapped-principal",
-    // Dlist: multiple terms per item — parser creates separate items
     "block/dlist/multiple-terms",
-    // Document-level tests
-    "block/document/",
-    // Attached indented blocks — parser preserves leading space
-    "block/list/unordered/attached-indented-block-",
-    "block/list/ordered/attached-indented-block",
-    // Literal: [normal] style on indented block converts to Paragraph
-    "block/literal/indented-with-normal-style",
-    // Literal: source style creates Literal instead of Listing
-    "block/literal/source-style-with-language",
-    // Sidebar: orphaned metadata creates extra block
-    "block/sidebar/orphaned-metadata",
-    // Sidebar advanced
-    "block/sidebar/containing-blocks-separated-by-empty-lines",
+    "block/dlist/nested",
+    "block/dlist/parent-list-indented-marker",
+    "block/dlist/wrapped-principal",
+    // Document metadata and preamble
+    "block/document/metadata",
+    "block/document/preamble",
+    // Header: attribute entries ordering, authors, adjacency
+    "block/header/adjacent-to-body",
+    "block/header/attribute-entries-above-title",
+    "block/header/attribute-entries-around-title",
+    "block/header/author",
+    "block/header/empty-lines-above",
+    // Discrete headings and heading-specific features
+    "block/heading/heading-adjacent-paragraph",
+    "block/heading/heading-only",
+    "block/heading/heading-paragraph",
+    "block/heading/implicit-when-inside-block",
+    "block/heading/level-0-at-top",
+    "block/heading/leveloffset",
+    "block/heading/title-attribute",
+    // Image: empty target
+    "block/image/empty-target",
+    // Callout list: advanced features
+    "block/list/callout/attached-paragraph",
+    "block/list/callout/autonumbered",
+    // Ordered list: metadata, markers, nesting
+    "block/list/ordered/adjacent-with-metadata",
+    "block/list/ordered/implicit-start-from-marker",
+    "block/list/ordered/numbered-marker",
+    "block/list/ordered/principal-interrupted",
+    "block/list/ordered/separated-by-block-attribute-line",
+    "block/list/ordered/unlimited-nesting",
+    // Unordered list: complex features
+    "block/list/unordered/adjacent-delimited-block",
+    "block/list/unordered/adjacent-with-metadata",
+    "block/list/unordered/ancestor-dlist-like",
+    "block/list/unordered/ancestor-with-nested-marker",
+    "block/list/unordered/attached-paragraph-plus-only",
+    "block/list/unordered/block-attached-to-",
+    "block/list/unordered/continue-",
+    "block/list/unordered/hyphen-marker",
+    "block/list/unordered/isolated-marker",
+    "block/list/unordered/list-continuation-as-attached-paragraph",
+    "block/list/unordered/separated-by-block-attribute-line",
+    "block/list/unordered/sibling-indented-with-metadata",
+    "block/list/unordered/unlimited-nesting",
+    "block/list/unordered/wrapped-principal",
+    // Section: leveloffset processing
+    "block/section/leveloffset-input",
+    "block/section/relative-leveloffset",
 ];
 
 fn should_skip(test_path: &str) -> bool {
@@ -241,7 +178,8 @@ fn asciidoc_parsing_lab_block_tests() {
 
         let expected = AsgNode::from_value(&expected_value);
 
-        let parser = Parser::new(&input);
+        let preprocessed = preprocess(&input);
+        let parser = Parser::new(&preprocessed);
         let actual = build_asg(parser);
 
         if actual == expected {
