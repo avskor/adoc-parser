@@ -18,6 +18,7 @@ cargo test --workspace           # Run all tests (83 tests)
 cargo test -p adoc-parser        # Test core parser only
 cargo test -p adoc-html          # Test HTML backend only
 cargo test -p adoc-parser -- scanner::tests::test_is_delimiter   # Run single test
+cargo clippy --workspace         # Lint
 cargo build -p adoc-wasm --target wasm32-unknown-unknown         # WASM build
 ```
 
