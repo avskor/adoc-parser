@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use context7 MCP server to fetch up-to-date documentation for libraries and frameworks before answering questions or writing code that depends on them.
 
+## Workflow
+
+Each new task starts in a new git branch off main.
+
 ## Build & Test Commands
 
 ```bash
