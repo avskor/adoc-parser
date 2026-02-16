@@ -211,6 +211,12 @@ impl<'a> BlockScanner<'a> {
             return self.scan_delimited_block(delim_type, delim_len);
         }
 
+        // Single-line comment `// ...`
+        if scanner::is_line_comment(line) {
+            self.advance();
+            return self.scan_next_block();
+        }
+
         // Unordered list
         if let Some((depth, text)) = scanner::is_list_marker_unordered(line) {
             return self.scan_unordered_list_item(depth, text);
@@ -325,6 +331,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_attribute_entry(line).is_some()
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_block_title(line).is_some()
+                || scanner::is_line_comment(line)
             {
                 break;
             }
@@ -747,6 +754,47 @@ mod tests {
             Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_another_level_2".into()) }),
             Event::Text(Cow::Borrowed("Another Level 2")),
             Event::End(TagEnd::SectionTitle),
+            Event::End(TagEnd::Section { level: 2 }),
+        ]);
+    }
+
+    #[test]
+    fn test_line_comment_skipped() {
+        let input = "First.\n// this is a comment\nSecond.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("First.")),
+            Event::End(TagEnd::Paragraph),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Second.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_line_comment_at_start() {
+        let input = "// comment\nHello.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Hello.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_line_comment_between_sections() {
+        let input = "== Section\n// comment\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_section".into()) }),
+            Event::Text(Cow::Borrowed("Section")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
             Event::End(TagEnd::Section { level: 2 }),
         ]);
     }

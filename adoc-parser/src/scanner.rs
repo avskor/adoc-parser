@@ -171,6 +171,11 @@ pub fn is_admonition(line: &str) -> Option<(&str, &str)> {
     None
 }
 
+pub fn is_line_comment(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    trimmed.starts_with("//") && is_delimiter(trimmed).is_none()
+}
+
 pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
     let trimmed = line.trim();
     let rest = trimmed.strip_prefix("image::")?;
@@ -291,6 +296,16 @@ mod tests {
         assert_eq!(is_block_attribute("[source,rust]"), Some("source,rust"));
         assert_eq!(is_block_attribute("[]"), None);
         assert_eq!(is_block_attribute("not block attr"), None);
+    }
+
+    #[test]
+    fn test_is_line_comment() {
+        assert!(is_line_comment("// this is a comment"));
+        assert!(is_line_comment("//"));
+        assert!(is_line_comment("///"));
+        assert!(!is_line_comment("////"));
+        assert!(!is_line_comment("/////"));
+        assert!(!is_line_comment("not a comment"));
     }
 
     #[test]
