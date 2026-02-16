@@ -51,6 +51,14 @@ impl<'a> InlineState<'a> {
             let b = self.input.as_bytes()[self.pos];
 
             match b {
+                // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
+                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
+                    self.flush_text(text_start, self.pos, events);
+                    self.advance_by(1); // skip backslash
+                    text_start = self.pos;
+                    self.advance_by(1); // skip escaped char (included in next text flush)
+                }
+
                 // Hard break: ` +` at end of string
                 b' ' if self.check_hard_break() => {
                     self.flush_text(text_start, self.pos, events);
@@ -756,6 +764,69 @@ mod tests {
             Event::Start(Tag::Anchor { id: Cow::Borrowed("my-anchor") }),
             Event::End(TagEnd::Anchor),
             Event::Text(Cow::Borrowed("text")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_bold() {
+        let events = parse("hello \\*not bold* world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("*not bold* world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_italic() {
+        let events = parse("hello \\_not italic_ world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("_not italic_ world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_monospace() {
+        let events = parse("hello \\`not code` world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Text(Cow::Borrowed("`not code` world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_attribute_reference() {
+        let events = parse("use \\{name} literally");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("use ")),
+            Event::Text(Cow::Borrowed("{name} literally")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_cross_reference() {
+        let events = parse("not \\<<a ref>>");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("not ")),
+            Event::Text(Cow::Borrowed("<<a ref>>")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_backslash() {
+        let events = parse("a \\\\ b");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Text(Cow::Borrowed("\\ b")),
+        ]);
+    }
+
+    #[test]
+    fn test_backslash_before_normal_char() {
+        // Backslash before non-special char is kept as-is
+        let events = parse("hello \\world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello \\world")),
         ]);
     }
 
