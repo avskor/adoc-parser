@@ -39,6 +39,9 @@ struct HtmlRenderer {
     in_section_title: bool,
     current_toc_entry: Option<TocEntry>,
     pending_block_meta: Option<BlockMeta>,
+    kbd_mode: bool,
+    menu_target: Option<String>,
+    menu_items: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -56,6 +59,9 @@ impl HtmlRenderer {
             in_section_title: false,
             current_toc_entry: None,
             pending_block_meta: None,
+            kbd_mode: false,
+            menu_target: None,
+            menu_items: None,
         }
     }
 
@@ -69,7 +75,13 @@ impl HtmlRenderer {
                         && let Some(ref mut entry) = self.current_toc_entry {
                             entry.title.push_str(&text);
                     }
-                    html_escape(output, &text);
+                    if self.kbd_mode {
+                        self.render_kbd_keys(output, &text);
+                    } else if self.menu_target.is_some() {
+                        self.menu_items = Some(text.to_string());
+                    } else {
+                        html_escape(output, &text);
+                    }
                 }
                 Event::InlinePassthrough(text) => {
                     output.push_str(&text);
@@ -495,6 +507,15 @@ impl HtmlRenderer {
                 html_escape(output, target);
                 output.push_str("\">");
             }
+            Tag::Keyboard => {
+                self.kbd_mode = true;
+            }
+            Tag::Button => {
+                output.push_str("<b class=\"button\">");
+            }
+            Tag::Menu { target } => {
+                self.menu_target = Some(target.to_string());
+            }
             Tag::Anchor { id } => {
                 output.push_str("<a id=\"");
                 html_escape(output, id);
@@ -646,6 +667,15 @@ impl HtmlRenderer {
             TagEnd::CrossReference => {
                 output.push_str("</a>");
             }
+            TagEnd::Keyboard => {
+                self.kbd_mode = false;
+            }
+            TagEnd::Button => {
+                output.push_str("</b>");
+            }
+            TagEnd::Menu => {
+                self.render_menu(output);
+            }
             TagEnd::Anchor => {
                 // Already closed in start_tag
             }
@@ -684,6 +714,60 @@ impl HtmlRenderer {
                 first = false;
             }
             output.push('"');
+        }
+    }
+
+    fn render_kbd_keys(&self, output: &mut String, text: &str) {
+        let keys: Vec<&str> = text.split('+').map(|k| k.trim()).collect();
+        if keys.len() == 1 {
+            output.push_str("<kbd>");
+            html_escape(output, keys[0]);
+            output.push_str("</kbd>");
+        } else {
+            output.push_str("<span class=\"keyseq\">");
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    output.push('+');
+                }
+                output.push_str("<kbd>");
+                html_escape(output, key);
+                output.push_str("</kbd>");
+            }
+            output.push_str("</span>");
+        }
+    }
+
+    fn render_menu(&mut self, output: &mut String) {
+        let target = match self.menu_target.take() {
+            Some(t) => t,
+            None => return,
+        };
+        let items = self.menu_items.take();
+
+        let items_str = items.unwrap_or_default();
+        if items_str.is_empty() {
+            // menu:File[] — just the menu name
+            output.push_str("<span class=\"menu\">");
+            html_escape(output, &target);
+            output.push_str("</span>");
+        } else {
+            let parts: Vec<&str> = items_str.split('>').map(|s| s.trim()).collect();
+            output.push_str("<span class=\"menuseq\"><span class=\"menu\">");
+            html_escape(output, &target);
+            output.push_str("</span>");
+            for (i, part) in parts.iter().enumerate() {
+                output.push_str("\u{00A0}\u{25B8} ");
+                if i < parts.len() - 1 {
+                    output.push_str("<span class=\"submenu\">");
+                    html_escape(output, part);
+                    output.push_str("</span>");
+                } else {
+                    output.push_str("<span class=\"menuitem\">");
+                    html_escape(output, part);
+                    output.push_str("</span>");
+                }
+            }
+            output.push_str("</span>");
         }
     }
 
@@ -1101,5 +1185,47 @@ mod tests {
     fn test_table_colspan_rowspan_html() {
         let html = to_html("|===\n2.3+| cell | B\n| C\n| D\n|===");
         assert!(html.contains("<td colspan=\"2\" rowspan=\"3\">cell</td>"));
+    }
+
+    #[test]
+    fn test_kbd_single_key_html() {
+        let html = to_html("kbd:[F11]");
+        assert_eq!(html, "<p><kbd>F11</kbd></p>\n");
+    }
+
+    #[test]
+    fn test_kbd_combo_html() {
+        let html = to_html("kbd:[Ctrl+C]");
+        assert_eq!(html, "<p><span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>C</kbd></span></p>\n");
+    }
+
+    #[test]
+    fn test_btn_html() {
+        let html = to_html("btn:[OK]");
+        assert_eq!(html, "<p><b class=\"button\">OK</b></p>\n");
+    }
+
+    #[test]
+    fn test_menu_html() {
+        let html = to_html("menu:File[Save As]");
+        assert_eq!(
+            html,
+            "<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Save As</span></span></p>\n"
+        );
+    }
+
+    #[test]
+    fn test_menu_no_items_html() {
+        let html = to_html("menu:File[]");
+        assert_eq!(html, "<p><span class=\"menu\">File</span></p>\n");
+    }
+
+    #[test]
+    fn test_menu_submenus_html() {
+        let html = to_html("menu:File[New > Doc]");
+        assert_eq!(
+            html,
+            "<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"submenu\">New</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Doc</span></span></p>\n"
+        );
     }
 }

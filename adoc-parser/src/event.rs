@@ -182,6 +182,11 @@ pub enum Tag<'a> {
     Link { url: CowStr<'a> },
     CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>> },
 
+    // UI macros
+    Keyboard,
+    Button,
+    Menu { target: CowStr<'a> },
+
     // Anchors
     Anchor { id: CowStr<'a> },
 }
@@ -232,6 +237,10 @@ pub enum TagEnd {
 
     Link,
     CrossReference,
+
+    Keyboard,
+    Button,
+    Menu,
 
     Anchor,
 }
@@ -291,6 +300,11 @@ impl<'a> Tag<'a> {
                 target: Cow::Owned(target.into_owned()),
                 label: label.map(|l| Cow::Owned(l.into_owned())),
             },
+            Tag::Keyboard => Tag::Keyboard,
+            Tag::Button => Tag::Button,
+            Tag::Menu { target } => Tag::Menu {
+                target: Cow::Owned(target.into_owned()),
+            },
             Tag::Anchor { id } => Tag::Anchor {
                 id: Cow::Owned(id.into_owned()),
             },
@@ -335,6 +349,9 @@ impl<'a> Tag<'a> {
             Tag::Subscript => TagEnd::Subscript,
             Tag::Link { .. } => TagEnd::Link,
             Tag::CrossReference { .. } => TagEnd::CrossReference,
+            Tag::Keyboard => TagEnd::Keyboard,
+            Tag::Button => TagEnd::Button,
+            Tag::Menu { .. } => TagEnd::Menu,
             Tag::Anchor { .. } => TagEnd::Anchor,
         }
     }

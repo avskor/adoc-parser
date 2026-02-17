@@ -117,6 +117,15 @@ enum BuildFrame {
     },
     Anchor,
     CrossReference,
+    Keyboard {
+        inlines: Vec<AsgNode>,
+    },
+    Button {
+        inlines: Vec<AsgNode>,
+    },
+    Menu {
+        inlines: Vec<AsgNode>,
+    },
 }
 
 /// Build an AsgNode tree from a stream of parser events.
@@ -207,6 +216,9 @@ pub fn build_asg<'a>(
                     },
                     Tag::Anchor { .. } => BuildFrame::Anchor,
                     Tag::CrossReference { .. } => BuildFrame::CrossReference,
+                    Tag::Keyboard => BuildFrame::Keyboard { inlines: vec![] },
+                    Tag::Button => BuildFrame::Button { inlines: vec![] },
+                    Tag::Menu { .. } => BuildFrame::Menu { inlines: vec![] },
                 };
                 stack.push(frame);
             }
@@ -587,6 +599,27 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
             Some(AsgNode::ListItem { principal, blocks })
         }
         BuildFrame::Anchor | BuildFrame::CrossReference => None,
+        BuildFrame::Keyboard { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "keyboard".to_string(),
+                inlines: merged,
+            })
+        }
+        BuildFrame::Button { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "button".to_string(),
+                inlines: merged,
+            })
+        }
+        BuildFrame::Menu { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "menu".to_string(),
+                inlines: merged,
+            })
+        }
     }
 }
 
@@ -713,6 +746,9 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         | BuildFrame::CrossReference => {
             // Ignored for now
         }
+        BuildFrame::Keyboard { inlines }
+        | BuildFrame::Button { inlines }
+        | BuildFrame::Menu { inlines } => inlines.push(node),
         BuildFrame::BlockImage { .. } | BuildFrame::InlineImage { .. } => {
             // Images don't have children in our model
         }

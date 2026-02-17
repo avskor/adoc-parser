@@ -318,6 +318,30 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Keyboard macro: kbd:[keys]
+                b'k' if self.remaining().starts_with("kbd:") => {
+                    if self.try_kbd_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Button macro: btn:[label]
+                b'b' if self.remaining().starts_with("btn:") => {
+                    if self.try_btn_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Menu macro: menu:Target[items]
+                b'm' if self.remaining().starts_with("menu:") => {
+                    if self.try_menu_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Footnote macro: footnote:[text] or footnote:id[text] or footnote:id[]
                 b'f' if self.remaining().starts_with("footnote:") => {
                     if self.try_footnote_macro(events, &mut text_start) {
@@ -657,6 +681,112 @@ impl<'a> InlineState<'a> {
         events.push(Event::Text(Cow::Borrowed(inner)));
 
         self.pos = after_open + close + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_kbd_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 4..]; // skip "kbd:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &rest[1..bracket_end];
+        if content.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Start(Tag::Keyboard));
+        events.push(Event::Text(Cow::Borrowed(content)));
+        events.push(Event::End(TagEnd::Keyboard));
+
+        self.pos = start_pos + 4 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_btn_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 4..]; // skip "btn:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &rest[1..bracket_end];
+        if content.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Start(Tag::Button));
+        events.push(Event::Text(Cow::Borrowed(content)));
+        events.push(Event::End(TagEnd::Button));
+
+        self.pos = start_pos + 4 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_menu_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 5..]; // skip "menu:"
+
+        let bracket_start = match rest.find('[') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let target = &rest[..bracket_start];
+        if target.is_empty() {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+        if bracket_end <= bracket_start {
+            return false;
+        }
+
+        let items = &rest[bracket_start + 1..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Start(Tag::Menu {
+            target: Cow::Borrowed(target),
+        }));
+        if !items.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(items)));
+        }
+        events.push(Event::End(TagEnd::Menu));
+
+        self.pos = start_pos + 5 + bracket_end + 1;
         *text_start = self.pos;
         true
     }
@@ -1545,6 +1675,79 @@ mod tests {
         let events = parse("\\\"`text`\"");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("\"`text`\"")),
+        ]);
+    }
+
+    // UI macro tests
+
+    #[test]
+    fn test_kbd_macro() {
+        let events = parse("kbd:[Ctrl+C]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Keyboard),
+            Event::Text(Cow::Borrowed("Ctrl+C")),
+            Event::End(TagEnd::Keyboard),
+        ]);
+    }
+
+    #[test]
+    fn test_kbd_single_key() {
+        let events = parse("kbd:[F11]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Keyboard),
+            Event::Text(Cow::Borrowed("F11")),
+            Event::End(TagEnd::Keyboard),
+        ]);
+    }
+
+    #[test]
+    fn test_kbd_in_sentence() {
+        let events = parse("Press kbd:[Ctrl+C] to copy");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Press ")),
+            Event::Start(Tag::Keyboard),
+            Event::Text(Cow::Borrowed("Ctrl+C")),
+            Event::End(TagEnd::Keyboard),
+            Event::Text(Cow::Borrowed(" to copy")),
+        ]);
+    }
+
+    #[test]
+    fn test_btn_macro() {
+        let events = parse("btn:[OK]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Button),
+            Event::Text(Cow::Borrowed("OK")),
+            Event::End(TagEnd::Button),
+        ]);
+    }
+
+    #[test]
+    fn test_menu_macro() {
+        let events = parse("menu:File[Save As]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
+            Event::Text(Cow::Borrowed("Save As")),
+            Event::End(TagEnd::Menu),
+        ]);
+    }
+
+    #[test]
+    fn test_menu_no_items() {
+        let events = parse("menu:File[]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
+            Event::End(TagEnd::Menu),
+        ]);
+    }
+
+    #[test]
+    fn test_menu_with_submenus() {
+        let events = parse("menu:File[New > Document]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
+            Event::Text(Cow::Borrowed("New > Document")),
+            Event::End(TagEnd::Menu),
         ]);
     }
 
