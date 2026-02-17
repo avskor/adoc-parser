@@ -147,6 +147,16 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    fn emit_block_metadata(&mut self, attrs: &BlockAttributes) {
+        if attrs.id.is_some() || !attrs.roles.is_empty() || !attrs.options.is_empty() {
+            self.push_event(Event::BlockMetadata {
+                id: attrs.id.as_ref().map(|s| Cow::Owned(s.clone())),
+                roles: attrs.roles.iter().map(|s| Cow::Owned(s.clone())).collect(),
+                options: attrs.options.iter().map(|s| Cow::Owned(s.clone())).collect(),
+            });
+        }
+    }
+
     fn push_title_then_events(&mut self, title_events: Vec<Event<'a>>) {
         // Title events should be emitted first (pushed on top of buffer)
         for ev in title_events.into_iter().rev() {
@@ -417,11 +427,15 @@ impl<'a> BlockScanner<'a> {
         if let Some((target, alt)) = scanner::is_block_image(line) {
             self.advance();
             let title_events = self.take_pending_block_title();
+            let block_attrs = self.pending_block_attrs.take();
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),
                 alt: Cow::Borrowed(alt),
             }));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs);
+            }
             self.push_title_then_events(title_events);
             return self.event_buffer.pop();
         }
@@ -774,7 +788,7 @@ impl<'a> BlockScanner<'a> {
             .and_then(|a| a.id.clone())
             .unwrap_or_else(|| scanner::generate_id(title));
 
-        self.pending_block_attrs = None;
+        let block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
 
         self.context_stack.push(BlockContext::Section { level: effective_level });
@@ -787,6 +801,9 @@ impl<'a> BlockScanner<'a> {
             id: Cow::Owned(id),
         }));
         self.push_event(Event::Start(Tag::Section { level: effective_level }));
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
 
         // Close events emitted before section opening
         for ev in close_events.into_iter().rev() {
@@ -806,7 +823,7 @@ impl<'a> BlockScanner<'a> {
 
     fn scan_discrete_heading(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
         self.advance();
-        self.pending_block_attrs = None;
+        let block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
 
         // Apply leveloffset to heading level
@@ -816,6 +833,9 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::End(TagEnd::Heading { level: effective_level }));
         self.push_event(Event::Text(Cow::Borrowed(title)));
         self.push_event(Event::Start(Tag::Heading { level: effective_level }));
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -959,6 +979,7 @@ impl<'a> BlockScanner<'a> {
         }
 
         self.push_event(Event::Start(Tag::Table));
+        self.emit_block_metadata(&block_attrs);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1003,6 +1024,8 @@ impl<'a> BlockScanner<'a> {
         let admonition_kind = self.pending_block_attrs.as_ref()
             .and_then(|a| a.admonition_kind());
 
+        let block_attrs = self.pending_block_attrs.take();
+
         if let Some(kind) = admonition_kind {
             self.push_event(Event::End(TagEnd::Admonition));
             self.push_event(Event::End(TagEnd::Paragraph));
@@ -1014,6 +1037,9 @@ impl<'a> BlockScanner<'a> {
             }
             self.push_event(Event::Start(Tag::Paragraph));
             self.push_event(Event::Start(Tag::Admonition { kind }));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs);
+            }
         } else {
             self.push_event(Event::End(TagEnd::Paragraph));
             for (i, &pline) in para_lines.iter().enumerate().rev() {
@@ -1023,10 +1049,12 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::Text(Cow::Borrowed(pline)));
             }
             self.push_event(Event::Start(Tag::Paragraph));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs);
+            }
         }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1068,9 +1096,12 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(stripped)));
         }
         self.push_event(Event::Start(Tag::Paragraph));
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1106,9 +1137,12 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(stripped)));
         }
         self.push_event(Event::Start(Tag::LiteralParagraph));
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1130,9 +1164,12 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Text(Cow::Borrowed(text)));
         self.push_event(Event::Start(Tag::Paragraph));
         self.push_event(Event::Start(Tag::Admonition { kind }));
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1152,7 +1189,7 @@ impl<'a> BlockScanner<'a> {
             && block_attrs.is_source_block()
         {
             let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
-            return self.scan_source_block(delim_type, delim_len, language, title_events);
+            return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
         }
 
         // Comment block — skip content entirely
@@ -1209,6 +1246,7 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::End(TagEnd::DelimitedBlock));
                 self.push_event(Event::Text(Cow::Borrowed("\n")));
                 self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                self.emit_block_metadata(&block_attrs);
                 self.push_title_then_events(title_events);
                 return self.event_buffer.pop();
             }
@@ -1223,6 +1261,7 @@ impl<'a> BlockScanner<'a> {
             }
             // Push Start on top of content
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+            self.emit_block_metadata(&block_attrs);
             // Push title events on very top (emitted first)
             self.push_title_then_events(title_events);
 
@@ -1247,6 +1286,7 @@ impl<'a> BlockScanner<'a> {
         } else {
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
         }
+        self.emit_block_metadata(&block_attrs);
         self.push_title_then_events(title_events);
         self.event_buffer.pop()
     }
@@ -1257,6 +1297,7 @@ impl<'a> BlockScanner<'a> {
         delim_len: usize,
         language: Option<CowStr<'a>>,
         title_events: Vec<Event<'a>>,
+        block_attrs: &BlockAttributes,
     ) -> Option<Event<'a>> {
         let mut content_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
@@ -1285,6 +1326,7 @@ impl<'a> BlockScanner<'a> {
             }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
+        self.emit_block_metadata(block_attrs);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1512,13 +1554,16 @@ impl<'a> BlockScanner<'a> {
         if need_new_list {
             self.push_event(Event::Start(Tag::DescriptionList));
         }
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
 
         for ev in close_events.into_iter().rev() {
             self.push_event(ev);
         }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1604,12 +1649,16 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::ListItem { depth, checked }));
         }
 
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
+
         for ev in close_events.into_iter().rev() {
             self.push_event(ev);
         }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.had_blank_line = false;
         self.event_buffer.pop()
     }
@@ -1646,12 +1695,16 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
         }
 
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
+
         for ev in close_events.into_iter().rev() {
             self.push_event(ev);
         }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -1688,12 +1741,16 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::CalloutList));
         }
 
+        let block_attrs = self.pending_block_attrs.take();
+        if let Some(ref attrs) = block_attrs {
+            self.emit_block_metadata(attrs);
+        }
+
         for ev in close_events.into_iter().rev() {
             self.push_event(ev);
         }
         self.push_title_then_events(title_events);
 
-        self.pending_block_attrs = None;
         self.event_buffer.pop()
     }
 
@@ -2137,6 +2194,7 @@ mod tests {
         let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("header".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -2167,6 +2225,7 @@ mod tests {
         let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("footer".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -2197,6 +2256,7 @@ mod tests {
         let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),

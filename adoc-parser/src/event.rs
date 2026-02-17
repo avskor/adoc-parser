@@ -43,6 +43,11 @@ pub enum Event<'a> {
         initials: CowStr<'a>,
         address: CowStr<'a>,
     },
+    BlockMetadata {
+        id: Option<CowStr<'a>>,
+        roles: Vec<CowStr<'a>>,
+        options: Vec<CowStr<'a>>,
+    },
 }
 
 impl<'a> Event<'a> {
@@ -89,6 +94,11 @@ impl<'a> Event<'a> {
                 lastname: cow_owned(lastname),
                 initials: cow_owned(initials),
                 address: cow_owned(address),
+            },
+            Event::BlockMetadata { id, roles, options } => Event::BlockMetadata {
+                id: id.map(cow_owned),
+                roles: roles.into_iter().map(cow_owned).collect(),
+                options: options.into_iter().map(cow_owned).collect(),
             },
         }
     }

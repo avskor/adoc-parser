@@ -19,6 +19,13 @@ struct TocEntry {
     title: String,
 }
 
+#[allow(dead_code)]
+struct BlockMeta {
+    id: Option<String>,
+    roles: Vec<String>,
+    options: Vec<String>,
+}
+
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
@@ -30,6 +37,7 @@ struct HtmlRenderer {
     toc_levels: u8,
     in_section_title: bool,
     current_toc_entry: Option<TocEntry>,
+    pending_block_meta: Option<BlockMeta>,
 }
 
 impl HtmlRenderer {
@@ -45,6 +53,7 @@ impl HtmlRenderer {
             toc_levels: 2,
             in_section_title: false,
             current_toc_entry: None,
+            pending_block_meta: None,
         }
     }
 
@@ -137,6 +146,13 @@ impl HtmlRenderer {
                 }
                 Event::Author { .. } => {
                     // Author metadata — not rendered to HTML body
+                }
+                Event::BlockMetadata { id, roles, options } => {
+                    self.pending_block_meta = Some(BlockMeta {
+                        id: id.map(|s| s.into_owned()),
+                        roles: roles.into_iter().map(|s| s.into_owned()).collect(),
+                        options: options.into_iter().map(|s| s.into_owned()).collect(),
+                    });
                 }
             }
         }
@@ -231,6 +247,7 @@ impl HtmlRenderer {
     fn start_tag(&mut self, output: &mut String, tag: &Tag) {
         let tag_end = tag.to_end();
         self.tag_stack.push(tag_end);
+        let meta = self.take_block_meta();
 
         match tag {
             Tag::Header => {
@@ -260,36 +277,55 @@ impl HtmlRenderer {
                 let h = section_level_to_h(*level);
                 output.push_str("<h");
                 output.push_str(&h.to_string());
+                Self::write_meta_attrs(output, &meta, "");
                 output.push('>');
             }
             Tag::Section { .. } => {
-                output.push_str("<div class=\"sect\">\n");
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "sect");
+                output.push_str(">\n");
             }
             Tag::Paragraph => {
-                output.push_str("<p>");
+                output.push_str("<p");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push('>');
             }
             Tag::LiteralParagraph => {
-                output.push_str("<pre>");
+                output.push_str("<pre");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push('>');
             }
             Tag::DelimitedBlock { kind } => {
                 match kind {
                     DelimitedBlockKind::Listing => {
-                        output.push_str("<div class=\"listingblock\">\n<div class=\"content\">\n<pre>");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "listingblock");
+                        output.push_str(">\n<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Literal => {
-                        output.push_str("<div class=\"literalblock\">\n<div class=\"content\">\n<pre>");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "literalblock");
+                        output.push_str(">\n<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Example => {
-                        output.push_str("<div class=\"exampleblock\">\n<div class=\"content\">\n");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "exampleblock");
+                        output.push_str(">\n<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Sidebar => {
-                        output.push_str("<div class=\"sidebarblock\">\n<div class=\"content\">\n");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "sidebarblock");
+                        output.push_str(">\n<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Quote => {
-                        output.push_str("<div class=\"quoteblock\">\n<blockquote>\n");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "quoteblock");
+                        output.push_str(">\n<blockquote>\n");
                     }
                     DelimitedBlockKind::Open => {
-                        output.push_str("<div class=\"openblock\">\n<div class=\"content\">\n");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "openblock");
+                        output.push_str(">\n<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Comment => {
                         // Comment blocks are not rendered
@@ -301,7 +337,9 @@ impl HtmlRenderer {
             }
             Tag::SourceBlock { language } => {
                 self.in_source_block = true;
-                output.push_str("<div class=\"listingblock\">\n<div class=\"content\">\n<pre class=\"highlight\"><code");
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "listingblock");
+                output.push_str(">\n<div class=\"content\">\n<pre class=\"highlight\"><code");
                 if let Some(lang) = language {
                     output.push_str(" class=\"language-");
                     html_escape(output, lang);
@@ -313,13 +351,19 @@ impl HtmlRenderer {
                 output.push_str("<div class=\"title\">");
             }
             Tag::UnorderedList { has_checklist: true } => {
-                output.push_str("<ul class=\"checklist\">\n");
+                output.push_str("<ul");
+                Self::write_meta_attrs(output, &meta, "checklist");
+                output.push_str(">\n");
             }
             Tag::UnorderedList { has_checklist: false } => {
-                output.push_str("<ul>\n");
+                output.push_str("<ul");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push_str(">\n");
             }
             Tag::OrderedList => {
-                output.push_str("<ol>\n");
+                output.push_str("<ol");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push_str(">\n");
             }
             Tag::ListItem { checked: Some(true), .. } => {
                 output.push_str("<li><input type=\"checkbox\" disabled checked> ");
@@ -331,7 +375,9 @@ impl HtmlRenderer {
                 output.push_str("<li>");
             }
             Tag::DescriptionList => {
-                output.push_str("<dl>\n");
+                output.push_str("<dl");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push_str(">\n");
             }
             Tag::DescriptionTerm => {
                 output.push_str("<dt>");
@@ -353,14 +399,17 @@ impl HtmlRenderer {
                     AdmonitionKind::Warning => "Warning",
                     AdmonitionKind::Caution => "Caution",
                 };
-                output.push_str("<div class=\"admonitionblock ");
-                output.push_str(&label.to_lowercase());
-                output.push_str("\">\n<table>\n<tr>\n<td class=\"icon\">\n<div class=\"title\">");
+                let adm_class = format!("admonitionblock {}", label.to_lowercase());
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, &adm_class);
+                output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n<div class=\"title\">");
                 output.push_str(label);
                 output.push_str("</div>\n</td>\n<td class=\"content\">\n");
             }
             Tag::Table => {
-                output.push_str("<table>\n");
+                output.push_str("<table");
+                Self::write_meta_attrs(output, &meta, "");
+                output.push_str(">\n");
             }
             Tag::TableHead => {
                 output.push_str("<thead>\n");
@@ -381,7 +430,9 @@ impl HtmlRenderer {
                 output.push_str("<th>");
             }
             Tag::BlockImage { target, alt } => {
-                output.push_str("<div class=\"imageblock\">\n<div class=\"content\">\n<img src=\"");
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "imageblock");
+                output.push_str(">\n<div class=\"content\">\n<img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
@@ -560,6 +611,41 @@ impl HtmlRenderer {
             TagEnd::Anchor => {
                 // Already closed in start_tag
             }
+        }
+    }
+
+    fn take_block_meta(&mut self) -> Option<BlockMeta> {
+        self.pending_block_meta.take()
+    }
+
+    /// Write HTML id and class attributes from block metadata into an already-started tag.
+    /// `default_class` is the base class (e.g. "sect", "listingblock").
+    /// If no metadata and default_class is non-empty, writes ` class="default_class"`.
+    /// Roles from metadata are appended to the class list.
+    fn write_meta_attrs(output: &mut String, meta: &Option<BlockMeta>, default_class: &str) {
+        if let Some(m) = meta
+            && let Some(ref id) = m.id
+        {
+            output.push_str(" id=\"");
+            html_escape(output, id);
+            output.push('"');
+        }
+        let roles = meta.as_ref().map(|m| &m.roles[..]).unwrap_or(&[]);
+        if !default_class.is_empty() || !roles.is_empty() {
+            output.push_str(" class=\"");
+            let mut first = true;
+            if !default_class.is_empty() {
+                output.push_str(default_class);
+                first = false;
+            }
+            for role in roles {
+                if !first {
+                    output.push(' ');
+                }
+                html_escape(output, role);
+                first = false;
+            }
+            output.push('"');
         }
     }
 

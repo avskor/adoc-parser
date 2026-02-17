@@ -348,6 +348,10 @@ pub fn build_asg<'a>(
             | Event::CalloutRef(_)
             | Event::Toc
             | Event::Include { .. } => {}
+
+            Event::BlockMetadata { .. } => {
+                // Block metadata (id, roles, options) — not tracked in ASG comparison
+            }
         }
     }
 
