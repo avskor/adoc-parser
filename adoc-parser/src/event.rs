@@ -186,6 +186,7 @@ pub enum Tag<'a> {
     Keyboard,
     Button,
     Menu { target: CowStr<'a> },
+    Icon { name: CowStr<'a> },
 
     // Anchors
     Anchor { id: CowStr<'a> },
@@ -241,6 +242,7 @@ pub enum TagEnd {
     Keyboard,
     Button,
     Menu,
+    Icon,
 
     Anchor,
 }
@@ -305,6 +307,9 @@ impl<'a> Tag<'a> {
             Tag::Menu { target } => Tag::Menu {
                 target: Cow::Owned(target.into_owned()),
             },
+            Tag::Icon { name } => Tag::Icon {
+                name: Cow::Owned(name.into_owned()),
+            },
             Tag::Anchor { id } => Tag::Anchor {
                 id: Cow::Owned(id.into_owned()),
             },
@@ -352,6 +357,7 @@ impl<'a> Tag<'a> {
             Tag::Keyboard => TagEnd::Keyboard,
             Tag::Button => TagEnd::Button,
             Tag::Menu { .. } => TagEnd::Menu,
+            Tag::Icon { .. } => TagEnd::Icon,
             Tag::Anchor { .. } => TagEnd::Anchor,
         }
     }

@@ -126,6 +126,9 @@ enum BuildFrame {
     Menu {
         inlines: Vec<AsgNode>,
     },
+    Icon {
+        inlines: Vec<AsgNode>,
+    },
 }
 
 /// Build an AsgNode tree from a stream of parser events.
@@ -219,6 +222,7 @@ pub fn build_asg<'a>(
                     Tag::Keyboard => BuildFrame::Keyboard { inlines: vec![] },
                     Tag::Button => BuildFrame::Button { inlines: vec![] },
                     Tag::Menu { .. } => BuildFrame::Menu { inlines: vec![] },
+                    Tag::Icon { .. } => BuildFrame::Icon { inlines: vec![] },
                 };
                 stack.push(frame);
             }
@@ -620,6 +624,13 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
                 inlines: merged,
             })
         }
+        BuildFrame::Icon { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "icon".to_string(),
+                inlines: merged,
+            })
+        }
     }
 }
 
@@ -748,7 +759,8 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         }
         BuildFrame::Keyboard { inlines }
         | BuildFrame::Button { inlines }
-        | BuildFrame::Menu { inlines } => inlines.push(node),
+        | BuildFrame::Menu { inlines }
+        | BuildFrame::Icon { inlines } => inlines.push(node),
         BuildFrame::BlockImage { .. } | BuildFrame::InlineImage { .. } => {
             // Images don't have children in our model
         }

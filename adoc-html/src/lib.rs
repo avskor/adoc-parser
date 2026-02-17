@@ -42,6 +42,8 @@ struct HtmlRenderer {
     kbd_mode: bool,
     menu_target: Option<String>,
     menu_items: Option<String>,
+    icon_name: Option<String>,
+    icon_attrs: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -62,6 +64,8 @@ impl HtmlRenderer {
             kbd_mode: false,
             menu_target: None,
             menu_items: None,
+            icon_name: None,
+            icon_attrs: None,
         }
     }
 
@@ -79,6 +83,8 @@ impl HtmlRenderer {
                         self.render_kbd_keys(output, &text);
                     } else if self.menu_target.is_some() {
                         self.menu_items = Some(text.to_string());
+                    } else if self.icon_name.is_some() {
+                        self.icon_attrs = Some(text.to_string());
                     } else {
                         html_escape(output, &text);
                     }
@@ -516,6 +522,10 @@ impl HtmlRenderer {
             Tag::Menu { target } => {
                 self.menu_target = Some(target.to_string());
             }
+            Tag::Icon { name } => {
+                self.icon_name = Some(name.to_string());
+                self.icon_attrs = None;
+            }
             Tag::Anchor { id } => {
                 output.push_str("<a id=\"");
                 html_escape(output, id);
@@ -676,6 +686,9 @@ impl HtmlRenderer {
             TagEnd::Menu => {
                 self.render_menu(output);
             }
+            TagEnd::Icon => {
+                self.render_icon(output);
+            }
             TagEnd::Anchor => {
                 // Already closed in start_tag
             }
@@ -768,6 +781,76 @@ impl HtmlRenderer {
                 }
             }
             output.push_str("</span>");
+        }
+    }
+
+    fn render_icon(&mut self, output: &mut String) {
+        let name = match self.icon_name.take() {
+            Some(n) => n,
+            None => return,
+        };
+        let attrs_str = self.icon_attrs.take().unwrap_or_default();
+
+        let mut size = None;
+        let mut rotate = None;
+        let mut flip = None;
+        let mut role = None;
+        let mut link = None;
+        let mut title = None;
+
+        if !attrs_str.is_empty() {
+            for (i, part) in attrs_str.split(',').enumerate() {
+                let part = part.trim();
+                if let Some((key, val)) = part.split_once('=') {
+                    match key.trim() {
+                        "role" => role = Some(val.trim().to_string()),
+                        "link" => link = Some(val.trim().to_string()),
+                        "title" => title = Some(val.trim().to_string()),
+                        "rotate" => rotate = Some(val.trim().to_string()),
+                        "flip" => flip = Some(val.trim().to_string()),
+                        _ => {}
+                    }
+                } else if i == 0 {
+                    // First positional = size
+                    size = Some(part.to_string());
+                }
+            }
+        }
+
+        // Build class list
+        let mut classes = format!("fa fa-{name}");
+        if let Some(ref s) = size {
+            classes.push_str(&format!(" fa-{s}"));
+        }
+        if let Some(ref r) = rotate {
+            classes.push_str(&format!(" fa-rotate-{r}"));
+        }
+        if let Some(ref f) = flip {
+            classes.push_str(&format!(" fa-flip-{f}"));
+        }
+        if let Some(ref r) = role {
+            classes.push(' ');
+            classes.push_str(r);
+        }
+
+        if let Some(ref href) = link {
+            output.push_str("<a class=\"icon\" href=\"");
+            html_escape(output, href);
+            output.push_str("\">");
+        }
+
+        output.push_str("<i class=\"");
+        html_escape(output, &classes);
+        output.push('"');
+        if let Some(ref t) = title {
+            output.push_str(" title=\"");
+            html_escape(output, t);
+            output.push('"');
+        }
+        output.push_str("></i>");
+
+        if link.is_some() {
+            output.push_str("</a>");
         }
     }
 
@@ -1218,6 +1301,54 @@ mod tests {
     fn test_menu_no_items_html() {
         let html = to_html("menu:File[]");
         assert_eq!(html, "<p><span class=\"menu\">File</span></p>\n");
+    }
+
+    #[test]
+    fn test_icon_basic_html() {
+        let html = to_html("icon:heart[]");
+        assert_eq!(html, "<p><i class=\"fa fa-heart\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_size_html() {
+        let html = to_html("icon:heart[2x]");
+        assert_eq!(html, "<p><i class=\"fa fa-heart fa-2x\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_role_html() {
+        let html = to_html("icon:tags[role=blue]");
+        assert_eq!(html, "<p><i class=\"fa fa-tags blue\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_title_html() {
+        let html = to_html("icon:info[title=Info]");
+        assert_eq!(html, "<p><i class=\"fa fa-info\" title=\"Info\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_rotate_html() {
+        let html = to_html("icon:shield[rotate=90]");
+        assert_eq!(html, "<p><i class=\"fa fa-shield fa-rotate-90\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_flip_html() {
+        let html = to_html("icon:shield[flip=vertical]");
+        assert_eq!(html, "<p><i class=\"fa fa-shield fa-flip-vertical\"></i></p>\n");
+    }
+
+    #[test]
+    fn test_icon_link_html() {
+        let html = to_html("icon:download[link=https://example.com]");
+        assert_eq!(html, "<p><a class=\"icon\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></p>\n");
+    }
+
+    #[test]
+    fn test_icon_combined_html() {
+        let html = to_html("icon:heart[2x,role=red]");
+        assert_eq!(html, "<p><i class=\"fa fa-heart fa-2x red\"></i></p>\n");
     }
 
     #[test]

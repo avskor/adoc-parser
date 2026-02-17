@@ -310,6 +310,14 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Icon macro: icon:name[attrs]
+                b'i' if self.remaining().starts_with("icon:") => {
+                    if self.try_icon_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Inline image: image:path[alt] (not image::path[alt])
                 b'i' if self.remaining().starts_with("image:") && !self.remaining().starts_with("image::") => {
                     if self.try_inline_image(events, &mut text_start) {
@@ -785,6 +793,48 @@ impl<'a> InlineState<'a> {
             events.push(Event::Text(Cow::Borrowed(items)));
         }
         events.push(Event::End(TagEnd::Menu));
+
+        self.pos = start_pos + 5 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_icon_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 5..]; // skip "icon:"
+
+        let bracket_start = match rest.find('[') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let name = &rest[..bracket_start];
+        if name.is_empty() {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+        if bracket_end <= bracket_start {
+            return false;
+        }
+
+        let attrs = &rest[bracket_start + 1..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Start(Tag::Icon {
+            name: Cow::Borrowed(name),
+        }));
+        if !attrs.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(attrs)));
+        }
+        events.push(Event::End(TagEnd::Icon));
 
         self.pos = start_pos + 5 + bracket_end + 1;
         *text_start = self.pos;
@@ -1748,6 +1798,38 @@ mod tests {
             Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
             Event::Text(Cow::Borrowed("New > Document")),
             Event::End(TagEnd::Menu),
+        ]);
+    }
+
+    // Icon macro tests
+
+    #[test]
+    fn test_icon_macro() {
+        let events = parse("icon:heart[]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Icon { name: Cow::Borrowed("heart") }),
+            Event::End(TagEnd::Icon),
+        ]);
+    }
+
+    #[test]
+    fn test_icon_with_attrs() {
+        let events = parse("icon:heart[2x]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Icon { name: Cow::Borrowed("heart") }),
+            Event::Text(Cow::Borrowed("2x")),
+            Event::End(TagEnd::Icon),
+        ]);
+    }
+
+    #[test]
+    fn test_icon_in_sentence() {
+        let events = parse("Press icon:save[] to save");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Press ")),
+            Event::Start(Tag::Icon { name: Cow::Borrowed("save") }),
+            Event::End(TagEnd::Icon),
+            Event::Text(Cow::Borrowed(" to save")),
         ]);
     }
 
