@@ -295,8 +295,16 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                 }
             }
 
-            Event::AttributeReference(_)
-            | Event::Footnote { .. }
+            Event::AttributeReference(name) => {
+                push_inline_to_current(
+                    &mut stack,
+                    AsgNode::Text {
+                        value: format!("{{{name}}}"),
+                    },
+                );
+            }
+
+            Event::Footnote { .. }
             | Event::FootnoteRef { .. }
             | Event::CalloutRef(_)
             | Event::Toc

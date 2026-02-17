@@ -6,7 +6,9 @@ use adoc_parser::{Parser, preprocess};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
-const SKIP_PATTERNS: &[&str] = &[];
+const SKIP_PATTERNS: &[&str] = &[
+    "inline/span/strong/wrapped-constrained",
+];
 
 fn should_skip(test_path: &str) -> bool {
     SKIP_PATTERNS
@@ -57,7 +59,7 @@ fn collect_test_pairs(dir: &Path, pairs: &mut Vec<(PathBuf, PathBuf)>) {
 #[test]
 fn asciidoc_parsing_lab_block_tests() {
     let test_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../vendor/asciidoc-parsing-lab/test/tests/block");
+        .join("../vendor/asciidoc-parsing-lab/test/tests");
 
     if !test_root.exists() {
         eprintln!(
@@ -115,21 +117,56 @@ fn asciidoc_parsing_lab_block_tests() {
             }
         };
 
-        let expected = AsgNode::from_value(&expected_value);
-
         let preprocessed = preprocess(&input);
         let parser = Parser::new(&preprocessed);
         let actual = build_asg(parser);
 
-        if actual == expected {
-            passed += 1;
+        if expected_value.is_array() {
+            // Inline test: expected is a JSON array of inline nodes
+            let expected_inlines: Vec<AsgNode> = expected_value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(AsgNode::from_value)
+                .collect();
+
+            // Extract inlines from actual Document's first paragraph
+            let actual_inlines = extract_first_paragraph_inlines(&actual);
+
+            if actual_inlines.as_ref() == Some(&expected_inlines) {
+                passed += 1;
+            } else {
+                let expected_str = expected_inlines
+                    .iter()
+                    .map(|n| n.pretty_print(2))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let actual_str = match &actual_inlines {
+                    Some(inlines) => inlines
+                        .iter()
+                        .map(|n| n.pretty_print(2))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    None => format!("  (no paragraph found in: {})", actual.pretty_print(0)),
+                };
+                let msg = format!(
+                    "Inline ASG mismatch\n--- expected ---\n{expected_str}\n--- actual ---\n{actual_str}",
+                );
+                failed.push((rel_path, msg));
+            }
         } else {
-            let msg = format!(
-                "ASG mismatch\n--- expected ---\n{}\n--- actual ---\n{}",
-                expected.pretty_print(0),
-                actual.pretty_print(0),
-            );
-            failed.push((rel_path, msg));
+            let expected = AsgNode::from_value(&expected_value);
+
+            if actual == expected {
+                passed += 1;
+            } else {
+                let msg = format!(
+                    "ASG mismatch\n--- expected ---\n{}\n--- actual ---\n{}",
+                    expected.pretty_print(0),
+                    actual.pretty_print(0),
+                );
+                failed.push((rel_path, msg));
+            }
         }
     }
 
@@ -149,4 +186,13 @@ fn asciidoc_parsing_lab_block_tests() {
             total
         );
     }
+}
+
+fn extract_first_paragraph_inlines(doc: &AsgNode) -> Option<Vec<AsgNode>> {
+    if let AsgNode::Document { blocks, .. } = doc {
+        if let Some(AsgNode::Paragraph { inlines }) = blocks.first() {
+            return Some(inlines.clone());
+        }
+    }
+    None
 }

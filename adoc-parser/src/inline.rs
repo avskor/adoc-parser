@@ -130,8 +130,26 @@ impl<'a> InlineState<'a> {
                     text_start = self.pos;
                 }
 
-                // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\ \+
-                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'+')) => {
+                // Escape pass macro: \pass:[...] → literal "pass:[" + normal inline parsing of content
+                b'\\' if self.input.get(self.pos + 1..).is_some_and(|s| s.starts_with("pass:[")) => {
+                    self.flush_text(text_start, self.pos, events);
+                    self.advance_by(1); // skip backslash
+                    text_start = self.pos;
+                    self.advance_by(6); // skip "pass:[" — included in next text flush as literal
+                }
+
+                // Escape plus sequences: \+, \++, \+++
+                b'\\' if self.peek_at(1) == Some(b'+') => {
+                    self.flush_text(text_start, self.pos, events);
+                    self.advance_by(1); // skip backslash
+                    text_start = self.pos;
+                    while self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'+' {
+                        self.advance_by(1);
+                    }
+                }
+
+                // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
+                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
                     self.flush_text(text_start, self.pos, events);
                     self.advance_by(1); // skip backslash
                     text_start = self.pos;
@@ -149,6 +167,14 @@ impl<'a> InlineState<'a> {
                 // Triple-plus passthrough: +++text+++
                 b'+' if self.peek_at(1) == Some(b'+') && self.peek_at(2) == Some(b'+') => {
                     if self.try_triple_plus_passthrough(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Double-plus passthrough: ++text++
+                b'+' if self.peek_at(1) == Some(b'+') => {
+                    if self.try_double_plus_passthrough(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -524,6 +550,34 @@ impl<'a> InlineState<'a> {
         events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
 
         self.pos = after_open + close + 3;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_double_plus_passthrough(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_open = start_pos + 2; // skip "++"
+
+        let rest = &self.input[after_open..];
+        let close = match rest.find("++") {
+            Some(c) => c,
+            None => return false,
+        };
+
+        if close == 0 {
+            return false;
+        }
+
+        let inner = &rest[..close];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+
+        self.pos = after_open + close + 2;
         *text_start = self.pos;
         true
     }
