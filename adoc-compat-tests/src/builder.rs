@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use adoc_parser::{
     AdmonitionKind, DelimitedBlockKind, Event, Tag, TagEnd,
 };
@@ -123,6 +125,7 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
         header: None,
         blocks: vec![],
     }];
+    let mut attrs: HashMap<String, Option<String>> = HashMap::new();
 
     for event in events {
         match event {
@@ -213,6 +216,16 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                 if let Some(node) = node {
                     push_to_parent(&mut stack, node, &tag_end);
                 }
+
+                // After header close, store doctitle
+                if tag_end == TagEnd::Header
+                    && let Some(BuildFrame::Document { header: Some(h), .. }) = stack.last()
+                {
+                    let doctitle = extract_text_from_inlines(&h.title);
+                    if !doctitle.is_empty() {
+                        attrs.insert("doctitle".to_string(), Some(doctitle));
+                    }
+                }
             }
 
             Event::Text(text) => {
@@ -283,23 +296,46 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
             }
 
             Event::Attribute { name, value } => {
+                let name_str = name.to_string();
+                let value_str = value.to_string();
+
+                // Store in attribute map (with negation support)
+                if let Some(stripped) = name_str.strip_prefix('!') {
+                    attrs.insert(stripped.to_string(), None);
+                } else {
+                    let resolved = resolve_attr_refs(&value_str, &attrs);
+                    attrs.insert(name_str.clone(), Some(resolved.clone()));
+                }
+
                 if matches!(stack.last(), Some(BuildFrame::Header { .. })) {
                     // Header attrs are metadata, not blocks
                 } else {
-                    push_block_to_current(
-                        &mut stack,
-                        AsgNode::Attributes {
-                            attributes: vec![(name.to_string(), value.to_string())],
-                        },
-                    );
+                    // Resolve value for the emitted block
+                    let emit_name = if let Some(stripped) = name_str.strip_prefix('!') {
+                        stripped.to_string()
+                    } else {
+                        name_str
+                    };
+                    let emit_value = if name.starts_with('!') {
+                        value_str
+                    } else {
+                        resolve_attr_refs(&value_str, &attrs)
+                    };
+
+                    // Merge consecutive Attributes blocks
+                    merge_or_push_attribute(&mut stack, emit_name, emit_value);
                 }
             }
 
             Event::AttributeReference(name) => {
+                let resolved = match attrs.get(name.as_ref()) {
+                    Some(Some(value)) => value.clone(),
+                    _ => format!("{{{name}}}"),
+                };
                 push_inline_to_current(
                     &mut stack,
                     AsgNode::Text {
-                        value: format!("{{{name}}}"),
+                        value: resolved,
                     },
                 );
             }
@@ -811,4 +847,76 @@ fn admonition_variant(kind: &AdmonitionKind) -> String {
         AdmonitionKind::Caution => "caution",
     }
     .to_string()
+}
+
+/// Resolve `{name}` attribute references in a string value.
+fn resolve_attr_refs(value: &str, attrs: &HashMap<String, Option<String>>) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('{') {
+        result.push_str(&rest[..start]);
+        let after_brace = &rest[start + 1..];
+        if let Some(end) = after_brace.find('}') {
+            let name = &after_brace[..end];
+            if let Some(Some(resolved)) = attrs.get(name) {
+                result.push_str(resolved);
+            } else {
+                // Unresolved — passthrough
+                result.push('{');
+                result.push_str(name);
+                result.push('}');
+            }
+            rest = &after_brace[end + 1..];
+        } else {
+            // No closing brace — keep as is
+            result.push('{');
+            rest = after_brace;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Extract plain text from inline nodes.
+fn extract_text_from_inlines(inlines: &[AsgNode]) -> String {
+    let mut result = String::new();
+    for node in inlines {
+        if let AsgNode::Text { value } = node {
+            result.push_str(value);
+        }
+    }
+    result
+}
+
+/// Merge an attribute entry into the last Attributes block if possible, otherwise push new.
+fn merge_or_push_attribute(stack: &mut [BuildFrame], name: String, value: String) {
+    let Some(frame) = stack.last_mut() else {
+        return;
+    };
+
+    // Get mutable access to the children vec of the current frame
+    let children = match frame {
+        BuildFrame::Document { blocks, .. } => blocks,
+        BuildFrame::Section { blocks, .. } => blocks,
+        BuildFrame::ListItem { children } => children,
+        BuildFrame::DescriptionDescription { children } => children,
+        BuildFrame::DelimitedBlock { children, .. } => children,
+        BuildFrame::Admonition { blocks, .. } => blocks,
+        _ => {
+            // For other frames, just push normally
+            push_node_to_frame(frame, AsgNode::Attributes {
+                attributes: vec![(name, value)],
+            });
+            return;
+        }
+    };
+
+    // Try to merge with the last Attributes block
+    if let Some(AsgNode::Attributes { attributes }) = children.last_mut() {
+        attributes.push((name, value));
+    } else {
+        children.push(AsgNode::Attributes {
+            attributes: vec![(name, value)],
+        });
+    }
 }

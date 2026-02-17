@@ -7,18 +7,10 @@ use adoc_parser::{Parser, preprocess};
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
 const SKIP_PATTERNS: &[&str] = &[
-    // Document-level attribute resolution not yet supported
+    // Attribute entry in list continuation doesn't keep subsequent paragraph in list item
     "block/attributes/above-block-attached-to-list-item",
-    "block/attributes/multiple-between-blocks",
-    "block/attributes/single-between-blocks",
+    // Attribute reference in block attribute lists not yet supported
     "block/attrlist/attribute-reference",
-    "block/header/negated-attribute-entry",
-    "block/header/redefined-attribute-entry",
-    "block/header/reference-attribute-in-body",
-    "block/header/reference-attribute-in-title",
-    "block/header/reference-doctitle-in-body",
-    // Unclosed delimited block with content not yet supported
-    "block/listing/unclosed-empty-line",
 ];
 
 fn should_skip(test_path: &str) -> bool {

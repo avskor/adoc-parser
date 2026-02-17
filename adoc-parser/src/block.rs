@@ -1178,15 +1178,15 @@ impl<'a> BlockScanner<'a> {
                 self.advance();
             }
 
-            // For unclosed blocks, trim trailing empty lines (artifacts of split_lines)
-            if !closed {
-                while content_lines.last().is_some_and(|l| l.is_empty()) {
-                    content_lines.pop();
-                }
+            // For unclosed blocks, trim one trailing empty line (artifact of split_lines)
+            if !closed
+                && content_lines.last().is_some_and(|l| l.is_empty())
+            {
+                content_lines.pop();
             }
 
-            // Handle single empty line in closed blocks: emit "\n" instead of ""
-            if closed && content_lines.len() == 1 && content_lines[0].is_empty() {
+            // Handle single empty line: emit "\n" instead of ""
+            if content_lines.len() == 1 && content_lines[0].is_empty() {
                 self.push_event(Event::End(TagEnd::DelimitedBlock));
                 self.push_event(Event::Text(Cow::Borrowed("\n")));
                 self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
