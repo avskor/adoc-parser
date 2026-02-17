@@ -2,6 +2,10 @@ use std::borrow::Cow;
 
 pub type CowStr<'a> = Cow<'a, str>;
 
+fn cow_owned(s: CowStr<'_>) -> CowStr<'static> {
+    Cow::Owned(s.into_owned())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event<'a> {
     Start(Tag<'a>),
@@ -39,6 +43,55 @@ pub enum Event<'a> {
         initials: CowStr<'a>,
         address: CowStr<'a>,
     },
+}
+
+impl<'a> Event<'a> {
+    pub fn into_static(self) -> Event<'static> {
+        match self {
+            Event::Start(tag) => Event::Start(tag.into_static()),
+            Event::End(tag_end) => Event::End(tag_end),
+            Event::Text(s) => Event::Text(cow_owned(s)),
+            Event::Code(s) => Event::Code(cow_owned(s)),
+            Event::InlinePassthrough(s) => Event::InlinePassthrough(cow_owned(s)),
+            Event::SoftBreak => Event::SoftBreak,
+            Event::HardBreak => Event::HardBreak,
+            Event::ThematicBreak => Event::ThematicBreak,
+            Event::PageBreak => Event::PageBreak,
+            Event::Attribute { name, value } => Event::Attribute {
+                name: cow_owned(name),
+                value: cow_owned(value),
+            },
+            Event::AttributeReference(s) => Event::AttributeReference(cow_owned(s)),
+            Event::Footnote { id, text } => Event::Footnote {
+                id: id.map(cow_owned),
+                text: cow_owned(text),
+            },
+            Event::FootnoteRef { id } => Event::FootnoteRef {
+                id: cow_owned(id),
+            },
+            Event::CalloutRef(n) => Event::CalloutRef(n),
+            Event::Toc => Event::Toc,
+            Event::Include { path, attrs } => Event::Include {
+                path: cow_owned(path),
+                attrs: cow_owned(attrs),
+            },
+            Event::Author {
+                fullname,
+                firstname,
+                middlename,
+                lastname,
+                initials,
+                address,
+            } => Event::Author {
+                fullname: cow_owned(fullname),
+                firstname: cow_owned(firstname),
+                middlename: cow_owned(middlename),
+                lastname: cow_owned(lastname),
+                initials: cow_owned(initials),
+                address: cow_owned(address),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,6 +226,66 @@ pub enum TagEnd {
 }
 
 impl<'a> Tag<'a> {
+    pub fn into_static(self) -> Tag<'static> {
+        match self {
+            Tag::Header => Tag::Header,
+            Tag::DocumentTitle => Tag::DocumentTitle,
+            Tag::Section { level } => Tag::Section { level },
+            Tag::SectionTitle { level, id } => Tag::SectionTitle {
+                level,
+                id: Cow::Owned(id.into_owned()),
+            },
+            Tag::Heading { level } => Tag::Heading { level },
+            Tag::Paragraph => Tag::Paragraph,
+            Tag::LiteralParagraph => Tag::LiteralParagraph,
+            Tag::DelimitedBlock { kind } => Tag::DelimitedBlock { kind },
+            Tag::SourceBlock { language } => Tag::SourceBlock {
+                language: language.map(|l| Cow::Owned(l.into_owned())),
+            },
+            Tag::BlockTitle => Tag::BlockTitle,
+            Tag::UnorderedList { has_checklist } => Tag::UnorderedList { has_checklist },
+            Tag::OrderedList => Tag::OrderedList,
+            Tag::ListItem { depth, checked } => Tag::ListItem { depth, checked },
+            Tag::DescriptionList => Tag::DescriptionList,
+            Tag::DescriptionTerm => Tag::DescriptionTerm,
+            Tag::DescriptionDescription => Tag::DescriptionDescription,
+            Tag::CalloutList => Tag::CalloutList,
+            Tag::CalloutListItem { number } => Tag::CalloutListItem { number },
+            Tag::Admonition { kind } => Tag::Admonition { kind },
+            Tag::Table => Tag::Table,
+            Tag::TableHead => Tag::TableHead,
+            Tag::TableBody => Tag::TableBody,
+            Tag::TableFoot => Tag::TableFoot,
+            Tag::TableRow => Tag::TableRow,
+            Tag::TableCell => Tag::TableCell,
+            Tag::TableHeaderCell => Tag::TableHeaderCell,
+            Tag::BlockImage { target, alt } => Tag::BlockImage {
+                target: Cow::Owned(target.into_owned()),
+                alt: Cow::Owned(alt.into_owned()),
+            },
+            Tag::InlineImage { target, alt } => Tag::InlineImage {
+                target: Cow::Owned(target.into_owned()),
+                alt: Cow::Owned(alt.into_owned()),
+            },
+            Tag::Strong => Tag::Strong,
+            Tag::Emphasis => Tag::Emphasis,
+            Tag::Monospace => Tag::Monospace,
+            Tag::Highlight => Tag::Highlight,
+            Tag::Superscript => Tag::Superscript,
+            Tag::Subscript => Tag::Subscript,
+            Tag::Link { url } => Tag::Link {
+                url: Cow::Owned(url.into_owned()),
+            },
+            Tag::CrossReference { target, label } => Tag::CrossReference {
+                target: Cow::Owned(target.into_owned()),
+                label: label.map(|l| Cow::Owned(l.into_owned())),
+            },
+            Tag::Anchor { id } => Tag::Anchor {
+                id: Cow::Owned(id.into_owned()),
+            },
+        }
+    }
+
     pub fn to_end(&self) -> TagEnd {
         match self {
             Tag::Header => TagEnd::Header,

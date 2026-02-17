@@ -156,10 +156,13 @@ impl<'a> InlineState<'a> {
                     self.advance_by(1); // skip escaped char (included in next text flush)
                 }
 
-                // Hard break: ` +` at end of string
+                // Hard break: ` +` at end of string or before `\n`
                 b' ' if self.check_hard_break() => {
                     self.flush_text(text_start, self.pos, events);
-                    self.advance_by(2);
+                    self.advance_by(2); // skip ` +`
+                    if self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'\n' {
+                        self.advance_by(1); // skip `\n`
+                    }
                     events.push(Event::HardBreak);
                     text_start = self.pos;
                 }
@@ -358,7 +361,8 @@ impl<'a> InlineState<'a> {
         self.pos + 2 <= self.input.len()
             && self.input.as_bytes()[self.pos] == b' '
             && self.input.as_bytes()[self.pos + 1] == b'+'
-            && self.pos + 2 == self.input.len()
+            && (self.pos + 2 == self.input.len()
+                || self.input.as_bytes()[self.pos + 2] == b'\n')
     }
 
     fn is_word_char_before(&self, pos: usize) -> bool {

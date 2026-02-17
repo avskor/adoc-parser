@@ -29,11 +29,7 @@ fn test_multiline_paragraph() {
     let events = parse("Line one\nLine two\nLine three");
     assert_eq!(events, vec![
         Event::Start(Tag::Paragraph),
-        Event::Text(Cow::Borrowed("Line one")),
-        Event::SoftBreak,
-        Event::Text(Cow::Borrowed("Line two")),
-        Event::SoftBreak,
-        Event::Text(Cow::Borrowed("Line three")),
+        Event::Text(Cow::Owned("Line one\nLine two\nLine three".to_string())),
         Event::End(TagEnd::Paragraph),
     ]);
 }

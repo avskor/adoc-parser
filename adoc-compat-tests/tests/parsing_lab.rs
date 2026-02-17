@@ -6,9 +6,7 @@ use adoc_parser::{Parser, preprocess};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
-const SKIP_PATTERNS: &[&str] = &[
-    "inline/span/strong/wrapped-constrained",
-];
+const SKIP_PATTERNS: &[&str] = &[];
 
 fn should_skip(test_path: &str) -> bool {
     SKIP_PATTERNS
