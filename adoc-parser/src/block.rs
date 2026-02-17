@@ -858,16 +858,20 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Parse cells from content lines, tracking blank line positions
-        let mut all_cells: Vec<&'a str> = Vec::new();
+        let mut all_cells: Vec<scanner::CellSpec<'a>> = Vec::new();
         let mut first_blank_after_first_row = false;
-        let mut cells_before_blank: usize = 0;
+        let mut cells_before_blank_col_width: usize = 0;
         let mut found_first_data = false;
 
         for &line in &content_lines {
             if scanner::is_blank(line) {
                 if found_first_data && !first_blank_after_first_row {
                     first_blank_after_first_row = true;
-                    cells_before_blank = all_cells.len();
+                    // Sum of colspan values for cells before blank
+                    cells_before_blank_col_width = all_cells
+                        .iter()
+                        .map(|c| c.colspan as usize)
+                        .sum();
                 }
                 continue;
             }
@@ -886,13 +890,14 @@ impl<'a> BlockScanner<'a> {
         let num_cols = if let Some(n) = block_attrs.table_cols_count() {
             n
         } else {
+            // Sum colspan of first row's cells
             let mut cols = 0;
             for &line in &content_lines {
                 if scanner::is_blank(line) {
                     continue;
                 }
                 if let Some(cells) = scanner::parse_table_cells(line) {
-                    cols = cells.len();
+                    cols = cells.iter().map(|c| c.colspan as usize).sum();
                     break;
                 }
             }
@@ -901,49 +906,47 @@ impl<'a> BlockScanner<'a> {
 
         // Determine header: %header option OR blank line after first row
         let has_header = block_attrs.has_option("header")
-            || (first_blank_after_first_row && cells_before_blank == num_cols);
+            || (first_blank_after_first_row && cells_before_blank_col_width == num_cols);
 
         // Determine footer: %footer option
         let has_footer = block_attrs.has_option("footer");
 
-        // Split cells into header, body, footer
-        let header_cells = if has_header {
-            &all_cells[..num_cols.min(all_cells.len())]
+        // Build rows using grid-aware placement (respects colspan/rowspan)
+        let rows = Self::build_table_rows(&all_cells, num_cols);
+
+        // Split rows into header, body, footer
+        let header_rows = if has_header && !rows.is_empty() {
+            &rows[..1]
         } else {
             &[][..]
         };
-        let remaining = if has_header {
-            &all_cells[num_cols.min(all_cells.len())..]
+        let remaining_rows = if has_header && !rows.is_empty() {
+            &rows[1..]
         } else {
-            &all_cells[..]
+            &rows[..]
         };
-        // Footer is the last complete row of remaining cells
-        let (body_cells, footer_cells) = if has_footer && remaining.len() >= num_cols {
-            let footer_start = remaining.len() - (remaining.len() % num_cols).max(0);
-            // Take the last full row
-            let footer_start = if footer_start == remaining.len() {
-                remaining.len() - num_cols
-            } else {
-                // Incomplete last row — no footer
-                remaining.len()
-            };
-            (&remaining[..footer_start], &remaining[footer_start..])
+        let (body_rows, footer_rows) = if has_footer && !remaining_rows.is_empty() {
+            let split = remaining_rows.len() - 1;
+            (&remaining_rows[..split], &remaining_rows[split..])
         } else {
-            (remaining, &[][..])
+            (remaining_rows, &[][..])
         };
 
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
 
         // TableFoot
-        if !footer_cells.is_empty() {
+        if !footer_rows.is_empty() {
             self.push_event(Event::End(TagEnd::TableFoot));
-            for row in footer_cells.chunks(num_cols).rev() {
+            for row in footer_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
-                for &cell in row.iter().rev() {
+                for cell in row.iter().rev() {
                     self.push_event(Event::End(TagEnd::TableCell));
-                    self.push_event(Event::Text(Cow::Borrowed(cell)));
-                    self.push_event(Event::Start(Tag::TableCell));
+                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                    self.push_event(Event::Start(Tag::TableCell {
+                        colspan: cell.colspan,
+                        rowspan: cell.rowspan,
+                    }));
                 }
                 self.push_event(Event::Start(Tag::TableRow));
             }
@@ -951,14 +954,17 @@ impl<'a> BlockScanner<'a> {
         }
 
         // TableBody
-        if !body_cells.is_empty() {
+        if !body_rows.is_empty() {
             self.push_event(Event::End(TagEnd::TableBody));
-            for row in body_cells.chunks(num_cols).rev() {
+            for row in body_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
-                for &cell in row.iter().rev() {
+                for cell in row.iter().rev() {
                     self.push_event(Event::End(TagEnd::TableCell));
-                    self.push_event(Event::Text(Cow::Borrowed(cell)));
-                    self.push_event(Event::Start(Tag::TableCell));
+                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                    self.push_event(Event::Start(Tag::TableCell {
+                        colspan: cell.colspan,
+                        rowspan: cell.rowspan,
+                    }));
                 }
                 self.push_event(Event::Start(Tag::TableRow));
             }
@@ -966,15 +972,20 @@ impl<'a> BlockScanner<'a> {
         }
 
         // TableHead
-        if has_header {
+        if !header_rows.is_empty() {
             self.push_event(Event::End(TagEnd::TableHead));
-            self.push_event(Event::End(TagEnd::TableRow));
-            for &cell in header_cells.iter().rev() {
-                self.push_event(Event::End(TagEnd::TableHeaderCell));
-                self.push_event(Event::Text(Cow::Borrowed(cell)));
-                self.push_event(Event::Start(Tag::TableHeaderCell));
+            for row in header_rows.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                for cell in row.iter().rev() {
+                    self.push_event(Event::End(TagEnd::TableHeaderCell));
+                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                    self.push_event(Event::Start(Tag::TableHeaderCell {
+                        colspan: cell.colspan,
+                        rowspan: cell.rowspan,
+                    }));
+                }
+                self.push_event(Event::Start(Tag::TableRow));
             }
-            self.push_event(Event::Start(Tag::TableRow));
             self.push_event(Event::Start(Tag::TableHead));
         }
 
@@ -983,6 +994,61 @@ impl<'a> BlockScanner<'a> {
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
+    }
+
+    /// Build table rows from a flat list of CellSpecs, respecting colspan/rowspan.
+    fn build_table_rows(
+        cells: &[scanner::CellSpec<'a>],
+        num_cols: usize,
+    ) -> Vec<Vec<scanner::CellSpec<'a>>> {
+        let mut rows: Vec<Vec<scanner::CellSpec<'a>>> = Vec::new();
+        // Track how many more rows each column is occupied by a rowspan
+        let mut col_remaining: Vec<u8> = vec![0; num_cols];
+        let mut current_row: Vec<scanner::CellSpec<'a>> = Vec::new();
+        let mut col: usize = 0;
+
+        for cell in cells {
+            // Skip columns occupied by rowspan from previous rows
+            while col < num_cols && col_remaining[col] > 0 {
+                col_remaining[col] -= 1;
+                col += 1;
+            }
+
+            // If we've filled the row, start a new one
+            if col >= num_cols {
+                rows.push(std::mem::take(&mut current_row));
+                col = 0;
+                // Decrement remaining rowspans for the new row
+                for r in &mut col_remaining {
+                    if *r > 0 {
+                        *r -= 1;
+                    }
+                }
+                // Skip columns occupied by rowspan
+                while col < num_cols && col_remaining[col] > 0 {
+                    col_remaining[col] -= 1;
+                    col += 1;
+                }
+            }
+
+            current_row.push(cell.clone());
+
+            // Mark columns occupied by this cell's colspan and rowspan
+            let span = (cell.colspan as usize).min(num_cols - col);
+            if cell.rowspan > 1 {
+                for r in col_remaining.iter_mut().skip(col).take(span) {
+                    *r = cell.rowspan - 1;
+                }
+            }
+            col += span;
+        }
+
+        // Push the last row if it has any cells
+        if !current_row.is_empty() {
+            rows.push(current_row);
+        }
+
+        rows
     }
 
     fn scan_paragraph(&mut self) -> Option<Event<'a>> {
@@ -2117,18 +2183,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2145,28 +2211,28 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Header 1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Header 2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Cell 1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Cell 2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Cell 3")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("Cell 4")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2184,22 +2250,22 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2216,18 +2282,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2245,20 +2311,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2276,20 +2342,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2307,34 +2373,90 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableFoot),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_colspan() {
+        let input = "|===\n| A 2+| B spans\n| C | D | E\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 2, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("B spans")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("D")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("E")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_rowspan() {
+        let input = "|===\n.2+| A | B\n| C\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 2 }),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
             Event::End(TagEnd::Table),
         ]);
     }

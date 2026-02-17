@@ -367,21 +367,116 @@ pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
 
-pub fn parse_table_cells(line: &str) -> Option<Vec<&str>> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('|') {
-        return None;
-    }
-    let mut cells = Vec::new();
-    // Split by '|', skip the first empty segment before the leading '|'
-    let parts: Vec<&str> = trimmed[1..].split('|').collect();
-    for part in &parts {
-        let cell = part.trim();
-        if !cell.is_empty() {
-            cells.push(cell);
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellSpec<'a> {
+    pub content: &'a str,
+    pub colspan: u8,
+    pub rowspan: u8,
+}
+
+/// Parse a span modifier from the end of a segment (the part before `|`).
+/// Pattern: `(\d+)?(?:\.(\d+))?\+` at the end of the string.
+/// Returns `(remaining_content, colspan, rowspan)`.
+pub fn parse_span_spec(s: &str) -> (&str, u8, u8) {
+    let trimmed = s.trim_end();
+    let Some(rest) = trimmed.strip_suffix('+') else {
+        return (s, 1, 1);
+    };
+
+    // Parse backwards from the `+`: optional `(\d+)?(?:\.(\d+))?`
+    // Full pattern: `<colspan>.<rowspan>+` or `.<rowspan>+` or `<colspan>+`
+    let mut colspan: u8 = 1;
+    let mut rowspan: u8 = 1;
+
+    if let Some(dot_pos) = rest.rfind('.') {
+        let after_dot = &rest[dot_pos + 1..];
+        let before_dot = &rest[..dot_pos];
+        // after_dot must be all digits (rowspan)
+        if !after_dot.is_empty() && after_dot.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(r) = after_dot.parse::<u8>() {
+                rowspan = r.max(1);
+            }
+            // before_dot: either empty or all digits (colspan), preceded by content
+            // We need to find where the spec starts in before_dot
+            let spec_start = before_dot.len()
+                - before_dot
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+            let digits = &before_dot[spec_start..];
+            let content = &s[..s.len() - (trimmed.len() - spec_start)];
+            if !digits.is_empty()
+                && let Ok(c) = digits.parse::<u8>()
+            {
+                colspan = c.max(1);
+            }
+            return (content.trim_end(), colspan, rowspan);
         }
+        // Not valid rowspan digits after dot — check if whole thing is just colspan
     }
-    // If the last part was empty (trailing '|'), it's already skipped above
+
+    // No dot — try plain `<colspan>+`
+    let spec_start = rest.len()
+        - rest
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+    let digits = &rest[spec_start..];
+    let content = &s[..s.len() - (trimmed.len() - spec_start)];
+    if !digits.is_empty() {
+        if let Ok(c) = digits.parse::<u8>() {
+            colspan = c.max(1);
+        }
+        return (content.trim_end(), colspan, 1);
+    }
+
+    // `+` alone is not a span spec
+    (s, 1, 1)
+}
+
+pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
+    let trimmed = line.trim_start();
+
+    // Find the first pipe — if none, not a table line
+    let first_pipe = trimmed.find('|')?;
+
+    // Before first pipe: must be empty or a valid span spec (for the first cell)
+    let prefix = trimmed[..first_pipe].trim();
+    let mut pending_colspan: u8 = 1;
+    let mut pending_rowspan: u8 = 1;
+
+    if !prefix.is_empty() {
+        let (remaining, cs, rs) = parse_span_spec(prefix);
+        if !remaining.is_empty() {
+            return None; // Not a table line — non-spec content before first pipe
+        }
+        pending_colspan = cs;
+        pending_rowspan = rs;
+    }
+
+    let mut cells = Vec::new();
+    let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
+
+    for (i, part) in parts.iter().enumerate() {
+        let (content, next_colspan, next_rowspan) = parse_span_spec(part);
+        let content = content.trim();
+
+        if !content.is_empty() {
+            cells.push(CellSpec {
+                content,
+                colspan: pending_colspan,
+                rowspan: pending_rowspan,
+            });
+        } else if i < parts.len() - 1 {
+            // Empty cell between pipes — skip (preserving old behavior)
+        }
+
+        pending_colspan = next_colspan;
+        pending_rowspan = next_rowspan;
+    }
+
     Some(cells)
 }
 
@@ -650,20 +745,68 @@ mod tests {
         assert!(!is_table_delimiter(""));
     }
 
+    fn cell(content: &str) -> CellSpec<'_> {
+        CellSpec { content, colspan: 1, rowspan: 1 }
+    }
+
+    fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
+        CellSpec { content, colspan, rowspan }
+    }
+
     #[test]
     fn test_parse_table_cells() {
         assert_eq!(
             parse_table_cells("| A | B | C"),
-            Some(vec!["A", "B", "C"])
+            Some(vec![cell("A"), cell("B"), cell("C")])
         );
         assert_eq!(
             parse_table_cells("| A | B |"),
-            Some(vec!["A", "B"])
+            Some(vec![cell("A"), cell("B")])
         );
         assert_eq!(parse_table_cells("no pipe"), None);
         assert_eq!(
             parse_table_cells("| single"),
-            Some(vec!["single"])
+            Some(vec![cell("single")])
+        );
+    }
+
+    #[test]
+    fn test_parse_span_spec() {
+        // No spec
+        assert_eq!(parse_span_spec("hello"), ("hello", 1, 1));
+        // Colspan only
+        assert_eq!(parse_span_spec("2+"), ("", 2, 1));
+        // Rowspan only
+        assert_eq!(parse_span_spec(".3+"), ("", 1, 3));
+        // Both
+        assert_eq!(parse_span_spec("2.3+"), ("", 2, 3));
+        // With content before
+        assert_eq!(parse_span_spec("text 2+"), ("text", 2, 1));
+        // Plain `+` is not a span spec
+        assert_eq!(parse_span_spec("+"), ("+", 1, 1));
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_colspan() {
+        assert_eq!(
+            parse_table_cells("| A 2+| B spans"),
+            Some(vec![cell("A"), spanned_cell("B spans", 2, 1)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_rowspan() {
+        assert_eq!(
+            parse_table_cells(".2+| C spans | D"),
+            Some(vec![spanned_cell("C spans", 1, 2), cell("D")])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_both_spans() {
+        assert_eq!(
+            parse_table_cells("2.3+| cell"),
+            Some(vec![spanned_cell("cell", 2, 3)])
         );
     }
 

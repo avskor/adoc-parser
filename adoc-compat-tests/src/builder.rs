@@ -193,8 +193,8 @@ pub fn build_asg<'a>(
                     Tag::TableBody => BuildFrame::TableBody,
                     Tag::TableFoot => BuildFrame::TableFoot,
                     Tag::TableRow => BuildFrame::TableRow,
-                    Tag::TableCell => BuildFrame::TableCell { children: vec![] },
-                    Tag::TableHeaderCell => BuildFrame::TableHeaderCell { children: vec![] },
+                    Tag::TableCell { .. } => BuildFrame::TableCell { children: vec![] },
+                    Tag::TableHeaderCell { .. } => BuildFrame::TableHeaderCell { children: vec![] },
                     Tag::BlockImage { target, .. } => BuildFrame::BlockImage {
                         target: resolve_attr_refs(target.as_ref(), &attrs),
                     },

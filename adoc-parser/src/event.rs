@@ -163,8 +163,8 @@ pub enum Tag<'a> {
     TableBody,
     TableFoot,
     TableRow,
-    TableCell,
-    TableHeaderCell,
+    TableCell { colspan: u8, rowspan: u8 },
+    TableHeaderCell { colspan: u8, rowspan: u8 },
 
     // Media
     BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
@@ -268,8 +268,8 @@ impl<'a> Tag<'a> {
             Tag::TableBody => Tag::TableBody,
             Tag::TableFoot => Tag::TableFoot,
             Tag::TableRow => Tag::TableRow,
-            Tag::TableCell => Tag::TableCell,
-            Tag::TableHeaderCell => Tag::TableHeaderCell,
+            Tag::TableCell { colspan, rowspan } => Tag::TableCell { colspan, rowspan },
+            Tag::TableHeaderCell { colspan, rowspan } => Tag::TableHeaderCell { colspan, rowspan },
             Tag::BlockImage { target, alt } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
@@ -323,8 +323,8 @@ impl<'a> Tag<'a> {
             Tag::TableBody => TagEnd::TableBody,
             Tag::TableFoot => TagEnd::TableFoot,
             Tag::TableRow => TagEnd::TableRow,
-            Tag::TableCell => TagEnd::TableCell,
-            Tag::TableHeaderCell => TagEnd::TableHeaderCell,
+            Tag::TableCell { .. } => TagEnd::TableCell,
+            Tag::TableHeaderCell { .. } => TagEnd::TableHeaderCell,
             Tag::BlockImage { .. } => TagEnd::BlockImage,
             Tag::InlineImage { .. } => TagEnd::InlineImage,
             Tag::Strong => TagEnd::Strong,

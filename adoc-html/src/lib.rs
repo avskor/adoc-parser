@@ -431,11 +431,25 @@ impl HtmlRenderer {
             Tag::TableRow => {
                 output.push_str("<tr>\n");
             }
-            Tag::TableCell => {
-                output.push_str("<td>");
+            Tag::TableCell { colspan, rowspan } => {
+                output.push_str("<td");
+                if *colspan > 1 {
+                    output.push_str(&format!(" colspan=\"{}\"", colspan));
+                }
+                if *rowspan > 1 {
+                    output.push_str(&format!(" rowspan=\"{}\"", rowspan));
+                }
+                output.push('>');
             }
-            Tag::TableHeaderCell => {
-                output.push_str("<th>");
+            Tag::TableHeaderCell { colspan, rowspan } => {
+                output.push_str("<th");
+                if *colspan > 1 {
+                    output.push_str(&format!(" colspan=\"{}\"", colspan));
+                }
+                if *rowspan > 1 {
+                    output.push_str(&format!(" rowspan=\"{}\"", rowspan));
+                }
+                output.push('>');
             }
             Tag::BlockImage { target, alt } => {
                 output.push_str("<div");
@@ -1061,5 +1075,31 @@ mod tests {
         assert!(html.contains("<strong>bold</strong>"));
         assert!(html.contains("<em>italic</em>"));
         assert!(html.contains("</pre>\n</div>\n"));
+    }
+
+    #[test]
+    fn test_table_colspan_html() {
+        let html = to_html("|===\n| A 2+| B spans\n| C | D | E\n|===");
+        assert!(html.contains("<td>A</td>"));
+        assert!(html.contains("<td colspan=\"2\">B spans</td>"));
+        assert!(html.contains("<td>C</td>"));
+        assert!(html.contains("<td>D</td>"));
+        assert!(html.contains("<td>E</td>"));
+    }
+
+    #[test]
+    fn test_table_rowspan_html() {
+        let html = to_html("|===\n.2+| A | B\n| C\n|===");
+        assert!(html.contains("<td rowspan=\"2\">A</td>"));
+        assert!(html.contains("<td>B</td>"));
+        assert!(html.contains("<td>C</td>"));
+        // Should have 2 rows
+        assert_eq!(html.matches("<tr>").count(), 2);
+    }
+
+    #[test]
+    fn test_table_colspan_rowspan_html() {
+        let html = to_html("|===\n2.3+| cell | B\n| C\n| D\n|===");
+        assert!(html.contains("<td colspan=\"2\" rowspan=\"3\">cell</td>"));
     }
 }
