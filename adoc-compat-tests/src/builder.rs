@@ -120,12 +120,15 @@ enum BuildFrame {
 }
 
 /// Build an AsgNode tree from a stream of parser events.
-pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
+pub fn build_asg<'a>(
+    events: impl Iterator<Item = Event<'a>>,
+    initial_attrs: HashMap<String, Option<String>>,
+) -> AsgNode {
     let mut stack: Vec<BuildFrame> = vec![BuildFrame::Document {
         header: None,
         blocks: vec![],
     }];
-    let mut attrs: HashMap<String, Option<String>> = HashMap::new();
+    let mut attrs: HashMap<String, Option<String>> = initial_attrs;
 
     for event in events {
         match event {
@@ -193,10 +196,10 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                     Tag::TableCell => BuildFrame::TableCell { children: vec![] },
                     Tag::TableHeaderCell => BuildFrame::TableHeaderCell { children: vec![] },
                     Tag::BlockImage { target, .. } => BuildFrame::BlockImage {
-                        target: target.to_string(),
+                        target: resolve_attr_refs(target.as_ref(), &attrs),
                     },
                     Tag::InlineImage { target, .. } => BuildFrame::InlineImage {
-                        target: target.to_string(),
+                        target: resolve_attr_refs(target.as_ref(), &attrs),
                     },
                     Tag::CalloutList => BuildFrame::CalloutList { items: vec![] },
                     Tag::CalloutListItem { .. } => BuildFrame::CalloutListItem {

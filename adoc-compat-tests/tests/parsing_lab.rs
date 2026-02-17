@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use adoc_compat_tests::asg::AsgNode;
@@ -21,7 +22,9 @@ fn should_skip(test_path: &str) -> bool {
 
 struct TestConfig {
     ensure_trailing_newline: bool,
-    has_external_attributes: bool,
+    external_attributes: HashMap<String, Option<String>>,
+    needs_include: bool,
+    needs_array_attrs: bool,
 }
 
 impl TestConfig {
@@ -40,14 +43,44 @@ impl TestConfig {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let has_external_attributes = value
+        let attrs_value = value
             .get("options")
-            .and_then(|o| o.get("attributes"))
-            .is_some();
+            .and_then(|o| o.get("attributes"));
+
+        let mut external_attributes = HashMap::new();
+        let mut needs_include = false;
+        let mut needs_array_attrs = false;
+
+        if let Some(attrs) = attrs_value {
+            if let Some(obj) = attrs.as_object() {
+                for (key, val) in obj {
+                    // Strip trailing `@` (soft-set marker)
+                    let name = key.strip_suffix('@').unwrap_or(key).to_string();
+                    if name == "docdir" {
+                        needs_include = true;
+                    }
+                    match val {
+                        serde_json::Value::Null => {
+                            external_attributes.insert(name, None);
+                        }
+                        serde_json::Value::String(s) => {
+                            external_attributes.insert(name, Some(s.clone()));
+                        }
+                        _ => {
+                            // Non-string values (bool for docdir, etc.) — skip
+                        }
+                    }
+                }
+            } else if attrs.is_array() {
+                needs_array_attrs = true;
+            }
+        }
 
         Self {
             ensure_trailing_newline,
-            has_external_attributes,
+            external_attributes,
+            needs_include,
+            needs_array_attrs,
         }
     }
 }
@@ -56,7 +89,9 @@ impl Default for TestConfig {
     fn default() -> Self {
         Self {
             ensure_trailing_newline: false,
-            has_external_attributes: false,
+            external_attributes: HashMap::new(),
+            needs_include: false,
+            needs_array_attrs: false,
         }
     }
 }
@@ -148,8 +183,8 @@ fn asciidoc_parsing_lab_block_tests() {
             .map(|p| TestConfig::from_path(p))
             .unwrap_or_default();
 
-        // Skip tests requiring external attribute injection
-        if config.has_external_attributes {
+        // Skip tests requiring include directives or array-format attributes
+        if config.needs_include || config.needs_array_attrs {
             skipped += 1;
             continue;
         }
@@ -184,7 +219,7 @@ fn asciidoc_parsing_lab_block_tests() {
 
         let preprocessed = preprocess(&input);
         let parser = Parser::new(&preprocessed);
-        let actual = build_asg(parser);
+        let actual = build_asg(parser, config.external_attributes.clone());
 
         if expected_value.is_array() {
             // Inline test: expected is a JSON array of inline nodes
