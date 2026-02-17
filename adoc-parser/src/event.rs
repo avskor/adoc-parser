@@ -188,6 +188,10 @@ pub enum Tag<'a> {
     Menu { target: CowStr<'a> },
     Icon { name: CowStr<'a> },
 
+    // STEM (math)
+    Stem { variant: CowStr<'a> },
+    StemBlock { variant: CowStr<'a> },
+
     // Anchors
     Anchor { id: CowStr<'a> },
 }
@@ -243,6 +247,9 @@ pub enum TagEnd {
     Button,
     Menu,
     Icon,
+
+    Stem,
+    StemBlock,
 
     Anchor,
 }
@@ -310,6 +317,12 @@ impl<'a> Tag<'a> {
             Tag::Icon { name } => Tag::Icon {
                 name: Cow::Owned(name.into_owned()),
             },
+            Tag::Stem { variant } => Tag::Stem {
+                variant: Cow::Owned(variant.into_owned()),
+            },
+            Tag::StemBlock { variant } => Tag::StemBlock {
+                variant: Cow::Owned(variant.into_owned()),
+            },
             Tag::Anchor { id } => Tag::Anchor {
                 id: Cow::Owned(id.into_owned()),
             },
@@ -358,6 +371,8 @@ impl<'a> Tag<'a> {
             Tag::Button => TagEnd::Button,
             Tag::Menu { .. } => TagEnd::Menu,
             Tag::Icon { .. } => TagEnd::Icon,
+            Tag::Stem { .. } => TagEnd::Stem,
+            Tag::StemBlock { .. } => TagEnd::StemBlock,
             Tag::Anchor { .. } => TagEnd::Anchor,
         }
     }

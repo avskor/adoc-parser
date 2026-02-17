@@ -129,6 +129,12 @@ enum BuildFrame {
     Icon {
         inlines: Vec<AsgNode>,
     },
+    Stem {
+        inlines: Vec<AsgNode>,
+    },
+    StemBlock {
+        children: Vec<AsgNode>,
+    },
 }
 
 /// Build an AsgNode tree from a stream of parser events.
@@ -223,6 +229,8 @@ pub fn build_asg<'a>(
                     Tag::Button => BuildFrame::Button { inlines: vec![] },
                     Tag::Menu { .. } => BuildFrame::Menu { inlines: vec![] },
                     Tag::Icon { .. } => BuildFrame::Icon { inlines: vec![] },
+                    Tag::Stem { .. } => BuildFrame::Stem { inlines: vec![] },
+                    Tag::StemBlock { .. } => BuildFrame::StemBlock { children: vec![] },
                 };
                 stack.push(frame);
             }
@@ -631,6 +639,18 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
                 inlines: merged,
             })
         }
+        BuildFrame::Stem { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "stem".to_string(),
+                inlines: merged,
+            })
+        }
+        BuildFrame::StemBlock { children: _ } => {
+            Some(AsgNode::Unknown {
+                name: "stem".to_string(),
+            })
+        }
     }
 }
 
@@ -760,7 +780,9 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         BuildFrame::Keyboard { inlines }
         | BuildFrame::Button { inlines }
         | BuildFrame::Menu { inlines }
-        | BuildFrame::Icon { inlines } => inlines.push(node),
+        | BuildFrame::Icon { inlines }
+        | BuildFrame::Stem { inlines } => inlines.push(node),
+        BuildFrame::StemBlock { children } => children.push(node),
         BuildFrame::BlockImage { .. } | BuildFrame::InlineImage { .. } => {
             // Images don't have children in our model
         }

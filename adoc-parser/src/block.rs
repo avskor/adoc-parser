@@ -1263,6 +1263,14 @@ impl<'a> BlockScanner<'a> {
             return self.scan_verse_block(delim_type, delim_len, title_events, &block_attrs);
         }
 
+        // Stem block: [stem]/[latexmath]/[asciimath] on passthrough delimiter
+        if delim_type == scanner::DelimiterType::Passthrough
+            && let Some(variant) = block_attrs.stem_variant()
+        {
+            let variant = Cow::Owned(variant.to_string());
+            return self.scan_stem_block(delim_type, delim_len, variant, title_events, &block_attrs);
+        }
+
         // Comment block — skip content entirely
         if delim_type == scanner::DelimiterType::Comment {
             while let Some(line) = self.current_line() {
@@ -1439,6 +1447,47 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(cline)));
         }
         self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+        self.emit_block_metadata(block_attrs);
+        self.push_title_then_events(title_events);
+
+        self.event_buffer.pop()
+    }
+
+    fn scan_stem_block(
+        &mut self,
+        delim_type: scanner::DelimiterType,
+        delim_len: usize,
+        variant: CowStr<'a>,
+        title_events: Vec<Event<'a>>,
+        block_attrs: &BlockAttributes,
+    ) -> Option<Event<'a>> {
+        let mut content_lines: Vec<&'a str> = Vec::new();
+        let mut closed = false;
+        while let Some(line) = self.current_line() {
+            if let Some((dt, dl)) = scanner::is_delimiter(line)
+                && dt == delim_type && dl == delim_len {
+                    self.advance();
+                    closed = true;
+                    break;
+            }
+            content_lines.push(line);
+            self.advance();
+        }
+
+        if !closed
+            && content_lines.last().is_some_and(|l| l.is_empty())
+        {
+            content_lines.pop();
+        }
+
+        self.push_event(Event::End(TagEnd::StemBlock));
+        for (i, &cline) in content_lines.iter().enumerate().rev() {
+            if i < content_lines.len() - 1 {
+                self.push_event(Event::SoftBreak);
+            }
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
+        }
+        self.push_event(Event::Start(Tag::StemBlock { variant }));
         self.emit_block_metadata(block_attrs);
         self.push_title_then_events(title_events);
 

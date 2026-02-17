@@ -44,6 +44,10 @@ struct HtmlRenderer {
     menu_items: Option<String>,
     icon_name: Option<String>,
     icon_attrs: Option<String>,
+    stem_variant: Option<String>,
+    stem_content: Option<String>,
+    stem_block_variant: Option<String>,
+    stem_block_content: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -66,6 +70,10 @@ impl HtmlRenderer {
             menu_items: None,
             icon_name: None,
             icon_attrs: None,
+            stem_variant: None,
+            stem_content: None,
+            stem_block_variant: None,
+            stem_block_content: None,
         }
     }
 
@@ -85,6 +93,10 @@ impl HtmlRenderer {
                         self.menu_items = Some(text.to_string());
                     } else if self.icon_name.is_some() {
                         self.icon_attrs = Some(text.to_string());
+                    } else if self.stem_variant.is_some() {
+                        self.stem_content = Some(text.to_string());
+                    } else if self.stem_block_variant.is_some() {
+                        self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
                     } else {
                         html_escape(output, &text);
                     }
@@ -102,7 +114,11 @@ impl HtmlRenderer {
                     output.push_str("</code>");
                 }
                 Event::SoftBreak => {
-                    output.push('\n');
+                    if self.stem_block_variant.is_some() {
+                        self.stem_block_content.get_or_insert_with(String::new).push('\n');
+                    } else {
+                        output.push('\n');
+                    }
                 }
                 Event::HardBreak => {
                     output.push_str("<br>\n");
@@ -526,6 +542,17 @@ impl HtmlRenderer {
                 self.icon_name = Some(name.to_string());
                 self.icon_attrs = None;
             }
+            Tag::Stem { variant } => {
+                self.stem_variant = Some(variant.to_string());
+                self.stem_content = None;
+            }
+            Tag::StemBlock { variant } => {
+                self.stem_block_variant = Some(variant.to_string());
+                self.stem_block_content = None;
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "stemblock");
+                output.push_str(">\n<div class=\"content\">\n");
+            }
             Tag::Anchor { id } => {
                 output.push_str("<a id=\"");
                 html_escape(output, id);
@@ -688,6 +715,12 @@ impl HtmlRenderer {
             }
             TagEnd::Icon => {
                 self.render_icon(output);
+            }
+            TagEnd::Stem => {
+                self.render_inline_stem(output);
+            }
+            TagEnd::StemBlock => {
+                self.render_stem_block(output);
             }
             TagEnd::Anchor => {
                 // Already closed in start_tag
@@ -852,6 +885,44 @@ impl HtmlRenderer {
         if link.is_some() {
             output.push_str("</a>");
         }
+    }
+
+    fn render_inline_stem(&mut self, output: &mut String) {
+        let variant = match self.stem_variant.take() {
+            Some(v) => v,
+            None => return,
+        };
+        let content = self.stem_content.take().unwrap_or_default();
+
+        if variant == "latexmath" {
+            output.push_str("\\(");
+            output.push_str(&content);
+            output.push_str("\\)");
+        } else {
+            // stem and asciimath
+            output.push_str("\\$");
+            output.push_str(&content);
+            output.push_str("\\$");
+        }
+    }
+
+    fn render_stem_block(&mut self, output: &mut String) {
+        let variant = match self.stem_block_variant.take() {
+            Some(v) => v,
+            None => return,
+        };
+        let content = self.stem_block_content.take().unwrap_or_default();
+
+        if variant == "latexmath" {
+            output.push_str("\\[");
+            output.push_str(&content);
+            output.push_str("\\]");
+        } else {
+            output.push_str("\\$");
+            output.push_str(&content);
+            output.push_str("\\$");
+        }
+        output.push_str("\n</div>\n</div>\n");
     }
 
     fn find_section_level(&self) -> u8 {
@@ -1358,5 +1429,48 @@ mod tests {
             html,
             "<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"submenu\">New</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Doc</span></span></p>\n"
         );
+    }
+
+    // Stem macro tests
+
+    #[test]
+    fn test_stem_inline_html() {
+        let html = to_html("stem:[x^2]");
+        assert_eq!(html, "<p>\\$x^2\\$</p>\n");
+    }
+
+    #[test]
+    fn test_latexmath_inline_html() {
+        let html = to_html("latexmath:[C = \\alpha]");
+        assert_eq!(html, "<p>\\(C = \\alpha\\)</p>\n");
+    }
+
+    #[test]
+    fn test_asciimath_inline_html() {
+        let html = to_html("asciimath:[sqrt(4)]");
+        assert_eq!(html, "<p>\\$sqrt(4)\\$</p>\n");
+    }
+
+    #[test]
+    fn test_stem_no_escape_html() {
+        let html = to_html("stem:[a < b]");
+        assert!(html.contains("a < b"), "stem content should not be HTML-escaped");
+        assert!(!html.contains("&lt;"), "stem content must not contain &lt;");
+    }
+
+    #[test]
+    fn test_stem_block_html() {
+        let html = to_html("[stem]\n++++\nx^2\n++++");
+        assert!(html.contains("<div class=\"stemblock\">"));
+        assert!(html.contains("<div class=\"content\">"));
+        assert!(html.contains("\\$x^2\\$"));
+        assert!(html.contains("</div>\n</div>\n"));
+    }
+
+    #[test]
+    fn test_latexmath_block_html() {
+        let html = to_html("[latexmath]\n++++\nx^2\n++++");
+        assert!(html.contains("<div class=\"stemblock\">"));
+        assert!(html.contains("\\[x^2\\]"));
     }
 }

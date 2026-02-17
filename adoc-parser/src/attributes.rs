@@ -149,6 +149,15 @@ impl BlockAttributes {
         Some(trimmed.split(',').count())
     }
 
+    pub fn stem_variant(&self) -> Option<&str> {
+        match self.positional.first().map(|s| s.as_str()) {
+            Some("stem") | Some("latexmath") | Some("asciimath") => {
+                self.positional.first().map(|s| s.as_str())
+            }
+            _ => None,
+        }
+    }
+
     pub fn has_option(&self, name: &str) -> bool {
         self.options.iter().any(|o| o == name)
     }

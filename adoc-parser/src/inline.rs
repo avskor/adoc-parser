@@ -294,9 +294,25 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Inline stem macro: stem:[content]
+                b's' if self.remaining().starts_with("stem:[") => {
+                    if self.try_stem_macro(5, "stem", events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Pass macro: pass:[text]
                 b'p' if self.remaining().starts_with("pass:") => {
                     if self.try_pass_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Inline latexmath macro: latexmath:[content]
+                b'l' if self.remaining().starts_with("latexmath:[") => {
+                    if self.try_stem_macro(10, "latexmath", events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -361,6 +377,14 @@ impl<'a> InlineState<'a> {
                 // Attribute reference {name}
                 b'{' => {
                     if self.try_attribute_reference(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Inline asciimath macro: asciimath:[content]
+                b'a' if self.remaining().starts_with("asciimath:[") => {
+                    if self.try_stem_macro(10, "asciimath", events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -837,6 +861,41 @@ impl<'a> InlineState<'a> {
         events.push(Event::End(TagEnd::Icon));
 
         self.pos = start_pos + 5 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_stem_macro(
+        &mut self,
+        prefix_len: usize,
+        variant: &'a str,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + prefix_len..]; // skip "stem:" / "latexmath:" / "asciimath:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &rest[1..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Start(Tag::Stem {
+            variant: Cow::Borrowed(variant),
+        }));
+        if !content.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(content)));
+        }
+        events.push(Event::End(TagEnd::Stem));
+
+        self.pos = start_pos + prefix_len + bracket_end + 1;
         *text_start = self.pos;
         true
     }
@@ -1830,6 +1889,59 @@ mod tests {
             Event::Start(Tag::Icon { name: Cow::Borrowed("save") }),
             Event::End(TagEnd::Icon),
             Event::Text(Cow::Borrowed(" to save")),
+        ]);
+    }
+
+    // Stem macro tests
+
+    #[test]
+    fn test_stem_macro() {
+        let events = parse("stem:[x^2]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("stem") }),
+            Event::Text(Cow::Borrowed("x^2")),
+            Event::End(TagEnd::Stem),
+        ]);
+    }
+
+    #[test]
+    fn test_stem_empty() {
+        let events = parse("stem:[]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("stem") }),
+            Event::End(TagEnd::Stem),
+        ]);
+    }
+
+    #[test]
+    fn test_latexmath_macro() {
+        let events = parse("latexmath:[C = \\alpha]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("latexmath") }),
+            Event::Text(Cow::Borrowed("C = \\alpha")),
+            Event::End(TagEnd::Stem),
+        ]);
+    }
+
+    #[test]
+    fn test_asciimath_macro() {
+        let events = parse("asciimath:[sqrt(4)]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("asciimath") }),
+            Event::Text(Cow::Borrowed("sqrt(4)")),
+            Event::End(TagEnd::Stem),
+        ]);
+    }
+
+    #[test]
+    fn test_stem_in_sentence() {
+        let events = parse("The formula stem:[x^2] is simple");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("The formula ")),
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("stem") }),
+            Event::Text(Cow::Borrowed("x^2")),
+            Event::End(TagEnd::Stem),
+            Event::Text(Cow::Borrowed(" is simple")),
         ]);
     }
 
