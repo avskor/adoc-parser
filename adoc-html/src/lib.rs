@@ -29,6 +29,7 @@ struct BlockMeta {
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
+    delimited_block_stack: Vec<DelimitedBlockKind>,
     footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
     footnote_counter: usize,
     named_footnotes: HashMap<String, usize>, // id → number
@@ -45,6 +46,7 @@ impl HtmlRenderer {
         Self {
             tag_stack: Vec::new(),
             in_source_block: false,
+            delimited_block_stack: Vec::new(),
             footnotes: Vec::new(),
             footnote_counter: 0,
             named_footnotes: HashMap::new(),
@@ -296,6 +298,7 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::DelimitedBlock { kind } => {
+                self.delimited_block_stack.push(*kind);
                 match kind {
                     DelimitedBlockKind::Listing => {
                         output.push_str("<div");
@@ -332,6 +335,11 @@ impl HtmlRenderer {
                     }
                     DelimitedBlockKind::Passthrough => {
                         // Passthrough: content is rendered as-is
+                    }
+                    DelimitedBlockKind::Verse => {
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &meta, "verseblock");
+                        output.push_str(">\n<pre class=\"content\">");
                     }
                 }
             }
@@ -520,8 +528,24 @@ impl HtmlRenderer {
                 output.push_str("</pre>\n");
             }
             TagEnd::DelimitedBlock => {
-                // Check the tag stack to determine what kind of block we're closing
-                output.push_str("</pre>\n</div>\n</div>\n");
+                match self.delimited_block_stack.pop() {
+                    Some(DelimitedBlockKind::Listing | DelimitedBlockKind::Literal) => {
+                        output.push_str("</pre>\n</div>\n</div>\n");
+                    }
+                    Some(DelimitedBlockKind::Quote) => {
+                        output.push_str("</blockquote>\n</div>\n");
+                    }
+                    Some(DelimitedBlockKind::Verse) => {
+                        output.push_str("</pre>\n</div>\n");
+                    }
+                    Some(DelimitedBlockKind::Example | DelimitedBlockKind::Sidebar
+                         | DelimitedBlockKind::Open) => {
+                        output.push_str("</div>\n</div>\n");
+                    }
+                    _ => {
+                        output.push_str("</div>\n");
+                    }
+                }
             }
             TagEnd::SourceBlock => {
                 self.in_source_block = false;
@@ -1018,5 +1042,24 @@ mod tests {
         let html = to_html("* item 1\n* item 2");
         assert!(html.contains("<ul>"));
         assert!(!html.contains("checklist"));
+    }
+
+    #[test]
+    fn test_verse_block_html() {
+        let html = to_html("[verse]\n____\nline one\nline two\n____");
+        assert_eq!(
+            html,
+            "<div class=\"verseblock\">\n<pre class=\"content\">line one\nline two</pre>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn test_verse_block_with_formatting_html() {
+        let html = to_html("[verse]\n____\nhello *bold* world\nand _italic_ too\n____");
+        assert!(html.contains("<div class=\"verseblock\">"));
+        assert!(html.contains("<pre class=\"content\">"));
+        assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("<em>italic</em>"));
+        assert!(html.contains("</pre>\n</div>\n"));
     }
 }

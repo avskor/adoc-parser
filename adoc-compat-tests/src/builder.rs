@@ -829,6 +829,9 @@ fn delimited_block_node(kind: DelimitedBlockKind, children: Vec<AsgNode>) -> Asg
                 name: "passthrough".to_string(),
             }
         }
+        DelimitedBlockKind::Verse => AsgNode::Unknown {
+            name: "verse".to_string(),
+        }
     }
 }
 

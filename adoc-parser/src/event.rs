@@ -113,7 +113,7 @@ pub enum AdmonitionKind {
     Caution,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DelimitedBlockKind {
     Listing,
     Literal,
@@ -123,6 +123,7 @@ pub enum DelimitedBlockKind {
     Open,
     Comment,
     Passthrough,
+    Verse,
 }
 
 #[derive(Debug, Clone, PartialEq)]

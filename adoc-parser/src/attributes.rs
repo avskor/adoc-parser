@@ -136,6 +136,10 @@ impl BlockAttributes {
         self.positional.first().map(|s| s.as_str()) == Some("source")
     }
 
+    pub fn is_verse_style(&self) -> bool {
+        self.positional.first().map(|s| s.as_str()) == Some("verse")
+    }
+
     pub fn table_cols_count(&self) -> Option<usize> {
         let val = self.named.get("cols")?;
         let trimmed = val.trim();
@@ -198,6 +202,18 @@ mod tests {
 
         let attrs = BlockAttributes::new();
         assert_eq!(attrs.table_cols_count(), None);
+    }
+
+    #[test]
+    fn test_is_verse_style() {
+        let attrs = BlockAttributes::parse("verse");
+        assert!(attrs.is_verse_style());
+
+        let attrs = BlockAttributes::parse("source,rust");
+        assert!(!attrs.is_verse_style());
+
+        let attrs = BlockAttributes::new();
+        assert!(!attrs.is_verse_style());
     }
 
     #[test]

@@ -1192,6 +1192,11 @@ impl<'a> BlockScanner<'a> {
             return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
         }
 
+        // Verse block: [verse] on quote delimiter
+        if delim_type == scanner::DelimiterType::Quote && block_attrs.is_verse_style() {
+            return self.scan_verse_block(delim_type, delim_len, title_events, &block_attrs);
+        }
+
         // Comment block — skip content entirely
         if delim_type == scanner::DelimiterType::Comment {
             while let Some(line) = self.current_line() {
@@ -1326,6 +1331,48 @@ impl<'a> BlockScanner<'a> {
             }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
+        self.emit_block_metadata(block_attrs);
+        self.push_title_then_events(title_events);
+
+        self.event_buffer.pop()
+    }
+
+    fn scan_verse_block(
+        &mut self,
+        delim_type: scanner::DelimiterType,
+        delim_len: usize,
+        title_events: Vec<Event<'a>>,
+        block_attrs: &BlockAttributes,
+    ) -> Option<Event<'a>> {
+        let mut content_lines: Vec<&'a str> = Vec::new();
+        let mut closed = false;
+        while let Some(line) = self.current_line() {
+            if let Some((dt, dl)) = scanner::is_delimiter(line)
+                && dt == delim_type && dl == delim_len {
+                    self.advance();
+                    closed = true;
+                    break;
+            }
+            content_lines.push(line);
+            self.advance();
+        }
+
+        if !closed
+            && content_lines.last().is_some_and(|l| l.is_empty())
+        {
+            content_lines.pop();
+        }
+
+        let kind = DelimitedBlockKind::Verse;
+
+        self.push_event(Event::End(TagEnd::DelimitedBlock));
+        for (i, &cline) in content_lines.iter().enumerate().rev() {
+            if i < content_lines.len() - 1 {
+                self.push_event(Event::SoftBreak);
+            }
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
+        }
+        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
         self.emit_block_metadata(block_attrs);
         self.push_title_then_events(title_events);
 
@@ -2457,5 +2504,18 @@ mod tests {
         let input = "* item 1\n* item 2";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events[0], Event::Start(Tag::UnorderedList { has_checklist: false }));
+    }
+
+    #[test]
+    fn test_verse_block() {
+        let input = "[verse]\n____\nline one\nline two\n____";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Verse }),
+            Event::Text(Cow::Borrowed("line one")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("line two")),
+            Event::End(TagEnd::DelimitedBlock),
+        ]);
     }
 }
