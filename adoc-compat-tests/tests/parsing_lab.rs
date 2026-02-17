@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use adoc_compat_tests::asg::AsgNode;
 use adoc_compat_tests::builder::build_asg;
-use adoc_parser::{Parser, preprocess_with_attrs};
+use adoc_parser::{Parser, preprocess_with_attrs, resolve_includes};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
@@ -19,7 +19,6 @@ struct TestConfig {
     ensure_trailing_newline: bool,
     external_attributes: HashMap<String, Option<String>>,
     locked_attributes: HashSet<String>,
-    needs_include: bool,
 }
 
 impl TestConfig {
@@ -44,16 +43,12 @@ impl TestConfig {
 
         let mut external_attributes = HashMap::new();
         let mut locked_attributes = HashSet::new();
-        let mut needs_include = false;
 
         if let Some(attrs) = attrs_value {
             if let Some(obj) = attrs.as_object() {
                 for (key, val) in obj {
                     let is_soft = key.ends_with('@');
                     let name = key.strip_suffix('@').unwrap_or(key).to_string();
-                    if name == "docdir" {
-                        needs_include = true;
-                    }
                     match val {
                         serde_json::Value::Null => {
                             external_attributes.insert(name.clone(), None);
@@ -68,7 +63,7 @@ impl TestConfig {
                             }
                         }
                         _ => {
-                            // Non-string values (bool for docdir, etc.) — skip
+                            // Non-string/null values — skip
                         }
                     }
                 }
@@ -96,7 +91,6 @@ impl TestConfig {
             ensure_trailing_newline,
             external_attributes,
             locked_attributes,
-            needs_include,
         }
     }
 }
@@ -107,7 +101,6 @@ impl Default for TestConfig {
             ensure_trailing_newline: false,
             external_attributes: HashMap::new(),
             locked_attributes: HashSet::new(),
-            needs_include: false,
         }
     }
 }
@@ -199,12 +192,6 @@ fn asciidoc_parsing_lab_block_tests() {
             .map(|p| TestConfig::from_path(p))
             .unwrap_or_default();
 
-        // Skip tests requiring include directives
-        if config.needs_include {
-            skipped += 1;
-            continue;
-        }
-
         let mut input = match std::fs::read_to_string(input_path) {
             Ok(s) => s,
             Err(e) => {
@@ -233,6 +220,8 @@ fn asciidoc_parsing_lab_block_tests() {
             }
         };
 
+        let input_dir = input_path.parent().unwrap();
+        let input = resolve_includes(&input, input_dir);
         let preprocessed = preprocess_with_attrs(&input, &config.external_attributes, &config.locked_attributes);
         let parser = Parser::new(&preprocessed);
         let actual = build_asg(parser, config.external_attributes.clone());

@@ -1,4 +1,36 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+/// Resolve `include::path[]` directives by reading and splicing file content.
+///
+/// This is a text-to-text transformation that should run before conditional
+/// directive processing and parsing.
+pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
+    let mut output = String::with_capacity(input.len());
+
+    for line in input.lines() {
+        if let Some((path, _attrs)) = crate::scanner::is_include_directive(line) {
+            let file_path = base_dir.join(path);
+            if let Ok(content) = std::fs::read_to_string(&file_path) {
+                let content = content.trim_end_matches(['\n', '\r']);
+                if !content.is_empty() {
+                    output.push_str(content);
+                    output.push('\n');
+                }
+            }
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    // Remove trailing newline if original didn't end with one
+    if !input.ends_with('\n') && output.ends_with('\n') {
+        output.pop();
+    }
+
+    output
+}
 
 /// Preprocess AsciiDoc source by evaluating conditional directives
 /// (`ifdef`, `ifndef`, `ifeval`, `endif`) and tracking document attributes.
