@@ -368,6 +368,13 @@ impl<'a> BlockScanner<'a> {
         // Attribute entry `:name: value`
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
             self.advance();
+            if name == "leveloffset" {
+                self.update_leveloffset(value);
+                return Some(Event::Attribute {
+                    name: Cow::Borrowed(name),
+                    value: Cow::Owned(self.leveloffset.to_string()),
+                });
+            }
             return Some(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value: Cow::Borrowed(value),

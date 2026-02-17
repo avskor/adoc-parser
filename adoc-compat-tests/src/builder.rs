@@ -282,9 +282,20 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                 }
             }
 
-            // Attributes, footnotes, etc. — skip for now
-            Event::Attribute { .. }
-            | Event::AttributeReference(_)
+            Event::Attribute { name, value } => {
+                if matches!(stack.last(), Some(BuildFrame::Header { .. })) {
+                    // Header attrs are metadata, not blocks
+                } else {
+                    push_block_to_current(
+                        &mut stack,
+                        AsgNode::Attributes {
+                            attributes: vec![(name.to_string(), value.to_string())],
+                        },
+                    );
+                }
+            }
+
+            Event::AttributeReference(_)
             | Event::Footnote { .. }
             | Event::FootnoteRef { .. }
             | Event::CalloutRef(_)

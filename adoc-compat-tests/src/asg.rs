@@ -59,6 +59,9 @@ pub enum AsgNode {
         variant: String,
         inlines: Vec<AsgNode>,
     },
+    Attributes {
+        attributes: Vec<(String, String)>,
+    },
     ThematicBreak,
     PageBreak,
     Preamble {
@@ -224,6 +227,21 @@ impl AsgNode {
                 let blocks = parse_block_array(obj.get("blocks"));
                 AsgNode::Preamble { blocks }
             }
+            "attributes" => {
+                let mut attributes = Vec::new();
+                if let Some(attrs_obj) = obj.get("attributes").and_then(|v| v.as_object()) {
+                    for (key, val) in attrs_obj {
+                        let value = val
+                            .as_object()
+                            .and_then(|o| o.get("value"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        attributes.push((key.clone(), value));
+                    }
+                }
+                AsgNode::Attributes { attributes }
+            }
             "thematicBreak" => AsgNode::ThematicBreak,
             "pageBreak" => AsgNode::PageBreak,
             _ => AsgNode::Unknown { name: name.to_string() },
@@ -369,6 +387,13 @@ impl AsgNode {
                 let mut s = format!("{pad}Preamble");
                 for b in blocks {
                     s += &format!("\n{}", b.pretty_print(indent + 2));
+                }
+                s
+            }
+            AsgNode::Attributes { attributes } => {
+                let mut s = format!("{pad}Attributes");
+                for (name, value) in attributes {
+                    s += &format!("\n{pad}  {name}={value:?}");
                 }
                 s
             }

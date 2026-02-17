@@ -6,12 +6,7 @@ use adoc_parser::{Parser, preprocess};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
-const SKIP_PATTERNS: &[&str] = &[
-    // Attribute entries in body (requires Unknown(attributes) node)
-    "block/attributes/in-block",
-    // Leveloffset in body — requires heading vs section distinction + leveloffset + attributes node
-    "block/attributes/leveloffset-in-body",
-];
+const SKIP_PATTERNS: &[&str] = &[];
 
 fn should_skip(test_path: &str) -> bool {
     SKIP_PATTERNS
