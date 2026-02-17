@@ -8,4 +8,4 @@ mod scanner;
 
 pub use event::*;
 pub use parser::Parser;
-pub use preprocessor::preprocess;
+pub use preprocessor::{preprocess, preprocess_with_attrs};

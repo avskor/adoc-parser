@@ -517,9 +517,28 @@ impl<'a> BlockScanner<'a> {
             if self.is_in_list_context() {
                 self.in_continuation = true;
                 self.had_blank_line = false;
-                let result = self.scan_next_block();
-                self.in_continuation = false;
-                return result;
+                let mut attr_events = Vec::new();
+                loop {
+                    match self.scan_next_block() {
+                        Some(event) if matches!(&event, Event::Attribute { .. }) => {
+                            attr_events.push(event);
+                        }
+                        other => {
+                            self.in_continuation = false;
+                            if attr_events.is_empty() {
+                                return other;
+                            }
+                            // Buffer: block event + remaining attrs (reverse for FIFO)
+                            if let Some(evt) = other {
+                                self.event_buffer.push(evt);
+                            }
+                            for attr in attr_events.drain(1..).rev() {
+                                self.event_buffer.push(attr);
+                            }
+                            return attr_events.into_iter().next();
+                        }
+                    }
+                }
             }
             // Outside list context, emit as a single-line paragraph
             self.push_event(Event::End(TagEnd::Paragraph));

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Preprocess AsciiDoc source by evaluating conditional directives
 /// (`ifdef`, `ifndef`, `ifeval`, `endif`) and tracking document attributes.
@@ -6,7 +6,23 @@ use std::collections::HashMap;
 /// This is a text-to-text transformation that should run after include
 /// resolution and before parsing.
 pub fn preprocess(input: &str) -> String {
+    preprocess_with_attrs(input, &HashMap::new(), &HashSet::new())
+}
+
+/// Like [`preprocess`], but accepts initial external attributes and a set of
+/// locked attribute names.  Locked attributes cannot be overridden by attribute
+/// entries (`:name: value` / `:!name:`) in the document.
+pub fn preprocess_with_attrs(
+    input: &str,
+    initial_attrs: &HashMap<String, Option<String>>,
+    locked_attrs: &HashSet<String>,
+) -> String {
     let mut attributes: HashMap<String, String> = HashMap::new();
+    for (k, v) in initial_attrs {
+        if let Some(val) = v {
+            attributes.insert(k.clone(), val.clone());
+        }
+    }
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut output = String::with_capacity(input.len());
 
@@ -52,6 +68,10 @@ pub fn preprocess(input: &str) -> String {
 
         // 5. Attribute definitions
         if let Some((name, value)) = parse_attribute_entry(trimmed) {
+            if locked_attrs.contains(name) {
+                // Locked attribute — don't modify and don't output line
+                continue;
+            }
             match value {
                 Some(v) => {
                     attributes.insert(name.to_string(), v.to_string());
