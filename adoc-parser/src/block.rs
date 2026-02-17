@@ -364,6 +364,28 @@ impl<'a> BlockScanner<'a> {
 
         // List continuation `+`
         if scanner::is_list_continuation(line) {
+            if self.in_continuation {
+                // Already in continuation mode — treat `+` as paragraph text
+                self.advance();
+                let mut para_lines: Vec<&'a str> = vec!["+"];
+                while let Some(next_line) = self.current_line() {
+                    if self.is_list_continuation_line(next_line) {
+                        para_lines.push(next_line);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.push_event(Event::End(TagEnd::Paragraph));
+                for (i, &pline) in para_lines.iter().enumerate().rev() {
+                    if i < para_lines.len() - 1 {
+                        self.push_event(Event::SoftBreak);
+                    }
+                    self.push_event(Event::Text(Cow::Borrowed(pline)));
+                }
+                self.push_event(Event::Start(Tag::Paragraph));
+                return self.event_buffer.pop();
+            }
             self.advance();
             if self.is_in_list_context() {
                 self.in_continuation = true;
@@ -1092,6 +1114,14 @@ impl<'a> BlockScanner<'a> {
                     events.push(Event::End(TagEnd::ListItem));
                     self.context_stack.pop();
                 }
+                Some(BlockContext::UnorderedList { depth }) if *depth > target_depth => {
+                    events.push(Event::End(TagEnd::UnorderedList));
+                    self.context_stack.pop();
+                }
+                Some(BlockContext::OrderedList { depth }) if *depth > target_depth => {
+                    events.push(Event::End(TagEnd::OrderedList));
+                    self.context_stack.pop();
+                }
                 _ => break,
             }
         }
@@ -1121,6 +1151,10 @@ impl<'a> BlockScanner<'a> {
                     events.push(Event::End(TagEnd::DescriptionDescription));
                     self.context_stack.pop();
                 }
+                Some(BlockContext::DescriptionList { depth }) if *depth > target_depth => {
+                    events.push(Event::End(TagEnd::DescriptionList));
+                    self.context_stack.pop();
+                }
                 _ => break,
             }
         }
@@ -1135,6 +1169,29 @@ impl<'a> BlockScanner<'a> {
             }
         }
         false
+    }
+
+    /// Check if a line is a continuation of a description list principal text.
+    fn is_dlist_continuation_line(&self, line: &str) -> bool {
+        !scanner::is_blank(line)
+            && scanner::strip_section_marker(line).is_none()
+            && scanner::is_delimiter(line).is_none()
+            && scanner::is_list_marker_unordered(line).is_none()
+            && scanner::is_list_marker_ordered(line).is_none()
+            && scanner::is_admonition(line).is_none()
+            && scanner::is_block_image(line).is_none()
+            && !scanner::is_toc_macro(line)
+            && scanner::is_include_directive(line).is_none()
+            && !scanner::is_thematic_break(line)
+            && !scanner::is_page_break(line)
+            && scanner::is_attribute_entry(line).is_none()
+            && scanner::is_block_attribute(line).is_none()
+            && scanner::is_block_title(line).is_none()
+            && !scanner::is_line_comment(line)
+            && scanner::is_description_list_marker(line).is_none()
+            && scanner::is_callout_list_item(line).is_none()
+            && !scanner::is_list_continuation(line)
+            && !scanner::is_table_delimiter(line)
     }
 
     fn scan_description_list_item(
@@ -1155,9 +1212,59 @@ impl<'a> BlockScanner<'a> {
         }
         self.context_stack.push(BlockContext::DescriptionListEntry { depth });
 
+        // Collect principal text: desc on same line + wrapped continuation lines
+        let mut principal_desc = desc;
+        let mut continuation_lines: Vec<&'a str> = Vec::new();
+
+        if desc.is_empty() {
+            // Empty desc: look for principal on next line(s),
+            // possibly skipping blank lines ("ventilated" style)
+            let saved_pos = self.pos;
+            while let Some(l) = self.current_line() {
+                if scanner::is_blank(l) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            if let Some(line) = self.current_line() {
+                let check = if line.starts_with(' ') || line.starts_with('\t') {
+                    line.trim()
+                } else {
+                    line
+                };
+                if !check.is_empty() && self.is_dlist_continuation_line(check) {
+                    principal_desc = check;
+                    self.advance();
+                } else {
+                    self.pos = saved_pos;
+                }
+            } else {
+                self.pos = saved_pos;
+            }
+        }
+
+        // Collect wrapped continuation lines (non-indented, non-blank)
+        if !principal_desc.is_empty() {
+            while let Some(line) = self.current_line() {
+                if self.is_dlist_continuation_line(line)
+                    && !line.starts_with(' ') && !line.starts_with('\t')
+                {
+                    continuation_lines.push(line);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
         // Event buffer (bottom to top for FIFO via pop):
-        if !desc.is_empty() {
-            self.push_event(Event::Text(Cow::Borrowed(desc)));
+        for &cline in continuation_lines.iter().rev() {
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
+            self.push_event(Event::SoftBreak);
+        }
+        if !principal_desc.is_empty() {
+            self.push_event(Event::Text(Cow::Borrowed(principal_desc)));
         }
         self.push_event(Event::Start(Tag::DescriptionDescription));
         self.push_event(Event::End(TagEnd::DescriptionTerm));
@@ -1223,15 +1330,13 @@ impl<'a> BlockScanner<'a> {
 
         // If pending block attrs and same-depth list exists, force new list
         // (block attribute line between same-depth items starts a new list)
-        if !need_new_list && self.pending_block_attrs.is_some() {
-            // Close the existing UnorderedList at this depth
-            if let Some(BlockContext::UnorderedList { depth: d }) = self.context_stack.last() {
-                if *d == depth {
-                    close_events.push(Event::End(TagEnd::UnorderedList));
-                    self.context_stack.pop();
-                    need_new_list = true;
-                }
-            }
+        if !need_new_list && self.pending_block_attrs.is_some()
+            && let Some(BlockContext::UnorderedList { depth: d }) = self.context_stack.last()
+            && *d == depth
+        {
+            close_events.push(Event::End(TagEnd::UnorderedList));
+            self.context_stack.pop();
+            need_new_list = true;
         }
 
         // Push text events in reverse (bottom of stack = last to emit)
@@ -1273,14 +1378,13 @@ impl<'a> BlockScanner<'a> {
         let mut need_new_list = !self.is_in_list_at_depth(depth, false);
 
         // If pending block attrs and same-depth list exists, force new list
-        if !need_new_list && self.pending_block_attrs.is_some() {
-            if let Some(BlockContext::OrderedList { depth: d }) = self.context_stack.last() {
-                if *d == depth {
-                    close_events.push(Event::End(TagEnd::OrderedList));
-                    self.context_stack.pop();
-                    need_new_list = true;
-                }
-            }
+        if !need_new_list && self.pending_block_attrs.is_some()
+            && let Some(BlockContext::OrderedList { depth: d }) = self.context_stack.last()
+            && *d == depth
+        {
+            close_events.push(Event::End(TagEnd::OrderedList));
+            self.context_stack.pop();
+            need_new_list = true;
         }
 
         if need_new_list {

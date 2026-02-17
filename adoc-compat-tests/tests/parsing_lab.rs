@@ -12,43 +12,20 @@ const SKIP_PATTERNS: &[&str] = &[
     // Leveloffset in body — requires heading vs section distinction + leveloffset
     "block/attributes/leveloffset-in-body",
     // Description list complex features
-    "block/dlist/ancestor-list-like",
-    "block/dlist/attached-block-no-principal",
-    "block/dlist/indented-principal-below-term",
     "block/dlist/indented-sibling-following-nested-list",
     "block/dlist/multiple-terms",
-    "block/dlist/nested",
     "block/dlist/parent-list-indented-marker",
-    "block/dlist/wrapped-principal",
-    // Document metadata and preamble
-    "block/document/metadata",
+    // Document preamble (requires new Preamble event type)
     "block/document/preamble",
-    // Header: attribute entries ordering, authors, adjacency
-    "block/header/adjacent-to-body",
+    // Header: authors
     "block/header/author",
-    // Discrete headings: leveloffset and title-attribute
+    // Discrete headings: leveloffset
     "block/heading/leveloffset",
-    "block/heading/title-attribute",
     // Callout list: advanced features
     "block/list/callout/attached-paragraph",
-    // Ordered list: metadata, markers, nesting
-    "block/list/ordered/adjacent-with-metadata",
-    "block/list/ordered/principal-interrupted",
-    "block/list/ordered/separated-by-block-attribute-line",
-    "block/list/ordered/unlimited-nesting",
     // Unordered list: complex features
-    "block/list/unordered/adjacent-delimited-block",
-    "block/list/unordered/adjacent-with-metadata",
-    "block/list/unordered/ancestor-dlist-like",
-    "block/list/unordered/ancestor-with-nested-marker",
-    "block/list/unordered/attached-paragraph-plus-only",
     "block/list/unordered/block-attached-to-",
-    "block/list/unordered/continue-",
     "block/list/unordered/isolated-marker",
-    "block/list/unordered/list-continuation-as-attached-paragraph",
-    "block/list/unordered/separated-by-block-attribute-line",
-    "block/list/unordered/sibling-indented-with-metadata",
-    "block/list/unordered/unlimited-nesting",
     // Section: leveloffset processing
     "block/section/leveloffset-input",
     "block/section/relative-leveloffset",

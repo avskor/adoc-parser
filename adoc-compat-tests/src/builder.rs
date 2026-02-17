@@ -668,14 +668,6 @@ fn extract_principal(children: Vec<AsgNode>) -> (Vec<AsgNode>, Vec<AsgNode>) {
                 AsgNode::Text { .. } | AsgNode::Span { .. } => {
                     principal_nodes.push(child);
                 }
-                AsgNode::Paragraph { .. } if principal_nodes.is_empty() => {
-                    // If the first child IS a Paragraph (e.g. from DescriptionDescription),
-                    // unwrap its inlines as principal
-                    if let AsgNode::Paragraph { inlines } = child {
-                        principal_nodes = inlines;
-                    }
-                    in_principal = false;
-                }
                 _ => {
                     in_principal = false;
                     blocks.push(child);
