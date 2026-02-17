@@ -125,3 +125,21 @@ fn test_hard_break_html() {
     let html = to_html("Line one +\nLine two");
     assert!(html.contains("<br>"));
 }
+
+#[test]
+fn test_smart_double_quotes_html() {
+    let html = to_html("\"`curly`\"");
+    assert!(html.contains("\u{201C}curly\u{201D}"));
+}
+
+#[test]
+fn test_smart_single_quotes_html() {
+    let html = to_html("'`curly`'");
+    assert!(html.contains("\u{2018}curly\u{2019}"));
+}
+
+#[test]
+fn test_smart_quotes_with_bold_html() {
+    let html = to_html("\"`*bold* text`\"");
+    assert!(html.contains("\u{201C}<strong>bold</strong> text\u{201D}"));
+}

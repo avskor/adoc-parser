@@ -148,6 +148,16 @@ impl<'a> InlineState<'a> {
                     }
                 }
 
+                // Escape smart quote openers: \"` or \'`
+                b'\\' if self.peek_at(1).is_some_and(|c| c == b'"' || c == b'\'')
+                    && self.peek_at(2) == Some(b'`') =>
+                {
+                    self.flush_text(text_start, self.pos, events);
+                    self.advance_by(1); // skip backslash
+                    text_start = self.pos;
+                    self.advance_by(2); // skip quote + backtick (literal text in next flush)
+                }
+
                 // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
                 b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
                     self.flush_text(text_start, self.pos, events);
@@ -204,6 +214,23 @@ impl<'a> InlineState<'a> {
                     }
                     self.pos += 1;
                 }
+
+                // Smart double quotes: "`text`"
+                b'"' if self.peek_at(1) == Some(b'`') => {
+                    if self.try_smart_quotes(b'"', events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Smart single quotes: '`text`'
+                b'\'' if self.peek_at(1) == Some(b'`') => {
+                    if self.try_smart_quotes(b'\'', events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 b'`' if self.peek_at(1) == Some(b'`') => {
                     if self.try_unconstrained(b'`', Tag::Monospace, TagEnd::Monospace, events, &mut text_start) {
                         continue;
@@ -922,6 +949,60 @@ impl<'a> InlineState<'a> {
         *text_start = self.pos;
         true
     }
+
+    fn try_smart_quotes(
+        &mut self,
+        quote_char: u8,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_open = start_pos + 2; // skip quote + backtick
+
+        if after_open >= self.input.len() {
+            return false;
+        }
+
+        let close_pos = match self.find_smart_quote_close(quote_char, after_open) {
+            Some(pos) => pos,
+            None => return false,
+        };
+
+        let inner = &self.input[after_open..close_pos];
+        if inner.is_empty() {
+            return false;
+        }
+
+        let (open_q, close_q) = if quote_char == b'"' {
+            ("\u{201C}", "\u{201D}")
+        } else {
+            ("\u{2018}", "\u{2019}")
+        };
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Text(Cow::Borrowed(open_q)));
+
+        let mut inner_parser = InlineState::new(inner);
+        inner_parser.parse_inline(events);
+
+        events.push(Event::Text(Cow::Borrowed(close_q)));
+
+        self.pos = close_pos + 2; // skip closing backtick + quote
+        *text_start = self.pos;
+        true
+    }
+
+    fn find_smart_quote_close(&self, quote_char: u8, search_start: usize) -> Option<usize> {
+        let bytes = self.input.as_bytes();
+        let mut i = search_start;
+        while i + 1 < bytes.len() {
+            if bytes[i] == b'`' && bytes[i + 1] == quote_char {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1387,6 +1468,99 @@ mod tests {
             Event::Text(Cow::Borrowed("Hello ")),
             Event::Footnote { id: None, text: Cow::Borrowed("note") },
             Event::Text(Cow::Borrowed(" world")),
+        ]);
+    }
+
+    // Smart quotes tests
+
+    #[test]
+    fn test_smart_double_quotes() {
+        let events = parse("\"`text`\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("text")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_single_quotes() {
+        let events = parse("'`text`'");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{2018}")),
+            Event::Text(Cow::Borrowed("text")),
+            Event::Text(Cow::Borrowed("\u{2019}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_in_sentence() {
+        let events = parse("He said \"`hello`\" to her");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("He said ")),
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("hello")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+            Event::Text(Cow::Borrowed(" to her")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_with_formatting() {
+        let events = parse("\"`*bold* text`\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Start(Tag::Strong),
+            Event::Text(Cow::Borrowed("bold")),
+            Event::End(TagEnd::Strong),
+            Event::Text(Cow::Borrowed(" text")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_nested_types() {
+        let events = parse("'`outer \"`inner`\" end`'");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{2018}")),
+            Event::Text(Cow::Borrowed("outer ")),
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("inner")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+            Event::Text(Cow::Borrowed(" end")),
+            Event::Text(Cow::Borrowed("\u{2019}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_unclosed() {
+        let events = parse("\"`unclosed");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\"`unclosed")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_escaped() {
+        let events = parse("\\\"`text`\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\"`text`\"")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_empty() {
+        let events = parse("\"``\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\"``\"")),
+        ]);
+    }
+
+    #[test]
+    fn test_plain_quotes_no_backtick() {
+        let events = parse("\"text\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\"text\"")),
         ]);
     }
 }
