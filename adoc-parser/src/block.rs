@@ -30,6 +30,7 @@ pub struct BlockScanner<'a> {
     body_started: bool,
     in_continuation: bool,
     had_blank_line: bool,
+    leveloffset: i32,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -45,6 +46,7 @@ impl<'a> BlockScanner<'a> {
             body_started: false,
             in_continuation: false,
             had_blank_line: false,
+            leveloffset: 0,
         }
     }
 
@@ -152,6 +154,21 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    fn update_leveloffset(&mut self, value: &str) {
+        let trimmed = value.trim();
+        if let Some(rest) = trimmed.strip_prefix('+') {
+            if let Ok(n) = rest.parse::<i32>() {
+                self.leveloffset += n;
+            }
+        } else if trimmed.starts_with('-') {
+            if let Ok(n) = trimmed.parse::<i32>() {
+                self.leveloffset += n;
+            }
+        } else if let Ok(n) = trimmed.parse::<i32>() {
+            self.leveloffset = n;
+        }
+    }
+
     fn is_in_list_context(&self) -> bool {
         self.context_stack.iter().rev().any(|ctx| {
             matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
@@ -241,6 +258,40 @@ impl<'a> BlockScanner<'a> {
                         break;
                     }
                 }
+            }
+        }
+        events
+    }
+
+    /// Close all contexts above the matching parent list at the target depth.
+    /// Used when a new list item at a given depth should return to an existing parent list,
+    /// even when there are interleaved DL/other list contexts above it.
+    fn close_to_parent_list(&mut self, target_depth: u8, unordered: bool) -> Vec<Event<'a>> {
+        let target_pos = self.context_stack.iter().rposition(|ctx| match ctx {
+            BlockContext::UnorderedList { depth } if unordered && *depth == target_depth => true,
+            BlockContext::OrderedList { depth } if !unordered && *depth == target_depth => true,
+            _ => false,
+        });
+        let target_pos = match target_pos {
+            Some(pos) => pos,
+            None => return Vec::new(),
+        };
+
+        let mut events = Vec::new();
+        while self.context_stack.len() > target_pos + 1 {
+            match self.context_stack.pop() {
+                Some(BlockContext::ListItem { .. }) => events.push(Event::End(TagEnd::ListItem)),
+                Some(BlockContext::UnorderedList { .. }) => events.push(Event::End(TagEnd::UnorderedList)),
+                Some(BlockContext::OrderedList { .. }) => events.push(Event::End(TagEnd::OrderedList)),
+                Some(BlockContext::DescriptionListEntry { .. }) => events.push(Event::End(TagEnd::DescriptionDescription)),
+                Some(BlockContext::DescriptionList { .. }) => events.push(Event::End(TagEnd::DescriptionList)),
+                Some(BlockContext::CalloutListItem) => events.push(Event::End(TagEnd::CalloutListItem)),
+                Some(BlockContext::CalloutList) => events.push(Event::End(TagEnd::CalloutList)),
+                Some(other) => {
+                    self.context_stack.push(other);
+                    break;
+                }
+                None => break,
             }
         }
         events
@@ -483,9 +534,11 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Regular paragraph
-        // If in list context with pending block attrs (not continuation), close list first —
-        // block attribute line followed by a paragraph interrupts the list
-        if self.is_in_list_context() && !self.in_continuation && self.pending_block_attrs.is_some() {
+        // If in list context with preceding blank line or pending block attrs (not continuation),
+        // close list first — a blank line followed by non-list content ends the list
+        if self.is_in_list_context() && !self.in_continuation
+            && (self.pending_block_attrs.is_some() || self.had_blank_line)
+        {
             let close_events = self.close_list_contexts();
             for ev in close_events.into_iter().rev() {
                 self.push_event(ev);
@@ -531,6 +584,9 @@ impl<'a> BlockScanner<'a> {
                 break;
             }
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                if name == "leveloffset" {
+                    self.update_leveloffset(value);
+                }
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value: Cow::Borrowed(value),
@@ -583,12 +639,17 @@ impl<'a> BlockScanner<'a> {
                 continue;
             }
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                if name == "leveloffset" {
+                    self.update_leveloffset(value);
+                }
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value: Cow::Borrowed(value),
                 });
                 self.advance();
-            } else if let Some((1, title)) = scanner::strip_section_marker(line) {
+            } else if let Some((1, title)) = scanner::strip_section_marker(line)
+                && self.leveloffset == 0
+            {
                 // Found `= Title` after attributes — transition to full document header
                 self.advance();
                 return self.scan_document_header_with_pre_attrs(title, header_events);
@@ -675,9 +736,12 @@ impl<'a> BlockScanner<'a> {
             return self.scan_discrete_heading(level, title);
         }
 
+        // Apply leveloffset to section level
+        let effective_level = (level as i32 + self.leveloffset).max(1) as u8;
+
         self.advance();
         let list_close_events = self.close_list_contexts();
-        let close_events = self.close_sections_for_level(level);
+        let close_events = self.close_sections_for_level(effective_level);
 
         let id = self.pending_block_attrs
             .as_ref()
@@ -687,16 +751,16 @@ impl<'a> BlockScanner<'a> {
         self.pending_block_attrs = None;
         let title_events = self.take_pending_block_title();
 
-        self.context_stack.push(BlockContext::Section { level });
+        self.context_stack.push(BlockContext::Section { level: effective_level });
 
         // Buffer (bottom to top): section content, then close events, then title
         self.push_event(Event::End(TagEnd::SectionTitle));
         self.push_event(Event::Text(Cow::Borrowed(title)));
         self.push_event(Event::Start(Tag::SectionTitle {
-            level,
+            level: effective_level,
             id: Cow::Owned(id),
         }));
-        self.push_event(Event::Start(Tag::Section { level }));
+        self.push_event(Event::Start(Tag::Section { level: effective_level }));
 
         // Close events emitted before section opening
         for ev in close_events.into_iter().rev() {
@@ -719,10 +783,13 @@ impl<'a> BlockScanner<'a> {
         self.pending_block_attrs = None;
         let title_events = self.take_pending_block_title();
 
+        // Apply leveloffset to heading level
+        let effective_level = (level as i32 + self.leveloffset).max(1) as u8;
+
         // Emit: Start(Heading) Text(title) End(Heading) — no context push
-        self.push_event(Event::End(TagEnd::Heading { level }));
+        self.push_event(Event::End(TagEnd::Heading { level: effective_level }));
         self.push_event(Event::Text(Cow::Borrowed(title)));
-        self.push_event(Event::Start(Tag::Heading { level }));
+        self.push_event(Event::Start(Tag::Heading { level: effective_level }));
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1235,6 +1302,9 @@ impl<'a> BlockScanner<'a> {
     }
 
     fn close_description_entries_for_depth(&mut self, target_depth: u8) -> Vec<Event<'a>> {
+        // Check if there's a parent DL at target depth — enables cross-type closing
+        let has_parent_dl = self.is_in_description_list_at_depth(target_depth);
+
         let mut events = Vec::new();
         loop {
             match self.context_stack.last() {
@@ -1245,6 +1315,23 @@ impl<'a> BlockScanner<'a> {
                 Some(BlockContext::DescriptionList { depth }) if *depth > target_depth => {
                     events.push(Event::End(TagEnd::DescriptionList));
                     self.context_stack.pop();
+                }
+                // When returning to parent DL, close interleaved list contexts
+                Some(BlockContext::ListItem { .. })
+                | Some(BlockContext::UnorderedList { .. })
+                | Some(BlockContext::OrderedList { .. })
+                | Some(BlockContext::CalloutListItem)
+                | Some(BlockContext::CalloutList)
+                    if has_parent_dl =>
+                {
+                    match self.context_stack.pop() {
+                        Some(BlockContext::ListItem { .. }) => events.push(Event::End(TagEnd::ListItem)),
+                        Some(BlockContext::UnorderedList { .. }) => events.push(Event::End(TagEnd::UnorderedList)),
+                        Some(BlockContext::OrderedList { .. }) => events.push(Event::End(TagEnd::OrderedList)),
+                        Some(BlockContext::CalloutListItem) => events.push(Event::End(TagEnd::CalloutListItem)),
+                        Some(BlockContext::CalloutList) => events.push(Event::End(TagEnd::CalloutList)),
+                        _ => unreachable!(),
+                    }
                 }
                 _ => break,
             }
@@ -1450,7 +1537,13 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
-        let mut close_events = self.close_list_items_for_depth(depth);
+        // Use cross-type closing when there's an existing parent UL at the same depth
+        let has_parent_list = self.is_in_list_at_depth(depth, true);
+        let mut close_events = if has_parent_list {
+            self.close_to_parent_list(depth, true)
+        } else {
+            self.close_list_items_for_depth(depth)
+        };
 
         let mut need_new_list = !self.is_in_list_at_depth(depth, true);
 

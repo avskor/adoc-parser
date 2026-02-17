@@ -295,9 +295,41 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
 
     // Pop the Document frame
     match stack.pop().expect("missing Document frame") {
-        BuildFrame::Document { header, blocks } => AsgNode::Document { header, blocks },
+        BuildFrame::Document { header, blocks } => {
+            let blocks = wrap_preamble(&header, blocks);
+            AsgNode::Document { header, blocks }
+        }
         _ => panic!("expected Document frame at bottom of stack"),
     }
+}
+
+/// If the document has a header with a title, wrap blocks before the first section
+/// in a Preamble node (only when there IS a section after them).
+fn wrap_preamble(header: &Option<AsgHeader>, blocks: Vec<AsgNode>) -> Vec<AsgNode> {
+    // Only wrap when document has a titled header
+    let has_title = header.as_ref().is_some_and(|h| !h.title.is_empty());
+    if !has_title {
+        return blocks;
+    }
+
+    // Find the first section
+    let first_section = blocks.iter().position(|b| matches!(b, AsgNode::Section { .. }));
+    let first_section = match first_section {
+        Some(pos) if pos > 0 => pos,
+        _ => return blocks, // No section or no blocks before section
+    };
+
+    let preamble_blocks: Vec<AsgNode> = blocks[..first_section].to_vec();
+    let rest: Vec<AsgNode> = blocks[first_section..].to_vec();
+
+    // Don't wrap if preamble would be empty
+    if preamble_blocks.is_empty() {
+        return rest;
+    }
+
+    let mut result = vec![AsgNode::Preamble { blocks: preamble_blocks }];
+    result.extend(rest);
+    result
 }
 
 /// Convert a finished frame into an AsgNode.

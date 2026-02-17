@@ -147,7 +147,11 @@ pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
     // Hyphen marker: `- text` (depth 1)
     if let Some(rest) = trimmed.strip_prefix("- ") {
-        return Some((1, rest.trim_start()));
+        let text = rest.trim_start();
+        if text.is_empty() {
+            return None;
+        }
+        return Some((1, text));
     }
     let stars = count_leading(trimmed, '*');
     if stars == 0 {
@@ -157,7 +161,11 @@ pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     if !rest.starts_with(' ') {
         return None;
     }
-    Some((stars as u8, rest[1..].trim_start()))
+    let text = rest[1..].trim_start();
+    if text.is_empty() {
+        return None;
+    }
+    Some((stars as u8, text))
 }
 
 pub fn is_list_marker_ordered(line: &str) -> Option<(u8, &str)> {

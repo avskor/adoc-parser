@@ -61,6 +61,9 @@ pub enum AsgNode {
     },
     ThematicBreak,
     PageBreak,
+    Preamble {
+        blocks: Vec<AsgNode>,
+    },
     Unknown {
         name: String,
     },
@@ -217,6 +220,10 @@ impl AsgNode {
                 let inlines = parse_inline_array(obj.get("inlines"));
                 AsgNode::Span { variant, inlines }
             }
+            "preamble" => {
+                let blocks = parse_block_array(obj.get("blocks"));
+                AsgNode::Preamble { blocks }
+            }
             "thematicBreak" => AsgNode::ThematicBreak,
             "pageBreak" => AsgNode::PageBreak,
             _ => AsgNode::Unknown { name: name.to_string() },
@@ -355,6 +362,13 @@ impl AsgNode {
                 let mut s = format!("{pad}Span({variant})");
                 for i in inlines {
                     s += &format!("\n{}", i.pretty_print(indent + 2));
+                }
+                s
+            }
+            AsgNode::Preamble { blocks } => {
+                let mut s = format!("{pad}Preamble");
+                for b in blocks {
+                    s += &format!("\n{}", b.pretty_print(indent + 2));
                 }
                 s
             }

@@ -9,20 +9,8 @@ use adoc_parser::{Parser, preprocess};
 const SKIP_PATTERNS: &[&str] = &[
     // Attribute entries in body (requires Unknown(attributes) node)
     "block/attributes/in-block",
-    // Leveloffset in body — requires heading vs section distinction + leveloffset
+    // Leveloffset in body — requires heading vs section distinction + leveloffset + attributes node
     "block/attributes/leveloffset-in-body",
-    // Description list complex features
-    "block/dlist/indented-sibling-following-nested-list",
-    "block/dlist/parent-list-indented-marker",
-    // Document preamble (requires new Preamble event type)
-    "block/document/preamble",
-    // Discrete headings: leveloffset
-    "block/heading/leveloffset",
-    // Unordered list: complex features
-    "block/list/unordered/isolated-marker",
-    // Section: leveloffset processing
-    "block/section/leveloffset-input",
-    "block/section/relative-leveloffset",
 ];
 
 fn should_skip(test_path: &str) -> bool {
