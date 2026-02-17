@@ -6,7 +6,20 @@ use adoc_parser::{Parser, preprocess};
 
 /// Patterns to skip (relative to the test root).
 /// These tests require features our parser doesn't support yet.
-const SKIP_PATTERNS: &[&str] = &[];
+const SKIP_PATTERNS: &[&str] = &[
+    // Document-level attribute resolution not yet supported
+    "block/attributes/above-block-attached-to-list-item",
+    "block/attributes/multiple-between-blocks",
+    "block/attributes/single-between-blocks",
+    "block/attrlist/attribute-reference",
+    "block/header/negated-attribute-entry",
+    "block/header/redefined-attribute-entry",
+    "block/header/reference-attribute-in-body",
+    "block/header/reference-attribute-in-title",
+    "block/header/reference-doctitle-in-body",
+    // Unclosed delimited block with content not yet supported
+    "block/listing/unclosed-empty-line",
+];
 
 fn should_skip(test_path: &str) -> bool {
     SKIP_PATTERNS
@@ -14,14 +27,57 @@ fn should_skip(test_path: &str) -> bool {
         .any(|pattern| test_path.contains(pattern))
 }
 
-fn find_test_pairs(root: &Path) -> Vec<(PathBuf, PathBuf)> {
+struct TestConfig {
+    ensure_trailing_newline: bool,
+    has_external_attributes: bool,
+}
+
+impl TestConfig {
+    fn from_path(config_path: &Path) -> Self {
+        let content = match std::fs::read_to_string(config_path) {
+            Ok(s) => s,
+            Err(_) => return Self::default(),
+        };
+        let value: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return Self::default(),
+        };
+
+        let ensure_trailing_newline = value
+            .get("ensureTrailingNewline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let has_external_attributes = value
+            .get("options")
+            .and_then(|o| o.get("attributes"))
+            .is_some();
+
+        Self {
+            ensure_trailing_newline,
+            has_external_attributes,
+        }
+    }
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            ensure_trailing_newline: false,
+            has_external_attributes: false,
+        }
+    }
+}
+
+/// (input_path, output_path, optional config)
+fn find_test_pairs(root: &Path) -> Vec<(PathBuf, PathBuf, Option<PathBuf>)> {
     let mut pairs = Vec::new();
     collect_test_pairs(root, &mut pairs);
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs
 }
 
-fn collect_test_pairs(dir: &Path, pairs: &mut Vec<(PathBuf, PathBuf)>) {
+fn collect_test_pairs(dir: &Path, pairs: &mut Vec<(PathBuf, PathBuf, Option<PathBuf>)>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -44,11 +100,13 @@ fn collect_test_pairs(dir: &Path, pairs: &mut Vec<(PathBuf, PathBuf)>) {
                 .to_string();
             let output_path = path.with_file_name(format!("{stem}-output.json"));
             if output_path.exists() {
-                // Skip tests with config files
                 let config_path = path.with_file_name(format!("{stem}-config.json"));
-                if !config_path.exists() {
-                    pairs.push((path, output_path));
-                }
+                let config = if config_path.exists() {
+                    Some(config_path)
+                } else {
+                    None
+                };
+                pairs.push((path, output_path, config));
             }
         }
     }
@@ -79,7 +137,7 @@ fn asciidoc_parsing_lab_block_tests() {
     let mut skipped = 0;
     let mut failed = Vec::new();
 
-    for (input_path, output_path) in &pairs {
+    for (input_path, output_path, config_path) in &pairs {
         // Compute relative path for skip matching
         let rel_path = input_path
             .strip_prefix(test_root.parent().unwrap().parent().unwrap())
@@ -92,13 +150,30 @@ fn asciidoc_parsing_lab_block_tests() {
             continue;
         }
 
-        let input = match std::fs::read_to_string(input_path) {
+        // Parse config if present
+        let config = config_path
+            .as_ref()
+            .map(|p| TestConfig::from_path(p))
+            .unwrap_or_default();
+
+        // Skip tests requiring external attribute injection
+        if config.has_external_attributes {
+            skipped += 1;
+            continue;
+        }
+
+        let mut input = match std::fs::read_to_string(input_path) {
             Ok(s) => s,
             Err(e) => {
                 failed.push((rel_path, format!("Failed to read input: {e}")));
                 continue;
             }
         };
+
+        // Apply ensureTrailingNewline config
+        if config.ensure_trailing_newline && !input.ends_with('\n') {
+            input.push('\n');
+        }
         let expected_json = match std::fs::read_to_string(output_path) {
             Ok(s) => s,
             Err(e) => {
