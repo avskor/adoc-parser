@@ -81,7 +81,7 @@ fn test_document_header_with_attributes() {
     assert_eq!(events[5], Event::End(TagEnd::SectionTitle));
 
     // Author and attributes follow
-    let has_author = events.iter().any(|e| matches!(e, Event::Text(Cow::Borrowed("Author Name"))));
+    let has_author = events.iter().any(|e| matches!(e, Event::Author { fullname, .. } if fullname == "Author Name"));
     assert!(has_author);
 
     let has_toc = events.iter().any(|e| matches!(e, Event::Attribute { name, value } if name == "toc" && value == "left"));

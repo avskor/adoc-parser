@@ -31,6 +31,14 @@ pub enum Event<'a> {
         path: CowStr<'a>,
         attrs: CowStr<'a>,
     },
+    Author {
+        fullname: CowStr<'a>,
+        firstname: CowStr<'a>,
+        middlename: CowStr<'a>,
+        lastname: CowStr<'a>,
+        initials: CowStr<'a>,
+        address: CowStr<'a>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

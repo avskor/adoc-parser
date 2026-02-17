@@ -16,6 +16,7 @@ pub enum BlockContext {
     DescriptionList { depth: u8 },
     DescriptionListEntry { depth: u8 },
     CalloutList,
+    CalloutListItem,
 }
 
 pub struct BlockScanner<'a> {
@@ -124,6 +125,9 @@ impl<'a> BlockScanner<'a> {
                 BlockContext::CalloutList => {
                     events.push(Event::End(TagEnd::CalloutList));
                 }
+                BlockContext::CalloutListItem => {
+                    events.push(Event::End(TagEnd::CalloutListItem));
+                }
             }
         }
         events
@@ -150,7 +154,7 @@ impl<'a> BlockScanner<'a> {
 
     fn is_in_list_context(&self) -> bool {
         self.context_stack.iter().rev().any(|ctx| {
-            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. })
+            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
         })
     }
 
@@ -184,7 +188,59 @@ impl<'a> BlockScanner<'a> {
                     events.push(Event::End(TagEnd::CalloutList));
                     self.context_stack.pop();
                 }
+                BlockContext::CalloutListItem => {
+                    events.push(Event::End(TagEnd::CalloutListItem));
+                    self.context_stack.pop();
+                }
                 _ => break,
+            }
+        }
+        events
+    }
+
+    /// Close nested list items/lists above the outermost ListItem.
+    /// Used when `+` appears after blank lines to attach continuation to ancestor.
+    fn close_nested_list_items(&mut self) -> Vec<Event<'a>> {
+        // Find the outermost (lowest-index) ListItem/DescriptionListEntry/CalloutListItem
+        let outermost = self.context_stack.iter().position(|ctx| {
+            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
+        });
+        let outermost = match outermost {
+            Some(idx) => idx,
+            None => return Vec::new(),
+        };
+        // Close everything above the outermost list item
+        let mut events = Vec::new();
+        while self.context_stack.len() > outermost + 1 {
+            if let Some(ctx) = self.context_stack.pop() {
+                match ctx {
+                    BlockContext::ListItem { .. } => {
+                        events.push(Event::End(TagEnd::ListItem));
+                    }
+                    BlockContext::UnorderedList { .. } => {
+                        events.push(Event::End(TagEnd::UnorderedList));
+                    }
+                    BlockContext::OrderedList { .. } => {
+                        events.push(Event::End(TagEnd::OrderedList));
+                    }
+                    BlockContext::DescriptionListEntry { .. } => {
+                        events.push(Event::End(TagEnd::DescriptionDescription));
+                    }
+                    BlockContext::DescriptionList { .. } => {
+                        events.push(Event::End(TagEnd::DescriptionList));
+                    }
+                    BlockContext::CalloutList => {
+                        events.push(Event::End(TagEnd::CalloutList));
+                    }
+                    BlockContext::CalloutListItem => {
+                        events.push(Event::End(TagEnd::CalloutListItem));
+                    }
+                    other => {
+                        // Put it back — don't close non-list contexts
+                        self.context_stack.push(other);
+                        break;
+                    }
+                }
             }
         }
         events
@@ -386,9 +442,23 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::Start(Tag::Paragraph));
                 return self.event_buffer.pop();
             }
+            // When `+` appears after blank lines, close nested lists so
+            // continuation attaches to the outermost ancestor list item
+            if self.had_blank_line && self.is_in_list_context() {
+                let close_events = self.close_nested_list_items();
+                if !close_events.is_empty() {
+                    for ev in close_events.into_iter().rev() {
+                        self.push_event(ev);
+                    }
+                    // Don't consume `+` yet — after nested lists are closed,
+                    // next iteration will re-encounter `+` and handle it normally
+                    return self.event_buffer.pop();
+                }
+            }
             self.advance();
             if self.is_in_list_context() {
                 self.in_continuation = true;
+                self.had_blank_line = false;
                 let result = self.scan_next_block();
                 self.in_continuation = false;
                 return result;
@@ -433,6 +503,27 @@ impl<'a> BlockScanner<'a> {
 
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
+
+        // Check for author line: next line that is not blank, not attribute entry, not section marker
+        if let Some(line) = self.current_line()
+            && !scanner::is_blank(line)
+            && scanner::is_attribute_entry(line).is_none()
+            && scanner::strip_section_marker(line).is_none()
+        {
+            // Parse as author line
+            let authors = scanner::parse_authors(line);
+            for author in authors {
+                header_events.push(Event::Author {
+                    fullname: Cow::Borrowed(author.fullname),
+                    firstname: Cow::Borrowed(author.firstname),
+                    middlename: Cow::Borrowed(author.middlename),
+                    lastname: Cow::Borrowed(author.lastname),
+                    initials: Cow::Owned(author.initials),
+                    address: Cow::Borrowed(author.address),
+                });
+            }
+            self.advance();
+        }
 
         while let Some(line) = self.current_line() {
             if scanner::is_blank(line) {
@@ -1212,11 +1303,38 @@ impl<'a> BlockScanner<'a> {
         }
         self.context_stack.push(BlockContext::DescriptionListEntry { depth });
 
+        // Collect additional terms (multiple terms per dlistItem)
+        let mut extra_terms: Vec<&'a str> = Vec::new();
+
         // Collect principal text: desc on same line + wrapped continuation lines
         let mut principal_desc = desc;
         let mut continuation_lines: Vec<&'a str> = Vec::new();
 
         if desc.is_empty() {
+            // Collect additional terms: consecutive dlist markers with empty desc at same depth
+            loop {
+                // Skip blank lines between terms
+                let saved_pos = self.pos;
+                while let Some(l) = self.current_line() {
+                    if scanner::is_blank(l) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(line) = self.current_line()
+                    && let Some((d, t, dd)) = scanner::is_description_list_marker(line)
+                    && d == depth && dd.is_empty()
+                {
+                    extra_terms.push(t);
+                    self.advance();
+                    continue;
+                }
+                // Not another empty-desc term — restore position and look for principal
+                self.pos = saved_pos;
+                break;
+            }
+
             // Empty desc: look for principal on next line(s),
             // possibly skipping blank lines ("ventilated" style)
             let saved_pos = self.pos;
@@ -1267,6 +1385,14 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(principal_desc)));
         }
         self.push_event(Event::Start(Tag::DescriptionDescription));
+
+        // Emit extra terms in reverse (they go on top of the first term)
+        for &extra_term in extra_terms.iter().rev() {
+            self.push_event(Event::End(TagEnd::DescriptionTerm));
+            self.push_event(Event::Text(Cow::Borrowed(extra_term)));
+            self.push_event(Event::Start(Tag::DescriptionTerm));
+        }
+
         self.push_event(Event::End(TagEnd::DescriptionTerm));
         self.push_event(Event::Text(Cow::Borrowed(term)));
         self.push_event(Event::Start(Tag::DescriptionTerm));
@@ -1420,12 +1546,21 @@ impl<'a> BlockScanner<'a> {
 
         let need_new_list = !self.is_in_callout_list();
 
+        // Close previous CalloutListItem if one is open
+        let mut close_events = Vec::new();
+        if !need_new_list
+            && let Some(BlockContext::CalloutListItem) = self.context_stack.last()
+        {
+            close_events.push(Event::End(TagEnd::CalloutListItem));
+            self.context_stack.pop();
+        }
+
         if need_new_list {
             self.context_stack.push(BlockContext::CalloutList);
         }
+        self.context_stack.push(BlockContext::CalloutListItem);
 
         // Buffer (bottom to top for FIFO via pop):
-        self.push_event(Event::End(TagEnd::CalloutListItem));
         if !text.is_empty() {
             self.push_event(Event::Text(Cow::Borrowed(text)));
         }
@@ -1434,6 +1569,9 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::CalloutList));
         }
 
+        for ev in close_events.into_iter().rev() {
+            self.push_event(ev);
+        }
         self.push_title_then_events(title_events);
 
         self.pending_block_attrs = None;
@@ -1481,6 +1619,9 @@ impl<'a> BlockScanner<'a> {
                                         }
                                         BlockContext::CalloutList => {
                                             events.push(Event::End(TagEnd::CalloutList));
+                                        }
+                                        BlockContext::CalloutListItem => {
+                                            events.push(Event::End(TagEnd::CalloutListItem));
                                         }
                                     }
                                 }

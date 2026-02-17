@@ -62,6 +62,7 @@ impl<'a> Iterator for Parser<'a> {
         }
 
         match event {
+            Event::Author { .. } => Some(event),
             Event::Text(Cow::Borrowed(s)) if !self.in_source_block && !self.in_verbatim_block => {
                 let events = InlineParser::parse_str(s);
                 if events.len() == 1 {

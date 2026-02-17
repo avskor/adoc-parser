@@ -2,7 +2,7 @@ use adoc_parser::{
     AdmonitionKind, DelimitedBlockKind, Event, Tag, TagEnd,
 };
 
-use crate::asg::{AsgHeader, AsgNode};
+use crate::asg::{AsgHeader, AsgNode, AuthorInfo};
 
 /// Stack frame representing an open tag being built.
 enum BuildFrame {
@@ -12,6 +12,7 @@ enum BuildFrame {
     },
     Header {
         title: Vec<AsgNode>,
+        authors: Vec<AuthorInfo>,
     },
     DocumentTitle {
         inlines: Vec<AsgNode>,
@@ -127,7 +128,7 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
         match event {
             Event::Start(tag) => {
                 let frame = match tag {
-                    Tag::Header => BuildFrame::Header { title: vec![] },
+                    Tag::Header => BuildFrame::Header { title: vec![], authors: vec![] },
                     Tag::DocumentTitle => BuildFrame::DocumentTitle { inlines: vec![] },
                     Tag::Section { .. } => BuildFrame::Section {
                         level: 0, // will be set from SectionTitle
@@ -267,6 +268,20 @@ pub fn build_asg<'a>(events: impl Iterator<Item = Event<'a>>) -> AsgNode {
                 );
             }
 
+            Event::Author { fullname, firstname, middlename, lastname, initials, address } => {
+                // Push author info to the current Header frame
+                if let Some(BuildFrame::Header { authors, .. }) = stack.last_mut() {
+                    authors.push(AuthorInfo {
+                        fullname: fullname.to_string(),
+                        firstname: firstname.to_string(),
+                        middlename: middlename.to_string(),
+                        lastname: lastname.to_string(),
+                        initials: initials.to_string(),
+                        address: address.to_string(),
+                    });
+                }
+            }
+
             // Attributes, footnotes, etc. — skip for now
             Event::Attribute { .. }
             | Event::AttributeReference(_)
@@ -292,10 +307,10 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
             // Shouldn't happen — Document is handled in build_asg
             None
         }
-        BuildFrame::Header { title } => {
+        BuildFrame::Header { title, authors } => {
             // Header is handled specially — store in parent Document
             Some(AsgNode::Document {
-                header: Some(AsgHeader { title }),
+                header: Some(AsgHeader { title, authors }),
                 blocks: vec![],
             })
         }
@@ -507,7 +522,7 @@ fn push_to_parent(stack: &mut [BuildFrame], node: AsgNode, tag_end: &TagEnd) {
                 return;
             }
             // Fallback: direct parent is Header
-            if let BuildFrame::Header { title } = parent
+            if let BuildFrame::Header { title, .. } = parent
                 && let AsgNode::Paragraph { inlines } = node
             {
                 *title = inlines;
@@ -518,7 +533,7 @@ fn push_to_parent(stack: &mut [BuildFrame], node: AsgNode, tag_end: &TagEnd) {
             // Store title inlines in the Section frame OR Header frame
             if let AsgNode::Paragraph { inlines } = node {
                 match parent {
-                    BuildFrame::Section { title, .. } | BuildFrame::Header { title } => {
+                    BuildFrame::Section { title, .. } | BuildFrame::Header { title, .. } => {
                         *title = inlines;
                         return;
                     }
@@ -566,7 +581,7 @@ fn push_to_parent(stack: &mut [BuildFrame], node: AsgNode, tag_end: &TagEnd) {
 fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
     match frame {
         BuildFrame::Document { blocks, .. } => blocks.push(node),
-        BuildFrame::Header { title } => title.push(node),
+        BuildFrame::Header { title, .. } => title.push(node),
         BuildFrame::DocumentTitle { inlines } => inlines.push(node),
         BuildFrame::Section { blocks, .. } => blocks.push(node),
         BuildFrame::SectionTitle { inlines } => inlines.push(node),

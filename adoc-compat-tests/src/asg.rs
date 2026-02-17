@@ -67,8 +67,19 @@ pub enum AsgNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AuthorInfo {
+    pub fullname: String,
+    pub firstname: String,
+    pub middlename: String,
+    pub lastname: String,
+    pub initials: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AsgHeader {
     pub title: Vec<AsgNode>,
+    pub authors: Vec<AuthorInfo>,
 }
 
 impl AsgNode {
@@ -86,7 +97,29 @@ impl AsgNode {
             "document" => {
                 let header = obj.get("header").map(|h| {
                     let title = parse_inline_array(h.get("title"));
-                    AsgHeader { title }
+                    let authors = h.get("authors")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter().map(|a| {
+                                let obj = a.as_object();
+                                let get_str = |key: &str| -> String {
+                                    obj.and_then(|o| o.get(key))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string()
+                                };
+                                AuthorInfo {
+                                    fullname: get_str("fullname"),
+                                    firstname: get_str("firstname"),
+                                    middlename: get_str("middlename"),
+                                    lastname: get_str("lastname"),
+                                    initials: get_str("initials"),
+                                    address: get_str("address"),
+                                }
+                            }).collect()
+                        })
+                        .unwrap_or_default();
+                    AsgHeader { title, authors }
                 });
                 let blocks = parse_block_array(obj.get("blocks"));
                 AsgNode::Document { header, blocks }
@@ -200,6 +233,12 @@ impl AsgNode {
                     s += &format!("\n{pad}  header:");
                     for node in &h.title {
                         s += &format!("\n{}", node.pretty_print(indent + 4));
+                    }
+                    if !h.authors.is_empty() {
+                        s += &format!("\n{pad}  authors:");
+                        for a in &h.authors {
+                            s += &format!("\n{pad}    Author(fullname={:?}, initials={:?})", a.fullname, a.initials);
+                        }
                     }
                 }
                 for b in blocks {

@@ -135,6 +135,9 @@ impl HtmlRenderer {
                     html_escape(output, &path);
                     output.push_str("[] -->\n");
                 }
+                Event::Author { .. } => {
+                    // Author metadata — not rendered to HTML body
+                }
             }
         }
 

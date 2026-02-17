@@ -13,18 +13,12 @@ const SKIP_PATTERNS: &[&str] = &[
     "block/attributes/leveloffset-in-body",
     // Description list complex features
     "block/dlist/indented-sibling-following-nested-list",
-    "block/dlist/multiple-terms",
     "block/dlist/parent-list-indented-marker",
     // Document preamble (requires new Preamble event type)
     "block/document/preamble",
-    // Header: authors
-    "block/header/author",
     // Discrete headings: leveloffset
     "block/heading/leveloffset",
-    // Callout list: advanced features
-    "block/list/callout/attached-paragraph",
     // Unordered list: complex features
-    "block/list/unordered/block-attached-to-",
     "block/list/unordered/isolated-marker",
     // Section: leveloffset processing
     "block/section/leveloffset-input",

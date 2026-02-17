@@ -397,6 +397,69 @@ pub fn generate_id(title: &str) -> String {
     id
 }
 
+pub struct AuthorInfo<'a> {
+    pub fullname: &'a str,
+    pub firstname: &'a str,
+    pub middlename: &'a str,
+    pub lastname: &'a str,
+    pub initials: String,
+    pub address: &'a str,
+}
+
+pub fn parse_authors(line: &str) -> Vec<AuthorInfo<'_>> {
+    let mut authors = Vec::new();
+    for part in line.split("; ") {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (name_part, address) = if let Some(open) = part.rfind('<') {
+            if let Some(close) = part[open..].find('>') {
+                let addr = &part[open + 1..open + close];
+                let name = part[..open].trim();
+                (name, addr)
+            } else {
+                (part, "")
+            }
+        } else {
+            (part, "")
+        };
+
+        let words: Vec<&str> = name_part.split_whitespace().collect();
+        let (firstname, middlename, lastname) = match words.len() {
+            0 => ("", "", ""),
+            1 => (words[0], "", words[0]),
+            2 => (words[0], "", words[1]),
+            _ => {
+                let first = words[0];
+                let last = words[words.len() - 1];
+                // Find middle substring in name_part
+                let first_end = name_part.find(first).unwrap() + first.len();
+                let last_start = name_part.rfind(last).unwrap();
+                let mid = name_part[first_end..last_start].trim();
+                (first, mid, last)
+            }
+        };
+
+        let mut initials = String::new();
+        for word in &words {
+            if let Some(ch) = word.chars().next() {
+                initials.push(ch.to_ascii_uppercase());
+            }
+        }
+
+        authors.push(AuthorInfo {
+            fullname: name_part,
+            firstname,
+            middlename,
+            lastname,
+            initials,
+            address,
+        });
+    }
+    authors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
