@@ -376,6 +376,7 @@ pub fn build_asg<'a>(
             | Event::CalloutRef(_)
             | Event::IndexTerm { .. }
             | Event::ConcealedIndexTerm { .. }
+            | Event::BibliographyAnchor { .. }
             | Event::Toc
             | Event::Include { .. } => {}
 

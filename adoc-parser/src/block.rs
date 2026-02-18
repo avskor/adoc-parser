@@ -148,8 +148,17 @@ impl<'a> BlockScanner<'a> {
     }
 
     fn emit_block_metadata(&mut self, attrs: &BlockAttributes) {
-        if attrs.id.is_some() || !attrs.roles.is_empty() || !attrs.options.is_empty() {
+        // Only emit style for positional[0] values that are NOT consumed for block type detection
+        let style = attrs.positional.first()
+            .filter(|s| !matches!(s.as_str(),
+                "source" | "verse" | "stem" | "latexmath" | "asciimath"
+                | "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
+                | "discrete" | "normal"
+            ))
+            .map(|s| Cow::Owned(s.clone()));
+        if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty() || !attrs.options.is_empty() {
             self.push_event(Event::BlockMetadata {
+                style,
                 id: attrs.id.as_ref().map(|s| Cow::Owned(s.clone())),
                 roles: attrs.roles.iter().map(|s| Cow::Owned(s.clone())).collect(),
                 options: attrs.options.iter().map(|s| Cow::Owned(s.clone())).collect(),
@@ -2396,7 +2405,7 @@ mod tests {
         let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("header".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -2427,7 +2436,7 @@ mod tests {
         let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("footer".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -2458,7 +2467,7 @@ mod tests {
         let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())] },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),

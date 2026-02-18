@@ -21,6 +21,7 @@ struct TocEntry {
 
 #[allow(dead_code)]
 struct BlockMeta {
+    style: Option<String>,
     id: Option<String>,
     roles: Vec<String>,
     options: Vec<String>,
@@ -173,6 +174,13 @@ impl HtmlRenderer {
                 Event::ConcealedIndexTerm { .. } => {
                     // Concealed index terms produce no visible output
                 }
+                Event::BibliographyAnchor { id, label } => {
+                    output.push_str("<a id=\"");
+                    html_escape(output, &id);
+                    output.push_str("\"></a>[");
+                    html_escape(output, label.as_ref().unwrap_or(&id));
+                    output.push(']');
+                }
                 Event::CalloutRef(num) => {
                     output.push_str("<b class=\"conum\">(");
                     output.push_str(&num.to_string());
@@ -189,8 +197,9 @@ impl HtmlRenderer {
                 Event::Author { .. } => {
                     // Author metadata — not rendered to HTML body
                 }
-                Event::BlockMetadata { id, roles, options } => {
+                Event::BlockMetadata { style, id, roles, options } => {
                     self.pending_block_meta = Some(BlockMeta {
+                        style: style.map(|s| s.into_owned()),
                         id: id.map(|s| s.into_owned()),
                         roles: roles.into_iter().map(|s| s.into_owned()).collect(),
                         options: options.into_iter().map(|s| s.into_owned()).collect(),
@@ -768,12 +777,20 @@ impl HtmlRenderer {
             html_escape(output, id);
             output.push('"');
         }
+        let style = meta.as_ref().and_then(|m| m.style.as_deref());
         let roles = meta.as_ref().map(|m| &m.roles[..]).unwrap_or(&[]);
-        if !default_class.is_empty() || !roles.is_empty() {
+        if !default_class.is_empty() || style.is_some() || !roles.is_empty() {
             output.push_str(" class=\"");
             let mut first = true;
             if !default_class.is_empty() {
                 output.push_str(default_class);
+                first = false;
+            }
+            if let Some(s) = style {
+                if !first {
+                    output.push(' ');
+                }
+                html_escape(output, s);
                 first = false;
             }
             for role in roles {

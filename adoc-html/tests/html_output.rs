@@ -143,3 +143,48 @@ fn test_smart_quotes_with_bold_html() {
     let html = to_html("\"`*bold* text`\"");
     assert!(html.contains("\u{201C}<strong>bold</strong> text\u{201D}"));
 }
+
+#[test]
+fn test_bibliography_section_with_anchors() {
+    let input = "\
+[bibliography]
+== References
+
+* [[[pp]]] Ralph Johnson. Pragmatic Programmer.
+* [[[gof, 2]]] Gang of Four. Design Patterns.";
+
+    let html = to_html(input);
+    // Bibliography anchor with default label
+    assert!(html.contains("<a id=\"pp\"></a>[pp]"));
+    // Bibliography anchor with custom label
+    assert!(html.contains("<a id=\"gof\"></a>[2]"));
+    // Section has bibliography style class
+    assert!(html.contains("class=\"sect bibliography\""));
+}
+
+#[test]
+fn test_bibliography_anchor_with_cross_reference() {
+    let input = "\
+See <<pp>> for details.
+
+[bibliography]
+== References
+
+* [[[pp]]] Pragmatic Programmer.";
+
+    let html = to_html(input);
+    assert!(html.contains("<a href=\"#pp\">"));
+    assert!(html.contains("<a id=\"pp\"></a>[pp]"));
+}
+
+#[test]
+fn test_section_with_id_still_works() {
+    let input = "\
+[#myid]
+== My Section
+
+Some text.";
+
+    let html = to_html(input);
+    assert!(html.contains("id=\"myid\""));
+}

@@ -38,6 +38,10 @@ pub enum Event<'a> {
         secondary: Option<CowStr<'a>>,
         tertiary: Option<CowStr<'a>>,
     },
+    BibliographyAnchor {
+        id: CowStr<'a>,
+        label: Option<CowStr<'a>>,
+    },
     Toc,
     Include {
         path: CowStr<'a>,
@@ -52,6 +56,7 @@ pub enum Event<'a> {
         address: CowStr<'a>,
     },
     BlockMetadata {
+        style: Option<CowStr<'a>>,
         id: Option<CowStr<'a>>,
         roles: Vec<CowStr<'a>>,
         options: Vec<CowStr<'a>>,
@@ -95,6 +100,10 @@ impl<'a> Event<'a> {
                 secondary: secondary.map(cow_owned),
                 tertiary: tertiary.map(cow_owned),
             },
+            Event::BibliographyAnchor { id, label } => Event::BibliographyAnchor {
+                id: cow_owned(id),
+                label: label.map(cow_owned),
+            },
             Event::Toc => Event::Toc,
             Event::Include { path, attrs } => Event::Include {
                 path: cow_owned(path),
@@ -115,7 +124,8 @@ impl<'a> Event<'a> {
                 initials: cow_owned(initials),
                 address: cow_owned(address),
             },
-            Event::BlockMetadata { id, roles, options } => Event::BlockMetadata {
+            Event::BlockMetadata { style, id, roles, options } => Event::BlockMetadata {
+                style: style.map(cow_owned),
                 id: id.map(cow_owned),
                 roles: roles.into_iter().map(cow_owned).collect(),
                 options: options.into_iter().map(cow_owned).collect(),
