@@ -422,7 +422,7 @@ pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
 
-use crate::event::CellStyle;
+use crate::event::{CellStyle, HAlign, VAlign};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellSpec<'a> {
@@ -430,6 +430,91 @@ pub struct CellSpec<'a> {
     pub colspan: u8,
     pub rowspan: u8,
     pub style: CellStyle,
+    pub halign: HAlign,
+    pub valign: VAlign,
+}
+
+/// Parse alignment prefix from a cell specifier (prefix before first `|`).
+/// Reads `[<^>]` for halign, then `.[<^>]` for valign from the beginning.
+/// Returns `(remaining, halign, valign)`.
+pub fn parse_cell_align_prefix(s: &str) -> (&str, HAlign, VAlign) {
+    let mut rest = s;
+    let mut halign = HAlign::default();
+    let mut valign = VAlign::default();
+
+    // Parse halign: <, ^, >
+    if let Some(stripped) = rest.strip_prefix('<') {
+        halign = HAlign::Left;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix('^') {
+        halign = HAlign::Center;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix('>') {
+        halign = HAlign::Right;
+        rest = stripped;
+    }
+
+    // Parse valign: .<, .^, .>
+    if let Some(stripped) = rest.strip_prefix(".<") {
+        valign = VAlign::Top;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix(".^") {
+        valign = VAlign::Middle;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix(".>") {
+        valign = VAlign::Bottom;
+        rest = stripped;
+    }
+
+    (rest, halign, valign)
+}
+
+/// Parse alignment suffix from the end of a segment (content between pipes).
+/// The alignment spec for the NEXT cell sits at the END of the segment, after content.
+/// Pattern at end: `[<^>]` for halign, then `.[<^>]` for valign.
+/// Only valid if preceded by space or at start of string.
+/// Returns `(remaining_content, halign, valign)`.
+pub fn parse_cell_align_suffix(s: &str) -> (&str, HAlign, VAlign) {
+    let trimmed = s.trim_end();
+    if trimmed.is_empty() {
+        return (s, HAlign::default(), VAlign::default());
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut end = trimmed.len();
+    let mut halign = HAlign::default();
+    let mut valign = VAlign::default();
+    let mut found = false;
+
+    // Try to parse valign from end: .< .^ .>
+    if end >= 2 && bytes[end - 2] == b'.' {
+        match bytes[end - 1] {
+            b'<' => { valign = VAlign::Top; end -= 2; found = true; }
+            b'^' => { valign = VAlign::Middle; end -= 2; found = true; }
+            b'>' => { valign = VAlign::Bottom; end -= 2; found = true; }
+            _ => {}
+        }
+    }
+
+    // Try to parse halign from end: < ^ >
+    if end >= 1 {
+        match bytes[end - 1] {
+            b'<' => { halign = HAlign::Left; end -= 1; found = true; }
+            b'^' => { halign = HAlign::Center; end -= 1; found = true; }
+            b'>' => { halign = HAlign::Right; end -= 1; found = true; }
+            _ => {}
+        }
+    }
+
+    // Only valid if preceded by space or at start of string
+    if found {
+        let remaining = &trimmed[..end];
+        if remaining.is_empty() || remaining.ends_with(' ') {
+            return (&s[..s.len() - (trimmed.len() - end)], halign, valign);
+        }
+    }
+
+    (s, HAlign::default(), VAlign::default())
 }
 
 /// Parse a span modifier from the end of a segment (the part before `|`).
@@ -528,14 +613,17 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
     // Find the first pipe — if none, not a table line
     let first_pipe = trimmed.find('|')?;
 
-    // Before first pipe: must be empty or a valid style+span spec (for the first cell)
+    // Before first pipe: must be empty or a valid align+style+span spec (for the first cell)
     let prefix = trimmed[..first_pipe].trim();
     let mut pending_colspan: u8 = 1;
     let mut pending_rowspan: u8 = 1;
     let mut pending_style = CellStyle::Default;
+    let mut pending_halign = HAlign::default();
+    let mut pending_valign = VAlign::default();
 
     if !prefix.is_empty() {
-        let (after_style, style) = parse_cell_style_suffix(prefix);
+        let (after_align, halign, valign) = parse_cell_align_prefix(prefix);
+        let (after_style, style) = parse_cell_style_suffix(after_align);
         let (remaining, cs, rs) = parse_span_spec(after_style);
         if !remaining.trim().is_empty() {
             return None; // Not a table line — non-spec content before first pipe
@@ -543,14 +631,18 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
         pending_colspan = cs;
         pending_rowspan = rs;
         pending_style = style;
+        pending_halign = halign;
+        pending_valign = valign;
     }
 
     let mut cells = Vec::new();
     let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
 
     for (i, part) in parts.iter().enumerate() {
+        // Parse next-cell specs from END: style, then span, then alignment
         let (after_style, next_style) = parse_cell_style_suffix(part);
-        let (content, next_colspan, next_rowspan) = parse_span_spec(after_style);
+        let (after_span, next_colspan, next_rowspan) = parse_span_spec(after_style);
+        let (content, next_halign, next_valign) = parse_cell_align_suffix(after_span);
         let content = content.trim();
 
         if !content.is_empty() {
@@ -559,6 +651,8 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
                 colspan: pending_colspan,
                 rowspan: pending_rowspan,
                 style: pending_style,
+                halign: pending_halign,
+                valign: pending_valign,
             });
         } else if i < parts.len() - 1 {
             // Empty cell between pipes — skip (preserving old behavior)
@@ -567,6 +661,8 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
         pending_colspan = next_colspan;
         pending_rowspan = next_rowspan;
         pending_style = next_style;
+        pending_halign = next_halign;
+        pending_valign = next_valign;
     }
 
     Some(cells)
@@ -871,19 +967,23 @@ mod tests {
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default }
+        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
-        CellSpec { content, colspan, rowspan, style: CellStyle::Default }
+        CellSpec { content, colspan, rowspan, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn styled_cell(content: &str, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1, style }
+        CellSpec { content, colspan: 1, rowspan: 1, style, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_styled_cell(content: &str, colspan: u8, rowspan: u8, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content, colspan, rowspan, style }
+        CellSpec { content, colspan, rowspan, style, halign: HAlign::default(), valign: VAlign::default() }
+    }
+
+    fn aligned_cell(content: &str, halign: HAlign, valign: VAlign) -> CellSpec<'_> {
+        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default, halign, valign }
     }
 
     #[test]
@@ -1105,6 +1205,72 @@ mod tests {
         assert_eq!(
             parse_table_cells("| A e| B | C"),
             Some(vec![cell("A"), styled_cell("B", CellStyle::Emphasis), cell("C")])
+        );
+    }
+
+    #[test]
+    fn test_parse_cell_align_prefix_halign() {
+        assert_eq!(parse_cell_align_prefix("^"), ("", HAlign::Center, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix("<"), ("", HAlign::Left, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix(">"), ("", HAlign::Right, VAlign::Top));
+    }
+
+    #[test]
+    fn test_parse_cell_align_prefix_valign() {
+        assert_eq!(parse_cell_align_prefix(".<"), ("", HAlign::Left, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix(".^"), ("", HAlign::Left, VAlign::Middle));
+        assert_eq!(parse_cell_align_prefix(".>"), ("", HAlign::Left, VAlign::Bottom));
+    }
+
+    #[test]
+    fn test_parse_cell_align_prefix_combined() {
+        assert_eq!(parse_cell_align_prefix("^.>"), ("", HAlign::Center, VAlign::Bottom));
+        assert_eq!(parse_cell_align_prefix(">.^rest"), ("rest", HAlign::Right, VAlign::Middle));
+    }
+
+    #[test]
+    fn test_parse_cell_align_prefix_no_align() {
+        assert_eq!(parse_cell_align_prefix(""), ("", HAlign::Left, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix("text"), ("text", HAlign::Left, VAlign::Top));
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_halign() {
+        assert_eq!(
+            parse_table_cells("^| centered"),
+            Some(vec![aligned_cell("centered", HAlign::Center, VAlign::Top)])
+        );
+        assert_eq!(
+            parse_table_cells(">| right"),
+            Some(vec![aligned_cell("right", HAlign::Right, VAlign::Top)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_valign() {
+        assert_eq!(
+            parse_table_cells(".^| middle"),
+            Some(vec![aligned_cell("middle", HAlign::Left, VAlign::Middle)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_combined_align() {
+        assert_eq!(
+            parse_table_cells(">.^| right-middle"),
+            Some(vec![aligned_cell("right-middle", HAlign::Right, VAlign::Middle)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_align_between_pipes() {
+        assert_eq!(
+            parse_table_cells("| A ^| B | C"),
+            Some(vec![
+                cell("A"),
+                aligned_cell("B", HAlign::Center, VAlign::Top),
+                cell("C"),
+            ])
         );
     }
 }

@@ -144,6 +144,22 @@ pub enum AdmonitionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VAlign {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CellStyle {
     #[default]
     Default,
@@ -205,8 +221,8 @@ pub enum Tag<'a> {
     TableBody,
     TableFoot,
     TableRow,
-    TableCell { colspan: u8, rowspan: u8, style: CellStyle },
-    TableHeaderCell { colspan: u8, rowspan: u8, style: CellStyle },
+    TableCell { colspan: u8, rowspan: u8, style: CellStyle, halign: HAlign, valign: VAlign },
+    TableHeaderCell { colspan: u8, rowspan: u8, style: CellStyle, halign: HAlign, valign: VAlign },
 
     // Media
     BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
@@ -334,8 +350,8 @@ impl<'a> Tag<'a> {
             Tag::TableBody => Tag::TableBody,
             Tag::TableFoot => Tag::TableFoot,
             Tag::TableRow => Tag::TableRow,
-            Tag::TableCell { colspan, rowspan, style } => Tag::TableCell { colspan, rowspan, style },
-            Tag::TableHeaderCell { colspan, rowspan, style } => Tag::TableHeaderCell { colspan, rowspan, style },
+            Tag::TableCell { colspan, rowspan, style, halign, valign } => Tag::TableCell { colspan, rowspan, style, halign, valign },
+            Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } => Tag::TableHeaderCell { colspan, rowspan, style, halign, valign },
             Tag::BlockImage { target, alt } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),

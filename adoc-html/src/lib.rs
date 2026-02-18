@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use adoc_parser::{CellStyle, Event, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind};
+use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, VAlign};
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
     let mut renderer = HtmlRenderer::new();
@@ -505,7 +505,7 @@ impl HtmlRenderer {
             Tag::TableRow => {
                 output.push_str("<tr>\n");
             }
-            Tag::TableCell { colspan, rowspan, style } => {
+            Tag::TableCell { colspan, rowspan, style, halign, valign } => {
                 self.cell_style_stack.push(*style);
                 output.push_str("<td");
                 if *colspan > 1 {
@@ -514,6 +514,7 @@ impl HtmlRenderer {
                 if *rowspan > 1 {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
+                Self::write_align_style(output, halign, valign);
                 output.push('>');
                 match style {
                     CellStyle::Emphasis => output.push_str("<em>"),
@@ -522,7 +523,7 @@ impl HtmlRenderer {
                     _ => {}
                 }
             }
-            Tag::TableHeaderCell { colspan, rowspan, style } => {
+            Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } => {
                 self.cell_style_stack.push(*style);
                 output.push_str("<th");
                 if *colspan > 1 {
@@ -531,6 +532,7 @@ impl HtmlRenderer {
                 if *rowspan > 1 {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
+                Self::write_align_style(output, halign, valign);
                 output.push('>');
                 match style {
                     CellStyle::Emphasis => output.push_str("<em>"),
@@ -838,6 +840,35 @@ impl HtmlRenderer {
 
     fn take_block_meta(&mut self) -> Option<BlockMeta> {
         self.pending_block_meta.take()
+    }
+
+    /// Write `style="text-align:...; vertical-align:..."` attribute if alignment is non-default.
+    fn write_align_style(output: &mut String, halign: &HAlign, valign: &VAlign) {
+        let ha = match halign {
+            HAlign::Center => Some("text-align: center"),
+            HAlign::Right => Some("text-align: right"),
+            HAlign::Left => None,
+        };
+        let va = match valign {
+            VAlign::Middle => Some("vertical-align: middle"),
+            VAlign::Bottom => Some("vertical-align: bottom"),
+            VAlign::Top => None,
+        };
+        if ha.is_some() || va.is_some() {
+            output.push_str(" style=\"");
+            if let Some(h) = ha {
+                output.push_str(h);
+                output.push(';');
+                if va.is_some() {
+                    output.push(' ');
+                }
+            }
+            if let Some(v) = va {
+                output.push_str(v);
+                output.push(';');
+            }
+            output.push('"');
+        }
     }
 
     /// Write HTML id and class attributes from block metadata into an already-started tag.
@@ -1678,6 +1709,47 @@ mod tests {
         let html = to_html("|===\n| data | more\n|===");
         assert!(html.contains("<td>data</td>"));
         assert!(html.contains("<td>more</td>"));
+    }
+
+    #[test]
+    fn test_table_cols_alignment_html() {
+        let html = to_html("[cols=\"<,^,>\"]\n|===\n| A | B | C\n|===");
+        assert!(html.contains("<td>A</td>"), "Left-aligned should have no style");
+        assert!(html.contains("<td style=\"text-align: center;\">B</td>"), "Center should have text-align: center");
+        assert!(html.contains("<td style=\"text-align: right;\">C</td>"), "Right should have text-align: right");
+    }
+
+    #[test]
+    fn test_table_cell_align_html() {
+        let html = to_html("|===\n^| centered\n|===");
+        assert!(html.contains("<td style=\"text-align: center;\">centered</td>"));
+    }
+
+    #[test]
+    fn test_table_cell_combined_align_html() {
+        let html = to_html("|===\n>.^| text\n|===");
+        assert!(html.contains("<td style=\"text-align: right; vertical-align: middle;\">text</td>"));
+    }
+
+    #[test]
+    fn test_table_cell_override_cols_align_html() {
+        // cols says left, cell overrides to center
+        let html = to_html("[cols=\"<,<\"]\n|===\n^| centered | normal\n|===");
+        assert!(html.contains("<td style=\"text-align: center;\">centered</td>"));
+        assert!(html.contains("<td>normal</td>"));
+    }
+
+    #[test]
+    fn test_table_valign_only_html() {
+        let html = to_html("|===\n.>| bottom\n|===");
+        assert!(html.contains("<td style=\"vertical-align: bottom;\">bottom</td>"));
+    }
+
+    #[test]
+    fn test_table_cols_valign_html() {
+        let html = to_html("[cols=\".^,1\"]\n|===\n| A | B\n|===");
+        assert!(html.contains("<td style=\"vertical-align: middle;\">A</td>"));
+        assert!(html.contains("<td>B</td>"));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::attributes::BlockAttributes;
 use crate::event::{
-    AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, Tag, TagEnd,
+    AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, HAlign, Tag, TagEnd, VAlign,
 };
 use crate::scanner;
 
@@ -992,6 +992,9 @@ impl<'a> BlockScanner<'a> {
         // Determine footer: %footer option
         let has_footer = block_attrs.has_option("footer");
 
+        // Get column specs for alignment defaults
+        let col_specs = block_attrs.table_col_specs();
+
         // Build rows using grid-aware placement (respects colspan/rowspan)
         let rows = Self::build_table_rows(&all_cells, num_cols);
 
@@ -1013,22 +1016,53 @@ impl<'a> BlockScanner<'a> {
             (remaining_rows, &[][..])
         };
 
+        // Resolve alignment for a cell: cell-level overrides column-level defaults.
+        // A cell's alignment is "default" if not explicitly set by the cell spec.
+        let resolve_align = |cell: &scanner::CellSpec<'_>, col_idx: usize| -> (HAlign, VAlign) {
+            let mut halign = cell.halign;
+            let mut valign = cell.valign;
+            if let Some(ref specs) = col_specs
+                && col_idx < specs.len()
+            {
+                if halign == HAlign::Left && cell.halign == HAlign::Left {
+                    // Only use column default if cell didn't explicitly set alignment.
+                    // We can't distinguish "explicitly set to Left" from "default Left",
+                    // so we always apply column default when cell is Left (the default).
+                    halign = specs[col_idx].halign;
+                }
+                if valign == VAlign::Top && cell.valign == VAlign::Top {
+                    valign = specs[col_idx].valign;
+                }
+            }
+            (halign, valign)
+        };
+
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
 
-        // TableFoot
-        if !footer_rows.is_empty() {
-            self.push_event(Event::End(TagEnd::TableFoot));
-            for row in footer_rows.iter().rev() {
-                self.push_event(Event::End(TagEnd::TableRow));
-                for cell in row.iter().rev() {
-                    if cell.style == CellStyle::Header {
+        // Helper closure to emit cell events
+        // Note: rows are iterated in reverse, so col_idx must be computed per-row
+        macro_rules! emit_row_cells {
+            ($row:expr, $is_header_section:expr) => {
+                // First pass: compute column indices for each cell
+                let mut col_indices = Vec::with_capacity($row.len());
+                let mut col_idx: usize = 0;
+                for cell in $row.iter() {
+                    col_indices.push(col_idx);
+                    col_idx += cell.colspan as usize;
+                }
+                // Emit in reverse order (buffer is a stack)
+                for (ci, cell) in $row.iter().enumerate().rev() {
+                    let (halign, valign) = resolve_align(cell, col_indices[ci]);
+                    if cell.style == CellStyle::Header || $is_header_section {
                         self.push_event(Event::End(TagEnd::TableHeaderCell));
                         self.push_event(Event::Text(Cow::Borrowed(cell.content)));
                         self.push_event(Event::Start(Tag::TableHeaderCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
                             style: cell.style,
+                            halign,
+                            valign,
                         }));
                     } else {
                         self.push_event(Event::End(TagEnd::TableCell));
@@ -1037,9 +1071,20 @@ impl<'a> BlockScanner<'a> {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
                             style: cell.style,
+                            halign,
+                            valign,
                         }));
                     }
                 }
+            };
+        }
+
+        // TableFoot
+        if !footer_rows.is_empty() {
+            self.push_event(Event::End(TagEnd::TableFoot));
+            for row in footer_rows.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                emit_row_cells!(row, false);
                 self.push_event(Event::Start(Tag::TableRow));
             }
             self.push_event(Event::Start(Tag::TableFoot));
@@ -1050,25 +1095,7 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::End(TagEnd::TableBody));
             for row in body_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
-                for cell in row.iter().rev() {
-                    if cell.style == CellStyle::Header {
-                        self.push_event(Event::End(TagEnd::TableHeaderCell));
-                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
-                        self.push_event(Event::Start(Tag::TableHeaderCell {
-                            colspan: cell.colspan,
-                            rowspan: cell.rowspan,
-                            style: cell.style,
-                        }));
-                    } else {
-                        self.push_event(Event::End(TagEnd::TableCell));
-                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
-                        self.push_event(Event::Start(Tag::TableCell {
-                            colspan: cell.colspan,
-                            rowspan: cell.rowspan,
-                            style: cell.style,
-                        }));
-                    }
-                }
+                emit_row_cells!(row, false);
                 self.push_event(Event::Start(Tag::TableRow));
             }
             self.push_event(Event::Start(Tag::TableBody));
@@ -1079,15 +1106,7 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::End(TagEnd::TableHead));
             for row in header_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
-                for cell in row.iter().rev() {
-                    self.push_event(Event::End(TagEnd::TableHeaderCell));
-                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
-                    self.push_event(Event::Start(Tag::TableHeaderCell {
-                        colspan: cell.colspan,
-                        rowspan: cell.rowspan,
-                        style: cell.style,
-                    }));
-                }
+                emit_row_cells!(row, true);
                 self.push_event(Event::Start(Tag::TableRow));
             }
             self.push_event(Event::Start(Tag::TableHead));
@@ -2442,18 +2461,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2470,28 +2489,28 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Header 1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Header 2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Cell 1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Cell 2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Cell 3")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("Cell 4")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2509,22 +2528,22 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2541,18 +2560,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2570,20 +2589,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2601,20 +2620,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2632,30 +2651,30 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2672,21 +2691,21 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 2, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 2, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B spans")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("E")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2703,16 +2722,83 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 2, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 2, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
             Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_cols_alignment() {
+        let input = "[cols=\"<,^,>\"]\n|===\n| A | B | C\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Center, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Right, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_cell_level_alignment() {
+        let input = "|===\n^| centered >.^| right-middle | normal\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Center, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("centered")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Right, valign: VAlign::Middle }),
+            Event::Text(Cow::Borrowed("right-middle")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("normal")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_table_cell_overrides_col_alignment() {
+        // cols says left, but cell says center — cell wins
+        let input = "[cols=\"<,<\"]\n|===\n^| centered | normal\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Center, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("centered")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("normal")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),

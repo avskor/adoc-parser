@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::event::CowStr;
+use crate::event::{CowStr, CellStyle, HAlign, VAlign};
 
 fn split_respecting_quotes(s: &str) -> Vec<&str> {
     let mut parts = Vec::new();
@@ -56,6 +56,82 @@ pub struct BlockAttributes {
     pub named: HashMap<String, String>,
     #[allow(dead_code)]
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ColSpec {
+    pub halign: HAlign,
+    pub valign: VAlign,
+    pub width: u8,
+    pub style: CellStyle,
+}
+
+/// Parse a single column spec: `[multiplier*][halign][.valign][width][style]`
+/// Returns `(count, ColSpec)` where count is the multiplier (default 1).
+fn parse_col_spec(s: &str) -> (usize, ColSpec) {
+    let mut rest = s;
+    let mut count: usize = 1;
+
+    // Check for multiplier: `N*`
+    if let Some(star_pos) = rest.find('*') {
+        let before = &rest[..star_pos];
+        if !before.is_empty() && before.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(n) = before.parse::<usize>() {
+                count = n.max(1);
+            }
+            rest = &rest[star_pos + 1..];
+        }
+    }
+
+    let mut spec = ColSpec::default();
+
+    // Parse halign: <, ^, >
+    if let Some(stripped) = rest.strip_prefix('<') {
+        spec.halign = HAlign::Left;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix('^') {
+        spec.halign = HAlign::Center;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix('>') {
+        spec.halign = HAlign::Right;
+        rest = stripped;
+    }
+
+    // Parse valign: .<, .^, .>
+    if let Some(stripped) = rest.strip_prefix(".<") {
+        spec.valign = VAlign::Top;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix(".^") {
+        spec.valign = VAlign::Middle;
+        rest = stripped;
+    } else if let Some(stripped) = rest.strip_prefix(".>") {
+        spec.valign = VAlign::Bottom;
+        rest = stripped;
+    }
+
+    // Parse width (digits)
+    let digit_count = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digit_count > 0 {
+        if let Ok(w) = rest[..digit_count].parse::<u8>() {
+            spec.width = w;
+        }
+        rest = &rest[digit_count..];
+    }
+
+    // Parse style letter
+    if rest.len() == 1 {
+        match rest.as_bytes()[0] {
+            b'a' => spec.style = CellStyle::AsciiDoc,
+            b'h' => spec.style = CellStyle::Header,
+            b'e' => spec.style = CellStyle::Emphasis,
+            b'm' => spec.style = CellStyle::Monospace,
+            b's' => spec.style = CellStyle::Strong,
+            b'l' => spec.style = CellStyle::Literal,
+            _ => {}
+        }
+    }
+
+    (count, spec)
 }
 
 impl BlockAttributes {
@@ -159,12 +235,39 @@ impl BlockAttributes {
     }
 
     pub fn table_cols_count(&self) -> Option<usize> {
+        if let Some(specs) = self.table_col_specs() {
+            return Some(specs.len());
+        }
+        None
+    }
+
+    pub fn table_col_specs(&self) -> Option<Vec<ColSpec>> {
         let val = self.named.get("cols")?;
         let trimmed = val.trim();
+
+        // Simple numeric: cols="3" → 3 columns with defaults
         if let Ok(n) = trimmed.parse::<usize>() {
-            return Some(n);
+            return Some(vec![ColSpec::default(); n]);
         }
-        Some(trimmed.split(',').count())
+
+        // Comma-separated specs: cols="<,^,>" or cols="^.>2,<1" or cols="3*^"
+        let mut specs = Vec::new();
+        for part in trimmed.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (count, spec) = parse_col_spec(part);
+            for _ in 0..count {
+                specs.push(spec.clone());
+            }
+        }
+
+        if specs.is_empty() {
+            None
+        } else {
+            Some(specs)
+        }
     }
 
     pub fn stem_variant(&self) -> Option<&str> {
@@ -330,5 +433,121 @@ mod tests {
 
         let attrs = BlockAttributes::new();
         assert!(!attrs.is_reversed());
+    }
+
+    #[test]
+    fn test_parse_col_spec_simple_number() {
+        let (count, spec) = parse_col_spec("1");
+        assert_eq!(count, 1);
+        assert_eq!(spec.width, 1);
+        assert_eq!(spec.halign, HAlign::Left);
+        assert_eq!(spec.valign, VAlign::Top);
+    }
+
+    #[test]
+    fn test_parse_col_spec_halign() {
+        let (_, spec) = parse_col_spec("<");
+        assert_eq!(spec.halign, HAlign::Left);
+
+        let (_, spec) = parse_col_spec("^");
+        assert_eq!(spec.halign, HAlign::Center);
+
+        let (_, spec) = parse_col_spec(">");
+        assert_eq!(spec.halign, HAlign::Right);
+    }
+
+    #[test]
+    fn test_parse_col_spec_valign() {
+        let (_, spec) = parse_col_spec(".<");
+        assert_eq!(spec.valign, VAlign::Top);
+
+        let (_, spec) = parse_col_spec(".^");
+        assert_eq!(spec.valign, VAlign::Middle);
+
+        let (_, spec) = parse_col_spec(".>");
+        assert_eq!(spec.valign, VAlign::Bottom);
+    }
+
+    #[test]
+    fn test_parse_col_spec_combined_align_and_width() {
+        let (count, spec) = parse_col_spec("^.>2");
+        assert_eq!(count, 1);
+        assert_eq!(spec.halign, HAlign::Center);
+        assert_eq!(spec.valign, VAlign::Bottom);
+        assert_eq!(spec.width, 2);
+    }
+
+    #[test]
+    fn test_parse_col_spec_multiplier() {
+        let (count, spec) = parse_col_spec("3*^");
+        assert_eq!(count, 3);
+        assert_eq!(spec.halign, HAlign::Center);
+    }
+
+    #[test]
+    fn test_parse_col_spec_with_style() {
+        let (_, spec) = parse_col_spec("2a");
+        assert_eq!(spec.width, 2);
+        assert_eq!(spec.style, CellStyle::AsciiDoc);
+
+        let (_, spec) = parse_col_spec(">1e");
+        assert_eq!(spec.halign, HAlign::Right);
+        assert_eq!(spec.width, 1);
+        assert_eq!(spec.style, CellStyle::Emphasis);
+    }
+
+    #[test]
+    fn test_table_col_specs_numeric() {
+        let attrs = BlockAttributes::parse("cols=\"3\"");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 3);
+        for s in &specs {
+            assert_eq!(s.halign, HAlign::Left);
+            assert_eq!(s.valign, VAlign::Top);
+        }
+    }
+
+    #[test]
+    fn test_table_col_specs_align_list() {
+        let attrs = BlockAttributes::parse("cols=\"<,^,>\"");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].halign, HAlign::Left);
+        assert_eq!(specs[1].halign, HAlign::Center);
+        assert_eq!(specs[2].halign, HAlign::Right);
+    }
+
+    #[test]
+    fn test_table_col_specs_multiplier() {
+        let attrs = BlockAttributes::parse("cols=\"3*^\"");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 3);
+        for s in &specs {
+            assert_eq!(s.halign, HAlign::Center);
+        }
+    }
+
+    #[test]
+    fn test_table_col_specs_mixed() {
+        let attrs = BlockAttributes::parse("cols=\"^.>2,<1\"");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].halign, HAlign::Center);
+        assert_eq!(specs[0].valign, VAlign::Bottom);
+        assert_eq!(specs[0].width, 2);
+        assert_eq!(specs[1].halign, HAlign::Left);
+        assert_eq!(specs[1].width, 1);
+    }
+
+    #[test]
+    fn test_table_col_specs_with_style() {
+        let attrs = BlockAttributes::parse("cols=\"1,2a,3\"");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].style, CellStyle::Default);
+        assert_eq!(specs[1].style, CellStyle::AsciiDoc);
+        assert_eq!(specs[1].width, 2);
+        assert_eq!(specs[2].style, CellStyle::Default);
+        assert_eq!(specs[2].width, 3);
     }
 }
