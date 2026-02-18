@@ -540,6 +540,25 @@ impl HtmlRenderer {
             Tag::Highlight => {
                 output.push_str("<mark>");
             }
+            Tag::InlineSpan { id, roles } => {
+                output.push_str("<span");
+                if let Some(id) = id {
+                    output.push_str(" id=\"");
+                    html_escape(output, id);
+                    output.push('"');
+                }
+                if !roles.is_empty() {
+                    output.push_str(" class=\"");
+                    for (i, role) in roles.iter().enumerate() {
+                        if i > 0 {
+                            output.push(' ');
+                        }
+                        html_escape(output, role);
+                    }
+                    output.push('"');
+                }
+                output.push('>');
+            }
             Tag::Superscript => {
                 output.push_str("<sup>");
             }
@@ -724,6 +743,9 @@ impl HtmlRenderer {
             }
             TagEnd::Highlight => {
                 output.push_str("</mark>");
+            }
+            TagEnd::InlineSpan => {
+                output.push_str("</span>");
             }
             TagEnd::Superscript => {
                 output.push_str("</sup>");
@@ -1813,5 +1835,37 @@ mod tests {
         let html = to_html("[discrete#myh.special]\n== Heading");
         assert!(html.contains("id=\"myh\""));
         assert!(html.contains("class=\"special\""));
+    }
+
+    // Inline span tests
+
+    #[test]
+    fn test_inline_span_single_role_html() {
+        let html = to_html("[.lead]#text#");
+        assert_eq!(html, "<p><span class=\"lead\">text</span></p>\n");
+    }
+
+    #[test]
+    fn test_inline_span_multiple_roles_html() {
+        let html = to_html("[.big.red]#text#");
+        assert_eq!(html, "<p><span class=\"big red\">text</span></p>\n");
+    }
+
+    #[test]
+    fn test_inline_span_id_and_role_html() {
+        let html = to_html("[#myid.lead]#text#");
+        assert_eq!(html, "<p><span id=\"myid\" class=\"lead\">text</span></p>\n");
+    }
+
+    #[test]
+    fn test_inline_span_unconstrained_html() {
+        let html = to_html("hel[.x]##lo##rld");
+        assert_eq!(html, "<p>hel<span class=\"x\">lo</span>rld</p>\n");
+    }
+
+    #[test]
+    fn test_bare_highlight_no_regression_html() {
+        let html = to_html("#highlight#");
+        assert_eq!(html, "<p><mark>highlight</mark></p>\n");
     }
 }

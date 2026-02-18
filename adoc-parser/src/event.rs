@@ -207,6 +207,7 @@ pub enum Tag<'a> {
     Emphasis,
     Monospace,
     Highlight,
+    InlineSpan { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
     Superscript,
     Subscript,
 
@@ -271,6 +272,7 @@ pub enum TagEnd {
     Emphasis,
     Monospace,
     Highlight,
+    InlineSpan,
     Superscript,
     Subscript,
 
@@ -342,6 +344,10 @@ impl<'a> Tag<'a> {
             Tag::Emphasis => Tag::Emphasis,
             Tag::Monospace => Tag::Monospace,
             Tag::Highlight => Tag::Highlight,
+            Tag::InlineSpan { id, roles } => Tag::InlineSpan {
+                id: id.map(cow_owned),
+                roles: roles.into_iter().map(cow_owned).collect(),
+            },
             Tag::Superscript => Tag::Superscript,
             Tag::Subscript => Tag::Subscript,
             Tag::Link { url } => Tag::Link {
@@ -407,6 +413,7 @@ impl<'a> Tag<'a> {
             Tag::Emphasis => TagEnd::Emphasis,
             Tag::Monospace => TagEnd::Monospace,
             Tag::Highlight => TagEnd::Highlight,
+            Tag::InlineSpan { .. } => TagEnd::InlineSpan,
             Tag::Superscript => TagEnd::Superscript,
             Tag::Subscript => TagEnd::Subscript,
             Tag::Link { .. } => TagEnd::Link,

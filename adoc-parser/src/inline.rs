@@ -419,6 +419,16 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Inline attr span: [.class]#text# or [#id.class]#text#
+                b'[' if self.peek_at(1) != Some(b'[')
+                    && self.peek_at(1).is_some_and(|c| c == b'.' || c == b'#') =>
+                {
+                    if self.try_inline_attr_span(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Bibliography anchor [[[id]]] or [[[id, label]]]
                 b'[' if self.peek_at(1) == Some(b'[') && self.peek_at(2) == Some(b'[') => {
                     if self.try_bibliography_anchor(events, &mut text_start) {
@@ -1423,6 +1433,154 @@ impl<'a> InlineState<'a> {
         self.pos = start_pos + 11 + bracket_end + 1;
         *text_start = self.pos;
         true
+    }
+
+    /// Parse inline shorthand notation from bracket content like `#id.class1.class2`.
+    /// Returns (id, roles).
+    fn parse_inline_shorthand(s: &str) -> (Option<&str>, Vec<&str>) {
+        let mut id = None;
+        let mut roles = Vec::new();
+
+        let mut rest = s;
+        // Parse #id if present
+        if let Some(stripped) = rest.strip_prefix('#') {
+            rest = stripped;
+            let end = rest.find('.').unwrap_or(rest.len());
+            let id_str = &rest[..end];
+            if !id_str.is_empty() {
+                id = Some(id_str);
+            }
+            rest = &rest[end..];
+        }
+
+        // Parse .class1.class2...
+        for part in rest.split('.') {
+            if !part.is_empty() {
+                roles.push(part);
+            }
+        }
+
+        (id, roles)
+    }
+
+    fn try_inline_attr_span(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_bracket = start_pos + 1; // skip '['
+
+        // Find closing ']'
+        let bytes = self.input.as_bytes();
+        let mut bracket_close = None;
+        for (i, &b) in bytes.iter().enumerate().skip(after_bracket) {
+            if b == b']' {
+                bracket_close = Some(i);
+                break;
+            }
+            // Don't cross newlines
+            if b == b'\n' {
+                return false;
+            }
+        }
+        let bracket_close = match bracket_close {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let attr_content = &self.input[after_bracket..bracket_close];
+        let (id, roles) = Self::parse_inline_shorthand(attr_content);
+
+        // Must have at least an id or a role
+        if id.is_none() && roles.is_empty() {
+            return false;
+        }
+
+        let after_close_bracket = bracket_close + 1;
+        if after_close_bracket >= self.input.len() {
+            return false;
+        }
+
+        // Check for ## (unconstrained) or # (constrained)
+        let is_unconstrained = after_close_bracket + 1 < self.input.len()
+            && bytes[after_close_bracket] == b'#'
+            && bytes[after_close_bracket + 1] == b'#';
+
+        if bytes[after_close_bracket] != b'#' {
+            return false;
+        }
+
+        if is_unconstrained {
+            // Unconstrained: [.class]##text##
+            let content_start = after_close_bracket + 2;
+            if content_start >= self.input.len() {
+                return false;
+            }
+            let close_pos = match self.find_closing_unconstrained(b'#', content_start) {
+                Some(p) => p,
+                None => return false,
+            };
+            let inner = &self.input[content_start..close_pos];
+            if inner.is_empty() {
+                return false;
+            }
+
+            self.flush_text(*text_start, start_pos, events);
+            events.push(Event::Start(Tag::InlineSpan {
+                id: id.map(Cow::Borrowed),
+                roles: roles.iter().copied().map(Cow::Borrowed).collect(),
+            }));
+
+            let mut inner_parser = InlineState::new(inner);
+            inner_parser.parse_inline(events);
+
+            events.push(Event::End(TagEnd::InlineSpan));
+
+            self.pos = close_pos + 2;
+            *text_start = self.pos;
+            return true;
+        }
+
+        // Constrained: [.class]#text#
+        let content_start = after_close_bracket + 1;
+        if content_start >= self.input.len() {
+            return false;
+        }
+        if bytes[content_start] == b' ' {
+            return false;
+        }
+
+        if let Some(close_offset) = self.find_closing_constrained(b'#', content_start) {
+            let close_pos = content_start + close_offset;
+            let inner = &self.input[content_start..close_pos];
+
+            if inner.ends_with(' ') {
+                return false;
+            }
+
+            let after_close = close_pos + 1;
+            if self.is_word_char_after(after_close) {
+                return false;
+            }
+
+            self.flush_text(*text_start, start_pos, events);
+            events.push(Event::Start(Tag::InlineSpan {
+                id: id.map(Cow::Borrowed),
+                roles: roles.iter().copied().map(Cow::Borrowed).collect(),
+            }));
+
+            let mut inner_parser = InlineState::new(inner);
+            inner_parser.parse_inline(events);
+
+            events.push(Event::End(TagEnd::InlineSpan));
+
+            self.pos = after_close;
+            *text_start = self.pos;
+            return true;
+        }
+
+        false
     }
 
     fn try_smart_quotes(
@@ -2473,6 +2631,141 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("it")),
             Event::Text(Cow::Borrowed("'s fine")),
+        ]);
+    }
+
+    // Inline span tests: [.class]#text#
+
+    #[test]
+    fn test_inline_span_single_role() {
+        let events = parse("[.lead]#text#");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("lead")],
+            }),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_multiple_roles() {
+        let events = parse("[.big.red]#text#");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("big"), Cow::Borrowed("red")],
+            }),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_id_and_role() {
+        let events = parse("[#myid.lead]#text#");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan {
+                id: Some(Cow::Borrowed("myid")),
+                roles: vec![Cow::Borrowed("lead")],
+            }),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_unconstrained() {
+        let events = parse("[.lead]##text##");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("lead")],
+            }),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_in_sentence() {
+        let events = parse("hello [.lead]#world# end");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hello ")),
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("lead")],
+            }),
+            Event::Text(Cow::Borrowed("world")),
+            Event::End(TagEnd::InlineSpan),
+            Event::Text(Cow::Borrowed(" end")),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_unconstrained_mid_word() {
+        let events = parse("hel[.x]##lo wo##rld");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("hel")),
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("x")],
+            }),
+            Event::Text(Cow::Borrowed("lo wo")),
+            Event::End(TagEnd::InlineSpan),
+            Event::Text(Cow::Borrowed("rld")),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_nested_formatting() {
+        let events = parse("[.lead]#*bold* text#");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan {
+                id: None,
+                roles: vec![Cow::Borrowed("lead")],
+            }),
+            Event::Start(Tag::Strong),
+            Event::Text(Cow::Borrowed("bold")),
+            Event::End(TagEnd::Strong),
+            Event::Text(Cow::Borrowed(" text")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_bare_highlight_unchanged() {
+        // Bare #highlight# should still work as highlight (<mark>)
+        let events = parse("#highlight#");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Highlight),
+            Event::Text(Cow::Borrowed("highlight")),
+            Event::End(TagEnd::Highlight),
+        ]);
+    }
+
+    #[test]
+    fn test_non_shorthand_bracket_not_span() {
+        // [text]#foo# — content doesn't start with . or # → not a span
+        let events = parse("[text]#foo#");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("[text]")),
+            Event::Start(Tag::Highlight),
+            Event::Text(Cow::Borrowed("foo")),
+            Event::End(TagEnd::Highlight),
+        ]);
+    }
+
+    #[test]
+    fn test_inline_span_escaped() {
+        // \[.lead]#text# — escaped bracket
+        let events = parse("\\[.lead]#text#");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("[.lead]")),
+            Event::Start(Tag::Highlight),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::Highlight),
         ]);
     }
 }

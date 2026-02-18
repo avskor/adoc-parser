@@ -78,6 +78,9 @@ enum BuildFrame {
     Highlight {
         inlines: Vec<AsgNode>,
     },
+    InlineSpan {
+        inlines: Vec<AsgNode>,
+    },
     Superscript {
         inlines: Vec<AsgNode>,
     },
@@ -202,6 +205,7 @@ pub fn build_asg<'a>(
                     Tag::Emphasis => BuildFrame::Emphasis { inlines: vec![] },
                     Tag::Monospace => BuildFrame::Monospace { inlines: vec![] },
                     Tag::Highlight => BuildFrame::Highlight { inlines: vec![] },
+                    Tag::InlineSpan { .. } => BuildFrame::InlineSpan { inlines: vec![] },
                     Tag::Superscript => BuildFrame::Superscript { inlines: vec![] },
                     Tag::Subscript => BuildFrame::Subscript { inlines: vec![] },
                     Tag::Link { url } => BuildFrame::Link {
@@ -566,6 +570,13 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
                 inlines: merged,
             })
         }
+        BuildFrame::InlineSpan { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "span".to_string(),
+                inlines: merged,
+            })
+        }
         BuildFrame::Superscript { inlines } => {
             let merged = merge_adjacent_text(inlines);
             Some(AsgNode::Span {
@@ -768,6 +779,7 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         BuildFrame::Emphasis { inlines } => inlines.push(node),
         BuildFrame::Monospace { inlines } => inlines.push(node),
         BuildFrame::Highlight { inlines } => inlines.push(node),
+        BuildFrame::InlineSpan { inlines } => inlines.push(node),
         BuildFrame::Superscript { inlines } => inlines.push(node),
         BuildFrame::Subscript { inlines } => inlines.push(node),
         BuildFrame::Link { inlines, .. } => inlines.push(node),
