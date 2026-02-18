@@ -4,7 +4,7 @@ use crate::event::{Event, Tag, TagEnd};
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
-    if !text.contains('-') && !text.contains('.') && !text.contains('(') {
+    if !text.contains('-') && !text.contains('.') && !text.contains('(') && !text.contains('\'') {
         return Cow::Borrowed(text);
     }
 
@@ -45,6 +45,13 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 && bytes[i + 3] == b')' =>
             {
                 Some(("\u{2122}", 4)) // trademark
+            }
+            b'\'' if i > 0
+                && bytes[i - 1].is_ascii_alphanumeric()
+                && i + 1 < len
+                && bytes[i + 1].is_ascii_alphanumeric() =>
+            {
+                Some(("\u{2019}", 1))
             }
             _ => None,
         };
@@ -159,7 +166,7 @@ impl<'a> InlineState<'a> {
                 }
 
                 // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
-                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\')) => {
+                b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'\'')) => {
                     self.flush_text(text_start, self.pos, events);
                     self.advance_by(1); // skip backslash
                     text_start = self.pos;
@@ -2397,6 +2404,75 @@ mod tests {
             Event::Start(Tag::Anchor { id: Cow::Borrowed("id") }),
             Event::End(TagEnd::Anchor),
             Event::BibliographyAnchor { id: Cow::Borrowed("ref"), label: None },
+        ]);
+    }
+
+    // Apostrophe conversion tests
+
+    #[test]
+    fn test_apostrophe_basic_contraction() {
+        let events = parse("it's");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("it\u{2019}s".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_multiple_contractions() {
+        let events = parse("don't won't can't");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("don\u{2019}t won\u{2019}t can\u{2019}t".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_in_sentence() {
+        let events = parse("I don't think it's right");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("I don\u{2019}t think it\u{2019}s right".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_not_at_start() {
+        // 'twas — apostrophe at start of word, not between alphanums
+        let events = parse("'twas the night");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("'twas the night")),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_not_at_end() {
+        // cats' — apostrophe at end, not between alphanums
+        let events = parse("the cats' toys");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("the cats' toys")),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_rock_n_roll() {
+        let events = parse("rock'n'roll");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("rock\u{2019}n\u{2019}roll".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_with_dash_combo() {
+        let events = parse("it's---done");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("it\u{2019}s\u{2014}done".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_escaped() {
+        let events = parse("it\\'s fine");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("it")),
+            Event::Text(Cow::Borrowed("'s fine")),
         ]);
     }
 }
