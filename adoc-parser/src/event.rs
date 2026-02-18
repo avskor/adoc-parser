@@ -143,6 +143,18 @@ pub enum AdmonitionKind {
     Caution,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CellStyle {
+    #[default]
+    Default,
+    AsciiDoc,
+    Header,
+    Emphasis,
+    Monospace,
+    Strong,
+    Literal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DelimitedBlockKind {
     Listing,
@@ -193,8 +205,8 @@ pub enum Tag<'a> {
     TableBody,
     TableFoot,
     TableRow,
-    TableCell { colspan: u8, rowspan: u8 },
-    TableHeaderCell { colspan: u8, rowspan: u8 },
+    TableCell { colspan: u8, rowspan: u8, style: CellStyle },
+    TableHeaderCell { colspan: u8, rowspan: u8, style: CellStyle },
 
     // Media
     BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
@@ -322,8 +334,8 @@ impl<'a> Tag<'a> {
             Tag::TableBody => Tag::TableBody,
             Tag::TableFoot => Tag::TableFoot,
             Tag::TableRow => Tag::TableRow,
-            Tag::TableCell { colspan, rowspan } => Tag::TableCell { colspan, rowspan },
-            Tag::TableHeaderCell { colspan, rowspan } => Tag::TableHeaderCell { colspan, rowspan },
+            Tag::TableCell { colspan, rowspan, style } => Tag::TableCell { colspan, rowspan, style },
+            Tag::TableHeaderCell { colspan, rowspan, style } => Tag::TableHeaderCell { colspan, rowspan, style },
             Tag::BlockImage { target, alt } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),

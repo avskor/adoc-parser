@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use adoc_parser::{Event, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind};
+use adoc_parser::{CellStyle, Event, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind};
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
     let mut renderer = HtmlRenderer::new();
@@ -49,6 +49,7 @@ struct HtmlRenderer {
     stem_content: Option<String>,
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
+    cell_style_stack: Vec<CellStyle>,
 }
 
 impl HtmlRenderer {
@@ -75,6 +76,7 @@ impl HtmlRenderer {
             stem_content: None,
             stem_block_variant: None,
             stem_block_content: None,
+            cell_style_stack: Vec::new(),
         }
     }
 
@@ -503,7 +505,8 @@ impl HtmlRenderer {
             Tag::TableRow => {
                 output.push_str("<tr>\n");
             }
-            Tag::TableCell { colspan, rowspan } => {
+            Tag::TableCell { colspan, rowspan, style } => {
+                self.cell_style_stack.push(*style);
                 output.push_str("<td");
                 if *colspan > 1 {
                     output.push_str(&format!(" colspan=\"{}\"", colspan));
@@ -512,8 +515,15 @@ impl HtmlRenderer {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
                 output.push('>');
+                match style {
+                    CellStyle::Emphasis => output.push_str("<em>"),
+                    CellStyle::Strong => output.push_str("<strong>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("<code>"),
+                    _ => {}
+                }
             }
-            Tag::TableHeaderCell { colspan, rowspan } => {
+            Tag::TableHeaderCell { colspan, rowspan, style } => {
+                self.cell_style_stack.push(*style);
                 output.push_str("<th");
                 if *colspan > 1 {
                     output.push_str(&format!(" colspan=\"{}\"", colspan));
@@ -522,6 +532,12 @@ impl HtmlRenderer {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
                 output.push('>');
+                match style {
+                    CellStyle::Emphasis => output.push_str("<em>"),
+                    CellStyle::Strong => output.push_str("<strong>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("<code>"),
+                    _ => {}
+                }
             }
             Tag::BlockImage { target, alt } => {
                 output.push_str("<div");
@@ -738,9 +754,23 @@ impl HtmlRenderer {
                 output.push_str("</tr>\n");
             }
             TagEnd::TableCell => {
+                let style = self.cell_style_stack.pop().unwrap_or_default();
+                match style {
+                    CellStyle::Emphasis => output.push_str("</em>"),
+                    CellStyle::Strong => output.push_str("</strong>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("</code>"),
+                    _ => {}
+                }
                 output.push_str("</td>\n");
             }
             TagEnd::TableHeaderCell => {
+                let style = self.cell_style_stack.pop().unwrap_or_default();
+                match style {
+                    CellStyle::Emphasis => output.push_str("</em>"),
+                    CellStyle::Strong => output.push_str("</strong>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("</code>"),
+                    _ => {}
+                }
                 output.push_str("</th>\n");
             }
             TagEnd::BlockImage => {
@@ -1604,6 +1634,50 @@ mod tests {
     fn test_table_colspan_rowspan_html() {
         let html = to_html("|===\n2.3+| cell | B\n| C\n| D\n|===");
         assert!(html.contains("<td colspan=\"2\" rowspan=\"3\">cell</td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_emphasis_html() {
+        let html = to_html("|===\ne| italic\n|===");
+        assert!(html.contains("<td><em>italic</em></td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_strong_html() {
+        let html = to_html("|===\ns| bold\n|===");
+        assert!(html.contains("<td><strong>bold</strong></td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_monospace_html() {
+        let html = to_html("|===\nm| code\n|===");
+        assert!(html.contains("<td><code>code</code></td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_literal_html() {
+        let html = to_html("|===\nl| literal\n|===");
+        assert!(html.contains("<td><code>literal</code></td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_header_in_body_html() {
+        let html = to_html("|===\nh| header cell\n|===");
+        assert!(html.contains("<th>header cell</th>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_with_colspan_html() {
+        let html = to_html("|===\n2+e| wide italic | B\n| C | D\n|===");
+        assert!(html.contains("<td colspan=\"2\"><em>wide italic</em></td>"));
+    }
+
+    #[test]
+    fn test_table_cell_style_no_false_positive_html() {
+        // "data" ends with 'a' but should NOT be treated as AsciiDoc style
+        let html = to_html("|===\n| data | more\n|===");
+        assert!(html.contains("<td>data</td>"));
+        assert!(html.contains("<td>more</td>"));
     }
 
     #[test]

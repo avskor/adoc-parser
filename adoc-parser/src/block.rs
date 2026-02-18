@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::attributes::BlockAttributes;
 use crate::event::{
-    AdmonitionKind, CowStr, DelimitedBlockKind, Event, Tag, TagEnd,
+    AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, Tag, TagEnd,
 };
 use crate::scanner;
 
@@ -1022,12 +1022,23 @@ impl<'a> BlockScanner<'a> {
             for row in footer_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
                 for cell in row.iter().rev() {
-                    self.push_event(Event::End(TagEnd::TableCell));
-                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
-                    self.push_event(Event::Start(Tag::TableCell {
-                        colspan: cell.colspan,
-                        rowspan: cell.rowspan,
-                    }));
+                    if cell.style == CellStyle::Header {
+                        self.push_event(Event::End(TagEnd::TableHeaderCell));
+                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Start(Tag::TableHeaderCell {
+                            colspan: cell.colspan,
+                            rowspan: cell.rowspan,
+                            style: cell.style,
+                        }));
+                    } else {
+                        self.push_event(Event::End(TagEnd::TableCell));
+                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Start(Tag::TableCell {
+                            colspan: cell.colspan,
+                            rowspan: cell.rowspan,
+                            style: cell.style,
+                        }));
+                    }
                 }
                 self.push_event(Event::Start(Tag::TableRow));
             }
@@ -1040,12 +1051,23 @@ impl<'a> BlockScanner<'a> {
             for row in body_rows.iter().rev() {
                 self.push_event(Event::End(TagEnd::TableRow));
                 for cell in row.iter().rev() {
-                    self.push_event(Event::End(TagEnd::TableCell));
-                    self.push_event(Event::Text(Cow::Borrowed(cell.content)));
-                    self.push_event(Event::Start(Tag::TableCell {
-                        colspan: cell.colspan,
-                        rowspan: cell.rowspan,
-                    }));
+                    if cell.style == CellStyle::Header {
+                        self.push_event(Event::End(TagEnd::TableHeaderCell));
+                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Start(Tag::TableHeaderCell {
+                            colspan: cell.colspan,
+                            rowspan: cell.rowspan,
+                            style: cell.style,
+                        }));
+                    } else {
+                        self.push_event(Event::End(TagEnd::TableCell));
+                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Start(Tag::TableCell {
+                            colspan: cell.colspan,
+                            rowspan: cell.rowspan,
+                            style: cell.style,
+                        }));
+                    }
                 }
                 self.push_event(Event::Start(Tag::TableRow));
             }
@@ -1063,6 +1085,7 @@ impl<'a> BlockScanner<'a> {
                     self.push_event(Event::Start(Tag::TableHeaderCell {
                         colspan: cell.colspan,
                         rowspan: cell.rowspan,
+                        style: cell.style,
                     }));
                 }
                 self.push_event(Event::Start(Tag::TableRow));
@@ -2419,18 +2442,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2447,28 +2470,28 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Header 1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Header 2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Cell 1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Cell 2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Cell 3")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("Cell 4")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2486,22 +2509,22 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2518,18 +2541,18 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2547,20 +2570,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2578,20 +2601,20 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2609,30 +2632,30 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("H1")),
             Event::End(TagEnd::TableHeaderCell),
-            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableHeaderCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("H2")),
             Event::End(TagEnd::TableHeaderCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableHead),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::End(TagEnd::TableBody),
             Event::Start(Tag::TableFoot),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("F1")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("F2")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2649,21 +2672,21 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 2, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 2, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B spans")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("D")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("E")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
@@ -2680,15 +2703,15 @@ mod tests {
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 2 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 2, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("A")),
             Event::End(TagEnd::TableCell),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("B")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),
             Event::Start(Tag::TableRow),
-            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1 }),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default }),
             Event::Text(Cow::Borrowed("C")),
             Event::End(TagEnd::TableCell),
             Event::End(TagEnd::TableRow),

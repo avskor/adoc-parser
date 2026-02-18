@@ -422,11 +422,14 @@ pub fn is_table_delimiter(line: &str) -> bool {
     line.trim() == "|==="
 }
 
+use crate::event::CellStyle;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellSpec<'a> {
     pub content: &'a str,
     pub colspan: u8,
     pub rowspan: u8,
+    pub style: CellStyle,
 }
 
 /// Parse a span modifier from the end of a segment (the part before `|`).
@@ -491,31 +494,63 @@ pub fn parse_span_spec(s: &str) -> (&str, u8, u8) {
     (s, 1, 1)
 }
 
+/// Parse a cell content style suffix from the end of a segment (before `|`).
+/// Valid style chars: `a` (AsciiDoc), `h` (Header), `e` (Emphasis),
+/// `m` (Monospace), `s` (Strong), `l` (Literal).
+/// The style char is valid only if it is the last char and before it
+/// is either nothing or a `+` (part of span spec).
+pub fn parse_cell_style_suffix(s: &str) -> (&str, CellStyle) {
+    if s.is_empty() {
+        return (s, CellStyle::Default);
+    }
+    let last_byte = s.as_bytes()[s.len() - 1];
+    let style = match last_byte {
+        b'a' => CellStyle::AsciiDoc,
+        b'h' => CellStyle::Header,
+        b'e' => CellStyle::Emphasis,
+        b'm' => CellStyle::Monospace,
+        b's' => CellStyle::Strong,
+        b'l' => CellStyle::Literal,
+        _ => return (s, CellStyle::Default),
+    };
+    let before = &s[..s.len() - 1];
+    let before_trimmed = before.trim();
+    if before_trimmed.is_empty() || before_trimmed.ends_with('+') || before.ends_with(' ') {
+        (&s[..s.len() - 1], style)
+    } else {
+        (s, CellStyle::Default)
+    }
+}
+
 pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
     let trimmed = line.trim_start();
 
     // Find the first pipe — if none, not a table line
     let first_pipe = trimmed.find('|')?;
 
-    // Before first pipe: must be empty or a valid span spec (for the first cell)
+    // Before first pipe: must be empty or a valid style+span spec (for the first cell)
     let prefix = trimmed[..first_pipe].trim();
     let mut pending_colspan: u8 = 1;
     let mut pending_rowspan: u8 = 1;
+    let mut pending_style = CellStyle::Default;
 
     if !prefix.is_empty() {
-        let (remaining, cs, rs) = parse_span_spec(prefix);
-        if !remaining.is_empty() {
+        let (after_style, style) = parse_cell_style_suffix(prefix);
+        let (remaining, cs, rs) = parse_span_spec(after_style);
+        if !remaining.trim().is_empty() {
             return None; // Not a table line — non-spec content before first pipe
         }
         pending_colspan = cs;
         pending_rowspan = rs;
+        pending_style = style;
     }
 
     let mut cells = Vec::new();
     let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
 
     for (i, part) in parts.iter().enumerate() {
-        let (content, next_colspan, next_rowspan) = parse_span_spec(part);
+        let (after_style, next_style) = parse_cell_style_suffix(part);
+        let (content, next_colspan, next_rowspan) = parse_span_spec(after_style);
         let content = content.trim();
 
         if !content.is_empty() {
@@ -523,6 +558,7 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
                 content,
                 colspan: pending_colspan,
                 rowspan: pending_rowspan,
+                style: pending_style,
             });
         } else if i < parts.len() - 1 {
             // Empty cell between pipes — skip (preserving old behavior)
@@ -530,6 +566,7 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
 
         pending_colspan = next_colspan;
         pending_rowspan = next_rowspan;
+        pending_style = next_style;
     }
 
     Some(cells)
@@ -834,11 +871,19 @@ mod tests {
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1 }
+        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default }
     }
 
     fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
-        CellSpec { content, colspan, rowspan }
+        CellSpec { content, colspan, rowspan, style: CellStyle::Default }
+    }
+
+    fn styled_cell(content: &str, style: CellStyle) -> CellSpec<'_> {
+        CellSpec { content, colspan: 1, rowspan: 1, style }
+    }
+
+    fn spanned_styled_cell(content: &str, colspan: u8, rowspan: u8, style: CellStyle) -> CellSpec<'_> {
+        CellSpec { content, colspan, rowspan, style }
     }
 
     #[test]
@@ -981,6 +1026,85 @@ mod tests {
         assert_eq!(
             strip_line_continuation(" \\"),
             Some(("", false))
+        );
+    }
+
+    #[test]
+    fn test_parse_cell_style_suffix() {
+        // Standalone style letter
+        assert_eq!(parse_cell_style_suffix("a"), ("", CellStyle::AsciiDoc));
+        assert_eq!(parse_cell_style_suffix("h"), ("", CellStyle::Header));
+        assert_eq!(parse_cell_style_suffix("e"), ("", CellStyle::Emphasis));
+        assert_eq!(parse_cell_style_suffix("m"), ("", CellStyle::Monospace));
+        assert_eq!(parse_cell_style_suffix("s"), ("", CellStyle::Strong));
+        assert_eq!(parse_cell_style_suffix("l"), ("", CellStyle::Literal));
+        // After span spec (ends with +)
+        assert_eq!(parse_cell_style_suffix("2+a"), ("2+", CellStyle::AsciiDoc));
+        assert_eq!(parse_cell_style_suffix("2.3+s"), ("2.3+", CellStyle::Strong));
+        // Content ending with style letter — NOT a style
+        assert_eq!(parse_cell_style_suffix("data"), ("data", CellStyle::Default));
+        assert_eq!(parse_cell_style_suffix("date"), ("date", CellStyle::Default));
+        // Empty
+        assert_eq!(parse_cell_style_suffix(""), ("", CellStyle::Default));
+        // Trailing space — last char is space, not a style letter
+        assert_eq!(parse_cell_style_suffix(" a "), (" a ", CellStyle::Default));
+        assert_eq!(parse_cell_style_suffix(" data "), (" data ", CellStyle::Default));
+        // Style letter preceded by space (content + space + style)
+        assert_eq!(parse_cell_style_suffix(" A e"), (" A ", CellStyle::Emphasis));
+        assert_eq!(parse_cell_style_suffix(" text s"), (" text ", CellStyle::Strong));
+    }
+
+    #[test]
+    fn test_parse_table_cells_with_style() {
+        assert_eq!(
+            parse_table_cells("e| italic text"),
+            Some(vec![styled_cell("italic text", CellStyle::Emphasis)])
+        );
+        assert_eq!(
+            parse_table_cells("s| bold text"),
+            Some(vec![styled_cell("bold text", CellStyle::Strong)])
+        );
+        assert_eq!(
+            parse_table_cells("h| header text"),
+            Some(vec![styled_cell("header text", CellStyle::Header)])
+        );
+        assert_eq!(
+            parse_table_cells("m| mono text"),
+            Some(vec![styled_cell("mono text", CellStyle::Monospace)])
+        );
+        assert_eq!(
+            parse_table_cells("l| literal text"),
+            Some(vec![styled_cell("literal text", CellStyle::Literal)])
+        );
+        assert_eq!(
+            parse_table_cells("a| asciidoc text"),
+            Some(vec![styled_cell("asciidoc text", CellStyle::AsciiDoc)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_span_plus_style() {
+        assert_eq!(
+            parse_table_cells("2+e| wide italic"),
+            Some(vec![spanned_styled_cell("wide italic", 2, 1, CellStyle::Emphasis)])
+        );
+        assert_eq!(
+            parse_table_cells("2.3+s| big bold"),
+            Some(vec![spanned_styled_cell("big bold", 2, 3, CellStyle::Strong)])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_style_disambiguation() {
+        // Content that ends with a style letter should NOT be treated as styled
+        assert_eq!(
+            parse_table_cells("| data | more"),
+            Some(vec![cell("data"), cell("more")])
+        );
+        // Inline style between cells
+        assert_eq!(
+            parse_table_cells("| A e| B | C"),
+            Some(vec![cell("A"), styled_cell("B", CellStyle::Emphasis), cell("C")])
         );
     }
 }

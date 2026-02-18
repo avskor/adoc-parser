@@ -137,12 +137,12 @@
 | 7.7 | Colspan + rowspan | `2.3+\|` | ✅ |
 | 7.8 | Спецификация столбцов | `cols="1,2a,3"` (ширина) | ⚠️ |
 | 7.9 | Выравнивание столбцов | `cols="<,^,>"` | ❌ |
-| 7.10 | AsciiDoc content в ячейках | `a\|` (asciidoc cell) | ❌ |
-| 7.11 | Literal content в ячейках | `l\|` | ❌ |
-| 7.12 | Header cell style | `h\|` | ❌ |
-| 7.13 | Emphasis cell style | `e\|` | ❌ |
-| 7.14 | Monospaced cell style | `m\|` | ❌ |
-| 7.15 | Strong cell style | `s\|` | ❌ |
+| 7.10 | AsciiDoc content в ячейках | `a\|` (asciidoc cell) | ✅ |
+| 7.11 | Literal content в ячейках | `l\|` | ✅ |
+| 7.12 | Header cell style | `h\|` | ✅ |
+| 7.13 | Emphasis cell style | `e\|` | ✅ |
+| 7.14 | Monospaced cell style | `m\|` | ✅ |
+| 7.15 | Strong cell style | `s\|` | ✅ |
 | 7.16 | CSV data | `[%header,format=csv]` | ❌ |
 | 7.17 | DSV data | `[format=dsv]` | ❌ |
 | 7.18 | TSV data | `[format=tsv]` | ❌ |
