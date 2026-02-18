@@ -79,15 +79,6 @@ impl BlockAttributes {
             return attrs;
         }
 
-        if let Some(rest) = attr_str.strip_prefix('#') {
-            if let Some(end) = rest.find(['.', '%', ',']) {
-                attrs.id = Some(rest[..end].to_string());
-            } else {
-                attrs.id = Some(rest.to_string());
-                return attrs;
-            }
-        }
-
         let parts = split_respecting_quotes(attr_str);
         for part in &parts {
             let part = part.trim();
@@ -95,22 +86,49 @@ impl BlockAttributes {
                 continue;
             }
             if let Some((key, value)) = part.split_once('=') {
+                // named: key=value
                 let value = value.trim();
-                // Strip surrounding quotes from value
-                let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
+                let value = value
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .unwrap_or(value);
                 attrs.named.insert(key.trim().to_string(), value.to_string());
-            } else if let Some(stripped) = part.strip_prefix('.') {
-                attrs.roles.push(stripped.to_string());
-            } else if let Some(stripped) = part.strip_prefix('#') {
-                attrs.id = Some(stripped.to_string());
-            } else if let Some(stripped) = part.strip_prefix('%') {
-                attrs.options.push(stripped.to_string());
+            } else if part.starts_with('#') || part.starts_with('.') || part.starts_with('%') {
+                // Pure shorthand: #id.role1.role2%opt1
+                Self::parse_shorthand(part, &mut attrs);
+            } else if let Some(pos) = part.find(['#', '.', '%']) {
+                // Mixed: "discrete#myid.role" → positional + shorthand
+                attrs.positional.push(part[..pos].to_string());
+                Self::parse_shorthand(&part[pos..], &mut attrs);
             } else {
                 attrs.positional.push(part.to_string());
             }
         }
 
         attrs
+    }
+
+    fn parse_shorthand(s: &str, attrs: &mut Self) {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let marker = bytes[i];
+            i += 1;
+            let start = i;
+            while i < bytes.len() && !matches!(bytes[i], b'#' | b'.' | b'%') {
+                i += 1;
+            }
+            let value = &s[start..i];
+            if value.is_empty() {
+                continue;
+            }
+            match marker {
+                b'#' => attrs.id = Some(value.to_string()),
+                b'.' => attrs.roles.push(value.to_string()),
+                b'%' => attrs.options.push(value.to_string()),
+                _ => {}
+            }
+        }
     }
 
     pub fn admonition_kind(&self) -> Option<crate::event::AdmonitionKind> {
@@ -234,5 +252,54 @@ mod tests {
         let attrs = BlockAttributes::parse("%header,%footer");
         assert!(attrs.has_option("header"));
         assert!(attrs.has_option("footer"));
+    }
+
+    #[test]
+    fn test_shorthand_id_and_roles() {
+        let attrs = BlockAttributes::parse("#notice.important");
+        assert_eq!(attrs.id.as_deref(), Some("notice"));
+        assert_eq!(attrs.roles, vec!["important"]);
+    }
+
+    #[test]
+    fn test_shorthand_multiple_roles() {
+        let attrs = BlockAttributes::parse(".role1.role2.role3");
+        assert_eq!(attrs.roles, vec!["role1", "role2", "role3"]);
+        assert!(attrs.id.is_none());
+    }
+
+    #[test]
+    fn test_shorthand_id_and_multiple_roles() {
+        let attrs = BlockAttributes::parse("#myid.role1.role2");
+        assert_eq!(attrs.id.as_deref(), Some("myid"));
+        assert_eq!(attrs.roles, vec!["role1", "role2"]);
+    }
+
+    #[test]
+    fn test_shorthand_options() {
+        let attrs = BlockAttributes::parse("%opt1%opt2");
+        assert_eq!(attrs.options, vec!["opt1", "opt2"]);
+    }
+
+    #[test]
+    fn test_shorthand_id_and_options() {
+        let attrs = BlockAttributes::parse("#myid%opt1%opt2");
+        assert_eq!(attrs.id.as_deref(), Some("myid"));
+        assert_eq!(attrs.options, vec!["opt1", "opt2"]);
+    }
+
+    #[test]
+    fn test_mixed_positional_and_shorthand() {
+        let attrs = BlockAttributes::parse("discrete#myid.role");
+        assert_eq!(attrs.positional, vec!["discrete"]);
+        assert_eq!(attrs.id.as_deref(), Some("myid"));
+        assert_eq!(attrs.roles, vec!["role"]);
+    }
+
+    #[test]
+    fn test_source_with_shorthand_id() {
+        let attrs = BlockAttributes::parse("source,rust,#code1");
+        assert_eq!(attrs.positional, vec!["source", "rust"]);
+        assert_eq!(attrs.id.as_deref(), Some("code1"));
     }
 }

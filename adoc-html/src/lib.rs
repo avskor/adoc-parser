@@ -19,11 +19,11 @@ struct TocEntry {
     title: String,
 }
 
-#[allow(dead_code)]
 struct BlockMeta {
     style: Option<String>,
     id: Option<String>,
     roles: Vec<String>,
+    #[allow(dead_code)]
     options: Vec<String>,
 }
 
@@ -1743,5 +1743,75 @@ mod tests {
     fn test_flow_index_term_escaping_html() {
         let html = to_html("((a <b> & c))");
         assert_eq!(html, "<p>a &lt;b&gt; &amp; c</p>\n");
+    }
+
+    // Block metadata: custom id/class tests
+
+    #[test]
+    fn test_paragraph_with_id_and_role() {
+        let html = to_html("[#notice.important]\nText");
+        assert!(html.contains("id=\"notice\""));
+        assert!(html.contains("class=\"important\""));
+        assert!(html.contains("Text"));
+    }
+
+    #[test]
+    fn test_paragraph_with_id_only() {
+        let html = to_html("[#myid]\nHello");
+        assert!(html.contains("id=\"myid\""));
+        assert!(html.contains("Hello"));
+    }
+
+    #[test]
+    fn test_paragraph_with_role_only() {
+        let html = to_html("[.lead]\nText");
+        assert!(html.contains("class=\"lead\""));
+        assert!(html.contains("Text"));
+    }
+
+    #[test]
+    fn test_paragraph_with_multiple_roles() {
+        let html = to_html("[.r1.r2.r3]\nText");
+        assert!(html.contains("class=\"r1 r2 r3\""));
+    }
+
+    #[test]
+    fn test_sidebar_with_id_and_role() {
+        let html = to_html("[#tips.custom]\n****\nContent\n****");
+        assert!(html.contains("id=\"tips\""));
+        assert!(html.contains("class=\"sidebarblock custom\""));
+    }
+
+    #[test]
+    fn test_source_block_with_id() {
+        let html = to_html("[source,rust,#code1]\n----\nfn main() {}\n----");
+        assert!(html.contains("id=\"code1\""));
+    }
+
+    #[test]
+    fn test_admonition_with_id_and_role() {
+        let html = to_html("[#w1.special]\nWARNING: Danger!");
+        assert!(html.contains("id=\"w1\""));
+        assert!(html.contains("admonitionblock warning special"));
+    }
+
+    #[test]
+    fn test_list_with_id() {
+        let html = to_html("[#mylist]\n* item 1\n* item 2");
+        assert!(html.contains("<ul id=\"mylist\">"));
+    }
+
+    #[test]
+    fn test_table_with_id_and_role() {
+        let html = to_html("[#data.striped]\n|===\n| A | B\n|===");
+        assert!(html.contains("id=\"data\""));
+        assert!(html.contains("class=\"striped\""));
+    }
+
+    #[test]
+    fn test_discrete_heading_with_id_and_role() {
+        let html = to_html("[discrete#myh.special]\n== Heading");
+        assert!(html.contains("id=\"myh\""));
+        assert!(html.contains("class=\"special\""));
     }
 }

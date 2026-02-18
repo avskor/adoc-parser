@@ -188,3 +188,14 @@ Some text.";
     let html = to_html(input);
     assert!(html.contains("id=\"myid\""));
 }
+
+#[test]
+fn test_block_metadata_paragraph_id_and_role() {
+    let input = "\
+[#intro.lead]
+This is the introduction.";
+
+    let html = to_html(input);
+    assert!(html.contains("<p id=\"intro\" class=\"lead\">"));
+    assert!(html.contains("This is the introduction."));
+}
