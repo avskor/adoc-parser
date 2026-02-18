@@ -30,6 +30,14 @@ pub enum Event<'a> {
         id: CowStr<'a>,
     },
     CalloutRef(u32),
+    IndexTerm {
+        text: CowStr<'a>,
+    },
+    ConcealedIndexTerm {
+        primary: CowStr<'a>,
+        secondary: Option<CowStr<'a>>,
+        tertiary: Option<CowStr<'a>>,
+    },
     Toc,
     Include {
         path: CowStr<'a>,
@@ -75,6 +83,18 @@ impl<'a> Event<'a> {
                 id: cow_owned(id),
             },
             Event::CalloutRef(n) => Event::CalloutRef(n),
+            Event::IndexTerm { text } => Event::IndexTerm {
+                text: cow_owned(text),
+            },
+            Event::ConcealedIndexTerm {
+                primary,
+                secondary,
+                tertiary,
+            } => Event::ConcealedIndexTerm {
+                primary: cow_owned(primary),
+                secondary: secondary.map(cow_owned),
+                tertiary: tertiary.map(cow_owned),
+            },
             Event::Toc => Event::Toc,
             Event::Include { path, attrs } => Event::Include {
                 path: cow_owned(path),

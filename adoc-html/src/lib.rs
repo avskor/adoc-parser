@@ -167,6 +167,12 @@ impl HtmlRenderer {
                         output.push_str("</a>]</sup>");
                     }
                 }
+                Event::IndexTerm { text } => {
+                    html_escape(output, &text);
+                }
+                Event::ConcealedIndexTerm { .. } => {
+                    // Concealed index terms produce no visible output
+                }
                 Event::CalloutRef(num) => {
                     output.push_str("<b class=\"conum\">(");
                     output.push_str(&num.to_string());
@@ -1688,5 +1694,37 @@ mod tests {
         let html = to_html("audio::audio.mp3[options=\"nocontrols\"]");
         assert!(html.contains("<audio src=\"audio.mp3\">"));
         assert!(!html.contains("controls"));
+    }
+
+    // Index term tests
+
+    #[test]
+    fn test_flow_index_term_html() {
+        let html = to_html("I love ((tigers)) very much");
+        assert_eq!(html, "<p>I love tigers very much</p>\n");
+    }
+
+    #[test]
+    fn test_concealed_index_term_html() {
+        let html = to_html("(((animals, cats)))Visible text");
+        assert_eq!(html, "<p>Visible text</p>\n");
+    }
+
+    #[test]
+    fn test_indexterm2_macro_html() {
+        let html = to_html("indexterm2:[tigers]");
+        assert_eq!(html, "<p>tigers</p>\n");
+    }
+
+    #[test]
+    fn test_indexterm_macro_html() {
+        let html = to_html("indexterm:[animals, cats]");
+        assert_eq!(html, "<p></p>\n");
+    }
+
+    #[test]
+    fn test_flow_index_term_escaping_html() {
+        let html = to_html("((a <b> & c))");
+        assert_eq!(html, "<p>a &lt;b&gt; &amp; c</p>\n");
     }
 }

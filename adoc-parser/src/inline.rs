@@ -326,6 +326,20 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Index term macros: indexterm2:[term] and indexterm:[primary, secondary, tertiary]
+                b'i' if self.remaining().starts_with("indexterm2:") => {
+                    if self.try_indexterm2_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+                b'i' if self.remaining().starts_with("indexterm:") => {
+                    if self.try_indexterm_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Icon macro: icon:name[attrs]
                 b'i' if self.remaining().starts_with("icon:") => {
                     if self.try_icon_macro(events, &mut text_start) {
@@ -401,6 +415,25 @@ impl<'a> InlineState<'a> {
                 // Anchor [[id]]
                 b'[' if self.peek_at(1) == Some(b'[') => {
                     if self.try_anchor(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Concealed index term (((primary, secondary, tertiary))) or flow index term ((term))
+                b'(' if self.peek_at(1) == Some(b'(') && self.peek_at(2) == Some(b'(') => {
+                    if self.try_concealed_index_term(events, &mut text_start) {
+                        continue;
+                    }
+                    if self.try_flow_index_term(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Flow index term ((term))
+                b'(' if self.peek_at(1) == Some(b'(') => {
+                    if self.try_flow_index_term(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -1189,6 +1222,152 @@ impl<'a> InlineState<'a> {
         true
     }
 
+    fn try_concealed_index_term(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_open = start_pos + 3; // skip "((("
+
+        let rest = &self.input[after_open..];
+        let close = match rest.find(")))") {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let content = &rest[..close];
+        if content.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        let mut parts = content.splitn(3, ',');
+        let primary = parts.next().unwrap().trim();
+        let secondary = parts.next().map(|s| s.trim());
+        let tertiary = parts.next().map(|s| s.trim());
+
+        events.push(Event::ConcealedIndexTerm {
+            primary: Cow::Borrowed(primary),
+            secondary: secondary.map(Cow::Borrowed),
+            tertiary: tertiary.map(Cow::Borrowed),
+        });
+
+        self.pos = after_open + close + 3;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_flow_index_term(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let after_open = start_pos + 2; // skip "(("
+
+        let rest = &self.input[after_open..];
+        let close = match rest.find("))") {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let content = &rest[..close];
+        if content.is_empty() {
+            return false;
+        }
+
+        // Make sure closing )) is not followed by another ) — that would be )))
+        let after_close = after_open + close + 2;
+        if after_close < self.input.len() && self.input.as_bytes()[after_close] == b')' {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        events.push(Event::IndexTerm {
+            text: Cow::Borrowed(content),
+        });
+
+        self.pos = after_close;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_indexterm_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 10..]; // skip "indexterm:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &rest[1..bracket_end];
+        if content.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        let mut parts = content.splitn(3, ',');
+        let primary = parts.next().unwrap().trim();
+        let secondary = parts.next().map(|s| s.trim());
+        let tertiary = parts.next().map(|s| s.trim());
+
+        events.push(Event::ConcealedIndexTerm {
+            primary: Cow::Borrowed(primary),
+            secondary: secondary.map(Cow::Borrowed),
+            tertiary: tertiary.map(Cow::Borrowed),
+        });
+
+        self.pos = start_pos + 10 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_indexterm2_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 11..]; // skip "indexterm2:"
+
+        if !rest.starts_with('[') {
+            return false;
+        }
+
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let content = &rest[1..bracket_end];
+        if content.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        events.push(Event::IndexTerm {
+            text: Cow::Borrowed(content),
+        });
+
+        self.pos = start_pos + 11 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
     fn try_smart_quotes(
         &mut self,
         quote_char: u8,
@@ -1958,6 +2137,141 @@ mod tests {
         let events = parse("\"text\"");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("\"text\"")),
+        ]);
+    }
+
+    // Index term tests
+
+    #[test]
+    fn test_flow_index_term() {
+        let events = parse("((tigers))");
+        assert_eq!(events, vec![
+            Event::IndexTerm { text: Cow::Borrowed("tigers") },
+        ]);
+    }
+
+    #[test]
+    fn test_flow_index_term_in_sentence() {
+        let events = parse("I love ((tigers)) very much");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("I love ")),
+            Event::IndexTerm { text: Cow::Borrowed("tigers") },
+            Event::Text(Cow::Borrowed(" very much")),
+        ]);
+    }
+
+    #[test]
+    fn test_concealed_index_term_single() {
+        let events = parse("(((animals)))");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: None,
+                tertiary: None,
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_concealed_index_term_two_levels() {
+        let events = parse("(((animals, cats)))");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: Some(Cow::Borrowed("cats")),
+                tertiary: None,
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_concealed_index_term_three_levels() {
+        let events = parse("(((animals, cats, tigers)))");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: Some(Cow::Borrowed("cats")),
+                tertiary: Some(Cow::Borrowed("tigers")),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_indexterm_macro() {
+        let events = parse("indexterm:[animals, cats]");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: Some(Cow::Borrowed("cats")),
+                tertiary: None,
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_indexterm2_macro() {
+        let events = parse("indexterm2:[tigers]");
+        assert_eq!(events, vec![
+            Event::IndexTerm { text: Cow::Borrowed("tigers") },
+        ]);
+    }
+
+    #[test]
+    fn test_unclosed_double_parens() {
+        let events = parse("((unclosed");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("((unclosed")),
+        ]);
+    }
+
+    #[test]
+    fn test_empty_flow_index_term() {
+        let events = parse("(())");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(())")),
+        ]);
+    }
+
+    #[test]
+    fn test_no_conflict_with_copyright() {
+        // (C) should still produce copyright symbol, not index term
+        let events = parse("(C) 2024");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("\u{00A9} 2024".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_indexterm_macro_single_level() {
+        let events = parse("indexterm:[animals]");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: None,
+                tertiary: None,
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_indexterm_macro_three_levels() {
+        let events = parse("indexterm:[animals, cats, tigers]");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("animals"),
+                secondary: Some(Cow::Borrowed("cats")),
+                tertiary: Some(Cow::Borrowed("tigers")),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_indexterm2_in_sentence() {
+        let events = parse("I love indexterm2:[tigers] very much");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("I love ")),
+            Event::IndexTerm { text: Cow::Borrowed("tigers") },
+            Event::Text(Cow::Borrowed(" very much")),
         ]);
     }
 }

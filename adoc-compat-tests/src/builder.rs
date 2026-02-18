@@ -374,6 +374,8 @@ pub fn build_asg<'a>(
             Event::Footnote { .. }
             | Event::FootnoteRef { .. }
             | Event::CalloutRef(_)
+            | Event::IndexTerm { .. }
+            | Event::ConcealedIndexTerm { .. }
             | Event::Toc
             | Event::Include { .. } => {}
 
