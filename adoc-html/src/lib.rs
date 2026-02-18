@@ -494,6 +494,18 @@ impl HtmlRenderer {
                 html_escape(output, alt);
                 output.push_str("\">\n</div>\n");
             }
+            Tag::BlockVideo { target, attrs } => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "videoblock");
+                output.push_str(">\n<div class=\"content\">\n");
+                render_video_tag(output, target, attrs);
+            }
+            Tag::BlockAudio { target, attrs } => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "audioblock");
+                output.push_str(">\n<div class=\"content\">\n");
+                render_audio_tag(output, target, attrs);
+            }
             Tag::InlineImage { target, alt } => {
                 output.push_str("<span class=\"image\"><img src=\"");
                 html_escape(output, target);
@@ -675,6 +687,12 @@ impl HtmlRenderer {
                 output.push_str("</th>\n");
             }
             TagEnd::BlockImage => {
+                output.push_str("</div>\n");
+            }
+            TagEnd::BlockVideo => {
+                output.push_str("</div>\n");
+            }
+            TagEnd::BlockAudio => {
                 output.push_str("</div>\n");
             }
             TagEnd::InlineImage => {
@@ -943,6 +961,148 @@ fn section_level_to_h(level: u8) -> u8 {
     } else {
         level
     }
+}
+
+struct MediaAttrs<'a> {
+    width: Option<&'a str>,
+    height: Option<&'a str>,
+    poster: Option<&'a str>,
+    start: Option<&'a str>,
+    end: Option<&'a str>,
+    autoplay: bool,
+    loop_: bool,
+    nocontrols: bool,
+}
+
+fn parse_media_attrs(attrs: &str) -> MediaAttrs<'_> {
+    let mut result = MediaAttrs {
+        width: None,
+        height: None,
+        poster: None,
+        start: None,
+        end: None,
+        autoplay: false,
+        loop_: false,
+        nocontrols: false,
+    };
+    if attrs.is_empty() {
+        return result;
+    }
+
+    // Split on commas, but respect quoted strings
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (i, ch) in attrs.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                parts.push(&attrs[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&attrs[start..]);
+
+    for part in parts {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            let key = key.trim();
+            let value = value.trim().trim_matches('"');
+            match key {
+                "width" => result.width = Some(value),
+                "height" => result.height = Some(value),
+                "poster" => result.poster = Some(value),
+                "start" => result.start = Some(value),
+                "end" => result.end = Some(value),
+                "options" => {
+                    for opt in value.split(',') {
+                        let opt = opt.trim();
+                        match opt {
+                            "autoplay" => result.autoplay = true,
+                            "loop" => result.loop_ = true,
+                            "nocontrols" => result.nocontrols = true,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    result
+}
+
+fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
+    let media = parse_media_attrs(attrs);
+
+    output.push_str("<video src=\"");
+    html_escape(output, target);
+    // Append time fragment if start/end present
+    match (media.start, media.end) {
+        (Some(s), Some(e)) => {
+            output.push_str("#t=");
+            output.push_str(s);
+            output.push(',');
+            output.push_str(e);
+        }
+        (Some(s), None) => {
+            output.push_str("#t=");
+            output.push_str(s);
+        }
+        (None, Some(e)) => {
+            output.push_str("#t=,");
+            output.push_str(e);
+        }
+        (None, None) => {}
+    }
+    output.push('"');
+
+    if let Some(w) = media.width {
+        output.push_str(" width=\"");
+        output.push_str(w);
+        output.push('"');
+    }
+    if let Some(h) = media.height {
+        output.push_str(" height=\"");
+        output.push_str(h);
+        output.push('"');
+    }
+    if let Some(p) = media.poster {
+        output.push_str(" poster=\"");
+        html_escape(output, p);
+        output.push('"');
+    }
+    if !media.nocontrols {
+        output.push_str(" controls");
+    }
+    if media.autoplay {
+        output.push_str(" autoplay");
+    }
+    if media.loop_ {
+        output.push_str(" loop");
+    }
+    output.push_str(">\nYour browser does not support the video tag.\n</video>\n</div>\n");
+}
+
+fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
+    let media = parse_media_attrs(attrs);
+
+    output.push_str("<audio src=\"");
+    html_escape(output, target);
+    output.push('"');
+
+    if !media.nocontrols {
+        output.push_str(" controls");
+    }
+    if media.autoplay {
+        output.push_str(" autoplay");
+    }
+    if media.loop_ {
+        output.push_str(" loop");
+    }
+    output.push_str(">\nYour browser does not support the audio tag.\n</audio>\n</div>\n");
 }
 
 fn html_escape(output: &mut String, text: &str) {
@@ -1472,5 +1632,61 @@ mod tests {
         let html = to_html("[latexmath]\n++++\nx^2\n++++");
         assert!(html.contains("<div class=\"stemblock\">"));
         assert!(html.contains("\\[x^2\\]"));
+    }
+
+    #[test]
+    fn test_video_basic_html() {
+        let html = to_html("video::video.mp4[]");
+        assert_eq!(
+            html,
+            "<div class=\"videoblock\">\n<div class=\"content\">\n<video src=\"video.mp4\" controls>\nYour browser does not support the video tag.\n</video>\n</div>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn test_video_attrs_html() {
+        let html = to_html("video::video.mp4[width=640,height=480,poster=preview.jpg]");
+        assert!(html.contains("<video src=\"video.mp4\" width=\"640\" height=\"480\" poster=\"preview.jpg\" controls>"));
+    }
+
+    #[test]
+    fn test_video_options_html() {
+        let html = to_html("video::video.mp4[options=\"autoplay,loop,nocontrols\"]");
+        assert!(html.contains("<video src=\"video.mp4\" autoplay loop>"));
+        assert!(!html.contains("controls"));
+    }
+
+    #[test]
+    fn test_video_start_end_html() {
+        let html = to_html("video::video.mp4[start=60,end=120]");
+        assert!(html.contains("src=\"video.mp4#t=60,120\""));
+    }
+
+    #[test]
+    fn test_video_start_only_html() {
+        let html = to_html("video::video.mp4[start=30]");
+        assert!(html.contains("src=\"video.mp4#t=30\""));
+    }
+
+    #[test]
+    fn test_audio_basic_html() {
+        let html = to_html("audio::audio.mp3[]");
+        assert_eq!(
+            html,
+            "<div class=\"audioblock\">\n<div class=\"content\">\n<audio src=\"audio.mp3\" controls>\nYour browser does not support the audio tag.\n</audio>\n</div>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn test_audio_options_html() {
+        let html = to_html("audio::audio.mp3[options=\"autoplay,loop\"]");
+        assert!(html.contains("<audio src=\"audio.mp3\" controls autoplay loop>"));
+    }
+
+    #[test]
+    fn test_audio_nocontrols_html() {
+        let html = to_html("audio::audio.mp3[options=\"nocontrols\"]");
+        assert!(html.contains("<audio src=\"audio.mp3\">"));
+        assert!(!html.contains("controls"));
     }
 }

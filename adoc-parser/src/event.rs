@@ -168,6 +168,8 @@ pub enum Tag<'a> {
 
     // Media
     BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
+    BlockVideo { target: CowStr<'a>, attrs: CowStr<'a> },
+    BlockAudio { target: CowStr<'a>, attrs: CowStr<'a> },
     InlineImage { target: CowStr<'a>, alt: CowStr<'a> },
 
     // Inline formatting
@@ -231,6 +233,8 @@ pub enum TagEnd {
     TableHeaderCell,
 
     BlockImage,
+    BlockVideo,
+    BlockAudio,
     InlineImage,
 
     Strong,
@@ -291,6 +295,14 @@ impl<'a> Tag<'a> {
             Tag::BlockImage { target, alt } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
+            },
+            Tag::BlockVideo { target, attrs } => Tag::BlockVideo {
+                target: Cow::Owned(target.into_owned()),
+                attrs: Cow::Owned(attrs.into_owned()),
+            },
+            Tag::BlockAudio { target, attrs } => Tag::BlockAudio {
+                target: Cow::Owned(target.into_owned()),
+                attrs: Cow::Owned(attrs.into_owned()),
             },
             Tag::InlineImage { target, alt } => Tag::InlineImage {
                 target: Cow::Owned(target.into_owned()),
@@ -358,6 +370,8 @@ impl<'a> Tag<'a> {
             Tag::TableCell { .. } => TagEnd::TableCell,
             Tag::TableHeaderCell { .. } => TagEnd::TableHeaderCell,
             Tag::BlockImage { .. } => TagEnd::BlockImage,
+            Tag::BlockVideo { .. } => TagEnd::BlockVideo,
+            Tag::BlockAudio { .. } => TagEnd::BlockAudio,
             Tag::InlineImage { .. } => TagEnd::InlineImage,
             Tag::Strong => TagEnd::Strong,
             Tag::Emphasis => TagEnd::Emphasis,

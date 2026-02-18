@@ -440,6 +440,40 @@ impl<'a> BlockScanner<'a> {
             return self.event_buffer.pop();
         }
 
+        // Block video `video::path[attrs]`
+        if let Some((target, attrs)) = scanner::is_block_video(line) {
+            self.advance();
+            let title_events = self.take_pending_block_title();
+            let block_attrs = self.pending_block_attrs.take();
+            self.push_event(Event::End(TagEnd::BlockVideo));
+            self.push_event(Event::Start(Tag::BlockVideo {
+                target: Cow::Borrowed(target),
+                attrs: Cow::Borrowed(attrs),
+            }));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs);
+            }
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop();
+        }
+
+        // Block audio `audio::path[attrs]`
+        if let Some((target, attrs)) = scanner::is_block_audio(line) {
+            self.advance();
+            let title_events = self.take_pending_block_title();
+            let block_attrs = self.pending_block_attrs.take();
+            self.push_event(Event::End(TagEnd::BlockAudio));
+            self.push_event(Event::Start(Tag::BlockAudio {
+                target: Cow::Borrowed(target),
+                attrs: Cow::Borrowed(attrs),
+            }));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs);
+            }
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop();
+        }
+
         // Admonition `NOTE: text`
         if let Some((label, text)) = scanner::is_admonition(line) {
             return self.scan_admonition(label, text);
@@ -1063,6 +1097,8 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_list_marker_ordered(line).is_some()
                 || scanner::is_admonition(line).is_some()
                 || scanner::is_block_image(line).is_some()
+                || scanner::is_block_video(line).is_some()
+                || scanner::is_block_audio(line).is_some()
                 || scanner::is_toc_macro(line)
                 || scanner::is_include_directive(line).is_some()
                 || scanner::is_thematic_break(line)
@@ -1588,6 +1624,8 @@ impl<'a> BlockScanner<'a> {
             && scanner::is_list_marker_ordered(line).is_none()
             && scanner::is_admonition(line).is_none()
             && scanner::is_block_image(line).is_none()
+            && scanner::is_block_video(line).is_none()
+            && scanner::is_block_audio(line).is_none()
             && !scanner::is_toc_macro(line)
             && scanner::is_include_directive(line).is_none()
             && !scanner::is_thematic_break(line)
@@ -1738,6 +1776,8 @@ impl<'a> BlockScanner<'a> {
             && scanner::is_list_marker_ordered(line).is_none()
             && scanner::is_admonition(line).is_none()
             && scanner::is_block_image(line).is_none()
+            && scanner::is_block_video(line).is_none()
+            && scanner::is_block_audio(line).is_none()
             && !scanner::is_toc_macro(line)
             && scanner::is_include_directive(line).is_none()
             && !scanner::is_thematic_break(line)
@@ -2687,6 +2727,58 @@ mod tests {
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("line two")),
             Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_block_video() {
+        let input = "video::video.mp4[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::BlockVideo {
+                target: Cow::Borrowed("video.mp4"),
+                attrs: Cow::Borrowed(""),
+            }),
+            Event::End(TagEnd::BlockVideo),
+        ]);
+    }
+
+    #[test]
+    fn test_block_video_with_attrs() {
+        let input = "video::video.mp4[width=640,poster=preview.jpg]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::BlockVideo {
+                target: Cow::Borrowed("video.mp4"),
+                attrs: Cow::Borrowed("width=640,poster=preview.jpg"),
+            }),
+            Event::End(TagEnd::BlockVideo),
+        ]);
+    }
+
+    #[test]
+    fn test_block_audio() {
+        let input = "audio::audio.mp3[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::BlockAudio {
+                target: Cow::Borrowed("audio.mp3"),
+                attrs: Cow::Borrowed(""),
+            }),
+            Event::End(TagEnd::BlockAudio),
+        ]);
+    }
+
+    #[test]
+    fn test_block_audio_with_options() {
+        let input = "audio::audio.mp3[options=\"autoplay,loop\"]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::BlockAudio {
+                target: Cow::Borrowed("audio.mp3"),
+                attrs: Cow::Borrowed("options=\"autoplay,loop\""),
+            }),
+            Event::End(TagEnd::BlockAudio),
         ]);
     }
 }

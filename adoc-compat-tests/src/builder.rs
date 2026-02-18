@@ -102,6 +102,8 @@ enum BuildFrame {
     BlockImage {
         target: String,
     },
+    BlockVideo,
+    BlockAudio,
     InlineImage {
         target: String,
     },
@@ -216,6 +218,8 @@ pub fn build_asg<'a>(
                     Tag::BlockImage { target, .. } => BuildFrame::BlockImage {
                         target: resolve_attr_refs(target.as_ref(), &attrs),
                     },
+                    Tag::BlockVideo { .. } => BuildFrame::BlockVideo,
+                    Tag::BlockAudio { .. } => BuildFrame::BlockAudio,
                     Tag::InlineImage { target, .. } => BuildFrame::InlineImage {
                         target: resolve_attr_refs(target.as_ref(), &attrs),
                     },
@@ -601,6 +605,8 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
             }
         }
         BuildFrame::BlockImage { target } => Some(AsgNode::Image { target }),
+        BuildFrame::BlockVideo => Some(AsgNode::Unknown { name: "video".to_string() }),
+        BuildFrame::BlockAudio => Some(AsgNode::Unknown { name: "audio".to_string() }),
         BuildFrame::InlineImage { target } => Some(AsgNode::Image { target }),
         BuildFrame::CalloutList { items } => Some(AsgNode::List {
             variant: "callout".to_string(),
@@ -783,8 +789,11 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         | BuildFrame::Icon { inlines }
         | BuildFrame::Stem { inlines } => inlines.push(node),
         BuildFrame::StemBlock { children } => children.push(node),
-        BuildFrame::BlockImage { .. } | BuildFrame::InlineImage { .. } => {
-            // Images don't have children in our model
+        BuildFrame::BlockImage { .. }
+        | BuildFrame::BlockVideo
+        | BuildFrame::BlockAudio
+        | BuildFrame::InlineImage { .. } => {
+            // Media blocks don't have children in our model
         }
     }
 }

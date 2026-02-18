@@ -221,6 +221,38 @@ pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
     Some((target, alt))
 }
 
+pub fn is_block_video(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("video::")?;
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.rfind(']')?;
+    if bracket_end < bracket_start {
+        return None;
+    }
+    let target = &rest[..bracket_start];
+    if target.is_empty() {
+        return None;
+    }
+    let attrs = &rest[bracket_start + 1..bracket_end];
+    Some((target, attrs))
+}
+
+pub fn is_block_audio(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("audio::")?;
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.rfind(']')?;
+    if bracket_end < bracket_start {
+        return None;
+    }
+    let target = &rest[..bracket_start];
+    if target.is_empty() {
+        return None;
+    }
+    let attrs = &rest[bracket_start + 1..bracket_end];
+    Some((target, attrs))
+}
+
 pub fn is_description_list_marker(line: &str) -> Option<(u8, &str, &str)> {
     let trimmed = line.trim_end();
     // Find the first occurrence of "::" that is a valid marker
@@ -630,6 +662,39 @@ mod tests {
             is_block_image("image::path/to/img.png[Alt text]"),
             Some(("path/to/img.png", "Alt text"))
         );
+    }
+
+    #[test]
+    fn test_is_block_video() {
+        assert_eq!(
+            is_block_video("video::video.mp4[]"),
+            Some(("video.mp4", ""))
+        );
+        assert_eq!(
+            is_block_video("video::video.mp4[width=640,start=60,options=\"autoplay,loop\"]"),
+            Some(("video.mp4", "width=640,start=60,options=\"autoplay,loop\""))
+        );
+        assert_eq!(
+            is_block_video("video::path/to/video.mp4[poster=preview.jpg]"),
+            Some(("path/to/video.mp4", "poster=preview.jpg"))
+        );
+        assert_eq!(is_block_video("video::[]"), None); // empty target
+        assert_eq!(is_block_video("video::file.mp4"), None); // no brackets
+        assert_eq!(is_block_video("not video::file.mp4[]"), None); // not at start
+    }
+
+    #[test]
+    fn test_is_block_audio() {
+        assert_eq!(
+            is_block_audio("audio::audio.mp3[]"),
+            Some(("audio.mp3", ""))
+        );
+        assert_eq!(
+            is_block_audio("audio::audio.mp3[options=\"autoplay,loop\"]"),
+            Some(("audio.mp3", "options=\"autoplay,loop\""))
+        );
+        assert_eq!(is_block_audio("audio::[]"), None); // empty target
+        assert_eq!(is_block_audio("audio::file.mp3"), None); // no brackets
     }
 
     #[test]
