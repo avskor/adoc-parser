@@ -70,6 +70,40 @@ impl<'a> BlockScanner<'a> {
         self.pos += 1;
     }
 
+    /// After advancing past the attribute entry line, consume any continuation
+    /// lines (trailing ` \` for soft wrap or ` + \` for hard wrap) and return
+    /// the fully joined attribute value.
+    fn read_multiline_attribute_value(&mut self, initial_value: &'a str) -> CowStr<'a> {
+        let Some((prefix, mut is_hard)) = scanner::strip_line_continuation(initial_value) else {
+            return Cow::Borrowed(initial_value);
+        };
+        let mut result = String::from(prefix);
+        loop {
+            let Some(next_line) = self.current_line() else {
+                break;
+            };
+            let trimmed = next_line.trim();
+            if is_hard {
+                result.push('\n');
+            } else {
+                result.push(' ');
+            }
+            match scanner::strip_line_continuation(trimmed) {
+                Some((part, next_hard)) => {
+                    result.push_str(part);
+                    is_hard = next_hard;
+                    self.advance();
+                }
+                None => {
+                    result.push_str(trimmed);
+                    self.advance();
+                    break;
+                }
+            }
+        }
+        Cow::Owned(result)
+    }
+
     fn skip_blank_lines(&mut self) {
         while let Some(line) = self.current_line() {
             if scanner::is_blank(line) {
@@ -387,8 +421,9 @@ impl<'a> BlockScanner<'a> {
         // Attribute entry `:name: value`
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
             self.advance();
+            let value = self.read_multiline_attribute_value(value);
             if name == "leveloffset" {
-                self.update_leveloffset(value);
+                self.update_leveloffset(&value);
                 return Some(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value: Cow::Owned(self.leveloffset.to_string()),
@@ -396,7 +431,7 @@ impl<'a> BlockScanner<'a> {
             }
             return Some(Event::Attribute {
                 name: Cow::Borrowed(name),
-                value: Cow::Borrowed(value),
+                value,
             });
         }
 
@@ -667,14 +702,15 @@ impl<'a> BlockScanner<'a> {
                 break;
             }
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                self.advance();
+                let value = self.read_multiline_attribute_value(value);
                 if name == "leveloffset" {
-                    self.update_leveloffset(value);
+                    self.update_leveloffset(&value);
                 }
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
-                    value: Cow::Borrowed(value),
+                    value,
                 });
-                self.advance();
             } else {
                 // Non-attribute, non-blank line ends the header
                 break;
@@ -722,14 +758,15 @@ impl<'a> BlockScanner<'a> {
                 continue;
             }
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                self.advance();
+                let value = self.read_multiline_attribute_value(value);
                 if name == "leveloffset" {
-                    self.update_leveloffset(value);
+                    self.update_leveloffset(&value);
                 }
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
-                    value: Cow::Borrowed(value),
+                    value,
                 });
-                self.advance();
             } else if let Some((1, title)) = scanner::strip_section_marker(line)
                 && self.leveloffset == 0
             {
@@ -766,11 +803,12 @@ impl<'a> BlockScanner<'a> {
                 break;
             }
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
+                self.advance();
+                let value = self.read_multiline_attribute_value(value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
-                    value: Cow::Borrowed(value),
+                    value,
                 });
-                self.advance();
             } else {
                 header_events.push(Event::Text(Cow::Borrowed(line)));
                 self.advance();
@@ -2270,6 +2308,102 @@ mod tests {
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_multiline_attribute_soft_wrap_body() {
+        let input = "== Section\n\n:description: This is a long \\\nvalue that spans two lines\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_section".into()) }),
+            Event::Text(Cow::Borrowed("Section")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute {
+                name: Cow::Borrowed("description"),
+                value: Cow::Owned("This is a long value that spans two lines".into()),
+            },
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::Section { level: 2 }),
+        ]);
+    }
+
+    #[test]
+    fn test_multiline_attribute_hard_wrap_body() {
+        let input = "== Section\n\n:description: Line one + \\\nLine two\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_section".into()) }),
+            Event::Text(Cow::Borrowed("Section")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute {
+                name: Cow::Borrowed("description"),
+                value: Cow::Owned("Line one\nLine two".into()),
+            },
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::Section { level: 2 }),
+        ]);
+    }
+
+    #[test]
+    fn test_multiline_attribute_three_lines() {
+        let input = "== S\n\n:desc: one \\\ntwo \\\nthree";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_s".into()) }),
+            Event::Text(Cow::Borrowed("S")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute {
+                name: Cow::Borrowed("desc"),
+                value: Cow::Owned("one two three".into()),
+            },
+            Event::End(TagEnd::Section { level: 2 }),
+        ]);
+    }
+
+    #[test]
+    fn test_multiline_attribute_in_header() {
+        let input = "= Title\n:description: A long \\\nvalue here\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Header),
+            Event::Start(Tag::SectionTitle { level: 0, id: Cow::Owned("_title".into()) }),
+            Event::Start(Tag::DocumentTitle),
+            Event::Text(Cow::Borrowed("Title")),
+            Event::End(TagEnd::DocumentTitle),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute {
+                name: Cow::Borrowed("description"),
+                value: Cow::Owned("A long value here".into()),
+            },
+            Event::End(TagEnd::Header),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_multiline_attribute_mixed_wrap() {
+        let input = "== S\n\n:val: soft \\\nmiddle + \\\nhard end";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_s".into()) }),
+            Event::Text(Cow::Borrowed("S")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute {
+                name: Cow::Borrowed("val"),
+                value: Cow::Owned("soft middle\nhard end".into()),
+            },
+            Event::End(TagEnd::Section { level: 2 }),
         ]);
     }
 

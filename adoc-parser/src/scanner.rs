@@ -302,6 +302,29 @@ pub fn is_description_list_marker(line: &str) -> Option<(u8, &str, &str)> {
     None
 }
 
+/// Check if a value string ends with a line continuation marker.
+///
+/// Returns `Some((value_without_continuation, is_hard_wrap))`:
+/// - `"value \\"` → `Some(("value", false))` — soft wrap (joined with space)
+/// - `"value + \\"` → `Some(("value", true))` — hard wrap (joined with newline)
+/// - `"value"` → `None`
+/// - `"value\\"` (no space before `\`) → `None`
+pub fn strip_line_continuation(value: &str) -> Option<(&str, bool)> {
+    if !value.ends_with('\\') {
+        return None;
+    }
+    let before_backslash = &value[..value.len() - 1];
+    // Hard wrap: ` + \`
+    if let Some(rest) = before_backslash.strip_suffix(" + ") {
+        return Some((rest, true));
+    }
+    // Soft wrap: ` \`
+    if before_backslash.ends_with(' ') {
+        return Some((before_backslash.trim_end(), false));
+    }
+    None
+}
+
 pub fn is_list_continuation(line: &str) -> bool {
     line.trim() == "+"
 }
@@ -925,5 +948,39 @@ mod tests {
         assert_eq!(parse_checklist_marker("[x]no space"), (None, "[x]no space"));
         assert_eq!(parse_checklist_marker("[ ]no space"), (None, "[ ]no space"));
         assert_eq!(parse_checklist_marker("[x] "), (Some(true), ""));
+    }
+
+    #[test]
+    fn test_strip_line_continuation_soft() {
+        assert_eq!(
+            strip_line_continuation("value \\"),
+            Some(("value", false))
+        );
+    }
+
+    #[test]
+    fn test_strip_line_continuation_hard() {
+        assert_eq!(
+            strip_line_continuation("value + \\"),
+            Some(("value", true))
+        );
+    }
+
+    #[test]
+    fn test_strip_line_continuation_none() {
+        assert_eq!(strip_line_continuation("value"), None);
+    }
+
+    #[test]
+    fn test_strip_line_continuation_no_space() {
+        assert_eq!(strip_line_continuation("value\\"), None);
+    }
+
+    #[test]
+    fn test_strip_line_continuation_empty_prefix() {
+        assert_eq!(
+            strip_line_continuation(" \\"),
+            Some(("", false))
+        );
     }
 }

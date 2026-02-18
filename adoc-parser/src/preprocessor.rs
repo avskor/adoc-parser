@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::scanner;
+
 // ---------------------------------------------------------------------------
 // Include directive options
 // ---------------------------------------------------------------------------
@@ -469,8 +471,9 @@ pub fn preprocess_with_attrs(
     }
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut output = String::with_capacity(input.len());
+    let mut lines_iter = input.lines();
 
-    for line in input.lines() {
+    while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
 
         // 1. endif::[] — always processed regardless of skip state
@@ -519,17 +522,27 @@ pub fn preprocess_with_attrs(
         // 5b. Attribute definitions (sees expanded counter values)
         if let Some((name, value)) = parse_attribute_entry(effective_line.trim()) {
             if locked_attrs.contains(name) {
-                // Locked attribute — don't modify and don't output line
+                // Locked attribute — don't modify and don't output line;
+                // also skip continuation lines
+                if let Some(v) = value {
+                    skip_continuation_lines(v, &mut lines_iter);
+                }
                 continue;
             }
+            // Output the attribute line first, then any continuation lines
+            output.push_str(&effective_line);
+            output.push('\n');
             match value {
                 Some(v) => {
-                    attributes.insert(name.to_string(), v.to_string());
+                    let full_value =
+                        collect_continuation_value(v, &mut lines_iter, &mut output);
+                    attributes.insert(name.to_string(), full_value);
                 }
                 None => {
                     attributes.remove(name);
                 }
             }
+            continue;
         }
 
         // 6. Output the line
@@ -543,6 +556,57 @@ pub fn preprocess_with_attrs(
     }
 
     output
+}
+
+/// Consume continuation lines and build the full attribute value.
+/// Continuation lines are also appended to `output` so the block scanner can
+/// see them.
+fn collect_continuation_value<'a>(
+    first_value: &str,
+    lines: &mut impl Iterator<Item = &'a str>,
+    output: &mut String,
+) -> String {
+    let Some((prefix, mut is_hard)) = scanner::strip_line_continuation(first_value) else {
+        return first_value.to_string();
+    };
+    let mut result = String::from(prefix);
+    for cont_line in lines.by_ref() {
+        // Output the continuation line so block scanner sees it
+        output.push_str(cont_line);
+        output.push('\n');
+        let trimmed = cont_line.trim();
+        if is_hard {
+            result.push('\n');
+        } else {
+            result.push(' ');
+        }
+        match scanner::strip_line_continuation(trimmed) {
+            Some((part, next_hard)) => {
+                result.push_str(part);
+                is_hard = next_hard;
+            }
+            None => {
+                result.push_str(trimmed);
+                break;
+            }
+        }
+    }
+    result
+}
+
+/// Consume and discard continuation lines for a locked attribute.
+fn skip_continuation_lines<'a>(
+    first_value: &str,
+    lines: &mut impl Iterator<Item = &'a str>,
+) {
+    if scanner::strip_line_continuation(first_value).is_none() {
+        return;
+    }
+    for cont_line in lines.by_ref() {
+        if scanner::strip_line_continuation(cont_line.trim()).is_none() {
+            break;
+        }
+    }
 }
 
 fn is_skipping(stack: &[bool]) -> bool {
@@ -1496,5 +1560,48 @@ Value: {counter:x}";
         let result = preprocess(input);
         // Counter inside skipped ifdef must not execute, so first use starts at 1
         assert_eq!(result, "Value: 1");
+    }
+
+    #[test]
+    fn test_multiline_attribute_soft_wrap() {
+        // Preprocessor stores the joined value for conditionals;
+        // original lines are preserved in output for the block scanner.
+        let input = "\
+:desc: Hello \\\nworld\nifdef::desc[defined]";
+        let result = preprocess(input);
+        assert_eq!(result, ":desc: Hello \\\nworld\ndefined");
+    }
+
+    #[test]
+    fn test_multiline_attribute_hard_wrap() {
+        let input = "\
+:desc: Line one + \\\nLine two\nifdef::desc[present]";
+        let result = preprocess(input);
+        assert_eq!(result, ":desc: Line one + \\\nLine two\npresent");
+    }
+
+    #[test]
+    fn test_multiline_attribute_three_lines() {
+        let input = "\
+:val: a \\\nb \\\nc\nifdef::val[ok]";
+        let result = preprocess(input);
+        assert_eq!(result, ":val: a \\\nb \\\nc\nok");
+    }
+
+    #[test]
+    fn test_multiline_attribute_no_continuation() {
+        let input = ":desc: simple value\nifdef::desc[ok]";
+        let result = preprocess(input);
+        assert_eq!(result, ":desc: simple value\nok");
+    }
+
+    #[test]
+    fn test_multiline_attribute_locked_skips_continuation() {
+        let mut locked = HashSet::new();
+        locked.insert("desc".to_string());
+        let input = ":desc: value \\\ncontinuation\nContent";
+        let result = preprocess_with_attrs(input, &HashMap::new(), &locked);
+        // Locked attribute and its continuation lines are not output
+        assert_eq!(result, "Content");
     }
 }
