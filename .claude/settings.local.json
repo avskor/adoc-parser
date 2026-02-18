@@ -20,7 +20,27 @@
       "Bash(cargo build:*)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(find:*)",
+      "Bash(git pull:*)",
+      "Bash(xargs:*)",
+      "Bash(grep:*)",
+      "Bash(cargo test:*)",
+      "Bash(git checkout:*)",
+      "Bash(git submodule add:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(cat:*)",
+      "Bash(node -e:*)",
+      "Bash(cargo run:*)",
+      "Bash(ls:*)",
+      "Bash(xxd:*)",
+      "Bash(git fetch:*)",
+      "Bash(wc:*)",
+      "Bash(git submodule update:*)",
+      "Bash(gh api:*)",
+      "Bash(git status:*)"
     ]
   }
 }
