@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -298,6 +299,151 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
     output
 }
 
+// ---------------------------------------------------------------------------
+// Counter support ({counter:name}, {counter2:name})
+// ---------------------------------------------------------------------------
+
+/// Determine the initial value from a seed string.
+///
+/// - A single ASCII letter → that letter (alphabetic counter)
+/// - A parseable integer → that number
+/// - Anything else → `"1"`
+fn initialize_from_seed(seed: &str) -> String {
+    if seed.len() == 1 {
+        let ch = seed.as_bytes()[0];
+        if ch.is_ascii_alphabetic() {
+            return seed.to_string();
+        }
+    }
+    if seed.parse::<i64>().is_ok() {
+        return seed.to_string();
+    }
+    "1".to_string()
+}
+
+/// Increment a counter value.
+///
+/// - Single uppercase letter: A→B … Y→Z, Z→Z (saturation)
+/// - Single lowercase letter: a→b … y→z, z→z (saturation)
+/// - Integer string: +1
+/// - Anything else: `"1"`
+fn increment_counter_value(current: &str) -> String {
+    if current.len() == 1 {
+        let ch = current.as_bytes()[0];
+        if ch.is_ascii_uppercase() {
+            return if ch < b'Z' {
+                String::from((ch + 1) as char)
+            } else {
+                "Z".to_string()
+            };
+        }
+        if ch.is_ascii_lowercase() {
+            return if ch < b'z' {
+                String::from((ch + 1) as char)
+            } else {
+                "z".to_string()
+            };
+        }
+    }
+    if let Ok(n) = current.parse::<i64>() {
+        return (n + 1).to_string();
+    }
+    "1".to_string()
+}
+
+/// Try to parse a counter macro starting at `input[0] == '{'`.
+///
+/// Recognised forms:
+/// - `{counter:name}`
+/// - `{counter:name:seed}`
+/// - `{counter2:name}`
+/// - `{counter2:name:seed}`
+///
+/// Returns `(replacement_text, bytes_consumed)` on success.
+fn try_parse_counter(
+    input: &str,
+    attributes: &mut HashMap<String, String>,
+) -> Option<(String, usize)> {
+    if !input.starts_with('{') {
+        return None;
+    }
+
+    let close = input.find('}')?;
+    let inner = &input[1..close]; // between { and }
+
+    let (silent, rest) = if let Some(r) = inner.strip_prefix("counter2:") {
+        (true, r)
+    } else if let Some(r) = inner.strip_prefix("counter:") {
+        (false, r)
+    } else {
+        return None;
+    };
+
+    // Split rest into name and optional seed
+    let (name, seed) = if let Some(colon_pos) = rest.find(':') {
+        (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
+    } else {
+        (rest, None)
+    };
+
+    // Validate name: non-empty, alphanumeric + '-' + '_'
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return None;
+    }
+
+    let new_value = if let Some(current) = attributes.get(name) {
+        increment_counter_value(current)
+    } else if let Some(s) = seed {
+        initialize_from_seed(s)
+    } else {
+        "1".to_string()
+    };
+
+    attributes.insert(name.to_string(), new_value.clone());
+
+    let replacement = if silent {
+        String::new()
+    } else {
+        new_value
+    };
+
+    Some((replacement, close + 1)) // +1 for the closing '}'
+}
+
+/// Expand all `{counter:…}` / `{counter2:…}` macros in a single line.
+///
+/// Returns `None` when the line contains no counters (zero-allocation fast path).
+fn expand_counters(line: &str, attributes: &mut HashMap<String, String>) -> Option<String> {
+    if !line.contains("{counter") {
+        return None;
+    }
+
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len);
+    let mut i = 0;
+    let mut any_expanded = false;
+
+    while i < len {
+        if bytes[i] == b'{' && line[i..].starts_with("{counter")
+            && let Some((replacement, consumed)) = try_parse_counter(&line[i..], attributes)
+        {
+            result.push_str(&replacement);
+            i += consumed;
+            any_expanded = true;
+            continue;
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    if any_expanded { Some(result) } else { None }
+}
+
 /// Preprocess AsciiDoc source by evaluating conditional directives
 /// (`ifdef`, `ifndef`, `ifeval`, `endif`) and tracking document attributes.
 ///
@@ -364,8 +510,14 @@ pub fn preprocess_with_attrs(
             continue;
         }
 
-        // 5. Attribute definitions
-        if let Some((name, value)) = parse_attribute_entry(trimmed) {
+        // 5a. Expand counters
+        let effective_line: Cow<'_, str> = match expand_counters(line, &mut attributes) {
+            Some(expanded) => Cow::Owned(expanded),
+            None => Cow::Borrowed(line),
+        };
+
+        // 5b. Attribute definitions (sees expanded counter values)
+        if let Some((name, value)) = parse_attribute_entry(effective_line.trim()) {
             if locked_attrs.contains(name) {
                 // Locked attribute — don't modify and don't output line
                 continue;
@@ -381,7 +533,7 @@ pub fn preprocess_with_attrs(
         }
 
         // 6. Output the line
-        output.push_str(line);
+        output.push_str(&effective_line);
         output.push('\n');
     }
 
@@ -1153,5 +1305,196 @@ end::foo[]";
         assert_eq!(result, "hello");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Counter: increment_counter_value tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_increment_numbers() {
+        assert_eq!(increment_counter_value("1"), "2");
+        assert_eq!(increment_counter_value("5"), "6");
+        assert_eq!(increment_counter_value("0"), "1");
+        assert_eq!(increment_counter_value("-1"), "0");
+    }
+
+    #[test]
+    fn test_increment_uppercase() {
+        assert_eq!(increment_counter_value("A"), "B");
+        assert_eq!(increment_counter_value("Y"), "Z");
+        assert_eq!(increment_counter_value("Z"), "Z"); // saturation
+    }
+
+    #[test]
+    fn test_increment_lowercase() {
+        assert_eq!(increment_counter_value("a"), "b");
+        assert_eq!(increment_counter_value("y"), "z");
+        assert_eq!(increment_counter_value("z"), "z"); // saturation
+    }
+
+    #[test]
+    fn test_increment_fallback() {
+        assert_eq!(increment_counter_value("foo"), "1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Counter: initialize_from_seed tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_seed_number() {
+        assert_eq!(initialize_from_seed("5"), "5");
+        assert_eq!(initialize_from_seed("0"), "0");
+        assert_eq!(initialize_from_seed("-3"), "-3");
+    }
+
+    #[test]
+    fn test_seed_letter() {
+        assert_eq!(initialize_from_seed("A"), "A");
+        assert_eq!(initialize_from_seed("z"), "z");
+    }
+
+    #[test]
+    fn test_seed_fallback() {
+        assert_eq!(initialize_from_seed("foo"), "1");
+        assert_eq!(initialize_from_seed(""), "1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Counter: expand_counters tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_expand_counter_basic() {
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("Item {counter:item}", &mut attrs),
+            Some("Item 1".to_string())
+        );
+        assert_eq!(attrs.get("item").unwrap(), "1");
+
+        assert_eq!(
+            expand_counters("Item {counter:item}", &mut attrs),
+            Some("Item 2".to_string())
+        );
+        assert_eq!(attrs.get("item").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_expand_counter_with_seed() {
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("{counter:n:5}", &mut attrs),
+            Some("5".to_string())
+        );
+        assert_eq!(
+            expand_counters("{counter:n}", &mut attrs),
+            Some("6".to_string())
+        );
+    }
+
+    #[test]
+    fn test_expand_counter_alpha_seed() {
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("{counter:a:A}", &mut attrs),
+            Some("A".to_string())
+        );
+        assert_eq!(
+            expand_counters("{counter:a}", &mut attrs),
+            Some("B".to_string())
+        );
+        assert_eq!(
+            expand_counters("{counter:a}", &mut attrs),
+            Some("C".to_string())
+        );
+    }
+
+    #[test]
+    fn test_expand_counter2_silent() {
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("{counter2:x}", &mut attrs),
+            Some(String::new())
+        );
+        assert_eq!(attrs.get("x").unwrap(), "1");
+
+        assert_eq!(
+            expand_counters("{counter2:x}", &mut attrs),
+            Some(String::new())
+        );
+        assert_eq!(attrs.get("x").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_expand_multiple_counters() {
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("{counter:a} and {counter:b}", &mut attrs),
+            Some("1 and 1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_expand_no_counters() {
+        let mut attrs = HashMap::new();
+        assert_eq!(expand_counters("plain line", &mut attrs), None);
+    }
+
+    #[test]
+    fn test_expand_counter_empty_name() {
+        let mut attrs = HashMap::new();
+        // Empty name → not a valid counter, returned as-is
+        assert_eq!(expand_counters("{counter:}", &mut attrs), None);
+    }
+
+    #[test]
+    fn test_expand_counter_unclosed() {
+        let mut attrs = HashMap::new();
+        assert_eq!(expand_counters("{counter:name", &mut attrs), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Counter: integration through preprocess()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_preprocess_counter_sequential() {
+        let input = "Item {counter:item}\nItem {counter:item}\nItem {counter:item}";
+        let result = preprocess(input);
+        assert_eq!(result, "Item 1\nItem 2\nItem 3");
+    }
+
+    #[test]
+    fn test_preprocess_counter2_silent() {
+        let input = "{counter2:n}\nValue is not shown";
+        let result = preprocess(input);
+        assert_eq!(result, "\nValue is not shown");
+    }
+
+    #[test]
+    fn test_preprocess_counter_alpha() {
+        let input = "\
+Appendix {counter:app:A}
+Appendix {counter:app}
+Appendix {counter:app}";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+Appendix A
+Appendix B
+Appendix C");
+    }
+
+    #[test]
+    fn test_preprocess_counter_skipped_in_ifdef() {
+        let input = "\
+ifdef::nonexistent[]
+{counter:x}
+endif::[]
+Value: {counter:x}";
+        let result = preprocess(input);
+        // Counter inside skipped ifdef must not execute, so first use starts at 1
+        assert_eq!(result, "Value: 1");
     }
 }
