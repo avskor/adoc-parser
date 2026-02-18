@@ -1930,13 +1930,17 @@ impl<'a> BlockScanner<'a> {
             need_new_list = true;
         }
 
+        let (list_start, list_reversed) = self.pending_block_attrs.as_ref()
+            .map(|a| (a.list_start(), a.is_reversed()))
+            .unwrap_or((None, false));
+
         if need_new_list {
             self.context_stack.push(BlockContext::OrderedList { depth });
             self.context_stack.push(BlockContext::ListItem { depth });
 
             self.push_event(Event::Text(Cow::Borrowed(text)));
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
-            self.push_event(Event::Start(Tag::OrderedList));
+            self.push_event(Event::Start(Tag::OrderedList { start: list_start, reversed: list_reversed }));
         } else {
             self.context_stack.push(BlockContext::ListItem { depth });
 

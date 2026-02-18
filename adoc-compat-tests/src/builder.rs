@@ -179,7 +179,7 @@ pub fn build_asg<'a>(
                     Tag::Paragraph => BuildFrame::Paragraph { inlines: vec![] },
                     Tag::LiteralParagraph => BuildFrame::LiteralParagraph { inlines: vec![] },
                     Tag::UnorderedList { .. } => BuildFrame::UnorderedList { items: vec![] },
-                    Tag::OrderedList => BuildFrame::OrderedList { items: vec![] },
+                    Tag::OrderedList { .. } => BuildFrame::OrderedList { items: vec![] },
                     Tag::ListItem { .. } => BuildFrame::ListItem {
                         children: vec![],
                     },

@@ -417,8 +417,31 @@ impl HtmlRenderer {
                 Self::write_meta_attrs(output, &meta, "");
                 output.push_str(">\n");
             }
-            Tag::OrderedList => {
+            Tag::OrderedList { start, reversed } => {
                 output.push_str("<ol");
+                if let Some(ref m) = meta
+                    && let Some(ref style) = m.style
+                {
+                    let type_attr = match style.as_str() {
+                        "loweralpha" => Some("a"),
+                        "upperalpha" => Some("A"),
+                        "lowerroman" => Some("i"),
+                        "upperroman" => Some("I"),
+                        _ => None,
+                    };
+                    if let Some(t) = type_attr {
+                        output.push_str(" type=\"");
+                        output.push_str(t);
+                        output.push('"');
+                    }
+                }
+                if let Some(s) = start {
+                    use std::fmt::Write;
+                    let _ = write!(output, " start=\"{}\"", s);
+                }
+                if *reversed {
+                    output.push_str(" reversed");
+                }
                 Self::write_meta_attrs(output, &meta, "");
                 output.push_str(">\n");
             }
@@ -1204,9 +1227,46 @@ mod tests {
     fn test_ordered_list() {
         let html = to_html(". first\n. second");
         assert!(html.contains("<ol>"));
+        assert!(!html.contains("type="));
+        assert!(!html.contains("start="));
+        assert!(!html.contains("reversed"));
         assert!(html.contains("<li>first</li>"));
         assert!(html.contains("<li>second</li>"));
         assert!(html.contains("</ol>"));
+    }
+
+    #[test]
+    fn test_ordered_list_loweralpha() {
+        let html = to_html("[loweralpha]\n. a\n. b");
+        assert!(html.contains("<ol type=\"a\""));
+        assert!(html.contains("class=\"loweralpha\""));
+    }
+
+    #[test]
+    fn test_ordered_list_upperroman() {
+        let html = to_html("[upperroman]\n. x\n. y");
+        assert!(html.contains("<ol type=\"I\""));
+        assert!(html.contains("class=\"upperroman\""));
+    }
+
+    #[test]
+    fn test_ordered_list_start() {
+        let html = to_html("[start=3]\n. x\n. y");
+        assert!(html.contains("start=\"3\""));
+    }
+
+    #[test]
+    fn test_ordered_list_reversed() {
+        let html = to_html("[%reversed]\n. z\n. y");
+        assert!(html.contains(" reversed"));
+    }
+
+    #[test]
+    fn test_ordered_list_combined() {
+        let html = to_html("[loweralpha,start=2]\n. x");
+        assert!(html.contains("type=\"a\""));
+        assert!(html.contains("start=\"2\""));
+        assert!(html.contains("class=\"loweralpha\""));
     }
 
     #[test]

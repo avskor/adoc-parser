@@ -179,6 +179,14 @@ impl BlockAttributes {
     pub fn has_option(&self, name: &str) -> bool {
         self.options.iter().any(|o| o == name)
     }
+
+    pub fn list_start(&self) -> Option<u32> {
+        self.named.get("start")?.parse().ok()
+    }
+
+    pub fn is_reversed(&self) -> bool {
+        self.has_option("reversed")
+    }
 }
 
 #[cfg(test)]
@@ -301,5 +309,26 @@ mod tests {
         let attrs = BlockAttributes::parse("source,rust,#code1");
         assert_eq!(attrs.positional, vec!["source", "rust"]);
         assert_eq!(attrs.id.as_deref(), Some("code1"));
+    }
+
+    #[test]
+    fn test_list_start() {
+        let attrs = BlockAttributes::parse("start=5");
+        assert_eq!(attrs.list_start(), Some(5));
+
+        let attrs = BlockAttributes::parse("start=1");
+        assert_eq!(attrs.list_start(), Some(1));
+
+        let attrs = BlockAttributes::new();
+        assert_eq!(attrs.list_start(), None);
+    }
+
+    #[test]
+    fn test_is_reversed() {
+        let attrs = BlockAttributes::parse("%reversed");
+        assert!(attrs.is_reversed());
+
+        let attrs = BlockAttributes::new();
+        assert!(!attrs.is_reversed());
     }
 }

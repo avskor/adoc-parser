@@ -99,7 +99,7 @@ fn test_unordered_list() {
 fn test_ordered_list() {
     let events = parse(". Alpha\n. Beta\n. Gamma");
 
-    assert_eq!(events[0], Event::Start(Tag::OrderedList));
+    assert_eq!(events[0], Event::Start(Tag::OrderedList { start: None, reversed: false }));
     assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1, checked: None }));
     assert_eq!(events[2], Event::Text(Cow::Borrowed("Alpha")));
 }
@@ -266,7 +266,7 @@ The end.";
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::DocumentTitle))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Section { level: 2 }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Section { level: 3 }))));
-    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::OrderedList))));
+    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::OrderedList { .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Admonition { kind: AdmonitionKind::Note }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::ThematicBreak)));

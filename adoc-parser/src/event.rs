@@ -176,7 +176,7 @@ pub enum Tag<'a> {
 
     // Lists
     UnorderedList { has_checklist: bool },
-    OrderedList,
+    OrderedList { start: Option<u32>, reversed: bool },
     ListItem { depth: u8, checked: Option<bool> },
     DescriptionList,
     DescriptionTerm,
@@ -309,7 +309,7 @@ impl<'a> Tag<'a> {
             },
             Tag::BlockTitle => Tag::BlockTitle,
             Tag::UnorderedList { has_checklist } => Tag::UnorderedList { has_checklist },
-            Tag::OrderedList => Tag::OrderedList,
+            Tag::OrderedList { start, reversed } => Tag::OrderedList { start, reversed },
             Tag::ListItem { depth, checked } => Tag::ListItem { depth, checked },
             Tag::DescriptionList => Tag::DescriptionList,
             Tag::DescriptionTerm => Tag::DescriptionTerm,
@@ -390,7 +390,7 @@ impl<'a> Tag<'a> {
             Tag::SourceBlock { .. } => TagEnd::SourceBlock,
             Tag::BlockTitle => TagEnd::BlockTitle,
             Tag::UnorderedList { .. } => TagEnd::UnorderedList,
-            Tag::OrderedList => TagEnd::OrderedList,
+            Tag::OrderedList { .. } => TagEnd::OrderedList,
             Tag::ListItem { .. } => TagEnd::ListItem,
             Tag::DescriptionList => TagEnd::DescriptionList,
             Tag::DescriptionTerm => TagEnd::DescriptionTerm,
