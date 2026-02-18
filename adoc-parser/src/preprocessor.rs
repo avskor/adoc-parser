@@ -697,22 +697,30 @@ fn evaluate_condition(attrs: &str, attributes: &HashMap<String, String>) -> bool
 /// Evaluate an ifeval expression.
 ///
 /// 1. Substitute `{attr}` references with values from the attribute map
-/// 2. Find the comparison operator
-/// 3. Compare operands (numeric if both parse as numbers, otherwise string)
+/// 2. Split by `||` (OR) and `&&` (AND) with standard precedence (`&&` binds tighter)
+/// 3. Evaluate each atomic comparison
 fn evaluate_ifeval(expr: &str, attributes: &HashMap<String, String>) -> bool {
-    // Substitute attribute references
     let substituted = substitute_attributes(expr, attributes);
 
-    // Find operator and split
+    // OR groups: any must be true
+    substituted.split("||").any(|or_part| {
+        // AND terms: all must be true
+        or_part.split("&&").all(|term| {
+            evaluate_single_comparison(term.trim())
+        })
+    })
+}
+
+/// Evaluate a single comparison expression like `"html" == "html"` or `3 > 1`.
+fn evaluate_single_comparison(expr: &str) -> bool {
     let operators = ["==", "!=", "<=", ">=", "<", ">"];
     for op in &operators {
-        if let Some(pos) = substituted.find(op) {
-            let left = extract_operand(&substituted[..pos]);
-            let right = extract_operand(&substituted[pos + op.len()..]);
+        if let Some(pos) = expr.find(op) {
+            let left = extract_operand(&expr[..pos]);
+            let right = extract_operand(&expr[pos + op.len()..]);
             return compare(&left, op, &right);
         }
     }
-
     false
 }
 
@@ -1054,6 +1062,119 @@ missing is empty
 endif::[]";
         let result = preprocess(input);
         assert_eq!(result, "missing is empty");
+    }
+
+    #[test]
+    fn test_ifeval_and_both_true() {
+        let input = "\
+:level: 3
+ifeval::[\"{level}\" >= \"1\" && \"{level}\" <= \"5\"]
+in range
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:level: 3
+in range");
+    }
+
+    #[test]
+    fn test_ifeval_and_one_false() {
+        let input = "\
+:level: 3
+ifeval::[\"{level}\" >= \"1\" && \"{level}\" <= \"2\"]
+in range
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, ":level: 3");
+    }
+
+    #[test]
+    fn test_ifeval_or_one_true() {
+        let input = "\
+:backend: html
+ifeval::[\"{backend}\" == \"html\" || \"{backend}\" == \"xhtml\"]
+web output
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:backend: html
+web output");
+    }
+
+    #[test]
+    fn test_ifeval_or_both_false() {
+        let input = "\
+:backend: pdf
+ifeval::[\"{backend}\" == \"html\" || \"{backend}\" == \"xhtml\"]
+web output
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, ":backend: pdf");
+    }
+
+    #[test]
+    fn test_ifeval_and_or_precedence() {
+        // A || B && C  →  A || (B && C)
+        // A=true, B=false, C=true → true || (false && true) → true
+        let input = "\
+:a: 1
+:b: 2
+:c: 3
+ifeval::[\"{a}\" == \"1\" || \"{b}\" == \"99\" && \"{c}\" == \"3\"]
+matched
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:a: 1
+:b: 2
+:c: 3
+matched");
+    }
+
+    #[test]
+    fn test_ifeval_and_or_precedence_false() {
+        // A && B || C  →  (A && B) || C
+        // A=true, B=false, C=false → (true && false) || false → false
+        let input = "\
+:a: 1
+:b: 2
+ifeval::[\"{a}\" == \"1\" && \"{b}\" == \"99\" || \"{a}\" == \"99\"]
+matched
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:a: 1
+:b: 2");
+    }
+
+    #[test]
+    fn test_ifeval_multiple_and() {
+        let input = "\
+:a: 1
+:b: 2
+:c: 3
+ifeval::[\"{a}\" == \"1\" && \"{b}\" == \"2\" && \"{c}\" == \"3\"]
+all match
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:a: 1
+:b: 2
+:c: 3
+all match");
+    }
+
+    #[test]
+    fn test_ifeval_multiple_or() {
+        let input = "\
+:backend: docbook
+ifeval::[\"{backend}\" == \"html\" || \"{backend}\" == \"xhtml\" || \"{backend}\" == \"docbook\"]
+matched
+endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:backend: docbook
+matched");
     }
 
     #[test]
