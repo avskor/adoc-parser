@@ -353,7 +353,7 @@
 
 | # | Элемент | Синтаксис | Статус |
 |---|---------|-----------|--------|
-| 20.1 | Inline role/class | `[.class]#text#` | ❌ |
+| 20.1 | Inline role/class | `[.class]#text#` | ✅ |
 | 20.2 | Custom inline macro | `mymacro:target[attrs]` | ❌ |
 | 20.3 | Custom block macro | `mymacro::target[attrs]` | ❌ |
 | 20.4 | Block substitutions | `[subs="+macros"]` | ❌ |
