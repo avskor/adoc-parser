@@ -1,6 +1,260 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+// ---------------------------------------------------------------------------
+// Include directive options
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+enum LineRange {
+    Single(usize),
+    Range(usize, usize),
+    From(usize),
+}
+
+#[derive(Debug, PartialEq)]
+struct TagEntry<'a> {
+    name: &'a str,
+    include: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct TagFilter<'a> {
+    entries: Vec<TagEntry<'a>>,
+}
+
+#[derive(Debug, Default)]
+struct IncludeAttrs<'a> {
+    lines: Option<Vec<LineRange>>,
+    tags: Option<TagFilter<'a>>,
+    optional: bool,
+}
+
+fn parse_include_attrs(attrs: &str) -> IncludeAttrs<'_> {
+    let mut result = IncludeAttrs::default();
+    if attrs.is_empty() {
+        return result;
+    }
+
+    for part in attrs.split(',') {
+        let part = part.trim();
+        if let Some(value) = part.strip_prefix("lines=") {
+            let mut ranges = Vec::new();
+            for seg in value.split(';') {
+                let seg = seg.trim();
+                if seg.is_empty() {
+                    continue;
+                }
+                if let Some(range) = parse_line_range(seg) {
+                    ranges.push(range);
+                }
+            }
+            if !ranges.is_empty() {
+                result.lines = Some(ranges);
+            }
+        } else if let Some(value) = part.strip_prefix("tags=") {
+            let mut entries = Vec::new();
+            for seg in value.split(';') {
+                let seg = seg.trim();
+                if seg.is_empty() {
+                    continue;
+                }
+                if let Some(stripped) = seg.strip_prefix('!') {
+                    entries.push(TagEntry { name: stripped, include: false });
+                } else {
+                    entries.push(TagEntry { name: seg, include: true });
+                }
+            }
+            if !entries.is_empty() {
+                result.tags = Some(TagFilter { entries });
+            }
+        } else if let Some(value) = part.strip_prefix("tag=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                let (name, include) = if let Some(stripped) = value.strip_prefix('!') {
+                    (stripped, false)
+                } else {
+                    (value, true)
+                };
+                result.tags = Some(TagFilter {
+                    entries: vec![TagEntry { name, include }],
+                });
+            }
+        } else if part == "opts=optional" {
+            result.optional = true;
+        }
+        // Other keys (leveloffset, indent, encoding) — ignored
+    }
+
+    result
+}
+
+fn parse_line_range(s: &str) -> Option<LineRange> {
+    if let Some(pos) = s.find("..") {
+        let left = s[..pos].trim();
+        let right = s[pos + 2..].trim();
+        let start: usize = left.parse().ok()?;
+        if right.is_empty() || right == "-1" {
+            Some(LineRange::From(start))
+        } else {
+            let end: usize = right.parse().ok()?;
+            Some(LineRange::Range(start, end))
+        }
+    } else {
+        let n: usize = s.trim().parse().ok()?;
+        Some(LineRange::Single(n))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Line filtering
+// ---------------------------------------------------------------------------
+
+fn filter_by_lines(content: &str, ranges: &[LineRange]) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    let mut included = vec![false; total];
+
+    for range in ranges {
+        match *range {
+            LineRange::Single(n) => {
+                if n >= 1 && n <= total {
+                    included[n - 1] = true;
+                }
+            }
+            LineRange::Range(a, b) => {
+                let start = a.max(1);
+                let end = b.min(total);
+                for i in start..=end {
+                    included[i - 1] = true;
+                }
+            }
+            LineRange::From(n) => {
+                let start = n.max(1);
+                for i in start..=total {
+                    included[i - 1] = true;
+                }
+            }
+        }
+    }
+
+    let mut result = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if included[i] {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    if result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Tag filtering
+// ---------------------------------------------------------------------------
+
+fn is_tag_directive(line: &str) -> Option<(&str, bool)> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("tag::") {
+        let name = rest.strip_suffix("[]")?;
+        if !name.is_empty() {
+            return Some((name, true));
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("end::") {
+        let name = rest.strip_suffix("[]")?;
+        if !name.is_empty() {
+            return Some((name, false));
+        }
+    }
+    None
+}
+
+fn filter_by_tags<'a>(content: &str, filter: &TagFilter<'a>) -> String {
+    // Determine default inclusion for untagged lines.
+    // If the first filter entry is a positive include, untagged lines are excluded.
+    // If the first filter entry is a negation, untagged lines are included.
+    let default_include = filter
+        .entries
+        .first()
+        .map(|e| !e.include)
+        .unwrap_or(true);
+
+    // Build sets of included and excluded tag names
+    let mut include_tags: HashSet<&str> = HashSet::new();
+    let mut exclude_tags: HashSet<&str> = HashSet::new();
+    let mut wildcard_include = false;
+    let mut wildcard_exclude = false;
+    let mut double_wildcard_include = false;
+    let mut double_wildcard_exclude = false;
+
+    for entry in &filter.entries {
+        match (entry.name, entry.include) {
+            ("**", true) => double_wildcard_include = true,
+            ("**", false) => double_wildcard_exclude = true,
+            ("*", true) => wildcard_include = true,
+            ("*", false) => wildcard_exclude = true,
+            (name, true) => { include_tags.insert(name); }
+            (name, false) => { exclude_tags.insert(name); }
+        }
+    }
+
+    let mut result = String::new();
+    let mut tag_stack: Vec<&str> = Vec::new();
+
+    for line in content.lines() {
+        if let Some((name, is_start)) = is_tag_directive(line) {
+            if is_start {
+                tag_stack.push(name);
+            } else {
+                // Pop matching tag from stack
+                if let Some(pos) = tag_stack.iter().rposition(|&t| t == name) {
+                    tag_stack.remove(pos);
+                }
+            }
+            // Tag directive lines are always removed
+            continue;
+        }
+
+        let in_tag = !tag_stack.is_empty();
+        let should_include = if in_tag {
+            // Check if any active tag matches the filter
+            let mut included = false;
+            for &tag in &tag_stack {
+                if include_tags.contains(tag) || wildcard_include {
+                    included = true;
+                }
+                if exclude_tags.contains(tag) || wildcard_exclude {
+                    included = false;
+                    break;
+                }
+            }
+            included
+        } else {
+            // Untagged line
+            if double_wildcard_include {
+                true
+            } else if double_wildcard_exclude {
+                false
+            } else {
+                default_include
+            }
+        };
+
+        if should_include {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    if result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
 /// Resolve `include::path[]` directives by reading and splicing file content.
 ///
 /// This is a text-to-text transformation that should run before conditional
@@ -9,14 +263,26 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
     let mut output = String::with_capacity(input.len());
 
     for line in input.lines() {
-        if let Some((path, _attrs)) = crate::scanner::is_include_directive(line) {
+        if let Some((path, attrs_str)) = crate::scanner::is_include_directive(line) {
+            let attrs = parse_include_attrs(attrs_str);
             let file_path = base_dir.join(path);
-            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                let content = content.trim_end_matches(['\n', '\r']);
-                if !content.is_empty() {
-                    output.push_str(content);
-                    output.push('\n');
+            match std::fs::read_to_string(&file_path) {
+                Ok(content) => {
+                    let filtered = if let Some(ref ranges) = attrs.lines {
+                        filter_by_lines(&content, ranges)
+                    } else if let Some(ref tag_filter) = attrs.tags {
+                        filter_by_tags(&content, tag_filter)
+                    } else {
+                        let trimmed = content.trim_end_matches(['\n', '\r']);
+                        trimmed.to_string()
+                    };
+                    if !filtered.is_empty() {
+                        output.push_str(&filtered);
+                        output.push('\n');
+                    }
                 }
+                Err(_) if attrs.optional => { /* skip silently */ }
+                Err(_) => { /* skip (current behavior) */ }
             }
         } else {
             output.push_str(line);
@@ -587,5 +853,305 @@ endif::[]";
         // Note: inline content is emitted as-is, no attribute substitution in inline content
         let result = preprocess(input);
         assert_eq!(result, ":author: John Doe\nBy {author}");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_include_attrs tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_include_attrs_empty() {
+        let attrs = parse_include_attrs("");
+        assert!(attrs.lines.is_none());
+        assert!(attrs.tags.is_none());
+        assert!(!attrs.optional);
+    }
+
+    #[test]
+    fn test_parse_include_attrs_lines_range() {
+        let attrs = parse_include_attrs("lines=1..5");
+        assert_eq!(attrs.lines, Some(vec![LineRange::Range(1, 5)]));
+    }
+
+    #[test]
+    fn test_parse_include_attrs_lines_single() {
+        let attrs = parse_include_attrs("lines=5");
+        assert_eq!(attrs.lines, Some(vec![LineRange::Single(5)]));
+    }
+
+    #[test]
+    fn test_parse_include_attrs_lines_multiple() {
+        let attrs = parse_include_attrs("lines=1..5;10..15");
+        assert_eq!(
+            attrs.lines,
+            Some(vec![LineRange::Range(1, 5), LineRange::Range(10, 15)])
+        );
+    }
+
+    #[test]
+    fn test_parse_include_attrs_lines_from_negative() {
+        let attrs = parse_include_attrs("lines=5..-1");
+        assert_eq!(attrs.lines, Some(vec![LineRange::From(5)]));
+    }
+
+    #[test]
+    fn test_parse_include_attrs_lines_from_open() {
+        let attrs = parse_include_attrs("lines=5..");
+        assert_eq!(attrs.lines, Some(vec![LineRange::From(5)]));
+    }
+
+    #[test]
+    fn test_parse_include_attrs_tags() {
+        let attrs = parse_include_attrs("tags=foo;bar");
+        let filter = attrs.tags.unwrap();
+        assert_eq!(filter.entries.len(), 2);
+        assert_eq!(filter.entries[0], TagEntry { name: "foo", include: true });
+        assert_eq!(filter.entries[1], TagEntry { name: "bar", include: true });
+    }
+
+    #[test]
+    fn test_parse_include_attrs_tag_negated() {
+        let attrs = parse_include_attrs("tag=!foo");
+        let filter = attrs.tags.unwrap();
+        assert_eq!(filter.entries.len(), 1);
+        assert_eq!(filter.entries[0], TagEntry { name: "foo", include: false });
+    }
+
+    #[test]
+    fn test_parse_include_attrs_optional() {
+        let attrs = parse_include_attrs("opts=optional");
+        assert!(attrs.optional);
+    }
+
+    #[test]
+    fn test_parse_include_attrs_ignore_unknown() {
+        let attrs = parse_include_attrs("leveloffset=+1,lines=1..3");
+        assert_eq!(attrs.lines, Some(vec![LineRange::Range(1, 3)]));
+        assert!(!attrs.optional);
+    }
+
+    // -----------------------------------------------------------------------
+    // filter_by_lines tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_filter_by_lines_single() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        assert_eq!(filter_by_lines(content, &[LineRange::Single(3)]), "line3");
+    }
+
+    #[test]
+    fn test_filter_by_lines_range() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        assert_eq!(
+            filter_by_lines(content, &[LineRange::Range(2, 4)]),
+            "line2\nline3\nline4"
+        );
+    }
+
+    #[test]
+    fn test_filter_by_lines_from() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        assert_eq!(
+            filter_by_lines(content, &[LineRange::From(4)]),
+            "line4\nline5"
+        );
+    }
+
+    #[test]
+    fn test_filter_by_lines_multiple_ranges() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        assert_eq!(
+            filter_by_lines(
+                content,
+                &[LineRange::Single(1), LineRange::Range(4, 5)]
+            ),
+            "line1\nline4\nline5"
+        );
+    }
+
+    #[test]
+    fn test_filter_by_lines_out_of_bounds() {
+        let content = "line1\nline2";
+        assert_eq!(
+            filter_by_lines(content, &[LineRange::Single(10)]),
+            ""
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // filter_by_tags tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_filter_by_tags_single() {
+        let content = "\
+before
+tag::foo[]
+inside foo
+end::foo[]
+after";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "foo", include: true }],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "inside foo");
+    }
+
+    #[test]
+    fn test_filter_by_tags_negation() {
+        let content = "\
+before
+tag::foo[]
+inside foo
+end::foo[]
+after";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "foo", include: false }],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "before\nafter");
+    }
+
+    #[test]
+    fn test_filter_by_tags_multiple() {
+        let content = "\
+before
+tag::foo[]
+in foo
+end::foo[]
+middle
+tag::bar[]
+in bar
+end::bar[]
+after";
+        let filter = TagFilter {
+            entries: vec![
+                TagEntry { name: "foo", include: true },
+                TagEntry { name: "bar", include: true },
+            ],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "in foo\nin bar");
+    }
+
+    #[test]
+    fn test_filter_by_tags_wildcard() {
+        let content = "\
+before
+tag::foo[]
+in foo
+end::foo[]
+middle
+tag::bar[]
+in bar
+end::bar[]
+after";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "*", include: true }],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "in foo\nin bar");
+    }
+
+    #[test]
+    fn test_filter_by_tags_negated_wildcard() {
+        let content = "\
+before
+tag::foo[]
+in foo
+end::foo[]
+after";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "*", include: false }],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "before\nafter");
+    }
+
+    #[test]
+    fn test_filter_by_tags_nested() {
+        let content = "\
+tag::outer[]
+outer line
+tag::inner[]
+inner line
+end::inner[]
+outer again
+end::outer[]";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "inner", include: true }],
+        };
+        assert_eq!(filter_by_tags(content, &filter), "inner line");
+    }
+
+    #[test]
+    fn test_filter_by_tags_directives_removed() {
+        let content = "\
+tag::foo[]
+content
+end::foo[]";
+        let filter = TagFilter {
+            entries: vec![TagEntry { name: "foo", include: true }],
+        };
+        // tag/end directives must not appear in output
+        assert_eq!(filter_by_tags(content, &filter), "content");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_includes integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_includes_with_lines() {
+        let dir = std::env::temp_dir().join("adoc_test_lines");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("sample.adoc");
+        std::fs::write(&file, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+        let input = "include::sample.adoc[lines=2..4]";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, "line2\nline3\nline4");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_with_tag() {
+        let dir = std::env::temp_dir().join("adoc_test_tags");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("tagged.adoc");
+        std::fs::write(
+            &file,
+            "preamble\ntag::example[]\nshown content\nend::example[]\nepilogue\n",
+        )
+        .unwrap();
+
+        let input = "include::tagged.adoc[tag=example]";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, "shown content");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_optional_missing() {
+        let dir = std::env::temp_dir().join("adoc_test_optional");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let input = "before\ninclude::nonexistent.adoc[opts=optional]\nafter";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, "before\nafter");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_optional_existing() {
+        let dir = std::env::temp_dir().join("adoc_test_optional_exists");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("exists.adoc");
+        std::fs::write(&file, "hello\n").unwrap();
+
+        let input = "include::exists.adoc[opts=optional]";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, "hello");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
