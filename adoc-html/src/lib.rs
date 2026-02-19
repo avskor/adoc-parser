@@ -13,6 +13,13 @@ pub fn to_html(input: &str) -> String {
     output
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum DlistStyle {
+    Normal,
+    Horizontal,
+    Qanda,
+}
+
 struct TocEntry {
     level: u8,
     id: String,
@@ -50,7 +57,7 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
-    dlist_stack: Vec<bool>,
+    dlist_stack: Vec<DlistStyle>,
     hdlist_in_term_group: bool,
     has_document_title: bool,
     preamble_start: Option<usize>,
@@ -537,40 +544,63 @@ impl HtmlRenderer {
                 output.push_str("<li>");
             }
             Tag::DescriptionList => {
-                let is_horizontal = meta.as_ref().is_some_and(|m| m.style.as_deref() == Some("horizontal"));
-                self.dlist_stack.push(is_horizontal);
-                if is_horizontal {
-                    let mut adjusted_meta = meta;
-                    if let Some(ref mut m) = adjusted_meta {
-                        m.style = None;
+                let style_str = meta.as_ref().and_then(|m| m.style.as_deref());
+                let dlist_style = match style_str {
+                    Some("horizontal") => DlistStyle::Horizontal,
+                    Some("qanda") => DlistStyle::Qanda,
+                    _ => DlistStyle::Normal,
+                };
+                self.dlist_stack.push(dlist_style);
+                let mut adjusted_meta = meta;
+                if let Some(ref mut m) = adjusted_meta {
+                    m.style = None;
+                }
+                match dlist_style {
+                    DlistStyle::Horizontal => {
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &adjusted_meta, "hdlist");
+                        output.push_str(">\n<table>\n");
                     }
-                    output.push_str("<div");
-                    Self::write_meta_attrs(output, &adjusted_meta, "hdlist");
-                    output.push_str(">\n<table>\n");
-                } else {
-                    output.push_str("<dl");
-                    Self::write_meta_attrs(output, &meta, "");
-                    output.push_str(">\n");
+                    DlistStyle::Qanda => {
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &adjusted_meta, "qlist qanda");
+                        output.push_str(">\n<ol>\n");
+                    }
+                    DlistStyle::Normal => {
+                        output.push_str("<dl");
+                        Self::write_meta_attrs(output, &adjusted_meta, "");
+                        output.push_str(">\n");
+                    }
                 }
             }
             Tag::DescriptionTerm => {
-                if self.is_horizontal_dlist() {
-                    if self.hdlist_in_term_group {
-                        output.push_str("<br>");
-                    } else {
-                        output.push_str("<tr>\n<td class=\"hdlist1\">");
-                        self.hdlist_in_term_group = true;
+                match self.current_dlist_style() {
+                    DlistStyle::Horizontal => {
+                        if self.hdlist_in_term_group {
+                            output.push_str("<br>");
+                        } else {
+                            output.push_str("<tr>\n<td class=\"hdlist1\">");
+                            self.hdlist_in_term_group = true;
+                        }
                     }
-                } else {
-                    output.push_str("<dt>");
+                    DlistStyle::Qanda => {
+                        output.push_str("<li>\n<p><em>");
+                    }
+                    DlistStyle::Normal => {
+                        output.push_str("<dt>");
+                    }
                 }
             }
             Tag::DescriptionDescription => {
-                if self.is_horizontal_dlist() {
-                    output.push_str("</td>\n<td class=\"hdlist2\">");
-                    self.hdlist_in_term_group = false;
-                } else {
-                    output.push_str("<dd>");
+                match self.current_dlist_style() {
+                    DlistStyle::Horizontal => {
+                        output.push_str("</td>\n<td class=\"hdlist2\">");
+                        self.hdlist_in_term_group = false;
+                    }
+                    DlistStyle::Qanda => {}
+                    DlistStyle::Normal => {
+                        output.push_str("<dd>");
+                    }
                 }
             }
             Tag::CalloutList => {
@@ -832,23 +862,25 @@ impl HtmlRenderer {
                 output.push_str("</li>\n");
             }
             TagEnd::DescriptionList => {
-                let is_horizontal = self.dlist_stack.pop().unwrap_or(false);
-                if is_horizontal {
-                    output.push_str("</table>\n</div>\n");
-                } else {
-                    output.push_str("</dl>\n");
+                let style = self.dlist_stack.pop().unwrap_or(DlistStyle::Normal);
+                match style {
+                    DlistStyle::Horizontal => output.push_str("</table>\n</div>\n"),
+                    DlistStyle::Qanda => output.push_str("</ol>\n</div>\n"),
+                    DlistStyle::Normal => output.push_str("</dl>\n"),
                 }
             }
             TagEnd::DescriptionTerm => {
-                if !self.is_horizontal_dlist() {
-                    output.push_str("</dt>\n");
+                match self.current_dlist_style() {
+                    DlistStyle::Horizontal => {}
+                    DlistStyle::Qanda => output.push_str("</em></p>\n"),
+                    DlistStyle::Normal => output.push_str("</dt>\n"),
                 }
             }
             TagEnd::DescriptionDescription => {
-                if self.is_horizontal_dlist() {
-                    output.push_str("</td>\n</tr>\n");
-                } else {
-                    output.push_str("</dd>\n");
+                match self.current_dlist_style() {
+                    DlistStyle::Horizontal => output.push_str("</td>\n</tr>\n"),
+                    DlistStyle::Qanda => output.push_str("</li>\n"),
+                    DlistStyle::Normal => output.push_str("</dd>\n"),
                 }
             }
             TagEnd::CalloutList => {
@@ -1192,8 +1224,8 @@ impl HtmlRenderer {
         output.push_str("\n</div>\n</div>\n");
     }
 
-    fn is_horizontal_dlist(&self) -> bool {
-        self.dlist_stack.last().copied().unwrap_or(false)
+    fn current_dlist_style(&self) -> DlistStyle {
+        self.dlist_stack.last().copied().unwrap_or(DlistStyle::Normal)
     }
 
     fn find_section_level(&self) -> u8 {
@@ -2361,5 +2393,33 @@ mod tests {
             html,
             "<dl>\n<dt>CPU</dt>\n<dd>The brain</dd>\n<dt>RAM</dt>\n<dd>Memory</dd>\n</dl>\n"
         );
+    }
+
+    #[test]
+    fn test_qanda_description_list_html() {
+        let html = to_html("[qanda]\nWhat is Rust?:: A systems programming language.\nWhy use it?:: Memory safety.");
+        assert_eq!(
+            html,
+            "<div class=\"qlist qanda\">\n<ol>\n\
+             <li>\n<p><em>What is Rust?</em></p>\nA systems programming language.</li>\n\
+             <li>\n<p><em>Why use it?</em></p>\nMemory safety.</li>\n\
+             </ol>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn test_qanda_description_list_empty_answer_html() {
+        let html = to_html("[qanda]\nQuestion?:: ");
+        assert!(html.contains("<div class=\"qlist qanda\">"));
+        assert!(html.contains("<li>\n<p><em>Question?</em></p>"));
+        assert!(html.contains("</li>"));
+    }
+
+    #[test]
+    fn test_qanda_description_list_with_id_html() {
+        let html = to_html("[qanda#faq]\nQ:: A");
+        assert!(html.contains("id=\"faq\""));
+        assert!(html.contains("class=\"qlist qanda\""));
+        assert!(html.contains("<ol>"));
     }
 }
