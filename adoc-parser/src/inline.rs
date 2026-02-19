@@ -4,7 +4,10 @@ use crate::event::{Event, Tag, TagEnd};
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
-    if !text.contains('-') && !text.contains('.') && !text.contains('(') && !text.contains('\'') {
+    if !text.contains('-') && !text.contains('.') && !text.contains('(') && !text.contains('\'')
+        && !text.contains("->") && !text.contains("<-")
+        && !text.contains("=>") && !text.contains("<=")
+    {
         return Cow::Borrowed(text);
     }
 
@@ -21,6 +24,12 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
             }
             b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
                 Some(("\u{2013}", 2)) // en-dash
+            }
+            // -> right arrow (but not -->)
+            b'-' if i + 1 < len && bytes[i + 1] == b'>'
+                && !(i + 2 < len && bytes[i + 2] == b'>') =>
+            {
+                Some(("\u{2192}", 2)) // →
             }
             b'.' if i + 2 < len && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' => {
                 Some(("\u{2026}", 3)) // ellipsis
@@ -52,6 +61,24 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 && bytes[i + 1].is_ascii_alphanumeric() =>
             {
                 Some(("\u{2019}", 1))
+            }
+            // => double right arrow (but not ==>)
+            b'=' if i + 1 < len && bytes[i + 1] == b'>'
+                && !(i + 2 < len && bytes[i + 2] == b'>') =>
+            {
+                Some(("\u{21D2}", 2)) // ⇒
+            }
+            // <- left arrow (but not <--)
+            b'<' if i + 1 < len && bytes[i + 1] == b'-'
+                && !(i + 2 < len && bytes[i + 2] == b'-') =>
+            {
+                Some(("\u{2190}", 2)) // ←
+            }
+            // <= double left arrow (but not <==)
+            b'<' if i + 1 < len && bytes[i + 1] == b'='
+                && !(i + 2 < len && bytes[i + 2] == b'=') =>
+            {
+                Some(("\u{21D0}", 2)) // ⇐
             }
             _ => None,
         };
@@ -379,6 +406,14 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Mailto macro: mailto:user@example.com[text]
+                b'm' if self.remaining().starts_with("mailto:") => {
+                    if self.try_mailto_macro(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Menu macro: menu:Target[items]
                 b'm' if self.remaining().starts_with("menu:") => {
                     if self.try_menu_macro(events, &mut text_start) {
@@ -406,6 +441,14 @@ impl<'a> InlineState<'a> {
                 // Inline asciimath macro: asciimath:[content]
                 b'a' if self.remaining().starts_with("asciimath:[") => {
                     if self.try_stem_macro(10, "asciimath", events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Xref macro: xref:target[text]
+                b'x' if self.remaining().starts_with("xref:") => {
+                    if self.try_xref_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -491,6 +534,9 @@ impl<'a> InlineState<'a> {
             b'-' if p + 1 < bytes.len() && bytes[p + 1] == b'-' => {
                 if p + 2 < bytes.len() && bytes[p + 2] == b'-' { 3 } else { 2 }
             }
+            b'-' if p + 1 < bytes.len() && bytes[p + 1] == b'>' => 2, // \->
+            b'=' if p + 1 < bytes.len() && bytes[p + 1] == b'>' => 2, // \=>
+            b'<' if p + 1 < bytes.len() && (bytes[p + 1] == b'-' || bytes[p + 1] == b'=') => 2, // \<- or \<=
             b'.' if p + 2 < bytes.len() && bytes[p + 1] == b'.' && bytes[p + 2] == b'.' => 3,
             b'(' if p + 2 < bytes.len() && bytes[p + 2] == b')' && (bytes[p + 1] == b'C' || bytes[p + 1] == b'R') => 3,
             b'(' if p + 3 < bytes.len() && bytes[p + 1] == b'T' && bytes[p + 2] == b'M' && bytes[p + 3] == b')' => 4,
@@ -1119,6 +1165,97 @@ impl<'a> InlineState<'a> {
         let display = if link_text.is_empty() { url } else { link_text };
         events.push(Event::Text(Cow::Borrowed(display)));
         events.push(Event::End(TagEnd::Link));
+
+        self.pos = start_pos + 5 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_mailto_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 7..]; // skip "mailto:"
+
+        let bracket_start = match rest.find('[') {
+            Some(p) => p,
+            None => return false,
+        };
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+        if bracket_end <= bracket_start {
+            return false;
+        }
+
+        let email = &rest[..bracket_start];
+        let link_text = &rest[bracket_start + 1..bracket_end];
+
+        if email.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        // Build mailto: URL
+        let url = &self.input[start_pos..start_pos + 7 + bracket_start]; // "mailto:email"
+        events.push(Event::Start(Tag::Link {
+            url: Cow::Borrowed(url),
+        }));
+        let display = if link_text.is_empty() { email } else { link_text };
+        events.push(Event::Text(Cow::Borrowed(display)));
+        events.push(Event::End(TagEnd::Link));
+
+        self.pos = start_pos + 7 + bracket_end + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_xref_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 5..]; // skip "xref:"
+
+        let bracket_start = match rest.find('[') {
+            Some(p) => p,
+            None => return false,
+        };
+        let bracket_end = match rest.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+        if bracket_end <= bracket_start {
+            return false;
+        }
+
+        let target = &rest[..bracket_start];
+        let label_text = &rest[bracket_start + 1..bracket_end];
+
+        if target.is_empty() {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+
+        let label = if label_text.is_empty() {
+            None
+        } else {
+            Some(Cow::Borrowed(label_text))
+        };
+
+        events.push(Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed(target),
+            label: label.clone(),
+        }));
+        let display = label.unwrap_or(Cow::Borrowed(target));
+        events.push(Event::Text(display));
+        events.push(Event::End(TagEnd::CrossReference));
 
         self.pos = start_pos + 5 + bracket_end + 1;
         *text_start = self.pos;
@@ -2766,6 +2903,186 @@ mod tests {
             Event::Start(Tag::Highlight),
             Event::Text(Cow::Borrowed("text")),
             Event::End(TagEnd::Highlight),
+        ]);
+    }
+
+    // Mailto macro tests
+
+    #[test]
+    fn test_mailto_basic() {
+        let events = parse("mailto:user@example.com[]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:user@example.com"),
+            }),
+            Event::Text(Cow::Borrowed("user@example.com")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_mailto_with_display_text() {
+        let events = parse("mailto:user@example.com[Email Me]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:user@example.com"),
+            }),
+            Event::Text(Cow::Borrowed("Email Me")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_mailto_in_sentence() {
+        let events = parse("Contact mailto:user@example.com[us] for help");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Contact ")),
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:user@example.com"),
+            }),
+            Event::Text(Cow::Borrowed("us")),
+            Event::End(TagEnd::Link),
+            Event::Text(Cow::Borrowed(" for help")),
+        ]);
+    }
+
+    #[test]
+    fn test_mailto_no_brackets() {
+        // Without [] — not recognized as macro
+        let events = parse("mailto:user@example.com");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("mailto:user@example.com")),
+        ]);
+    }
+
+    // Xref macro tests
+
+    #[test]
+    fn test_xref_basic() {
+        let events = parse("xref:chapter1[]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("chapter1"),
+                label: None,
+            }),
+            Event::Text(Cow::Borrowed("chapter1")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+    }
+
+    #[test]
+    fn test_xref_with_label() {
+        let events = parse("xref:file.adoc#anchor[Link Text]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("file.adoc#anchor"),
+                label: Some(Cow::Borrowed("Link Text")),
+            }),
+            Event::Text(Cow::Borrowed("Link Text")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+    }
+
+    #[test]
+    fn test_xref_in_sentence() {
+        let events = parse("See xref:intro[Introduction] for details");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("See ")),
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("intro"),
+                label: Some(Cow::Borrowed("Introduction")),
+            }),
+            Event::Text(Cow::Borrowed("Introduction")),
+            Event::End(TagEnd::CrossReference),
+            Event::Text(Cow::Borrowed(" for details")),
+        ]);
+    }
+
+    #[test]
+    fn test_xref_no_brackets() {
+        // Without [] — not recognized as macro
+        let events = parse("xref:target");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("xref:target")),
+        ]);
+    }
+
+    // Arrow replacement tests
+
+    #[test]
+    fn test_arrow_right() {
+        let events = parse("A -> B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("A \u{2192} B".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_left() {
+        let events = parse("A <- B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("A \u{2190} B".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_double_right() {
+        let events = parse("A => B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("A \u{21D2} B".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_double_left() {
+        let events = parse("A <= B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("A \u{21D0} B".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_triple_not_replaced() {
+        // --> should NOT be replaced (triple sequence)
+        let events = parse("A --> B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("A \u{2013}> B".to_string())), // -- becomes en-dash, > stays
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_escaped_right() {
+        let events = parse("A \\-> B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("A ")),
+            Event::Text(Cow::Borrowed("->")),
+            Event::Text(Cow::Borrowed(" B")),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_escaped_double_right() {
+        let events = parse("A \\=> B");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("A ")),
+            Event::Text(Cow::Borrowed("=>")),
+            Event::Text(Cow::Borrowed(" B")),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_em_dash_still_works() {
+        let events = parse("hello---world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_en_dash_still_works() {
+        let events = parse("hello--world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("hello\u{2013}world".to_string())),
         ]);
     }
 }
