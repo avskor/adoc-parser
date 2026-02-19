@@ -356,13 +356,13 @@
 | 20.1 | Inline role/class | `[.class]#text#` | ✅ |
 | 20.2 | Custom inline macro | `mymacro:target[attrs]` | ❌ |
 | 20.3 | Custom block macro | `mymacro::target[attrs]` | ❌ |
-| 20.4 | Block substitutions | `[subs="+macros"]` | ❌ |
+| 20.4 | Block substitutions | `[subs="+macros"]` | ✅ |
 | 20.5 | Docinfo | `:docinfo: shared` | ❌ |
 | 20.6 | Preamble | Текст между заголовком и первой секцией | ✅ |
 | 20.7 | Manpage doctype | `:doctype: manpage` | ❌ |
 | 20.8 | Book doctype | `:doctype: book` + part/chapter | ❌ |
 | 20.9 | Collapsible block | `[%collapsible]` + `====` | ✅ |
-| 20.10 | Line-oriented subs | `[subs=none]`, `[subs=normal]` | ❌ |
+| 20.10 | Line-oriented subs | `[subs=none]`, `[subs=normal]` | ✅ |
 | 20.11 | Markdown совместимость | `#`, `##`, `###` заголовки | ❌ |
 | 20.12 | Markdown code fence | ` ``` ` | ❌ |
 

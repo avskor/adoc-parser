@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, VAlign};
+use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
     let mut renderer = HtmlRenderer::new();
@@ -32,11 +32,15 @@ struct BlockMeta {
     roles: Vec<String>,
     #[allow(dead_code)]
     options: Vec<String>,
+    subs: Option<SubstitutionSet>,
 }
 
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
+    subs_stack: Vec<SubstitutionSet>,
+    pending_subs: Option<SubstitutionSet>,
+    document_attrs: HashMap<String, String>,
     delimited_block_stack: Vec<(DelimitedBlockKind, bool)>,
     footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
     footnote_counter: usize,
@@ -74,6 +78,9 @@ impl HtmlRenderer {
         Self {
             tag_stack: Vec::new(),
             in_source_block: false,
+            subs_stack: Vec::new(),
+            pending_subs: None,
+            document_attrs: HashMap::new(),
             delimited_block_stack: Vec::new(),
             footnotes: Vec::new(),
             footnote_counter: 0,
@@ -104,6 +111,18 @@ impl HtmlRenderer {
             pending_section_caption: None,
             sectnums: false,
             section_counters: [0; 6],
+        }
+    }
+
+    fn current_subs(&self) -> SubstitutionSet {
+        self.subs_stack.last().copied().unwrap_or(SubstitutionSet::NORMAL)
+    }
+
+    fn default_subs_for_delimited(kind: DelimitedBlockKind) -> SubstitutionSet {
+        match kind {
+            DelimitedBlockKind::Listing | DelimitedBlockKind::Literal => SubstitutionSet::VERBATIM,
+            DelimitedBlockKind::Passthrough | DelimitedBlockKind::Comment => SubstitutionSet::NONE,
+            _ => SubstitutionSet::NORMAL,
         }
     }
 
@@ -145,8 +164,10 @@ impl HtmlRenderer {
                     self.stem_content = Some(text.to_string());
                 } else if self.stem_block_variant.is_some() {
                     self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
-                } else {
+                } else if self.current_subs().has(SubstitutionSet::SPECIALCHARS) {
                     html_escape(output, &text);
+                } else {
+                    output.push_str(&text);
                 }
             }
             Event::InlinePassthrough(text) => {
@@ -188,12 +209,23 @@ impl HtmlRenderer {
                 if name == "!sectnums" || name == "sectnums!" {
                     self.sectnums = false;
                 }
-                // Attributes are metadata, not rendered
+                // Store for attribute reference resolution
+                if let Some(stripped) = name.strip_prefix('!') {
+                    self.document_attrs.remove(stripped);
+                } else if let Some(stripped) = name.strip_suffix('!') {
+                    self.document_attrs.remove(stripped);
+                } else {
+                    self.document_attrs.insert(name.to_string(), value.to_string());
+                }
             }
             Event::AttributeReference(name) => {
-                output.push('{');
-                output.push_str(&name);
-                output.push('}');
+                if let Some(value) = self.document_attrs.get(name.as_ref()) {
+                    html_escape(output, value);
+                } else {
+                    output.push('{');
+                    output.push_str(&name);
+                    output.push('}');
+                }
             }
             Event::Footnote { id, text } => {
                 self.footnote_counter += 1;
@@ -253,12 +285,16 @@ impl HtmlRenderer {
             Event::Revision { .. } => {
                 // Revision metadata — not rendered to HTML body
             }
-            Event::BlockMetadata { style, id, roles, options } => {
+            Event::BlockMetadata { style, id, roles, options, subs } => {
+                if let Some(s) = subs {
+                    self.pending_subs = Some(s);
+                }
                 self.pending_block_meta = Some(BlockMeta {
                     style: style.map(|s| s.into_owned()),
                     id: id.map(|s| s.into_owned()),
                     roles: roles.into_iter().map(|s| s.into_owned()).collect(),
                     options: options.into_iter().map(|s| s.into_owned()).collect(),
+                    subs,
                 });
             }
         }
@@ -359,6 +395,26 @@ impl HtmlRenderer {
         let tag_end = tag.to_end();
         self.tag_stack.push(tag_end);
         let meta = self.take_block_meta();
+
+        // Push subs stack for blocks that affect substitution context
+        let meta_subs = meta.as_ref().and_then(|m| m.subs).or(self.pending_subs.take());
+        match tag {
+            Tag::SourceBlock { .. } => {
+                self.subs_stack.push(meta_subs.unwrap_or(SubstitutionSet::VERBATIM));
+            }
+            Tag::DelimitedBlock { kind } => {
+                let default = Self::default_subs_for_delimited(*kind);
+                self.subs_stack.push(meta_subs.unwrap_or(default));
+            }
+            Tag::Paragraph => {
+                // Inherit subs from parent block if no explicit override
+                self.subs_stack.push(meta_subs.unwrap_or_else(|| self.current_subs()));
+            }
+            Tag::LiteralParagraph => {
+                self.subs_stack.push(meta_subs.unwrap_or_else(|| self.current_subs()));
+            }
+            _ => {}
+        }
 
         match tag {
             Tag::Header => {
@@ -886,6 +942,14 @@ impl HtmlRenderer {
 
     fn end_tag(&mut self, output: &mut String, tag_end: &TagEnd) {
         self.tag_stack.pop();
+
+        // Pop subs stack for blocks that pushed to it
+        match tag_end {
+            TagEnd::SourceBlock | TagEnd::DelimitedBlock | TagEnd::Paragraph | TagEnd::LiteralParagraph => {
+                self.subs_stack.pop();
+            }
+            _ => {}
+        }
 
         match tag_end {
             TagEnd::Header => {
@@ -2732,5 +2796,110 @@ mod tests {
         assert!(html.contains("</div>\n</div>"));
         assert!(!html.contains("<details"));
         assert!(!html.contains("<summary"));
+    }
+
+    // === Block substitution tests ===
+
+    #[test]
+    fn test_listing_block_subs_normal() {
+        let html = to_html("[subs=normal]\n----\n*bold*\n----");
+        assert!(html.contains("<strong>bold</strong>"), "subs=normal on listing block should enable inline parsing. Got: {html}");
+    }
+
+    #[test]
+    fn test_paragraph_subs_none() {
+        let html = to_html("[subs=none]\n*bold* & <tag>");
+        assert!(!html.contains("<strong>"), "subs=none should disable inline parsing. Got: {html}");
+        assert!(!html.contains("&amp;"), "subs=none should disable specialchars. Got: {html}");
+        assert!(html.contains("*bold*"), "subs=none should preserve literal asterisks. Got: {html}");
+        assert!(html.contains("<tag>"), "subs=none should pass through raw tags. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_block_subs_plus_quotes() {
+        let html = to_html("[subs=\"+quotes\"]\n----\n*bold*\n----");
+        assert!(html.contains("<strong>bold</strong>"), "subs=+quotes on listing block should enable quote formatting. Got: {html}");
+    }
+
+    #[test]
+    fn test_paragraph_subs_minus_replacements() {
+        let html = to_html("[subs=\"-replacements\"]\nHello (C)");
+        assert!(html.contains("(C)"), "subs=-replacements should not replace (C) with ©. Got: {html}");
+        assert!(!html.contains("\u{00A9}"), "subs=-replacements should not produce ©. Got: {html}");
+    }
+
+    #[test]
+    fn test_example_block_no_subs_unchanged() {
+        let html = to_html("====\n*bold* text\n====");
+        assert!(html.contains("<strong>bold</strong>"), "Example block without subs should process inline normally. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_block_default_no_inline() {
+        let html = to_html("----\n*bold*\n----");
+        assert!(!html.contains("<strong>"), "Listing block default should NOT process inline formatting. Got: {html}");
+        assert!(html.contains("*bold*"), "Listing block default should preserve raw markup. Got: {html}");
+    }
+
+    #[test]
+    fn test_literal_paragraph_subs_normal() {
+        let html = to_html("[subs=normal]\n  literal *bold*");
+        assert!(html.contains("<strong>bold</strong>"), "subs=normal on literal paragraph should enable inline parsing. Got: {html}");
+    }
+
+    #[test]
+    fn test_paragraph_subs_verbatim() {
+        let html = to_html("[subs=verbatim]\n*bold* & <tag>");
+        assert!(!html.contains("<strong>"), "subs=verbatim should disable inline parsing. Got: {html}");
+        assert!(html.contains("&amp;"), "subs=verbatim should still escape specialchars. Got: {html}");
+        assert!(html.contains("&lt;tag&gt;"), "subs=verbatim should escape angle brackets. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_subs_plus_quotes() {
+        let html = to_html("[source,rust,subs=\"+quotes\"]\n----\nlet x = *bold*;\n----");
+        assert!(html.contains("<strong>bold</strong>"), "subs=+quotes on source block should enable formatting. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_subs_minus_callouts() {
+        // With -callouts, callout markers should be left as-is (not stripped)
+        let html = to_html("[source,rust,subs=\"-callouts\"]\n----\nlet x = 1; // <1>\n----");
+        assert!(!html.contains("<b class=\"conum\""), "subs=-callouts should not produce callout markers. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_block_subs_plus_attributes() {
+        let html = to_html(":myattr: hello\n\n[subs=\"+attributes\"]\n----\nValue is {myattr}\n----");
+        assert!(html.contains("Value is hello"), "subs=+attributes on listing block should resolve attribute refs. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_subs_normal() {
+        let html = to_html("[source,subs=normal]\n----\n*bold* & (C)\n----");
+        assert!(html.contains("<strong>bold</strong>"), "subs=normal on source block should enable inline parsing. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_block_subs_explicit_list() {
+        // Only specialchars and quotes — no replacements
+        let html = to_html("[subs=\"specialchars,quotes\"]\n----\n*bold* & (C)\n----");
+        assert!(html.contains("<strong>bold</strong>"), "explicit subs should enable quotes. Got: {html}");
+        assert!(html.contains("&amp;"), "explicit subs with specialchars should escape &. Got: {html}");
+        assert!(html.contains("(C)"), "explicit subs without replacements should not replace (C). Got: {html}");
+    }
+
+    #[test]
+    fn test_sidebar_block_subs_none() {
+        let html = to_html("[subs=none]\n****\n*bold* & <tag>\n****");
+        assert!(!html.contains("<strong>"), "subs=none on sidebar should disable inline. Got: {html}");
+        assert!(html.contains("<tag>"), "subs=none on sidebar should pass raw tags. Got: {html}");
+    }
+
+    #[test]
+    fn test_quote_block_subs_verbatim() {
+        let html = to_html("[subs=verbatim]\n____\n*bold* & <tag>\n____");
+        assert!(!html.contains("<strong>"), "subs=verbatim on quote block should disable inline. Got: {html}");
+        assert!(html.contains("&amp;"), "subs=verbatim on quote block should escape &. Got: {html}");
     }
 }

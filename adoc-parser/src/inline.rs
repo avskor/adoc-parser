@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::attributes::parse_link_attrs;
-use crate::event::{Event, Tag, TagEnd};
+use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
@@ -107,13 +107,18 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
 pub struct InlineParser;
 
 impl InlineParser {
+    #[cfg(test)]
     pub fn parse_str<'a>(text: &'a str) -> Vec<Event<'a>> {
+        Self::parse_str_with_subs(text, SubstitutionSet::NORMAL)
+    }
+
+    pub fn parse_str_with_subs<'a>(text: &'a str, subs: SubstitutionSet) -> Vec<Event<'a>> {
         if text.is_empty() {
             return vec![Event::Text(Cow::Borrowed(""))];
         }
 
         let mut events = Vec::new();
-        let mut parser = InlineState::new(text);
+        let mut parser = InlineState::new(text, subs);
         parser.parse_inline(&mut events);
 
         if events.is_empty() {
@@ -127,11 +132,12 @@ impl InlineParser {
 struct InlineState<'a> {
     input: &'a str,
     pos: usize,
+    subs: SubstitutionSet,
 }
 
 impl<'a> InlineState<'a> {
-    fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+    fn new(input: &'a str, subs: SubstitutionSet) -> Self {
+        Self { input, pos: 0, subs }
     }
 
     fn remaining(&self) -> &'a str {
@@ -147,6 +153,11 @@ impl<'a> InlineState<'a> {
     }
 
     fn parse_inline(&mut self, events: &mut Vec<Event<'a>>) {
+        let has_quotes = self.subs.has(SubstitutionSet::QUOTES);
+        let has_macros = self.subs.has(SubstitutionSet::MACROS);
+        let has_attributes = self.subs.has(SubstitutionSet::ATTRIBUTES);
+        let has_post_replacements = self.subs.has(SubstitutionSet::POST_REPLACEMENTS);
+
         let mut text_start = self.pos;
 
         while self.pos < self.input.len() {
@@ -184,7 +195,8 @@ impl<'a> InlineState<'a> {
                 }
 
                 // Escape smart quote openers: \"` or \'`
-                b'\\' if self.peek_at(1).is_some_and(|c| c == b'"' || c == b'\'')
+                b'\\' if has_quotes
+                    && self.peek_at(1).is_some_and(|c| c == b'"' || c == b'\'')
                     && self.peek_at(2) == Some(b'`') =>
                 {
                     self.flush_text(text_start, self.pos, events);
@@ -202,7 +214,7 @@ impl<'a> InlineState<'a> {
                 }
 
                 // Hard break: ` +` at end of string or before `\n`
-                b' ' if self.check_hard_break() => {
+                b' ' if has_post_replacements && self.check_hard_break() => {
                     self.flush_text(text_start, self.pos, events);
                     self.advance_by(2); // skip ` +`
                     if self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'\n' {
@@ -236,108 +248,108 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
-                // Unconstrained formatting: double markers
-                b'*' if self.peek_at(1) == Some(b'*') => {
+                // Unconstrained formatting: double markers (QUOTES)
+                b'*' if has_quotes && self.peek_at(1) == Some(b'*') => {
                     if self.try_unconstrained(b'*', Tag::Strong, TagEnd::Strong, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'_' if self.peek_at(1) == Some(b'_') => {
+                b'_' if has_quotes && self.peek_at(1) == Some(b'_') => {
                     if self.try_unconstrained(b'_', Tag::Emphasis, TagEnd::Emphasis, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Smart double quotes: "`text`"
-                b'"' if self.peek_at(1) == Some(b'`') => {
+                // Smart double quotes: "`text`" (QUOTES)
+                b'"' if has_quotes && self.peek_at(1) == Some(b'`') => {
                     if self.try_smart_quotes(b'"', events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Smart single quotes: '`text`'
-                b'\'' if self.peek_at(1) == Some(b'`') => {
+                // Smart single quotes: '`text`' (QUOTES)
+                b'\'' if has_quotes && self.peek_at(1) == Some(b'`') => {
                     if self.try_smart_quotes(b'\'', events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                b'`' if self.peek_at(1) == Some(b'`') => {
+                b'`' if has_quotes && self.peek_at(1) == Some(b'`') => {
                     if self.try_unconstrained(b'`', Tag::Monospace, TagEnd::Monospace, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'#' if self.peek_at(1) == Some(b'#') => {
+                b'#' if has_quotes && self.peek_at(1) == Some(b'#') => {
                     if self.try_unconstrained(b'#', Tag::Highlight, TagEnd::Highlight, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Constrained formatting: single markers
-                b'*' => {
+                // Constrained formatting: single markers (QUOTES)
+                b'*' if has_quotes => {
                     if self.try_constrained(b'*', Tag::Strong, TagEnd::Strong, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'_' => {
+                b'_' if has_quotes => {
                     if self.try_constrained(b'_', Tag::Emphasis, TagEnd::Emphasis, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'`' => {
+                b'`' if has_quotes => {
                     if self.try_constrained(b'`', Tag::Monospace, TagEnd::Monospace, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'#' => {
+                b'#' if has_quotes => {
                     if self.try_constrained(b'#', Tag::Highlight, TagEnd::Highlight, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Superscript ^text^
-                b'^' => {
+                // Superscript ^text^ (QUOTES)
+                b'^' if has_quotes => {
                     if self.try_simple_pair(b'^', Tag::Superscript, TagEnd::Superscript, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Subscript ~text~
-                b'~' => {
+                // Subscript ~text~ (QUOTES)
+                b'~' if has_quotes => {
                     if self.try_simple_pair(b'~', Tag::Subscript, TagEnd::Subscript, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Cross-reference <<id>> or <<id,label>>
-                b'<' if self.peek_at(1) == Some(b'<') => {
+                // Cross-reference <<id>> or <<id,label>> (MACROS)
+                b'<' if has_macros && self.peek_at(1) == Some(b'<') => {
                     if self.try_cross_reference(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Inline stem macro: stem:[content]
-                b's' if self.remaining().starts_with("stem:[") => {
+                // Inline stem macro: stem:[content] (MACROS)
+                b's' if has_macros && self.remaining().starts_with("stem:[") => {
                     if self.try_stem_macro(5, "stem", events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Pass macro: pass:[text]
+                // Pass macro: pass:[text] (always active)
                 b'p' if self.remaining().starts_with("pass:") => {
                     if self.try_pass_macro(events, &mut text_start) {
                         continue;
@@ -345,126 +357,127 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
-                // Inline latexmath macro: latexmath:[content]
-                b'l' if self.remaining().starts_with("latexmath:[") => {
+                // Inline latexmath macro: latexmath:[content] (MACROS)
+                b'l' if has_macros && self.remaining().starts_with("latexmath:[") => {
                     if self.try_stem_macro(10, "latexmath", events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Link macro: link:url[text]
-                b'l' if self.remaining().starts_with("link:") => {
+                // Link macro: link:url[text] (MACROS)
+                b'l' if has_macros && self.remaining().starts_with("link:") => {
                     if self.try_link_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Index term macros: indexterm2:[term] and indexterm:[primary, secondary, tertiary]
-                b'i' if self.remaining().starts_with("indexterm2:") => {
+                // Index term macros (MACROS)
+                b'i' if has_macros && self.remaining().starts_with("indexterm2:") => {
                     if self.try_indexterm2_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
-                b'i' if self.remaining().starts_with("indexterm:") => {
+                b'i' if has_macros && self.remaining().starts_with("indexterm:") => {
                     if self.try_indexterm_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Icon macro: icon:name[attrs]
-                b'i' if self.remaining().starts_with("icon:") => {
+                // Icon macro: icon:name[attrs] (MACROS)
+                b'i' if has_macros && self.remaining().starts_with("icon:") => {
                     if self.try_icon_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Inline image: image:path[alt] (not image::path[alt])
-                b'i' if self.remaining().starts_with("image:") && !self.remaining().starts_with("image::") => {
+                // Inline image: image:path[alt] (MACROS)
+                b'i' if has_macros && self.remaining().starts_with("image:") && !self.remaining().starts_with("image::") => {
                     if self.try_inline_image(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Keyboard macro: kbd:[keys]
-                b'k' if self.remaining().starts_with("kbd:") => {
+                // Keyboard macro: kbd:[keys] (MACROS)
+                b'k' if has_macros && self.remaining().starts_with("kbd:") => {
                     if self.try_kbd_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Button macro: btn:[label]
-                b'b' if self.remaining().starts_with("btn:") => {
+                // Button macro: btn:[label] (MACROS)
+                b'b' if has_macros && self.remaining().starts_with("btn:") => {
                     if self.try_btn_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Mailto macro: mailto:user@example.com[text]
-                b'm' if self.remaining().starts_with("mailto:") => {
+                // Mailto macro (MACROS)
+                b'm' if has_macros && self.remaining().starts_with("mailto:") => {
                     if self.try_mailto_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Menu macro: menu:Target[items]
-                b'm' if self.remaining().starts_with("menu:") => {
+                // Menu macro (MACROS)
+                b'm' if has_macros && self.remaining().starts_with("menu:") => {
                     if self.try_menu_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Footnote macro: footnote:[text] or footnote:id[text] or footnote:id[]
-                b'f' if self.remaining().starts_with("footnote:") => {
+                // Footnote macro (MACROS)
+                b'f' if has_macros && self.remaining().starts_with("footnote:") => {
                     if self.try_footnote_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Attribute reference {name}
-                b'{' => {
+                // Attribute reference {name} (ATTRIBUTES)
+                b'{' if has_attributes => {
                     if self.try_attribute_reference(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Inline asciimath macro: asciimath:[content]
-                b'a' if self.remaining().starts_with("asciimath:[") => {
+                // Inline asciimath macro (MACROS)
+                b'a' if has_macros && self.remaining().starts_with("asciimath:[") => {
                     if self.try_stem_macro(10, "asciimath", events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Xref macro: xref:target[text]
-                b'x' if self.remaining().starts_with("xref:") => {
+                // Xref macro (MACROS)
+                b'x' if has_macros && self.remaining().starts_with("xref:") => {
                     if self.try_xref_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Autolink: http:// or https://
-                b'h' if self.remaining().starts_with("http://") || self.remaining().starts_with("https://") => {
+                // Autolink: http:// or https:// (MACROS)
+                b'h' if has_macros && (self.remaining().starts_with("http://") || self.remaining().starts_with("https://")) => {
                     if self.try_autolink(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Inline attr span: [.class]#text# or [#id.class]#text#
-                b'[' if self.peek_at(1) != Some(b'[')
+                // Inline attr span: [.class]#text# or [#id.class]#text# (QUOTES)
+                b'[' if has_quotes
+                    && self.peek_at(1) != Some(b'[')
                     && self.peek_at(1).is_some_and(|c| c == b'.' || c == b'#') =>
                 {
                     if self.try_inline_attr_span(events, &mut text_start) {
@@ -473,24 +486,24 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
-                // Bibliography anchor [[[id]]] or [[[id, label]]]
-                b'[' if self.peek_at(1) == Some(b'[') && self.peek_at(2) == Some(b'[') => {
+                // Bibliography anchor [[[id]]] or [[[id, label]]] (MACROS)
+                b'[' if has_macros && self.peek_at(1) == Some(b'[') && self.peek_at(2) == Some(b'[') => {
                     if self.try_bibliography_anchor(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Anchor [[id]]
-                b'[' if self.peek_at(1) == Some(b'[') => {
+                // Anchor [[id]] (MACROS)
+                b'[' if has_macros && self.peek_at(1) == Some(b'[') => {
                     if self.try_anchor(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
 
-                // Concealed index term (((primary, secondary, tertiary))) or flow index term ((term))
-                b'(' if self.peek_at(1) == Some(b'(') && self.peek_at(2) == Some(b'(') => {
+                // Concealed index term (((primary, secondary, tertiary))) or flow index term ((term)) (MACROS)
+                b'(' if has_macros && self.peek_at(1) == Some(b'(') && self.peek_at(2) == Some(b'(') => {
                     if self.try_concealed_index_term(events, &mut text_start) {
                         continue;
                     }
@@ -500,8 +513,8 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
-                // Flow index term ((term))
-                b'(' if self.peek_at(1) == Some(b'(') => {
+                // Flow index term ((term)) (MACROS)
+                b'(' if has_macros && self.peek_at(1) == Some(b'(') => {
                     if self.try_flow_index_term(events, &mut text_start) {
                         continue;
                     }
@@ -520,7 +533,11 @@ impl<'a> InlineState<'a> {
     fn flush_text(&self, start: usize, end: usize, events: &mut Vec<Event<'a>>) {
         if start < end {
             let text = &self.input[start..end];
-            events.push(Event::Text(apply_typographic_replacements(text)));
+            if self.subs.has(SubstitutionSet::REPLACEMENTS) {
+                events.push(Event::Text(apply_typographic_replacements(text)));
+            } else {
+                events.push(Event::Text(Cow::Borrowed(text)));
+            }
         }
     }
 
@@ -607,7 +624,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            let mut inner_parser = InlineState::new(inner);
+            let mut inner_parser = InlineState::new(inner, self.subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -693,7 +710,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            let mut inner_parser = InlineState::new(inner);
+            let mut inner_parser = InlineState::new(inner, self.subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1681,7 +1698,7 @@ impl<'a> InlineState<'a> {
                 roles: roles.iter().copied().map(Cow::Borrowed).collect(),
             }));
 
-            let mut inner_parser = InlineState::new(inner);
+            let mut inner_parser = InlineState::new(inner, self.subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(TagEnd::InlineSpan));
@@ -1719,7 +1736,7 @@ impl<'a> InlineState<'a> {
                 roles: roles.iter().copied().map(Cow::Borrowed).collect(),
             }));
 
-            let mut inner_parser = InlineState::new(inner);
+            let mut inner_parser = InlineState::new(inner, self.subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(TagEnd::InlineSpan));
@@ -1764,7 +1781,7 @@ impl<'a> InlineState<'a> {
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Text(Cow::Borrowed(open_q)));
 
-        let mut inner_parser = InlineState::new(inner);
+        let mut inner_parser = InlineState::new(inner, self.subs);
         inner_parser.parse_inline(events);
 
         events.push(Event::Text(Cow::Borrowed(close_q)));

@@ -2,6 +2,54 @@ use std::borrow::Cow;
 
 pub type CowStr<'a> = Cow<'a, str>;
 
+/// Bitflag set controlling which substitutions apply to a block's content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubstitutionSet(u8);
+
+impl SubstitutionSet {
+    pub const SPECIALCHARS: u8 = 0b0000_0001;
+    pub const QUOTES: u8 = 0b0000_0010;
+    pub const ATTRIBUTES: u8 = 0b0000_0100;
+    pub const REPLACEMENTS: u8 = 0b0000_1000;
+    pub const MACROS: u8 = 0b0001_0000;
+    pub const POST_REPLACEMENTS: u8 = 0b0010_0000;
+    pub const CALLOUTS: u8 = 0b0100_0000;
+
+    pub const NORMAL: Self = Self(
+        Self::SPECIALCHARS
+            | Self::QUOTES
+            | Self::ATTRIBUTES
+            | Self::REPLACEMENTS
+            | Self::MACROS
+            | Self::POST_REPLACEMENTS,
+    );
+    pub const VERBATIM: Self = Self(Self::SPECIALCHARS | Self::CALLOUTS);
+    pub const NONE: Self = Self(0);
+
+    pub fn has(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
+
+    pub fn add(&mut self, flag: u8) {
+        self.0 |= flag;
+    }
+
+    pub fn remove(&mut self, flag: u8) {
+        self.0 &= !flag;
+    }
+
+    /// Whether inline parsing is needed (quotes, macros, attributes, replacements, post_replacements).
+    pub fn needs_inline_parsing(self) -> bool {
+        self.0
+            & (Self::QUOTES
+                | Self::MACROS
+                | Self::ATTRIBUTES
+                | Self::REPLACEMENTS
+                | Self::POST_REPLACEMENTS)
+            != 0
+    }
+}
+
 fn cow_owned(s: CowStr<'_>) -> CowStr<'static> {
     Cow::Owned(s.into_owned())
 }
@@ -65,6 +113,7 @@ pub enum Event<'a> {
         id: Option<CowStr<'a>>,
         roles: Vec<CowStr<'a>>,
         options: Vec<CowStr<'a>>,
+        subs: Option<SubstitutionSet>,
     },
 }
 
@@ -138,11 +187,12 @@ impl<'a> Event<'a> {
                 date: cow_owned(date),
                 remark: cow_owned(remark),
             },
-            Event::BlockMetadata { style, id, roles, options } => Event::BlockMetadata {
+            Event::BlockMetadata { style, id, roles, options, subs } => Event::BlockMetadata {
                 style: style.map(cow_owned),
                 id: id.map(cow_owned),
                 roles: roles.into_iter().map(cow_owned).collect(),
                 options: options.into_iter().map(cow_owned).collect(),
+                subs,
             },
         }
     }

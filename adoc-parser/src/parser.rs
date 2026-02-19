@@ -1,15 +1,15 @@
 use std::borrow::Cow;
 
 use crate::block::BlockScanner;
-use crate::event::Event;
+use crate::event::{DelimitedBlockKind, Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::InlineParser;
 
 pub struct Parser<'a> {
     block_scanner: BlockScanner<'a>,
     inline_buffer: Vec<Event<'a>>,
     pending_event: Option<Event<'a>>,
-    in_source_block: bool,
-    in_verbatim_block: bool,
+    subs_stack: Vec<SubstitutionSet>,
+    pending_subs: Option<SubstitutionSet>,
 }
 
 impl<'a> Parser<'a> {
@@ -18,13 +18,25 @@ impl<'a> Parser<'a> {
             block_scanner: BlockScanner::new(input),
             inline_buffer: Vec::new(),
             pending_event: None,
-            in_source_block: false,
-            in_verbatim_block: false,
+            subs_stack: Vec::new(),
+            pending_subs: None,
         }
     }
 
     fn next_block_event(&mut self) -> Option<Event<'a>> {
         self.pending_event.take().or_else(|| self.block_scanner.next())
+    }
+
+    fn current_subs(&self) -> SubstitutionSet {
+        self.subs_stack.last().copied().unwrap_or(SubstitutionSet::NORMAL)
+    }
+
+    fn default_subs_for_delimited(kind: DelimitedBlockKind) -> SubstitutionSet {
+        match kind {
+            DelimitedBlockKind::Listing | DelimitedBlockKind::Literal => SubstitutionSet::VERBATIM,
+            DelimitedBlockKind::Passthrough | DelimitedBlockKind::Comment => SubstitutionSet::NONE,
+            _ => SubstitutionSet::NORMAL,
+        }
     }
 }
 
@@ -39,37 +51,46 @@ impl<'a> Iterator for Parser<'a> {
         let event = self.next_block_event()?;
 
         match &event {
-            Event::Start(crate::event::Tag::SourceBlock { .. }) => {
-                self.in_source_block = true;
+            Event::BlockMetadata { subs, .. } => {
+                self.pending_subs = *subs;
             }
-            Event::End(crate::event::TagEnd::SourceBlock) => {
-                self.in_source_block = false;
+            Event::Start(Tag::SourceBlock { .. }) => {
+                let subs = self.pending_subs.take().unwrap_or(SubstitutionSet::VERBATIM);
+                self.subs_stack.push(subs);
             }
-            Event::Start(crate::event::Tag::DelimitedBlock { kind }) => {
-                if matches!(
-                    kind,
-                    crate::event::DelimitedBlockKind::Listing
-                        | crate::event::DelimitedBlockKind::Literal
-                        | crate::event::DelimitedBlockKind::Passthrough
-                ) {
-                    self.in_verbatim_block = true;
-                }
+            Event::End(TagEnd::SourceBlock) => {
+                self.subs_stack.pop();
             }
-            Event::End(crate::event::TagEnd::DelimitedBlock) => {
-                self.in_verbatim_block = false;
+            Event::Start(Tag::DelimitedBlock { kind }) => {
+                let default = Self::default_subs_for_delimited(*kind);
+                let subs = self.pending_subs.take().unwrap_or(default);
+                self.subs_stack.push(subs);
             }
-            Event::Start(crate::event::Tag::LiteralParagraph) => {
-                self.in_verbatim_block = true;
+            Event::End(TagEnd::DelimitedBlock) => {
+                self.subs_stack.pop();
             }
-            Event::End(crate::event::TagEnd::LiteralParagraph) => {
-                self.in_verbatim_block = false;
+            Event::Start(Tag::Paragraph) => {
+                // Inherit subs from parent block if no explicit override
+                let subs = self.pending_subs.take().unwrap_or_else(|| self.current_subs());
+                self.subs_stack.push(subs);
+            }
+            Event::End(TagEnd::Paragraph) => {
+                self.subs_stack.pop();
+            }
+            Event::Start(Tag::LiteralParagraph) => {
+                let subs = self.pending_subs.take().unwrap_or_else(|| self.current_subs());
+                self.subs_stack.push(subs);
+            }
+            Event::End(TagEnd::LiteralParagraph) => {
+                self.subs_stack.pop();
             }
             _ => {}
         }
 
         match event {
             Event::Author { .. } => Some(event),
-            Event::Text(Cow::Borrowed(s)) if !self.in_source_block && !self.in_verbatim_block => {
+            Event::Text(Cow::Borrowed(s)) if self.current_subs().needs_inline_parsing() => {
+                let subs = self.current_subs();
                 // Peek at the next block event to see if this is a multiline paragraph
                 let next = self.next_block_event();
                 if matches!(next, Some(Event::SoftBreak)) {
@@ -101,7 +122,7 @@ impl<'a> Iterator for Parser<'a> {
                         }
                     }
 
-                    let events = InlineParser::parse_str(&combined);
+                    let events = InlineParser::parse_str_with_subs(&combined, subs);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap().into_static())
                     } else {
@@ -113,7 +134,7 @@ impl<'a> Iterator for Parser<'a> {
                 } else {
                     // Single-line: zero-copy path
                     self.pending_event = next;
-                    let events = InlineParser::parse_str(s);
+                    let events = InlineParser::parse_str_with_subs(s, subs);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap())
                     } else {

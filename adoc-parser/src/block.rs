@@ -2,7 +2,8 @@ use std::borrow::Cow;
 
 use crate::attributes::{BlockAttributes, TableFormat};
 use crate::event::{
-    AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, HAlign, Tag, TagEnd, VAlign,
+    AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, HAlign, SubstitutionSet, Tag,
+    TagEnd, VAlign,
 };
 use crate::scanner;
 
@@ -181,7 +182,7 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
-    fn emit_block_metadata(&mut self, attrs: &BlockAttributes) {
+    fn emit_block_metadata(&mut self, attrs: &BlockAttributes, default_subs: SubstitutionSet) {
         // Only emit style for positional[0] values that are NOT consumed for block type detection
         let style = attrs.positional.first()
             .filter(|s| !matches!(s.as_str(),
@@ -191,12 +192,16 @@ impl<'a> BlockScanner<'a> {
                 | "csv" | "dsv" | "tsv"
             ))
             .map(|s| Cow::Owned(s.clone()));
-        if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty() || !attrs.options.is_empty() {
+        let subs = attrs.substitution_set(default_subs);
+        if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
+            || !attrs.options.is_empty() || subs.is_some()
+        {
             self.push_event(Event::BlockMetadata {
                 style,
                 id: attrs.id.as_ref().map(|s| Cow::Owned(s.clone())),
                 roles: attrs.roles.iter().map(|s| Cow::Owned(s.clone())).collect(),
                 options: attrs.options.iter().map(|s| Cow::Owned(s.clone())).collect(),
+                subs,
             });
         }
     }
@@ -482,7 +487,7 @@ impl<'a> BlockScanner<'a> {
                 height: img_attrs.height.map(Cow::Borrowed),
             }));
             if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs);
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
             return self.event_buffer.pop();
@@ -499,7 +504,7 @@ impl<'a> BlockScanner<'a> {
                 attrs: Cow::Borrowed(attrs),
             }));
             if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs);
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
             return self.event_buffer.pop();
@@ -516,7 +521,7 @@ impl<'a> BlockScanner<'a> {
                 attrs: Cow::Borrowed(attrs),
             }));
             if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs);
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
             return self.event_buffer.pop();
@@ -920,7 +925,7 @@ impl<'a> BlockScanner<'a> {
         }));
         self.push_event(Event::Start(Tag::Section { level: effective_level }));
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
 
         // Close events emitted before section opening
@@ -952,7 +957,7 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Text(Cow::Borrowed(title)));
         self.push_event(Event::Start(Tag::Heading { level: effective_level }));
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
         self.push_title_then_events(title_events);
 
@@ -1156,7 +1161,7 @@ impl<'a> BlockScanner<'a> {
         }
 
         self.push_event(Event::Start(Tag::Table));
-        self.emit_block_metadata(&block_attrs);
+        self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1366,7 +1371,7 @@ impl<'a> BlockScanner<'a> {
         }
 
         self.push_event(Event::Start(Tag::Table));
-        self.emit_block_metadata(&block_attrs);
+        self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1427,7 +1432,7 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::Paragraph));
             self.push_event(Event::Start(Tag::Admonition { kind }));
             if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs);
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
         } else {
             self.push_event(Event::End(TagEnd::Paragraph));
@@ -1439,7 +1444,7 @@ impl<'a> BlockScanner<'a> {
             }
             self.push_event(Event::Start(Tag::Paragraph));
             if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs);
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
         }
         self.push_title_then_events(title_events);
@@ -1487,7 +1492,7 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Start(Tag::Paragraph));
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
         self.push_title_then_events(title_events);
 
@@ -1528,7 +1533,7 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Start(Tag::LiteralParagraph));
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::VERBATIM);
         }
         self.push_title_then_events(title_events);
 
@@ -1555,7 +1560,7 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Start(Tag::Admonition { kind }));
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
         self.push_title_then_events(title_events);
 
@@ -1648,7 +1653,7 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::End(TagEnd::DelimitedBlock));
                 self.push_event(Event::Text(Cow::Borrowed("\n")));
                 self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                self.emit_block_metadata(&block_attrs);
+                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
                 self.push_title_then_events(title_events);
                 return self.event_buffer.pop();
             }
@@ -1663,7 +1668,7 @@ impl<'a> BlockScanner<'a> {
             }
             // Push Start on top of content
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-            self.emit_block_metadata(&block_attrs);
+            self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
             // Push title events on very top (emitted first)
             self.push_title_then_events(title_events);
 
@@ -1688,7 +1693,7 @@ impl<'a> BlockScanner<'a> {
         } else {
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
         }
-        self.emit_block_metadata(&block_attrs);
+        self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
         self.push_title_then_events(title_events);
         self.event_buffer.pop()
     }
@@ -1712,23 +1717,32 @@ impl<'a> BlockScanner<'a> {
             self.advance();
         }
 
+        let resolved_subs = block_attrs
+            .substitution_set(SubstitutionSet::VERBATIM)
+            .unwrap_or(SubstitutionSet::VERBATIM);
+        let process_callouts = resolved_subs.has(SubstitutionSet::CALLOUTS);
+
         self.push_event(Event::End(TagEnd::SourceBlock));
         for (i, &cline) in content_lines.iter().enumerate().rev() {
             if i < content_lines.len() - 1 {
                 self.push_event(Event::SoftBreak);
             }
-            let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
-            if callout_nums.is_empty() {
-                self.push_event(Event::Text(Cow::Borrowed(cline)));
-            } else {
-                for &n in callout_nums.iter().rev() {
-                    self.push_event(Event::CalloutRef(n));
+            if process_callouts {
+                let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
+                if callout_nums.is_empty() {
+                    self.push_event(Event::Text(Cow::Borrowed(cline)));
+                } else {
+                    for &n in callout_nums.iter().rev() {
+                        self.push_event(Event::CalloutRef(n));
+                    }
+                    self.push_event(Event::Text(Cow::Borrowed(stripped)));
                 }
-                self.push_event(Event::Text(Cow::Borrowed(stripped)));
+            } else {
+                self.push_event(Event::Text(Cow::Borrowed(cline)));
             }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
-        self.emit_block_metadata(block_attrs);
+        self.emit_block_metadata(block_attrs, SubstitutionSet::VERBATIM);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1770,7 +1784,7 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(cline)));
         }
         self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-        self.emit_block_metadata(block_attrs);
+        self.emit_block_metadata(block_attrs, SubstitutionSet::NORMAL);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -1811,7 +1825,7 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Text(Cow::Borrowed(cline)));
         }
         self.push_event(Event::Start(Tag::StemBlock { variant }));
-        self.emit_block_metadata(block_attrs);
+        self.emit_block_metadata(block_attrs, SubstitutionSet::NONE);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -2043,7 +2057,7 @@ impl<'a> BlockScanner<'a> {
         }
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
 
         for ev in close_events.into_iter().rev() {
@@ -2140,7 +2154,7 @@ impl<'a> BlockScanner<'a> {
 
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
 
         for ev in close_events.into_iter().rev() {
@@ -2190,7 +2204,7 @@ impl<'a> BlockScanner<'a> {
 
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
 
         for ev in close_events.into_iter().rev() {
@@ -2236,7 +2250,7 @@ impl<'a> BlockScanner<'a> {
 
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
-            self.emit_block_metadata(attrs);
+            self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
 
         for ev in close_events.into_iter().rev() {
@@ -2783,7 +2797,7 @@ mod tests {
         let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -2814,7 +2828,7 @@ mod tests {
         let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -2845,7 +2859,7 @@ mod tests {
         let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())] },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),

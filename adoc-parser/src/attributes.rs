@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::event::{CowStr, CellStyle, HAlign, VAlign};
+use crate::event::{CowStr, CellStyle, HAlign, SubstitutionSet, VAlign};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TableFormat {
@@ -299,6 +299,10 @@ impl BlockAttributes {
         self.has_option("reversed")
     }
 
+    pub fn substitution_set(&self, default: SubstitutionSet) -> Option<SubstitutionSet> {
+        self.named.get("subs").map(|v| parse_subs_value(v, default))
+    }
+
     pub fn table_format(&self) -> TableFormat {
         // Check named attribute: format=csv / format=dsv / format=tsv
         if let Some(fmt) = self.named.get("format") {
@@ -431,6 +435,71 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
     let text = positional.first().copied().unwrap_or(bracket_content);
 
     LinkAttrs { text, window, nofollow }
+}
+
+pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSet {
+    let trimmed = value.trim();
+    match trimmed {
+        "normal" => SubstitutionSet::NORMAL,
+        "verbatim" => SubstitutionSet::VERBATIM,
+        "none" => SubstitutionSet::NONE,
+        v => {
+            // Check if any token has +/- prefix → incremental mode
+            let has_incremental = v.split(',').any(|p| {
+                let p = p.trim();
+                p.starts_with('+') || p.starts_with('-')
+            });
+
+            if has_incremental {
+                // Incremental: "+macros,-callouts" or mixed "macros,+attributes"
+                let mut result = default;
+                for part in v.split(',') {
+                    let part = part.trim();
+                    if let Some(name) = part.strip_prefix('+') {
+                        if let Some(f) = sub_name_to_flag(name.trim()) {
+                            result.add(f);
+                        }
+                    } else if let Some(name) = part.strip_prefix('-')
+                        && let Some(f) = sub_name_to_flag(name.trim())
+                    {
+                        result.remove(f);
+                    }
+                    // Tokens without +/- prefix in incremental mode are ignored
+                }
+                result
+            } else {
+                // Explicit list: "specialchars,attributes"
+                let mut result = SubstitutionSet::NONE;
+                for part in v.split(',') {
+                    match part.trim() {
+                        "normal" => return SubstitutionSet::NORMAL,
+                        "verbatim" => {
+                            result.add(SubstitutionSet::SPECIALCHARS | SubstitutionSet::CALLOUTS);
+                        }
+                        name => {
+                            if let Some(f) = sub_name_to_flag(name) {
+                                result.add(f);
+                            }
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+}
+
+fn sub_name_to_flag(name: &str) -> Option<u8> {
+    match name {
+        "specialchars" | "specialcharacters" => Some(SubstitutionSet::SPECIALCHARS),
+        "quotes" => Some(SubstitutionSet::QUOTES),
+        "attributes" => Some(SubstitutionSet::ATTRIBUTES),
+        "replacements" => Some(SubstitutionSet::REPLACEMENTS),
+        "macros" => Some(SubstitutionSet::MACROS),
+        "post_replacements" => Some(SubstitutionSet::POST_REPLACEMENTS),
+        "callouts" => Some(SubstitutionSet::CALLOUTS),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -811,5 +880,85 @@ mod tests {
         assert_eq!(attrs.text, "");
         assert_eq!(attrs.window, None);
         assert!(!attrs.nofollow);
+    }
+
+    #[test]
+    fn test_subs_parse_normal() {
+        let result = parse_subs_value("normal", SubstitutionSet::VERBATIM);
+        assert_eq!(result, SubstitutionSet::NORMAL);
+    }
+
+    #[test]
+    fn test_subs_parse_none() {
+        let result = parse_subs_value("none", SubstitutionSet::NORMAL);
+        assert_eq!(result, SubstitutionSet::NONE);
+    }
+
+    #[test]
+    fn test_subs_parse_verbatim() {
+        let result = parse_subs_value("verbatim", SubstitutionSet::NORMAL);
+        assert_eq!(result, SubstitutionSet::VERBATIM);
+    }
+
+    #[test]
+    fn test_subs_parse_explicit_list() {
+        let result = parse_subs_value("specialchars,attributes", SubstitutionSet::NORMAL);
+        assert!(result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::ATTRIBUTES));
+        assert!(!result.has(SubstitutionSet::QUOTES));
+        assert!(!result.has(SubstitutionSet::MACROS));
+    }
+
+    #[test]
+    fn test_subs_parse_incremental_add() {
+        let result = parse_subs_value("+macros", SubstitutionSet::VERBATIM);
+        assert!(result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::CALLOUTS));
+        assert!(result.has(SubstitutionSet::MACROS));
+    }
+
+    #[test]
+    fn test_subs_parse_incremental_remove() {
+        let result = parse_subs_value("-callouts", SubstitutionSet::VERBATIM);
+        assert!(result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(!result.has(SubstitutionSet::CALLOUTS));
+    }
+
+    #[test]
+    fn test_subs_parse_combined() {
+        let result = parse_subs_value("+macros,-callouts", SubstitutionSet::VERBATIM);
+        assert!(result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::MACROS));
+        assert!(!result.has(SubstitutionSet::CALLOUTS));
+    }
+
+    #[test]
+    fn test_subs_parse_mixed_explicit_incremental() {
+        // "macros,+attributes" — any token with +/- triggers incremental mode
+        let result = parse_subs_value("macros,+attributes", SubstitutionSet::VERBATIM);
+        // Starts from VERBATIM default, adds ATTRIBUTES; "macros" without prefix is ignored
+        assert!(result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::CALLOUTS));
+        assert!(result.has(SubstitutionSet::ATTRIBUTES));
+        assert!(!result.has(SubstitutionSet::MACROS)); // no + prefix, ignored
+    }
+
+    #[test]
+    fn test_subs_parse_mixed_remove_in_middle() {
+        // "quotes,-specialchars" — incremental because of -specialchars
+        let result = parse_subs_value("quotes,-specialchars", SubstitutionSet::NORMAL);
+        // Starts from NORMAL, removes SPECIALCHARS; "quotes" without prefix is ignored
+        assert!(!result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::QUOTES)); // still in NORMAL default
+        assert!(result.has(SubstitutionSet::MACROS));
+    }
+
+    #[test]
+    fn test_subs_block_attributes() {
+        let attrs = BlockAttributes::parse("subs=normal");
+        assert_eq!(attrs.substitution_set(SubstitutionSet::VERBATIM), Some(SubstitutionSet::NORMAL));
+
+        let attrs = BlockAttributes::parse("source,rust");
+        assert_eq!(attrs.substitution_set(SubstitutionSet::VERBATIM), None);
     }
 }
