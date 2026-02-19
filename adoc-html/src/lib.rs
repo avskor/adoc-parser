@@ -54,6 +54,8 @@ struct HtmlRenderer {
     preamble_start: Option<usize>,
     appendix_counter: u8,
     pending_section_caption: Option<String>,
+    sectnums: bool,
+    section_counters: [u32; 6],
 }
 
 impl HtmlRenderer {
@@ -85,6 +87,8 @@ impl HtmlRenderer {
             preamble_start: None,
             appendix_counter: 0,
             pending_section_caption: None,
+            sectnums: false,
+            section_counters: [0; 6],
         }
     }
 
@@ -162,6 +166,12 @@ impl HtmlRenderer {
                 if name == "toclevels"
                     && let Ok(n) = value.parse::<u8>() {
                         self.toc_levels = n;
+                }
+                if name == "sectnums" {
+                    self.sectnums = true;
+                }
+                if name == "!sectnums" || name == "sectnums!" {
+                    self.sectnums = false;
                 }
                 // Attributes are metadata, not rendered
             }
@@ -359,6 +369,25 @@ impl HtmlRenderer {
                 output.push_str(" id=\"");
                 html_escape(output, id);
                 output.push_str("\">");
+                if self.sectnums && *level >= 2 && *level <= 5 && self.pending_section_caption.is_none() {
+                    let lvl = *level as usize;
+                    self.section_counters[lvl] += 1;
+                    for l in (lvl + 1)..6 {
+                        self.section_counters[l] = 0;
+                    }
+                    let mut prefix = String::new();
+                    for l in 2..=lvl {
+                        if !prefix.is_empty() {
+                            prefix.push('.');
+                        }
+                        prefix.push_str(&self.section_counters[l].to_string());
+                    }
+                    prefix.push_str(". ");
+                    output.push_str(&prefix);
+                    if let Some(ref mut entry) = self.current_toc_entry {
+                        entry.title.push_str(&prefix);
+                    }
+                }
                 if let Some(caption) = self.pending_section_caption.take() {
                     output.push_str(&caption);
                     if let Some(ref mut entry) = self.current_toc_entry {
@@ -2195,5 +2224,46 @@ mod tests {
     fn test_appendix_no_caption_without_style_html() {
         let html = to_html("== Regular Section\n\nContent.");
         assert!(!html.contains("Appendix"));
+    }
+
+    // Section numbering tests
+
+    #[test]
+    fn test_sectnums_basic() {
+        let html = to_html("= Doc\n:sectnums:\n\n== First\n\n== Second");
+        assert!(html.contains("1. First</h2>"));
+        assert!(html.contains("2. Second</h2>"));
+    }
+
+    #[test]
+    fn test_sectnums_nested() {
+        let html = to_html("= Doc\n:sectnums:\n\n== Chapter\n\n=== Sub One\n\n=== Sub Two\n\n== Next");
+        assert!(html.contains("1. Chapter</h2>"));
+        assert!(html.contains("1.1. Sub One</h3>"));
+        assert!(html.contains("1.2. Sub Two</h3>"));
+        assert!(html.contains("2. Next</h2>"));
+    }
+
+    #[test]
+    fn test_sectnums_disabled() {
+        let html = to_html("= Doc\n\n== First\n\n== Second");
+        assert!(html.contains(">First</h2>"));
+        assert!(html.contains(">Second</h2>"));
+        assert!(!html.contains("1. "));
+    }
+
+    #[test]
+    fn test_sectnums_unset() {
+        let html = to_html("= Doc\n:sectnums:\n\n== Numbered\n\n:!sectnums:\n\n== Not Numbered");
+        assert!(html.contains("1. Numbered</h2>"));
+        assert!(html.contains(">Not Numbered</h2>"));
+    }
+
+    #[test]
+    fn test_sectnums_appendix_not_numbered() {
+        let html = to_html("= Doc\n:sectnums:\n\n== Regular\n\n[appendix]\n== My Appendix");
+        assert!(html.contains("1. Regular</h2>"));
+        assert!(html.contains("Appendix A: My Appendix</h2>"));
+        assert!(!html.contains("2. My Appendix"));
     }
 }
