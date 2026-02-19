@@ -37,7 +37,7 @@ struct BlockMeta {
 struct HtmlRenderer {
     tag_stack: Vec<TagEnd>,
     in_source_block: bool,
-    delimited_block_stack: Vec<DelimitedBlockKind>,
+    delimited_block_stack: Vec<(DelimitedBlockKind, bool)>,
     footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
     footnote_counter: usize,
     named_footnotes: HashMap<String, usize>, // id → number
@@ -57,6 +57,8 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
+    block_title_output_start: Option<usize>,
+    block_title_inner_html: Option<String>,
     dlist_stack: Vec<DlistStyle>,
     hdlist_in_term_group: bool,
     has_document_title: bool,
@@ -92,6 +94,8 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
+            block_title_output_start: None,
+            block_title_inner_html: None,
             dlist_stack: Vec::new(),
             hdlist_in_term_group: false,
             has_document_title: false,
@@ -436,45 +440,98 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::DelimitedBlock { kind } => {
-                self.delimited_block_stack.push(*kind);
                 match kind {
                     DelimitedBlockKind::Listing => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "listingblock");
                         output.push_str(">\n<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Literal => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "literalblock");
                         output.push_str(">\n<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Example => {
-                        output.push_str("<div");
-                        Self::write_meta_attrs(output, &meta, "exampleblock");
-                        output.push_str(">\n<div class=\"content\">\n");
+                        let is_collapsible = meta.as_ref()
+                            .is_some_and(|m| m.options.iter().any(|o| o == "collapsible"));
+
+                        if is_collapsible {
+                            let is_open = meta.as_ref()
+                                .is_some_and(|m| m.options.iter().any(|o| o == "open"));
+
+                            let summary = if let (Some(start), Some(inner)) =
+                                (self.block_title_output_start.take(), self.block_title_inner_html.take())
+                            {
+                                output.truncate(start);
+                                inner
+                            } else {
+                                "Details".to_string()
+                            };
+
+                            output.push_str("<details");
+                            Self::write_meta_attrs(output, &meta, "exampleblock");
+                            if is_open {
+                                output.push_str(" open");
+                            }
+                            output.push_str(">\n<summary class=\"title\">");
+                            output.push_str(&summary);
+                            output.push_str("</summary>\n<div class=\"content\">\n");
+                            self.delimited_block_stack.push((*kind, true));
+                        } else {
+                            self.delimited_block_stack.push((*kind, false));
+                            self.block_title_output_start = None;
+                            self.block_title_inner_html = None;
+                            output.push_str("<div");
+                            Self::write_meta_attrs(output, &meta, "exampleblock");
+                            output.push_str(">\n<div class=\"content\">\n");
+                        }
                     }
                     DelimitedBlockKind::Sidebar => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "sidebarblock");
                         output.push_str(">\n<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Quote => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "quoteblock");
                         output.push_str(">\n<blockquote>\n");
                     }
                     DelimitedBlockKind::Open => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "openblock");
                         output.push_str(">\n<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Comment => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         // Comment blocks are not rendered
                     }
                     DelimitedBlockKind::Passthrough => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         // Passthrough: content is rendered as-is
                     }
                     DelimitedBlockKind::Verse => {
+                        self.delimited_block_stack.push((*kind, false));
+                        self.block_title_output_start = None;
+                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "verseblock");
                         output.push_str(">\n<pre class=\"content\">");
@@ -494,6 +551,7 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::BlockTitle => {
+                self.block_title_output_start = Some(output.len());
                 output.push_str("<div class=\"title\">");
             }
             Tag::UnorderedList { has_checklist: true } => {
@@ -869,17 +927,20 @@ impl HtmlRenderer {
             }
             TagEnd::DelimitedBlock => {
                 match self.delimited_block_stack.pop() {
-                    Some(DelimitedBlockKind::Listing | DelimitedBlockKind::Literal) => {
+                    Some((DelimitedBlockKind::Listing | DelimitedBlockKind::Literal, _)) => {
                         output.push_str("</pre>\n</div>\n</div>\n");
                     }
-                    Some(DelimitedBlockKind::Quote) => {
+                    Some((DelimitedBlockKind::Quote, _)) => {
                         output.push_str("</blockquote>\n</div>\n");
                     }
-                    Some(DelimitedBlockKind::Verse) => {
+                    Some((DelimitedBlockKind::Verse, _)) => {
                         output.push_str("</pre>\n</div>\n");
                     }
-                    Some(DelimitedBlockKind::Example | DelimitedBlockKind::Sidebar
-                         | DelimitedBlockKind::Open) => {
+                    Some((DelimitedBlockKind::Example, true)) => {
+                        output.push_str("</div>\n</details>\n");
+                    }
+                    Some((DelimitedBlockKind::Example | DelimitedBlockKind::Sidebar
+                         | DelimitedBlockKind::Open, false)) => {
                         output.push_str("</div>\n</div>\n");
                     }
                     _ => {
@@ -892,6 +953,11 @@ impl HtmlRenderer {
                 output.push_str("</code></pre>\n</div>\n</div>\n");
             }
             TagEnd::BlockTitle => {
+                if let Some(start) = self.block_title_output_start {
+                    let title_tag = "<div class=\"title\">";
+                    let inner_start = start + title_tag.len();
+                    self.block_title_inner_html = Some(output[inner_start..].to_string());
+                }
                 output.push_str("</div>\n");
             }
             TagEnd::UnorderedList => {
@@ -2618,5 +2684,53 @@ mod tests {
         assert!(html.contains("alt=\"Icon\""));
         assert!(html.contains("width=\"32\""));
         assert!(html.contains("height=\"32\""));
+    }
+
+    #[test]
+    fn test_collapsible_block_html() {
+        let html = to_html("[%collapsible]\n====\nContent\n====");
+        assert!(html.contains("<details"));
+        assert!(html.contains("<summary class=\"title\">Details</summary>"));
+        assert!(html.contains("<div class=\"content\">"));
+        assert!(html.contains("<p>Content</p>"));
+        assert!(html.contains("</div>\n</details>"));
+        assert!(!html.contains("<div class=\"exampleblock\">"));
+    }
+
+    #[test]
+    fn test_collapsible_block_with_title_html() {
+        let html = to_html(".Click to expand\n[%collapsible]\n====\nContent\n====");
+        assert!(html.contains("<details"));
+        assert!(html.contains("<summary class=\"title\">Click to expand</summary>"));
+        assert!(!html.contains("<div class=\"title\">Click to expand</div>"));
+        assert!(html.contains("<p>Content</p>"));
+        assert!(html.contains("</div>\n</details>"));
+    }
+
+    #[test]
+    fn test_collapsible_block_open_html() {
+        let html = to_html("[%collapsible%open]\n====\nContent\n====");
+        assert!(html.contains("<details"));
+        assert!(html.contains(" open>"));
+        assert!(html.contains("<summary class=\"title\">Details</summary>"));
+        assert!(html.contains("<p>Content</p>"));
+    }
+
+    #[test]
+    fn test_collapsible_block_with_id_html() {
+        let html = to_html("[%collapsible#myid]\n====\nContent\n====");
+        assert!(html.contains("<details id=\"myid\""));
+        assert!(html.contains("<summary class=\"title\">Details</summary>"));
+    }
+
+    #[test]
+    fn test_example_block_unchanged_html() {
+        let html = to_html("====\nContent\n====");
+        assert!(html.contains("<div class=\"exampleblock\">"));
+        assert!(html.contains("<div class=\"content\">"));
+        assert!(html.contains("<p>Content</p>"));
+        assert!(html.contains("</div>\n</div>"));
+        assert!(!html.contains("<details"));
+        assert!(!html.contains("<summary"));
     }
 }
