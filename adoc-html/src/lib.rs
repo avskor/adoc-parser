@@ -50,6 +50,8 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
+    dlist_stack: Vec<bool>,
+    hdlist_in_term_group: bool,
     has_document_title: bool,
     preamble_start: Option<usize>,
     appendix_counter: u8,
@@ -83,6 +85,8 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
+            dlist_stack: Vec::new(),
+            hdlist_in_term_group: false,
             has_document_title: false,
             preamble_start: None,
             appendix_counter: 0,
@@ -533,15 +537,41 @@ impl HtmlRenderer {
                 output.push_str("<li>");
             }
             Tag::DescriptionList => {
-                output.push_str("<dl");
-                Self::write_meta_attrs(output, &meta, "");
-                output.push_str(">\n");
+                let is_horizontal = meta.as_ref().is_some_and(|m| m.style.as_deref() == Some("horizontal"));
+                self.dlist_stack.push(is_horizontal);
+                if is_horizontal {
+                    let mut adjusted_meta = meta;
+                    if let Some(ref mut m) = adjusted_meta {
+                        m.style = None;
+                    }
+                    output.push_str("<div");
+                    Self::write_meta_attrs(output, &adjusted_meta, "hdlist");
+                    output.push_str(">\n<table>\n");
+                } else {
+                    output.push_str("<dl");
+                    Self::write_meta_attrs(output, &meta, "");
+                    output.push_str(">\n");
+                }
             }
             Tag::DescriptionTerm => {
-                output.push_str("<dt>");
+                if self.is_horizontal_dlist() {
+                    if self.hdlist_in_term_group {
+                        output.push_str("<br>");
+                    } else {
+                        output.push_str("<tr>\n<td class=\"hdlist1\">");
+                        self.hdlist_in_term_group = true;
+                    }
+                } else {
+                    output.push_str("<dt>");
+                }
             }
             Tag::DescriptionDescription => {
-                output.push_str("<dd>");
+                if self.is_horizontal_dlist() {
+                    output.push_str("</td>\n<td class=\"hdlist2\">");
+                    self.hdlist_in_term_group = false;
+                } else {
+                    output.push_str("<dd>");
+                }
             }
             Tag::CalloutList => {
                 output.push_str("<div class=\"colist arabic\">\n<ol>\n");
@@ -802,13 +832,24 @@ impl HtmlRenderer {
                 output.push_str("</li>\n");
             }
             TagEnd::DescriptionList => {
-                output.push_str("</dl>\n");
+                let is_horizontal = self.dlist_stack.pop().unwrap_or(false);
+                if is_horizontal {
+                    output.push_str("</table>\n</div>\n");
+                } else {
+                    output.push_str("</dl>\n");
+                }
             }
             TagEnd::DescriptionTerm => {
-                output.push_str("</dt>\n");
+                if !self.is_horizontal_dlist() {
+                    output.push_str("</dt>\n");
+                }
             }
             TagEnd::DescriptionDescription => {
-                output.push_str("</dd>\n");
+                if self.is_horizontal_dlist() {
+                    output.push_str("</td>\n</tr>\n");
+                } else {
+                    output.push_str("</dd>\n");
+                }
             }
             TagEnd::CalloutList => {
                 output.push_str("</ol>\n</div>\n");
@@ -1149,6 +1190,10 @@ impl HtmlRenderer {
             output.push_str("\\$");
         }
         output.push_str("\n</div>\n</div>\n");
+    }
+
+    fn is_horizontal_dlist(&self) -> bool {
+        self.dlist_stack.last().copied().unwrap_or(false)
     }
 
     fn find_section_level(&self) -> u8 {
@@ -2265,5 +2310,56 @@ mod tests {
         assert!(html.contains("1. Regular</h2>"));
         assert!(html.contains("Appendix A: My Appendix</h2>"));
         assert!(!html.contains("2. My Appendix"));
+    }
+
+    // Horizontal description list tests
+
+    #[test]
+    fn test_horizontal_description_list_html() {
+        let html = to_html("[horizontal]\nCPU:: The brain\nRAM:: Memory");
+        assert_eq!(
+            html,
+            "<div class=\"hdlist\">\n<table>\n\
+             <tr>\n<td class=\"hdlist1\">CPU</td>\n<td class=\"hdlist2\">The brain</td>\n</tr>\n\
+             <tr>\n<td class=\"hdlist1\">RAM</td>\n<td class=\"hdlist2\">Memory</td>\n</tr>\n\
+             </table>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn test_horizontal_description_list_multiple_terms_html() {
+        // Parser treats each term:: line as separate entry
+        // This test verifies multiple entries render correctly
+        let html = to_html("[horizontal]\nTerm1:: Desc1\nTerm2:: Desc2");
+        assert!(html.contains("<td class=\"hdlist1\">Term1</td>"));
+        assert!(html.contains("<td class=\"hdlist2\">Desc1</td>"));
+        assert!(html.contains("<td class=\"hdlist1\">Term2</td>"));
+        assert!(html.contains("<td class=\"hdlist2\">Desc2</td>"));
+        assert_eq!(html.matches("<tr>").count(), 2);
+    }
+
+    #[test]
+    fn test_horizontal_description_list_empty_desc_html() {
+        let html = to_html("[horizontal]\nTerm:: ");
+        assert!(html.contains("<div class=\"hdlist\">"));
+        assert!(html.contains("<td class=\"hdlist1\">Term</td>"));
+        assert!(html.contains("<td class=\"hdlist2\">"));
+    }
+
+    #[test]
+    fn test_horizontal_description_list_with_id_html() {
+        let html = to_html("[horizontal#mylist]\nA:: B");
+        assert!(html.contains("id=\"mylist\""));
+        assert!(html.contains("class=\"hdlist\""));
+        assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn test_normal_description_list_unchanged_html() {
+        let html = to_html("CPU:: The brain\nRAM:: Memory");
+        assert_eq!(
+            html,
+            "<dl>\n<dt>CPU</dt>\n<dd>The brain</dd>\n<dt>RAM</dt>\n<dd>Memory</dd>\n</dl>\n"
+        );
     }
 }
