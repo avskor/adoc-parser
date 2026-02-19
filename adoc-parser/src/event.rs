@@ -55,6 +55,11 @@ pub enum Event<'a> {
         initials: CowStr<'a>,
         address: CowStr<'a>,
     },
+    Revision {
+        version: CowStr<'a>,
+        date: CowStr<'a>,
+        remark: CowStr<'a>,
+    },
     BlockMetadata {
         style: Option<CowStr<'a>>,
         id: Option<CowStr<'a>>,
@@ -123,6 +128,15 @@ impl<'a> Event<'a> {
                 lastname: cow_owned(lastname),
                 initials: cow_owned(initials),
                 address: cow_owned(address),
+            },
+            Event::Revision {
+                version,
+                date,
+                remark,
+            } => Event::Revision {
+                version: cow_owned(version),
+                date: cow_owned(date),
+                remark: cow_owned(remark),
             },
             Event::BlockMetadata { style, id, roles, options } => Event::BlockMetadata {
                 style: style.map(cow_owned),

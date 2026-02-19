@@ -330,6 +330,10 @@ pub fn build_asg<'a>(
                 }
             }
 
+            Event::Revision { .. } => {
+                // Revision metadata — handled separately, skip for now
+            }
+
             Event::Attribute { name, value } => {
                 let name_str = name.to_string();
                 let value_str = value.to_string();

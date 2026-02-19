@@ -694,6 +694,39 @@ impl<'a> BlockScanner<'a> {
                 });
             }
             self.advance();
+
+            // Check for revision line after author line
+            if let Some(rev_line) = self.current_line()
+                && !scanner::is_blank(rev_line)
+                && scanner::is_attribute_entry(rev_line).is_none()
+                && scanner::strip_section_marker(rev_line).is_none()
+                && let Some(rev_info) = scanner::parse_revision_line(rev_line)
+            {
+                header_events.push(Event::Revision {
+                    version: Cow::Borrowed(rev_info.version),
+                    date: Cow::Borrowed(rev_info.date),
+                    remark: Cow::Borrowed(rev_info.remark),
+                });
+                if !rev_info.version.is_empty() {
+                    header_events.push(Event::Attribute {
+                        name: Cow::Borrowed("revnumber"),
+                        value: Cow::Borrowed(rev_info.version),
+                    });
+                }
+                if !rev_info.date.is_empty() {
+                    header_events.push(Event::Attribute {
+                        name: Cow::Borrowed("revdate"),
+                        value: Cow::Borrowed(rev_info.date),
+                    });
+                }
+                if !rev_info.remark.is_empty() {
+                    header_events.push(Event::Attribute {
+                        name: Cow::Borrowed("revremark"),
+                        value: Cow::Borrowed(rev_info.remark),
+                    });
+                }
+                self.advance();
+            }
         }
 
         while let Some(line) = self.current_line() {
@@ -3093,5 +3126,84 @@ mod tests {
             },
             Event::End(TagEnd::Header),
         ]);
+    }
+
+    #[test]
+    fn test_document_header_with_full_revision() {
+        let input = "= Title\nAuthor Name\nv1.0, 2024-01-01: Initial release\n\nContent";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Author {
+            fullname: Cow::Borrowed("Author Name"),
+            firstname: Cow::Borrowed("Author"),
+            middlename: Cow::Borrowed(""),
+            lastname: Cow::Borrowed("Name"),
+            initials: Cow::Owned("AN".into()),
+            address: Cow::Borrowed(""),
+        }));
+        assert!(events.contains(&Event::Revision {
+            version: Cow::Borrowed("v1.0"),
+            date: Cow::Borrowed("2024-01-01"),
+            remark: Cow::Borrowed("Initial release"),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revnumber"),
+            value: Cow::Borrowed("v1.0"),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revdate"),
+            value: Cow::Borrowed("2024-01-01"),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revremark"),
+            value: Cow::Borrowed("Initial release"),
+        }));
+    }
+
+    #[test]
+    fn test_document_header_with_version_only() {
+        let input = "= Title\nAuthor Name\nv2.0\n\nContent";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Revision {
+            version: Cow::Borrowed("v2.0"),
+            date: Cow::Borrowed(""),
+            remark: Cow::Borrowed(""),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revnumber"),
+            value: Cow::Borrowed("v2.0"),
+        }));
+        // No revdate or revremark attributes
+        assert!(!events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revdate"),
+            value: Cow::Borrowed(""),
+        }));
+    }
+
+    #[test]
+    fn test_document_header_no_author_no_revision() {
+        let input = "= Title\nv1.0, 2024-01-01: Initial release\n\nContent";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        // Without author line, the "v1.0..." line should NOT be parsed as revision
+        assert!(!events.iter().any(|e| matches!(e, Event::Revision { .. })));
+    }
+
+    #[test]
+    fn test_document_header_with_date_only() {
+        let input = "= Title\nAuthor Name\n2024-01-01\n\nContent";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Revision {
+            version: Cow::Borrowed(""),
+            date: Cow::Borrowed("2024-01-01"),
+            remark: Cow::Borrowed(""),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revdate"),
+            value: Cow::Borrowed("2024-01-01"),
+        }));
+        // No revnumber attribute
+        assert!(!events.contains(&Event::Attribute {
+            name: Cow::Borrowed("revnumber"),
+            value: Cow::Borrowed(""),
+        }));
     }
 }

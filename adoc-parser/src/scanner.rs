@@ -688,6 +688,50 @@ pub fn generate_id(title: &str) -> String {
     id
 }
 
+pub struct RevisionInfo<'a> {
+    pub version: &'a str,
+    pub date: &'a str,
+    pub remark: &'a str,
+}
+
+pub fn parse_revision_line(line: &str) -> Option<RevisionInfo<'_>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut version = "";
+    let mut date = "";
+    let mut remark = "";
+    let mut rest = trimmed;
+
+    // Check if starts with version (v or V prefix)
+    if rest.starts_with('v') || rest.starts_with('V') {
+        // Extract version: up to `, ` or `: ` or end
+        if let Some(comma_pos) = rest.find(", ") {
+            version = &rest[..comma_pos];
+            rest = &rest[comma_pos + 2..];
+        } else if let Some(colon_pos) = rest.find(": ") {
+            version = &rest[..colon_pos];
+            remark = &rest[colon_pos + 2..];
+            return Some(RevisionInfo { version, date, remark });
+        } else {
+            version = rest;
+            return Some(RevisionInfo { version, date, remark });
+        }
+    }
+
+    // Parse date and optional remark from rest
+    if let Some(colon_pos) = rest.find(": ") {
+        date = &rest[..colon_pos];
+        remark = &rest[colon_pos + 2..];
+    } else {
+        date = rest;
+    }
+
+    Some(RevisionInfo { version, date, remark })
+}
+
 pub struct AuthorInfo<'a> {
     pub fullname: &'a str,
     pub firstname: &'a str,
@@ -1299,5 +1343,67 @@ mod tests {
         assert_eq!(authors[1].lastname, "Smith");
         assert_eq!(authors[1].initials, "JS");
         assert_eq!(authors[1].address, "jane@example.com");
+    }
+
+    #[test]
+    fn test_parse_revision_line_all_fields() {
+        let rev = parse_revision_line("v1.0, 2024-01-01: Initial release").unwrap();
+        assert_eq!(rev.version, "v1.0");
+        assert_eq!(rev.date, "2024-01-01");
+        assert_eq!(rev.remark, "Initial release");
+    }
+
+    #[test]
+    fn test_parse_revision_line_version_and_date() {
+        let rev = parse_revision_line("v1.0, 2024-01-01").unwrap();
+        assert_eq!(rev.version, "v1.0");
+        assert_eq!(rev.date, "2024-01-01");
+        assert_eq!(rev.remark, "");
+    }
+
+    #[test]
+    fn test_parse_revision_line_version_only() {
+        let rev = parse_revision_line("v1.0").unwrap();
+        assert_eq!(rev.version, "v1.0");
+        assert_eq!(rev.date, "");
+        assert_eq!(rev.remark, "");
+    }
+
+    #[test]
+    fn test_parse_revision_line_date_and_remark() {
+        let rev = parse_revision_line("2024-01-01: Initial release").unwrap();
+        assert_eq!(rev.version, "");
+        assert_eq!(rev.date, "2024-01-01");
+        assert_eq!(rev.remark, "Initial release");
+    }
+
+    #[test]
+    fn test_parse_revision_line_date_only() {
+        let rev = parse_revision_line("2024-01-01").unwrap();
+        assert_eq!(rev.version, "");
+        assert_eq!(rev.date, "2024-01-01");
+        assert_eq!(rev.remark, "");
+    }
+
+    #[test]
+    fn test_parse_revision_line_version_and_remark() {
+        let rev = parse_revision_line("v1.0: Some remark").unwrap();
+        assert_eq!(rev.version, "v1.0");
+        assert_eq!(rev.date, "");
+        assert_eq!(rev.remark, "Some remark");
+    }
+
+    #[test]
+    fn test_parse_revision_line_uppercase_v() {
+        let rev = parse_revision_line("V2.5, 2024-06-15: Release notes").unwrap();
+        assert_eq!(rev.version, "V2.5");
+        assert_eq!(rev.date, "2024-06-15");
+        assert_eq!(rev.remark, "Release notes");
+    }
+
+    #[test]
+    fn test_parse_revision_line_empty() {
+        assert!(parse_revision_line("").is_none());
+        assert!(parse_revision_line("   ").is_none());
     }
 }

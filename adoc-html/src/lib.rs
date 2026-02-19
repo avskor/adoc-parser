@@ -221,6 +221,9 @@ impl HtmlRenderer {
             Event::Author { .. } => {
                 // Author metadata — not rendered to HTML body
             }
+            Event::Revision { .. } => {
+                // Revision metadata — not rendered to HTML body
+            }
             Event::BlockMetadata { style, id, roles, options } => {
                 self.pending_block_meta = Some(BlockMeta {
                     style: style.map(|s| s.into_owned()),
