@@ -3037,4 +3037,30 @@ mod tests {
             Event::End(TagEnd::BlockAudio),
         ]);
     }
+
+    #[test]
+    fn test_block_admonition() {
+        let input = "[NOTE]\n====\nContent\n====";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Note }),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::Admonition),
+        ]);
+    }
+
+    #[test]
+    fn test_block_admonition_warning() {
+        let input = "[WARNING]\n====\nDanger ahead!\n====";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Warning }),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Danger ahead!")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::Admonition),
+        ]);
+    }
 }

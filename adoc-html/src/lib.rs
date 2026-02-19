@@ -50,6 +50,8 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
+    has_document_title: bool,
+    preamble_start: Option<usize>,
 }
 
 impl HtmlRenderer {
@@ -77,80 +79,110 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
+            has_document_title: false,
+            preamble_start: None,
         }
     }
 
     fn run<'a>(&mut self, output: &mut String, iter: impl Iterator<Item = Event<'a>>) {
         for event in iter {
-            match event {
-                Event::Start(tag) => self.start_tag(output, &tag),
-                Event::End(tag_end) => self.end_tag(output, &tag_end),
-                Event::Text(text) => {
-                    if self.in_section_title
-                        && let Some(ref mut entry) = self.current_toc_entry {
-                            entry.title.push_str(&text);
-                    }
-                    if self.kbd_mode {
-                        self.render_kbd_keys(output, &text);
-                    } else if self.menu_target.is_some() {
-                        self.menu_items = Some(text.to_string());
-                    } else if self.icon_name.is_some() {
-                        self.icon_attrs = Some(text.to_string());
-                    } else if self.stem_variant.is_some() {
-                        self.stem_content = Some(text.to_string());
-                    } else if self.stem_block_variant.is_some() {
-                        self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
-                    } else {
-                        html_escape(output, &text);
-                    }
+            self.push_event(output, event);
+        }
+        self.finish(output);
+    }
+
+    fn push_event<'a>(&mut self, output: &mut String, event: Event<'a>) {
+        // Wrap preamble content when a section starts
+        if matches!(event, Event::Start(Tag::Section { .. }))
+            && let Some(start) = self.preamble_start.take()
+        {
+            let preamble_content = output.split_off(start);
+            if !preamble_content.is_empty() {
+                output.push_str("<div id=\"preamble\">\n<div class=\"sectionbody\">\n");
+                output.push_str(&preamble_content);
+                output.push_str("</div>\n</div>\n");
+            }
+        }
+
+        match event {
+            Event::Start(tag) => self.start_tag(output, &tag),
+            Event::End(tag_end) => self.end_tag(output, &tag_end),
+            Event::Text(text) => {
+                if self.in_section_title
+                    && let Some(ref mut entry) = self.current_toc_entry {
+                        entry.title.push_str(&text);
                 }
-                Event::InlinePassthrough(text) => {
-                    output.push_str(&text);
+                if self.kbd_mode {
+                    self.render_kbd_keys(output, &text);
+                } else if self.menu_target.is_some() {
+                    self.menu_items = Some(text.to_string());
+                } else if self.icon_name.is_some() {
+                    self.icon_attrs = Some(text.to_string());
+                } else if self.stem_variant.is_some() {
+                    self.stem_content = Some(text.to_string());
+                } else if self.stem_block_variant.is_some() {
+                    self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
+                } else {
+                    html_escape(output, &text);
                 }
-                Event::Code(code) => {
-                    if self.in_section_title
-                        && let Some(ref mut entry) = self.current_toc_entry {
-                            entry.title.push_str(&code);
-                    }
-                    output.push_str("<code>");
-                    html_escape(output, &code);
-                    output.push_str("</code>");
+            }
+            Event::InlinePassthrough(text) => {
+                output.push_str(&text);
+            }
+            Event::Code(code) => {
+                if self.in_section_title
+                    && let Some(ref mut entry) = self.current_toc_entry {
+                        entry.title.push_str(&code);
                 }
-                Event::SoftBreak => {
-                    if self.stem_block_variant.is_some() {
-                        self.stem_block_content.get_or_insert_with(String::new).push('\n');
-                    } else {
-                        output.push('\n');
-                    }
+                output.push_str("<code>");
+                html_escape(output, &code);
+                output.push_str("</code>");
+            }
+            Event::SoftBreak => {
+                if self.stem_block_variant.is_some() {
+                    self.stem_block_content.get_or_insert_with(String::new).push('\n');
+                } else {
+                    output.push('\n');
                 }
-                Event::HardBreak => {
-                    output.push_str("<br>\n");
+            }
+            Event::HardBreak => {
+                output.push_str("<br>\n");
+            }
+            Event::ThematicBreak => {
+                output.push_str("<hr>\n");
+            }
+            Event::PageBreak => {
+                output.push_str("<div style=\"page-break-after: always;\"></div>\n");
+            }
+            Event::Attribute { ref name, ref value, .. } => {
+                if name == "toclevels"
+                    && let Ok(n) = value.parse::<u8>() {
+                        self.toc_levels = n;
                 }
-                Event::ThematicBreak => {
-                    output.push_str("<hr>\n");
+                // Attributes are metadata, not rendered
+            }
+            Event::AttributeReference(name) => {
+                output.push('{');
+                output.push_str(&name);
+                output.push('}');
+            }
+            Event::Footnote { id, text } => {
+                self.footnote_counter += 1;
+                let num = self.footnote_counter;
+                if let Some(ref id) = id {
+                    self.named_footnotes.insert(id.to_string(), num);
                 }
-                Event::PageBreak => {
-                    output.push_str("<div style=\"page-break-after: always;\"></div>\n");
-                }
-                Event::Attribute { ref name, ref value, .. } => {
-                    if name == "toclevels"
-                        && let Ok(n) = value.parse::<u8>() {
-                            self.toc_levels = n;
-                    }
-                    // Attributes are metadata, not rendered
-                }
-                Event::AttributeReference(name) => {
-                    output.push('{');
-                    output.push_str(&name);
-                    output.push('}');
-                }
-                Event::Footnote { id, text } => {
-                    self.footnote_counter += 1;
-                    let num = self.footnote_counter;
-                    if let Some(ref id) = id {
-                        self.named_footnotes.insert(id.to_string(), num);
-                    }
-                    self.footnotes.push((num, id.as_ref().map(|s| s.to_string()), text.to_string()));
+                self.footnotes.push((num, id.as_ref().map(|s| s.to_string()), text.to_string()));
+                output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
+                output.push_str(&num.to_string());
+                output.push_str("\" href=\"#_footnotedef_");
+                output.push_str(&num.to_string());
+                output.push_str("\">");
+                output.push_str(&num.to_string());
+                output.push_str("</a>]</sup>");
+            }
+            Event::FootnoteRef { id } => {
+                if let Some(&num) = self.named_footnotes.get(id.as_ref()) {
                     output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
                     output.push_str(&num.to_string());
                     output.push_str("\" href=\"#_footnotedef_");
@@ -159,56 +191,50 @@ impl HtmlRenderer {
                     output.push_str(&num.to_string());
                     output.push_str("</a>]</sup>");
                 }
-                Event::FootnoteRef { id } => {
-                    if let Some(&num) = self.named_footnotes.get(id.as_ref()) {
-                        output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
-                        output.push_str(&num.to_string());
-                        output.push_str("\" href=\"#_footnotedef_");
-                        output.push_str(&num.to_string());
-                        output.push_str("\">");
-                        output.push_str(&num.to_string());
-                        output.push_str("</a>]</sup>");
-                    }
-                }
-                Event::IndexTerm { text } => {
-                    html_escape(output, &text);
-                }
-                Event::ConcealedIndexTerm { .. } => {
-                    // Concealed index terms produce no visible output
-                }
-                Event::BibliographyAnchor { id, label } => {
-                    output.push_str("<a id=\"");
-                    html_escape(output, &id);
-                    output.push_str("\"></a>[");
-                    html_escape(output, label.as_ref().unwrap_or(&id));
-                    output.push(']');
-                }
-                Event::CalloutRef(num) => {
-                    output.push_str("<b class=\"conum\">(");
-                    output.push_str(&num.to_string());
-                    output.push_str(")</b>");
-                }
-                Event::Toc => {
-                    self.toc_insert_position = Some(output.len());
-                }
-                Event::Include { path, .. } => {
-                    output.push_str("<!-- include::");
-                    html_escape(output, &path);
-                    output.push_str("[] -->\n");
-                }
-                Event::Author { .. } => {
-                    // Author metadata — not rendered to HTML body
-                }
-                Event::BlockMetadata { style, id, roles, options } => {
-                    self.pending_block_meta = Some(BlockMeta {
-                        style: style.map(|s| s.into_owned()),
-                        id: id.map(|s| s.into_owned()),
-                        roles: roles.into_iter().map(|s| s.into_owned()).collect(),
-                        options: options.into_iter().map(|s| s.into_owned()).collect(),
-                    });
-                }
+            }
+            Event::IndexTerm { text } => {
+                html_escape(output, &text);
+            }
+            Event::ConcealedIndexTerm { .. } => {
+                // Concealed index terms produce no visible output
+            }
+            Event::BibliographyAnchor { id, label } => {
+                output.push_str("<a id=\"");
+                html_escape(output, &id);
+                output.push_str("\"></a>[");
+                html_escape(output, label.as_ref().unwrap_or(&id));
+                output.push(']');
+            }
+            Event::CalloutRef(num) => {
+                output.push_str("<b class=\"conum\">(");
+                output.push_str(&num.to_string());
+                output.push_str(")</b>");
+            }
+            Event::Toc => {
+                self.toc_insert_position = Some(output.len());
+            }
+            Event::Include { path, .. } => {
+                output.push_str("<!-- include::");
+                html_escape(output, &path);
+                output.push_str("[] -->\n");
+            }
+            Event::Author { .. } => {
+                // Author metadata — not rendered to HTML body
+            }
+            Event::BlockMetadata { style, id, roles, options } => {
+                self.pending_block_meta = Some(BlockMeta {
+                    style: style.map(|s| s.into_owned()),
+                    id: id.map(|s| s.into_owned()),
+                    roles: roles.into_iter().map(|s| s.into_owned()).collect(),
+                    options: options.into_iter().map(|s| s.into_owned()).collect(),
+                });
             }
         }
+    }
+
+    fn finish(&mut self, output: &mut String) {
+        // If preamble_start is still set, no section followed — leave content as-is
+        self.preamble_start = None;
 
         if let Some(pos) = self.toc_insert_position {
             let toc_html = self.generate_toc();
@@ -308,6 +334,7 @@ impl HtmlRenderer {
                 output.push_str("<div class=\"header\">\n");
             }
             Tag::DocumentTitle => {
+                self.has_document_title = true;
                 output.push_str("<h1>");
             }
             Tag::SectionTitle { level, id } => {
@@ -654,6 +681,9 @@ impl HtmlRenderer {
         match tag_end {
             TagEnd::Header => {
                 output.push_str("</div>\n");
+                if self.has_document_title {
+                    self.preamble_start = Some(output.len());
+                }
             }
             TagEnd::DocumentTitle => {
                 output.push_str("</h1>\n");
@@ -2073,5 +2103,55 @@ mod tests {
     fn test_bare_highlight_no_regression_html() {
         let html = to_html("#highlight#");
         assert_eq!(html, "<p><mark>highlight</mark></p>\n");
+    }
+
+    #[test]
+    fn test_block_admonition_html() {
+        let html = to_html("[NOTE]\n====\nThis is a note.\n====");
+        assert!(html.contains("<div class=\"admonitionblock note\">"));
+        assert!(html.contains("<div class=\"title\">Note</div>"));
+        assert!(html.contains("<td class=\"content\">"));
+        assert!(html.contains("<p>This is a note.</p>"));
+        assert!(html.contains("</td>\n</tr>\n</table>\n</div>"));
+    }
+
+    #[test]
+    fn test_block_admonition_multi_para_html() {
+        let html = to_html("[NOTE]\n====\nFirst paragraph.\n\nSecond paragraph.\n====");
+        assert!(html.contains("<div class=\"admonitionblock note\">"));
+        assert!(html.contains("<p>First paragraph.</p>"));
+        assert!(html.contains("<p>Second paragraph.</p>"));
+    }
+
+    // Preamble tests
+
+    #[test]
+    fn test_preamble_html() {
+        let html = to_html("= Title\n\nPreamble text.\n\n== Section");
+        assert!(html.contains("<div id=\"preamble\">"));
+        assert!(html.contains("<div class=\"sectionbody\">"));
+        assert!(html.contains("<p>Preamble text.</p>"));
+        assert!(html.contains("</div>\n</div>\n<div class=\"sect"));
+    }
+
+    #[test]
+    fn test_preamble_multiple_blocks_html() {
+        let html = to_html("= Title\n\nFirst para.\n\nSecond para.\n\n== Section");
+        assert!(html.contains("<div id=\"preamble\">"));
+        assert!(html.contains("<p>First para.</p>"));
+        assert!(html.contains("<p>Second para.</p>"));
+    }
+
+    #[test]
+    fn test_no_preamble_without_title_html() {
+        let html = to_html("Content.\n\n== Section");
+        assert!(!html.contains("preamble"));
+    }
+
+    #[test]
+    fn test_no_preamble_without_section_html() {
+        let html = to_html("= Title\n\nContent only.");
+        assert!(!html.contains("preamble"));
+        assert!(html.contains("<p>Content only.</p>"));
     }
 }
