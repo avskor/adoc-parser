@@ -1283,13 +1283,16 @@ impl<'a> InlineState<'a> {
         }
 
         let target = &rest[..bracket_start];
-        let alt = &rest[bracket_start + 1..bracket_end];
+        let bracket_content = &rest[bracket_start + 1..bracket_end];
+        let img_attrs = crate::attributes::parse_image_attrs(bracket_content);
 
         self.flush_text(*text_start, start_pos, events);
 
         events.push(Event::Start(Tag::InlineImage {
             target: Cow::Borrowed(target),
-            alt: Cow::Borrowed(alt),
+            alt: Cow::Borrowed(img_attrs.alt),
+            width: img_attrs.width.map(Cow::Borrowed),
+            height: img_attrs.height.map(Cow::Borrowed),
         }));
         events.push(Event::End(TagEnd::InlineImage));
 
@@ -1921,6 +1924,8 @@ mod tests {
             Event::Start(Tag::InlineImage {
                 target: Cow::Borrowed("icon.png"),
                 alt: Cow::Borrowed("icon"),
+                width: None,
+                height: None,
             }),
             Event::End(TagEnd::InlineImage),
         ]);

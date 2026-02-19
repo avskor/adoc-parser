@@ -677,14 +677,25 @@ impl HtmlRenderer {
                     _ => {}
                 }
             }
-            Tag::BlockImage { target, alt } => {
+            Tag::BlockImage { target, alt, width, height } => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "imageblock");
                 output.push_str(">\n<div class=\"content\">\n<img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
-                output.push_str("\">\n</div>\n");
+                output.push('"');
+                if let Some(w) = width {
+                    output.push_str(" width=\"");
+                    html_escape(output, w);
+                    output.push('"');
+                }
+                if let Some(h) = height {
+                    output.push_str(" height=\"");
+                    html_escape(output, h);
+                    output.push('"');
+                }
+                output.push_str(">\n</div>\n");
             }
             Tag::BlockVideo { target, attrs } => {
                 output.push_str("<div");
@@ -698,12 +709,23 @@ impl HtmlRenderer {
                 output.push_str(">\n<div class=\"content\">\n");
                 render_audio_tag(output, target, attrs);
             }
-            Tag::InlineImage { target, alt } => {
+            Tag::InlineImage { target, alt, width, height } => {
                 output.push_str("<span class=\"image\"><img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
-                output.push_str("\"></span>");
+                output.push('"');
+                if let Some(w) = width {
+                    output.push_str(" width=\"");
+                    html_escape(output, w);
+                    output.push('"');
+                }
+                if let Some(h) = height {
+                    output.push_str(" height=\"");
+                    html_escape(output, h);
+                    output.push('"');
+                }
+                output.push_str("></span>");
             }
             Tag::Strong => {
                 output.push_str("<strong>");
@@ -2505,5 +2527,50 @@ mod tests {
         assert!(html.contains("id=\"faq\""));
         assert!(html.contains("class=\"qlist qanda\""));
         assert!(html.contains("<ol>"));
+    }
+
+    #[test]
+    fn test_block_image_dimensions_html() {
+        let html = to_html("image::sunset.jpg[A beautiful sunset,600,400]");
+        assert!(html.contains("src=\"sunset.jpg\""));
+        assert!(html.contains("alt=\"A beautiful sunset\""));
+        assert!(html.contains("width=\"600\""));
+        assert!(html.contains("height=\"400\""));
+    }
+
+    #[test]
+    fn test_block_image_named_dimensions_html() {
+        let html = to_html("image::photo.jpg[alt=Photo,width=800,height=600]");
+        assert!(html.contains("src=\"photo.jpg\""));
+        assert!(html.contains("alt=\"Photo\""));
+        assert!(html.contains("width=\"800\""));
+        assert!(html.contains("height=\"600\""));
+    }
+
+    #[test]
+    fn test_block_image_width_only_html() {
+        let html = to_html("image::photo.jpg[Photo,300]");
+        assert!(html.contains("src=\"photo.jpg\""));
+        assert!(html.contains("alt=\"Photo\""));
+        assert!(html.contains("width=\"300\""));
+        assert!(!html.contains("height="));
+    }
+
+    #[test]
+    fn test_block_image_no_dimensions_html() {
+        let html = to_html("image::sunset.jpg[A beautiful sunset]");
+        assert!(html.contains("src=\"sunset.jpg\""));
+        assert!(html.contains("alt=\"A beautiful sunset\""));
+        assert!(!html.contains("width="));
+        assert!(!html.contains("height="));
+    }
+
+    #[test]
+    fn test_inline_image_dimensions_html() {
+        let html = to_html("see image:icon.png[Icon,32,32]");
+        assert!(html.contains("src=\"icon.png\""));
+        assert!(html.contains("alt=\"Icon\""));
+        assert!(html.contains("width=\"32\""));
+        assert!(html.contains("height=\"32\""));
     }
 }

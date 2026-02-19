@@ -322,6 +322,70 @@ impl BlockAttributes {
     }
 }
 
+pub struct ImageAttrs<'a> {
+    pub alt: &'a str,
+    pub width: Option<&'a str>,
+    pub height: Option<&'a str>,
+}
+
+pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
+    if bracket_content.is_empty() {
+        return ImageAttrs {
+            alt: "",
+            width: None,
+            height: None,
+        };
+    }
+
+    let mut alt: Option<&str> = None;
+    let mut width: Option<&str> = None;
+    let mut height: Option<&str> = None;
+    let mut positional = Vec::new();
+
+    for part in split_respecting_quotes(bracket_content) {
+        let part = part.trim();
+        if part.is_empty() {
+            positional.push(part);
+            continue;
+        }
+        if let Some((key, value)) = part.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            match key {
+                "alt" => alt = Some(value),
+                "width" => width = Some(value),
+                "height" => height = Some(value),
+                _ => {}
+            }
+        } else {
+            positional.push(part);
+        }
+    }
+
+    // alt: named "alt" or positional[0] or entire bracket_content
+    let alt = alt.unwrap_or_else(|| positional.first().copied().unwrap_or(bracket_content));
+    // width: named "width" or positional[1]
+    if width.is_none()
+        && let Some(&w) = positional.get(1)
+        && !w.is_empty()
+    {
+        width = Some(w);
+    }
+    // height: named "height" or positional[2]
+    if height.is_none()
+        && let Some(&h) = positional.get(2)
+        && !h.is_empty()
+    {
+        height = Some(h);
+    }
+
+    ImageAttrs { alt, width, height }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,5 +676,53 @@ mod tests {
         assert_eq!(specs[1].width, 2);
         assert_eq!(specs[2].style, CellStyle::Default);
         assert_eq!(specs[2].width, 3);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_all() {
+        let attrs = parse_image_attrs("Alt text,600,400");
+        assert_eq!(attrs.alt, "Alt text");
+        assert_eq!(attrs.width, Some("600"));
+        assert_eq!(attrs.height, Some("400"));
+    }
+
+    #[test]
+    fn test_parse_image_attrs_alt_only() {
+        let attrs = parse_image_attrs("A beautiful sunset");
+        assert_eq!(attrs.alt, "A beautiful sunset");
+        assert_eq!(attrs.width, None);
+        assert_eq!(attrs.height, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_named() {
+        let attrs = parse_image_attrs("alt=Photo,width=800");
+        assert_eq!(attrs.alt, "Photo");
+        assert_eq!(attrs.width, Some("800"));
+        assert_eq!(attrs.height, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_named_all() {
+        let attrs = parse_image_attrs("alt=Photo,width=800,height=600");
+        assert_eq!(attrs.alt, "Photo");
+        assert_eq!(attrs.width, Some("800"));
+        assert_eq!(attrs.height, Some("600"));
+    }
+
+    #[test]
+    fn test_parse_image_attrs_empty() {
+        let attrs = parse_image_attrs("");
+        assert_eq!(attrs.alt, "");
+        assert_eq!(attrs.width, None);
+        assert_eq!(attrs.height, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_width_only() {
+        let attrs = parse_image_attrs("Alt,300");
+        assert_eq!(attrs.alt, "Alt");
+        assert_eq!(attrs.width, Some("300"));
+        assert_eq!(attrs.height, None);
     }
 }

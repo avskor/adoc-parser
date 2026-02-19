@@ -239,10 +239,10 @@ pub enum Tag<'a> {
     TableHeaderCell { colspan: u8, rowspan: u8, style: CellStyle, halign: HAlign, valign: VAlign },
 
     // Media
-    BlockImage { target: CowStr<'a>, alt: CowStr<'a> },
+    BlockImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>> },
     BlockVideo { target: CowStr<'a>, attrs: CowStr<'a> },
     BlockAudio { target: CowStr<'a>, attrs: CowStr<'a> },
-    InlineImage { target: CowStr<'a>, alt: CowStr<'a> },
+    InlineImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>> },
 
     // Inline formatting
     Strong,
@@ -366,9 +366,11 @@ impl<'a> Tag<'a> {
             Tag::TableRow => Tag::TableRow,
             Tag::TableCell { colspan, rowspan, style, halign, valign } => Tag::TableCell { colspan, rowspan, style, halign, valign },
             Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } => Tag::TableHeaderCell { colspan, rowspan, style, halign, valign },
-            Tag::BlockImage { target, alt } => Tag::BlockImage {
+            Tag::BlockImage { target, alt, width, height } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
+                width: width.map(|w| Cow::Owned(w.into_owned())),
+                height: height.map(|h| Cow::Owned(h.into_owned())),
             },
             Tag::BlockVideo { target, attrs } => Tag::BlockVideo {
                 target: Cow::Owned(target.into_owned()),
@@ -378,9 +380,11 @@ impl<'a> Tag<'a> {
                 target: Cow::Owned(target.into_owned()),
                 attrs: Cow::Owned(attrs.into_owned()),
             },
-            Tag::InlineImage { target, alt } => Tag::InlineImage {
+            Tag::InlineImage { target, alt, width, height } => Tag::InlineImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
+                width: width.map(|w| Cow::Owned(w.into_owned())),
+                height: height.map(|h| Cow::Owned(h.into_owned())),
             },
             Tag::Strong => Tag::Strong,
             Tag::Emphasis => Tag::Emphasis,

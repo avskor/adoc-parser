@@ -473,10 +473,13 @@ impl<'a> BlockScanner<'a> {
             self.advance();
             let title_events = self.take_pending_block_title();
             let block_attrs = self.pending_block_attrs.take();
+            let img_attrs = crate::attributes::parse_image_attrs(alt);
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),
-                alt: Cow::Borrowed(alt),
+                alt: Cow::Borrowed(img_attrs.alt),
+                width: img_attrs.width.map(Cow::Borrowed),
+                height: img_attrs.height.map(Cow::Borrowed),
             }));
             if let Some(ref attrs) = block_attrs {
                 self.emit_block_metadata(attrs);
