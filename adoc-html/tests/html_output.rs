@@ -199,3 +199,14 @@ This is the introduction.";
     assert!(html.contains("<p id=\"intro\" class=\"lead\">"));
     assert!(html.contains("This is the introduction."));
 }
+
+#[test]
+fn test_lead_paragraph() {
+    let input = "\
+[.lead]
+This is a lead paragraph.";
+
+    let html = to_html(input);
+    assert!(html.contains("<p class=\"lead\">"), "Expected lead class. Got: {html}");
+    assert!(html.contains("This is a lead paragraph."));
+}

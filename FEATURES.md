@@ -46,7 +46,7 @@
 | 3.2 | Многострочный параграф | Строки объединяются soft break | ✅ |
 | 3.3 | Literal paragraph | Строка с отступом (пробел/таб) | ✅ |
 | 3.4 | `[normal]` override | Принудительно обычный параграф | ✅ |
-| 3.5 | Lead paragraph | `[.lead]` роль | ❌ |
+| 3.5 | Lead paragraph | `[.lead]` роль | ✅ |
 
 ## 4. Разделительные блоки (Delimited Blocks)
 
