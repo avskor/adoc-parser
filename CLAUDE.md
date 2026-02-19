@@ -6,9 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use context7 MCP server to fetch up-to-date documentation for libraries and frameworks before answering questions or writing code that depends on them.
 
-## Workflow
+## Git Workflow
 
-The main branch is `master`. Each new task starts in a new git branch off `master`. Run `cargo clippy --workspace` before every commit and fix all warnings.
+CRITICAL: Never make commits directly on `master`. Before starting ANY task, ALWAYS:
+1. `git checkout master && git pull`
+2. `git checkout -b <branch-name>` (e.g., `feat/add-auth`, `fix/parse-error`)
+
+Only then begin writing code. Run `cargo clippy --workspace` before every commit and fix all warnings.
 
 ## Build & Test Commands
 
