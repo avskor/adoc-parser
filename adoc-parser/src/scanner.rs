@@ -1273,4 +1273,31 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn test_parse_authors_single() {
+        let authors = parse_authors("John Doe <john@example.com>");
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].fullname, "John Doe");
+        assert_eq!(authors[0].firstname, "John");
+        assert_eq!(authors[0].middlename, "");
+        assert_eq!(authors[0].lastname, "Doe");
+        assert_eq!(authors[0].initials, "JD");
+        assert_eq!(authors[0].address, "john@example.com");
+    }
+
+    #[test]
+    fn test_parse_authors_multiple() {
+        let authors = parse_authors("John Doe; Jane Smith <jane@example.com>");
+        assert_eq!(authors.len(), 2);
+        assert_eq!(authors[0].fullname, "John Doe");
+        assert_eq!(authors[0].firstname, "John");
+        assert_eq!(authors[0].lastname, "Doe");
+        assert_eq!(authors[0].address, "");
+        assert_eq!(authors[1].fullname, "Jane Smith");
+        assert_eq!(authors[1].firstname, "Jane");
+        assert_eq!(authors[1].lastname, "Smith");
+        assert_eq!(authors[1].initials, "JS");
+        assert_eq!(authors[1].address, "jane@example.com");
+    }
 }

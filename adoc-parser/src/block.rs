@@ -3063,4 +3063,35 @@ mod tests {
             Event::End(TagEnd::Admonition),
         ]);
     }
+
+    #[test]
+    fn test_multiple_authors() {
+        let input = "= Title\nJohn Doe; Jane Smith";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Header),
+            Event::Start(Tag::SectionTitle { level: 0, id: Cow::Owned("_title".into()) }),
+            Event::Start(Tag::DocumentTitle),
+            Event::Text(Cow::Borrowed("Title")),
+            Event::End(TagEnd::DocumentTitle),
+            Event::End(TagEnd::SectionTitle),
+            Event::Author {
+                fullname: Cow::Borrowed("John Doe"),
+                firstname: Cow::Borrowed("John"),
+                middlename: Cow::Borrowed(""),
+                lastname: Cow::Borrowed("Doe"),
+                initials: Cow::Owned("JD".into()),
+                address: Cow::Borrowed(""),
+            },
+            Event::Author {
+                fullname: Cow::Borrowed("Jane Smith"),
+                firstname: Cow::Borrowed("Jane"),
+                middlename: Cow::Borrowed(""),
+                lastname: Cow::Borrowed("Smith"),
+                initials: Cow::Owned("JS".into()),
+                address: Cow::Borrowed(""),
+            },
+            Event::End(TagEnd::Header),
+        ]);
+    }
 }
