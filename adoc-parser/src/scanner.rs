@@ -670,9 +670,10 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
     Some(cells)
 }
 
-pub fn generate_id(title: &str) -> String {
-    let mut id = String::with_capacity(title.len() + 1);
-    id.push('_');
+pub fn generate_id(title: &str, prefix: &str, separator: &str) -> String {
+    let sep_char = separator.chars().next().unwrap_or('_');
+    let mut id = String::with_capacity(title.len() + prefix.len());
+    id.push_str(prefix);
     let mut prev_was_separator = false;
     for ch in title.chars() {
         if ch.is_alphanumeric() {
@@ -680,11 +681,11 @@ pub fn generate_id(title: &str) -> String {
             prev_was_separator = false;
         } else if (ch == ' ' || ch == '-' || ch == '_')
             && !prev_was_separator {
-                id.push('_');
+                id.push(sep_char);
                 prev_was_separator = true;
         }
     }
-    if id.ends_with('_') && id.len() > 1 {
+    if id.ends_with(sep_char) && id.len() > prefix.len() {
         id.pop();
     }
     id
@@ -988,8 +989,24 @@ mod tests {
 
     #[test]
     fn test_generate_id() {
-        assert_eq!(generate_id("My Title"), "_my_title");
-        assert_eq!(generate_id("Hello World!"), "_hello_world");
+        // Default prefix and separator
+        assert_eq!(generate_id("My Title", "_", "_"), "_my_title");
+        assert_eq!(generate_id("Hello World!", "_", "_"), "_hello_world");
+
+        // Empty prefix
+        assert_eq!(generate_id("My Title", "", "_"), "my_title");
+
+        // Custom separator
+        assert_eq!(generate_id("My Title", "_", "-"), "_my-title");
+
+        // Empty prefix + custom separator
+        assert_eq!(generate_id("My Title", "", "-"), "my-title");
+
+        // Custom prefix
+        assert_eq!(generate_id("My Title", "id-", "_"), "id-my_title");
+
+        // Empty separator (no separator char — falls back to '_')
+        assert_eq!(generate_id("My Title", "_", ""), "_my_title");
     }
 
     #[test]

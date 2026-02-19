@@ -32,6 +32,8 @@ pub struct BlockScanner<'a> {
     in_continuation: bool,
     had_blank_line: bool,
     leveloffset: i32,
+    idprefix: String,
+    idseparator: String,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -48,6 +50,8 @@ impl<'a> BlockScanner<'a> {
             in_continuation: false,
             had_blank_line: false,
             leveloffset: 0,
+            idprefix: "_".to_string(),
+            idseparator: "_".to_string(),
         }
     }
 
@@ -225,6 +229,27 @@ impl<'a> BlockScanner<'a> {
             }
         } else if let Ok(n) = trimmed.parse::<i32>() {
             self.leveloffset = n;
+        }
+    }
+
+    fn update_id_settings(&mut self, name: &str, value: &str) {
+        // Handle normal set: :idprefix: value
+        if name == "idprefix" {
+            self.idprefix = value.to_string();
+        } else if name == "idseparator" {
+            self.idseparator = value.to_string();
+        }
+        // Handle unset prefix form: :!name:
+        else if name == "!idprefix" {
+            self.idprefix = String::new();
+        } else if name == "!idseparator" {
+            self.idseparator = "_".to_string();
+        }
+        // Handle unset suffix form: :name!:
+        else if name == "idprefix!" {
+            self.idprefix = String::new();
+        } else if name == "idseparator!" {
+            self.idseparator = "_".to_string();
         }
     }
 
@@ -435,6 +460,7 @@ impl<'a> BlockScanner<'a> {
                     value: Cow::Owned(self.leveloffset.to_string()),
                 });
             }
+            self.update_id_settings(name, &value);
             return Some(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value,
@@ -679,7 +705,7 @@ impl<'a> BlockScanner<'a> {
         self.header_emitted = true;
         self.advance();
 
-        let id = scanner::generate_id(title);
+        let id = scanner::generate_id(title, &self.idprefix, &self.idseparator);
 
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -749,6 +775,7 @@ impl<'a> BlockScanner<'a> {
                 if name == "leveloffset" {
                     self.update_leveloffset(&value);
                 }
+                self.update_id_settings(name, &value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value,
@@ -805,6 +832,7 @@ impl<'a> BlockScanner<'a> {
                 if name == "leveloffset" {
                     self.update_leveloffset(&value);
                 }
+                self.update_id_settings(name, &value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value,
@@ -834,7 +862,7 @@ impl<'a> BlockScanner<'a> {
         title: &'a str,
         pre_attrs: Vec<Event<'a>>,
     ) -> Option<Event<'a>> {
-        let id = scanner::generate_id(title);
+        let id = scanner::generate_id(title, &self.idprefix, &self.idseparator);
 
         // Collect header content lines after the title
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -909,7 +937,7 @@ impl<'a> BlockScanner<'a> {
         let id = self.pending_block_attrs
             .as_ref()
             .and_then(|a| a.id.clone())
-            .unwrap_or_else(|| scanner::generate_id(title));
+            .unwrap_or_else(|| scanner::generate_id(title, &self.idprefix, &self.idseparator));
 
         let block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
@@ -3399,5 +3427,59 @@ mod tests {
         assert!(section_pos.is_some(), "Expected Start(Section)");
         assert!(meta_pos.unwrap() < section_pos.unwrap(),
             "BlockMetadata should appear before Start(Section)");
+    }
+
+    #[test]
+    fn test_idprefix_idseparator_default() {
+        let input = "== My Section";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("_my_section".into()),
+        })));
+    }
+
+    #[test]
+    fn test_idprefix_empty() {
+        let input = ":idprefix:\n\n== My Section";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("my_section".into()),
+        })));
+    }
+
+    #[test]
+    fn test_idseparator_dash() {
+        let input = ":idseparator: -\n\n== My Section";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("_my-section".into()),
+        })));
+    }
+
+    #[test]
+    fn test_idprefix_empty_idseparator_dash() {
+        let input = ":idprefix:\n:idseparator: -\n\n== My Section";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("my-section".into()),
+        })));
+    }
+
+    #[test]
+    fn test_idprefix_unset() {
+        let input = ":idprefix: sec-\n\n== First\n\n:!idprefix:\n\n== Second";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("sec-first".into()),
+        })));
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("second".into()),
+        })));
     }
 }

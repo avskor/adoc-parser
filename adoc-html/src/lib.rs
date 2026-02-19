@@ -3039,4 +3039,19 @@ mod tests {
         assert!(html.contains("<pre class=\"CodeRay highlight\">"), "coderay: pre class. Got: {html}");
         assert!(html.contains("data-lang=\"java\""), "coderay: data-lang. Got: {html}");
     }
+
+    #[test]
+    fn test_idprefix_idseparator() {
+        // Default: prefix=_ separator=_
+        let html = to_html("== My Section\n\nContent.");
+        assert!(html.contains("id=\"_my_section\""), "default id. Got: {html}");
+
+        // Empty prefix + dash separator
+        let html = to_html(":idprefix:\n:idseparator: -\n\n== My Section\n\nContent.");
+        assert!(html.contains("id=\"my-section\""), "custom id. Got: {html}");
+
+        // Custom prefix
+        let html = to_html(":idprefix: sec-\n\n== My Section\n\nContent.");
+        assert!(html.contains("id=\"sec-my_section\""), "custom prefix. Got: {html}");
+    }
 }

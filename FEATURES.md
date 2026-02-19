@@ -36,7 +36,7 @@
 | 2.9 | Стиль colophon | `[colophon]` | ✅ |
 | 2.10 | Стиль abstract | `[abstract]` | ✅ |
 | 2.11 | Нумерация секций | `:sectnums:` | ✅ |
-| 2.12 | Префикс ID секции | `:idprefix:`, `:idseparator:` | ❌ |
+| 2.12 | Префикс ID секции | `:idprefix:`, `:idseparator:` | ✅ |
 
 ## 3. Параграфы (Paragraphs)
 
