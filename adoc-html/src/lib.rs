@@ -30,7 +30,6 @@ struct BlockMeta {
     style: Option<String>,
     id: Option<String>,
     roles: Vec<String>,
-    #[allow(dead_code)]
     options: Vec<String>,
     subs: Option<SubstitutionSet>,
 }
@@ -598,12 +597,50 @@ impl HtmlRenderer {
                 self.in_source_block = true;
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "listingblock");
-                output.push_str(">\n<div class=\"content\">\n<pre class=\"highlight\"><code");
-                if let Some(lang) = language {
-                    output.push_str(" class=\"language-");
-                    html_escape(output, lang);
+                output.push_str(">\n<div class=\"content\">\n<pre");
+
+                let highlighter = self.document_attrs.get("source-highlighter").cloned();
+                let linenums = meta.as_ref().is_some_and(|m| {
+                    m.options.iter().any(|o| o == "linenums")
+                });
+
+                // Build <pre> class
+                let mut pre_classes = Vec::new();
+                match highlighter.as_deref() {
+                    Some("highlight.js" | "highlightjs") => pre_classes.push("highlightjs"),
+                    Some("rouge") => pre_classes.push("rouge"),
+                    Some("pygments") => pre_classes.push("pygments"),
+                    Some("coderay") => pre_classes.push("CodeRay"),
+                    _ => {}
+                }
+                if highlighter.is_some() {
+                    pre_classes.push("highlight");
+                }
+                if linenums {
+                    pre_classes.push("linenums");
+                }
+                if !pre_classes.is_empty() {
+                    output.push_str(" class=\"");
+                    output.push_str(&pre_classes.join(" "));
                     output.push('"');
                 }
+
+                output.push_str("><code");
+
+                // Build <code> attrs
+                if let Some(lang) = language {
+                    if matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs") | None) {
+                        output.push_str(" class=\"language-");
+                        html_escape(output, lang);
+                        output.push('"');
+                    }
+                    if highlighter.is_some() {
+                        output.push_str(" data-lang=\"");
+                        html_escape(output, lang);
+                        output.push('"');
+                    }
+                }
+
                 output.push('>');
             }
             Tag::BlockTitle => {
@@ -2901,5 +2938,65 @@ mod tests {
         let html = to_html("[subs=verbatim]\n____\n*bold* & <tag>\n____");
         assert!(!html.contains("<strong>"), "subs=verbatim on quote block should disable inline. Got: {html}");
         assert!(html.contains("&amp;"), "subs=verbatim on quote block should escape &. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_no_highlighter() {
+        let html = to_html("[source,rust]\n----\nfn main() {}\n----");
+        assert!(html.contains("<pre><code class=\"language-rust\">"), "Without highlighter: bare <pre><code class=\"language-X\">. Got: {html}");
+        assert!(!html.contains("data-lang"), "Without highlighter: no data-lang. Got: {html}");
+        assert!(!html.contains("class=\"highlight\""), "Without highlighter: no highlight class. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_highlightjs() {
+        let html = to_html(":source-highlighter: highlight.js\n\n[source,rust]\n----\nfn main() {}\n----");
+        assert!(html.contains("<pre class=\"highlightjs highlight\">"), "highlight.js: pre class. Got: {html}");
+        assert!(html.contains("class=\"language-rust\""), "highlight.js: language class on code. Got: {html}");
+        assert!(html.contains("data-lang=\"rust\""), "highlight.js: data-lang on code. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_rouge() {
+        let html = to_html(":source-highlighter: rouge\n\n[source,ruby]\n----\nputs 'hi'\n----");
+        assert!(html.contains("<pre class=\"rouge highlight\">"), "rouge: pre class. Got: {html}");
+        assert!(html.contains("data-lang=\"ruby\""), "rouge: data-lang on code. Got: {html}");
+        assert!(!html.contains("class=\"language-ruby\""), "rouge: no language- class on code. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums() {
+        let html = to_html(":source-highlighter: highlight.js\n\n[source,rust,%linenums]\n----\nfn main() {}\n----");
+        assert!(html.contains("linenums"), "linenums option should add linenums class. Got: {html}");
+        assert!(html.contains("highlightjs highlight"), "highlightjs highlight classes should be present. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_no_highlighter() {
+        let html = to_html("[source,rust,%linenums]\n----\nfn main() {}\n----");
+        assert!(html.contains("linenums"), "linenums should work even without highlighter. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_no_language() {
+        let html = to_html(":source-highlighter: highlight.js\n\n[source]\n----\nsome code\n----");
+        assert!(html.contains("<pre class=\"highlightjs highlight\">"), "No language: pre class should still have highlighter. Got: {html}");
+        assert!(!html.contains("data-lang"), "No language: no data-lang. Got: {html}");
+        assert!(!html.contains("language-"), "No language: no language- class. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_pygments() {
+        let html = to_html(":source-highlighter: pygments\n\n[source,python]\n----\nprint('hi')\n----");
+        assert!(html.contains("<pre class=\"pygments highlight\">"), "pygments: pre class. Got: {html}");
+        assert!(html.contains("data-lang=\"python\""), "pygments: data-lang. Got: {html}");
+        assert!(!html.contains("class=\"language-python\""), "pygments: no language- class. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_coderay() {
+        let html = to_html(":source-highlighter: coderay\n\n[source,java]\n----\nSystem.out.println();\n----");
+        assert!(html.contains("<pre class=\"CodeRay highlight\">"), "coderay: pre class. Got: {html}");
+        assert!(html.contains("data-lang=\"java\""), "coderay: data-lang. Got: {html}");
     }
 }

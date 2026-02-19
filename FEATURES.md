@@ -337,8 +337,8 @@
 | 18.1 | Source block с языком | `[source,rust]` | ✅ |
 | 18.2 | Callout в коде | `// <1>` | ✅ |
 | 18.3 | Подсветка строк | `:highlight:` | ❌ |
-| 18.4 | Нумерация строк | `[%linenums]` | ❌ |
-| 18.5 | Source highlighter | `:source-highlighter: highlight.js` | ❌ |
+| 18.4 | Нумерация строк | `[%linenums]` | ✅ |
+| 18.5 | Source highlighter | `:source-highlighter: highlight.js` | ✅ |
 
 ## 19. Оглавление (TOC)
 
