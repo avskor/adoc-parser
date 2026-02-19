@@ -3206,4 +3206,19 @@ mod tests {
             value: Cow::Borrowed(""),
         }));
     }
+
+    #[test]
+    fn test_appendix_section_metadata() {
+        let input = "[appendix]\n== Title";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        // BlockMetadata with style "appendix" should appear before Start(Section)
+        let meta_pos = events.iter().position(|e| matches!(e,
+            Event::BlockMetadata { style: Some(s), .. } if s == "appendix"
+        ));
+        let section_pos = events.iter().position(|e| matches!(e, Event::Start(Tag::Section { .. })));
+        assert!(meta_pos.is_some(), "Expected BlockMetadata with style appendix");
+        assert!(section_pos.is_some(), "Expected Start(Section)");
+        assert!(meta_pos.unwrap() < section_pos.unwrap(),
+            "BlockMetadata should appear before Start(Section)");
+    }
 }

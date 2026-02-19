@@ -52,6 +52,8 @@ struct HtmlRenderer {
     cell_style_stack: Vec<CellStyle>,
     has_document_title: bool,
     preamble_start: Option<usize>,
+    appendix_counter: u8,
+    pending_section_caption: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -81,6 +83,8 @@ impl HtmlRenderer {
             cell_style_stack: Vec::new(),
             has_document_title: false,
             preamble_start: None,
+            appendix_counter: 0,
+            pending_section_caption: None,
         }
     }
 
@@ -355,6 +359,12 @@ impl HtmlRenderer {
                 output.push_str(" id=\"");
                 html_escape(output, id);
                 output.push_str("\">");
+                if let Some(caption) = self.pending_section_caption.take() {
+                    output.push_str(&caption);
+                    if let Some(ref mut entry) = self.current_toc_entry {
+                        entry.title.push_str(&caption);
+                    }
+                }
             }
             Tag::Heading { level } => {
                 let h = section_level_to_h(*level);
@@ -364,9 +374,16 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::Section { .. } => {
+                let is_appendix = meta.as_ref()
+                    .is_some_and(|m| m.style.as_deref() == Some("appendix"));
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "sect");
                 output.push_str(">\n");
+                if is_appendix {
+                    self.appendix_counter += 1;
+                    let letter = (b'A' + self.appendix_counter - 1) as char;
+                    self.pending_section_caption = Some(format!("Appendix {letter}: "));
+                }
             }
             Tag::Paragraph => {
                 output.push_str("<p");
@@ -2156,5 +2173,27 @@ mod tests {
         let html = to_html("= Title\n\nContent only.");
         assert!(!html.contains("preamble"));
         assert!(html.contains("<p>Content only.</p>"));
+    }
+
+    // Appendix section tests
+
+    #[test]
+    fn test_appendix_section_html() {
+        let html = to_html("[appendix]\n== My Appendix\n\nContent.");
+        assert!(html.contains("class=\"sect appendix\""));
+        assert!(html.contains("Appendix A: My Appendix</h2>"));
+    }
+
+    #[test]
+    fn test_appendix_multiple_html() {
+        let html = to_html("[appendix]\n== First\n\nContent.\n\n[appendix]\n== Second\n\nMore.");
+        assert!(html.contains("Appendix A: First</h2>"));
+        assert!(html.contains("Appendix B: Second</h2>"));
+    }
+
+    #[test]
+    fn test_appendix_no_caption_without_style_html() {
+        let html = to_html("== Regular Section\n\nContent.");
+        assert!(!html.contains("Appendix"));
     }
 }
