@@ -31,10 +31,10 @@
 | 2.4 | Дискретный заголовок | `[discrete]` + `== Title` | ✅ |
 | 2.5 | Level offset | `:leveloffset: +1` | ✅ |
 | 2.6 | Стиль appendix | `[appendix]` | ✅ |
-| 2.7 | Стиль glossary | `[glossary]` | ❌ |
-| 2.8 | Стиль bibliography | `[bibliography]` | ⚠️ |
-| 2.9 | Стиль colophon | `[colophon]` | ❌ |
-| 2.10 | Стиль abstract | `[abstract]` | ❌ |
+| 2.7 | Стиль glossary | `[glossary]` | ✅ |
+| 2.8 | Стиль bibliography | `[bibliography]` | ✅ |
+| 2.9 | Стиль colophon | `[colophon]` | ✅ |
+| 2.10 | Стиль abstract | `[abstract]` | ✅ |
 | 2.11 | Нумерация секций | `:sectnums:` | ✅ |
 | 2.12 | Префикс ID секции | `:idprefix:`, `:idseparator:` | ❌ |
 

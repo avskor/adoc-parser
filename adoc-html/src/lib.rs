@@ -473,15 +473,20 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::Section { .. } => {
-                let is_appendix = meta.as_ref()
-                    .is_some_and(|m| m.style.as_deref() == Some("appendix"));
+                let style = meta.as_ref().and_then(|m| m.style.as_deref());
+                let is_special = matches!(style, Some(
+                    "appendix" | "glossary" | "bibliography" | "colophon"
+                    | "abstract" | "preface" | "dedication" | "index"
+                ));
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "sect");
                 output.push_str(">\n");
-                if is_appendix {
+                if style == Some("appendix") {
                     self.appendix_counter += 1;
                     let letter = (b'A' + self.appendix_counter - 1) as char;
                     self.pending_section_caption = Some(format!("Appendix {letter}: "));
+                } else if is_special {
+                    self.pending_section_caption = Some(String::new());
                 }
             }
             Tag::Paragraph => {
@@ -2620,6 +2625,41 @@ mod tests {
     fn test_appendix_no_caption_without_style_html() {
         let html = to_html("== Regular Section\n\nContent.");
         assert!(!html.contains("Appendix"));
+    }
+
+    #[test]
+    fn test_glossary_section_html() {
+        let html = to_html("[glossary]\n== Terms\n\nSome terms here.");
+        assert!(html.contains("class=\"sect glossary\""));
+    }
+
+    #[test]
+    fn test_bibliography_section_html() {
+        let html = to_html("[bibliography]\n== References\n\nSome refs.");
+        assert!(html.contains("class=\"sect bibliography\""));
+    }
+
+    #[test]
+    fn test_colophon_section_html() {
+        let html = to_html("[colophon]\n== Colophon\n\nPublishing info.");
+        assert!(html.contains("class=\"sect colophon\""));
+    }
+
+    #[test]
+    fn test_abstract_section_html() {
+        let html = to_html("[abstract]\n== Summary\n\nBrief summary.");
+        assert!(html.contains("class=\"sect abstract\""));
+    }
+
+    #[test]
+    fn test_special_section_no_sectnums() {
+        let html = to_html(":sectnums:\n\n== Numbered\n\n[glossary]\n== Terms\n\n[bibliography]\n== Refs\n\n== Also Numbered");
+        // Regular sections should be numbered
+        assert!(html.contains("1. Numbered"));
+        assert!(html.contains("2. Also Numbered"));
+        // Special sections should NOT be numbered
+        assert!(html.contains(">Terms</h2>"));
+        assert!(html.contains(">Refs</h2>"));
     }
 
     // Section numbering tests
