@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::attributes::BlockAttributes;
+use crate::attributes::{BlockAttributes, TableFormat};
 use crate::event::{
     AdmonitionKind, CellStyle, CowStr, DelimitedBlockKind, Event, HAlign, Tag, TagEnd, VAlign,
 };
@@ -188,6 +188,7 @@ impl<'a> BlockScanner<'a> {
                 "source" | "verse" | "stem" | "latexmath" | "asciimath"
                 | "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
                 | "discrete" | "normal"
+                | "csv" | "dsv" | "tsv"
             ))
             .map(|s| Cow::Owned(s.clone()));
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty() || !attrs.options.is_empty() {
@@ -971,6 +972,12 @@ impl<'a> BlockScanner<'a> {
             self.advance();
         }
 
+        // Check for CSV/DSV/TSV format
+        let format = block_attrs.table_format();
+        if format != TableFormat::Native {
+            return self.scan_delimited_format_table(&content_lines, block_attrs, format, title_events);
+        }
+
         // Parse cells from content lines, tracking blank line positions
         let mut all_cells: Vec<scanner::CellSpec<'a>> = Vec::new();
         let mut first_blank_after_first_row = false;
@@ -1205,6 +1212,161 @@ impl<'a> BlockScanner<'a> {
         }
 
         rows
+    }
+
+    fn scan_delimited_format_table(
+        &mut self,
+        content_lines: &[&'a str],
+        block_attrs: BlockAttributes,
+        format: TableFormat,
+        title_events: Vec<Event<'a>>,
+    ) -> Option<Event<'a>> {
+        // Parse each non-blank line into fields
+        let mut rows: Vec<Vec<Cow<'a, str>>> = Vec::new();
+        let mut first_blank_after_first_row = false;
+
+        for &line in content_lines {
+            if scanner::is_blank(line) {
+                if !rows.is_empty() && !first_blank_after_first_row {
+                    first_blank_after_first_row = true;
+                }
+                continue;
+            }
+            let fields = match format {
+                TableFormat::Csv => scanner::parse_csv_fields(line),
+                TableFormat::Dsv => scanner::parse_dsv_fields(line),
+                TableFormat::Tsv => scanner::parse_tsv_fields(line),
+                TableFormat::Native => unreachable!(),
+            };
+            rows.push(fields);
+        }
+
+        if rows.is_empty() {
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop().or_else(|| self.scan_next_block());
+        }
+
+        // Determine number of columns from cols attribute or first row
+        let num_cols = if let Some(n) = block_attrs.table_cols_count() {
+            n
+        } else {
+            rows[0].len()
+        };
+
+        // Determine header/footer
+        let has_header = block_attrs.has_option("header")
+            || (first_blank_after_first_row && rows[0].len() == num_cols);
+        let has_footer = block_attrs.has_option("footer");
+
+        // Get column specs for alignment defaults
+        let col_specs = block_attrs.table_col_specs();
+
+        // Split rows into header, body, footer
+        let header_rows = if has_header && !rows.is_empty() {
+            &rows[..1]
+        } else {
+            &[][..]
+        };
+        let remaining_rows = if has_header && !rows.is_empty() {
+            &rows[1..]
+        } else {
+            &rows[..]
+        };
+        let (body_rows, footer_rows) = if has_footer && !remaining_rows.is_empty() {
+            let split = remaining_rows.len() - 1;
+            (&remaining_rows[..split], &remaining_rows[split..])
+        } else {
+            (remaining_rows, &[][..])
+        };
+
+        // Resolve alignment from column specs
+        let resolve_align = |col_idx: usize| -> (HAlign, VAlign) {
+            if let Some(ref specs) = col_specs
+                && col_idx < specs.len()
+            {
+                return (specs[col_idx].halign, specs[col_idx].valign);
+            }
+            (HAlign::default(), VAlign::default())
+        };
+
+        // Build events in reverse (buffer is a stack)
+        self.push_event(Event::End(TagEnd::Table));
+
+        // Helper to emit cells for a row
+        macro_rules! emit_format_row_cells {
+            ($row:expr, $is_header_section:expr) => {
+                for (ci, field) in $row.iter().enumerate().rev() {
+                    if ci >= num_cols {
+                        continue;
+                    }
+                    let (halign, valign) = resolve_align(ci);
+                    let text: Cow<'a, str> = match field {
+                        Cow::Borrowed(s) => Cow::Borrowed(*s),
+                        Cow::Owned(s) => Cow::Owned(s.clone()),
+                    };
+                    if $is_header_section {
+                        self.push_event(Event::End(TagEnd::TableHeaderCell));
+                        self.push_event(Event::Text(text));
+                        self.push_event(Event::Start(Tag::TableHeaderCell {
+                            colspan: 1,
+                            rowspan: 1,
+                            style: CellStyle::Default,
+                            halign,
+                            valign,
+                        }));
+                    } else {
+                        self.push_event(Event::End(TagEnd::TableCell));
+                        self.push_event(Event::Text(text));
+                        self.push_event(Event::Start(Tag::TableCell {
+                            colspan: 1,
+                            rowspan: 1,
+                            style: CellStyle::Default,
+                            halign,
+                            valign,
+                        }));
+                    }
+                }
+            };
+        }
+
+        // TableFoot
+        if !footer_rows.is_empty() {
+            self.push_event(Event::End(TagEnd::TableFoot));
+            for row in footer_rows.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                emit_format_row_cells!(row, false);
+                self.push_event(Event::Start(Tag::TableRow));
+            }
+            self.push_event(Event::Start(Tag::TableFoot));
+        }
+
+        // TableBody
+        if !body_rows.is_empty() {
+            self.push_event(Event::End(TagEnd::TableBody));
+            for row in body_rows.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                emit_format_row_cells!(row, false);
+                self.push_event(Event::Start(Tag::TableRow));
+            }
+            self.push_event(Event::Start(Tag::TableBody));
+        }
+
+        // TableHead
+        if !header_rows.is_empty() {
+            self.push_event(Event::End(TagEnd::TableHead));
+            for row in header_rows.iter().rev() {
+                self.push_event(Event::End(TagEnd::TableRow));
+                emit_format_row_cells!(row, true);
+                self.push_event(Event::Start(Tag::TableRow));
+            }
+            self.push_event(Event::Start(Tag::TableHead));
+        }
+
+        self.push_event(Event::Start(Tag::Table));
+        self.emit_block_metadata(&block_attrs);
+        self.push_title_then_events(title_events);
+
+        self.event_buffer.pop()
     }
 
     fn scan_paragraph(&mut self) -> Option<Event<'a>> {

@@ -2193,6 +2193,90 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_table_html() {
+        let html = to_html("[%header,format=csv]\n|===\nName,Age,City\nAlice,30,NYC\nBob,25,LA\n|===");
+        assert!(html.contains("<table>"));
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("</thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<td>NYC</td>"));
+        assert!(html.contains("<td>Bob</td>"));
+        assert!(html.contains("<td>25</td>"));
+        assert!(html.contains("<td>LA</td>"));
+        assert!(html.contains("</tbody>"));
+        assert!(html.contains("</table>"));
+    }
+
+    #[test]
+    fn test_csv_table_shorthand_html() {
+        let html = to_html("[%header,csv]\n|===\nName,Age\nAlice,30\n|===");
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("</thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("</tbody>"));
+    }
+
+    #[test]
+    fn test_dsv_table_html() {
+        let html = to_html("[%header,format=dsv]\n|===\nName:Age:City\nAlice:30:NYC\n|===");
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("</thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<td>NYC</td>"));
+        assert!(html.contains("</tbody>"));
+    }
+
+    #[test]
+    fn test_tsv_table_html() {
+        let html = to_html("[%header,format=tsv]\n|===\nName\tAge\tCity\nAlice\t30\tNYC\n|===");
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("</thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<td>NYC</td>"));
+        assert!(html.contains("</tbody>"));
+    }
+
+    #[test]
+    fn test_csv_table_no_header_html() {
+        let html = to_html("[format=csv]\n|===\nAlice,30\nBob,25\n|===");
+        assert!(!html.contains("<thead>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<td>Bob</td>"));
+        assert!(html.contains("<td>25</td>"));
+        assert!(html.contains("</tbody>"));
+    }
+
+    #[test]
+    fn test_csv_table_quoted_fields_html() {
+        let html = to_html("[%header,csv]\n|===\nName,Description\nAlice,\"Has a, comma\"\n|===");
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Description</th>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>Has a, comma</td>"));
+    }
+
+    #[test]
     fn test_discrete_heading_with_id_and_role() {
         let html = to_html("[discrete#myh.special]\n== Heading");
         assert!(html.contains("id=\"myh\""));

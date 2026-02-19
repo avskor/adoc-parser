@@ -3,6 +3,14 @@ use std::collections::HashMap;
 
 use crate::event::{CowStr, CellStyle, HAlign, VAlign};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TableFormat {
+    Native,
+    Csv,
+    Dsv,
+    Tsv,
+}
+
 fn split_respecting_quotes(s: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -290,6 +298,28 @@ impl BlockAttributes {
     pub fn is_reversed(&self) -> bool {
         self.has_option("reversed")
     }
+
+    pub fn table_format(&self) -> TableFormat {
+        // Check named attribute: format=csv / format=dsv / format=tsv
+        if let Some(fmt) = self.named.get("format") {
+            match fmt.as_str() {
+                "csv" => return TableFormat::Csv,
+                "dsv" => return TableFormat::Dsv,
+                "tsv" => return TableFormat::Tsv,
+                _ => {}
+            }
+        }
+        // Check positional shorthand: [csv], [dsv], [tsv]
+        if let Some(first) = self.positional.first() {
+            match first.as_str() {
+                "csv" => return TableFormat::Csv,
+                "dsv" => return TableFormat::Dsv,
+                "tsv" => return TableFormat::Tsv,
+                _ => {}
+            }
+        }
+        TableFormat::Native
+    }
 }
 
 #[cfg(test)]
@@ -433,6 +463,39 @@ mod tests {
 
         let attrs = BlockAttributes::new();
         assert!(!attrs.is_reversed());
+    }
+
+    #[test]
+    fn test_table_format_named() {
+        let attrs = BlockAttributes::parse("format=csv");
+        assert_eq!(attrs.table_format(), TableFormat::Csv);
+
+        let attrs = BlockAttributes::parse("format=dsv");
+        assert_eq!(attrs.table_format(), TableFormat::Dsv);
+
+        let attrs = BlockAttributes::parse("format=tsv");
+        assert_eq!(attrs.table_format(), TableFormat::Tsv);
+    }
+
+    #[test]
+    fn test_table_format_shorthand() {
+        let attrs = BlockAttributes::parse("csv");
+        assert_eq!(attrs.table_format(), TableFormat::Csv);
+
+        let attrs = BlockAttributes::parse("dsv");
+        assert_eq!(attrs.table_format(), TableFormat::Dsv);
+
+        let attrs = BlockAttributes::parse("tsv");
+        assert_eq!(attrs.table_format(), TableFormat::Tsv);
+    }
+
+    #[test]
+    fn test_table_format_default() {
+        let attrs = BlockAttributes::new();
+        assert_eq!(attrs.table_format(), TableFormat::Native);
+
+        let attrs = BlockAttributes::parse("source,rust");
+        assert_eq!(attrs.table_format(), TableFormat::Native);
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 pub fn split_lines(input: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -795,6 +797,93 @@ pub fn parse_authors(line: &str) -> Vec<AuthorInfo<'_>> {
     authors
 }
 
+/// Parse CSV fields from a line (RFC 4180-like).
+/// Fields separated by commas; quoted fields support embedded commas and escaped quotes (`""`).
+pub fn parse_csv_fields(line: &str) -> Vec<Cow<'_, str>> {
+    let mut fields = Vec::new();
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    loop {
+        if i >= len {
+            // Only add empty field if we haven't added anything yet (empty input)
+            if fields.is_empty() {
+                fields.push(Cow::Borrowed(""));
+            }
+            break;
+        }
+
+        // Skip leading whitespace
+        while i < len && bytes[i] == b' ' {
+            i += 1;
+        }
+
+        if i < len && bytes[i] == b'"' {
+            // Quoted field
+            i += 1; // skip opening quote
+            let start = i;
+            let mut has_escapes = false;
+            while i < len {
+                if bytes[i] == b'"' {
+                    if i + 1 < len && bytes[i + 1] == b'"' {
+                        has_escapes = true;
+                        i += 2; // skip escaped quote
+                    } else {
+                        break; // closing quote
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            let raw = &line[start..i];
+            if i < len {
+                i += 1; // skip closing quote
+            }
+            // Skip to comma or end
+            while i < len && bytes[i] != b',' {
+                i += 1;
+            }
+
+            if has_escapes {
+                fields.push(Cow::Owned(raw.replace("\"\"", "\"")));
+            } else {
+                fields.push(Cow::Borrowed(raw));
+            }
+        } else {
+            // Unquoted field
+            let start = i;
+            while i < len && bytes[i] != b',' {
+                i += 1;
+            }
+            fields.push(Cow::Borrowed(line[start..i].trim()));
+        }
+
+        // After field: expect comma or end
+        if i < len && bytes[i] == b',' {
+            i += 1; // skip comma
+            // If comma was last char, add trailing empty field
+            if i == len {
+                fields.push(Cow::Borrowed(""));
+            }
+        } else {
+            break;
+        }
+    }
+
+    fields
+}
+
+/// Parse DSV fields from a line (colon-separated).
+pub fn parse_dsv_fields(line: &str) -> Vec<Cow<'_, str>> {
+    line.split(':').map(|f| Cow::Borrowed(f.trim())).collect()
+}
+
+/// Parse TSV fields from a line (tab-separated).
+pub fn parse_tsv_fields(line: &str) -> Vec<Cow<'_, str>> {
+    line.split('\t').map(|f| Cow::Borrowed(f.trim())).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1405,5 +1494,65 @@ mod tests {
     fn test_parse_revision_line_empty() {
         assert!(parse_revision_line("").is_none());
         assert!(parse_revision_line("   ").is_none());
+    }
+
+    #[test]
+    fn test_parse_csv_fields_simple() {
+        let fields = parse_csv_fields("a,b,c");
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_fields_quoted() {
+        let fields = parse_csv_fields("\"a,b\",c");
+        assert_eq!(fields, vec!["a,b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_fields_escaped_quotes() {
+        let fields = parse_csv_fields("\"a\"\"b\",c");
+        assert_eq!(fields, vec!["a\"b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_fields_empty() {
+        let fields = parse_csv_fields("a,,c");
+        assert_eq!(fields, vec!["a", "", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_fields_single() {
+        let fields = parse_csv_fields("hello");
+        assert_eq!(fields, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_parse_csv_fields_trailing_comma() {
+        let fields = parse_csv_fields("a,b,");
+        assert_eq!(fields, vec!["a", "b", ""]);
+    }
+
+    #[test]
+    fn test_parse_dsv_fields() {
+        let fields = parse_dsv_fields("a:b:c");
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_dsv_fields_with_spaces() {
+        let fields = parse_dsv_fields("a : b : c");
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_tsv_fields() {
+        let fields = parse_tsv_fields("a\tb\tc");
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_tsv_fields_with_spaces() {
+        let fields = parse_tsv_fields("a \t b \t c");
+        assert_eq!(fields, vec!["a", "b", "c"]);
     }
 }
