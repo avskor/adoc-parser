@@ -764,10 +764,30 @@ impl HtmlRenderer {
             Tag::Subscript => {
                 output.push_str("<sub>");
             }
-            Tag::Link { url } => {
+            Tag::Link { url, window, nofollow } => {
                 output.push_str("<a href=\"");
                 html_escape(output, url);
-                output.push_str("\">");
+                output.push('"');
+                if let Some(w) = window {
+                    output.push_str(" target=\"");
+                    html_escape(output, w);
+                    output.push('"');
+                }
+                let has_noopener = window.is_some();
+                if has_noopener || *nofollow {
+                    output.push_str(" rel=\"");
+                    if has_noopener {
+                        output.push_str("noopener");
+                    }
+                    if *nofollow {
+                        if has_noopener {
+                            output.push(' ');
+                        }
+                        output.push_str("nofollow");
+                    }
+                    output.push('"');
+                }
+                output.push('>');
             }
             Tag::CrossReference { target, .. } => {
                 output.push_str("<a href=\"#");
@@ -1527,6 +1547,32 @@ mod tests {
     fn test_link() {
         let html = to_html("Visit link:https://example.com[Example].");
         assert!(html.contains("<a href=\"https://example.com\">Example</a>"));
+    }
+
+    #[test]
+    fn test_link_with_window_html() {
+        let html = to_html("link:https://example.com[Example,window=_blank]");
+        assert!(html.contains("<a href=\"https://example.com\" target=\"_blank\" rel=\"noopener\">Example</a>"));
+    }
+
+    #[test]
+    fn test_link_with_nofollow_html() {
+        let html = to_html("link:https://example.com[Example,opts=nofollow]");
+        assert!(html.contains("<a href=\"https://example.com\" rel=\"nofollow\">Example</a>"));
+    }
+
+    #[test]
+    fn test_link_with_window_and_nofollow_html() {
+        let html = to_html("link:https://example.com[Example,window=_blank,opts=nofollow]");
+        assert!(html.contains("<a href=\"https://example.com\" target=\"_blank\" rel=\"noopener nofollow\">Example</a>"));
+    }
+
+    #[test]
+    fn test_link_no_attrs_unchanged_html() {
+        let html = to_html("link:https://example.com[Example]");
+        assert!(html.contains("<a href=\"https://example.com\">Example</a>"));
+        assert!(!html.contains("target="));
+        assert!(!html.contains("rel="));
     }
 
     #[test]

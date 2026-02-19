@@ -221,7 +221,7 @@
 | 10.5 | Библиографический якорь | `[[[id]]]` или `[[[id,label]]]` | ✅ |
 | 10.6 | Email ссылка | `mailto:user@example.com[]` | ✅ |
 | 10.7 | Xref macro | `xref:file.adoc#anchor[text]` | ✅ |
-| 10.8 | Link с атрибутами | `link:url[text,window=_blank]` | ❌ |
+| 10.8 | Link с атрибутами | `link:url[text,window=_blank]` | ✅ |
 | 10.9 | URL с пробелами | `link:++url with spaces++[text]` | ❌ |
 | 10.10 | Автоссылка email | `user@example.com` | ❌ |
 

@@ -386,6 +386,53 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
     ImageAttrs { alt, width, height }
 }
 
+pub struct LinkAttrs<'a> {
+    pub text: &'a str,
+    pub window: Option<&'a str>,
+    pub nofollow: bool,
+}
+
+pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
+    if bracket_content.is_empty() {
+        return LinkAttrs {
+            text: "",
+            window: None,
+            nofollow: false,
+        };
+    }
+
+    let mut window: Option<&str> = None;
+    let mut nofollow = false;
+    let mut positional = Vec::new();
+
+    for part in split_respecting_quotes(bracket_content) {
+        let part = part.trim();
+        if part.is_empty() {
+            positional.push(part);
+            continue;
+        }
+        if let Some((key, value)) = part.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            match key {
+                "window" => window = Some(value),
+                "opts" if value == "nofollow" => nofollow = true,
+                _ => {}
+            }
+        } else {
+            positional.push(part);
+        }
+    }
+
+    let text = positional.first().copied().unwrap_or(bracket_content);
+
+    LinkAttrs { text, window, nofollow }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,5 +771,45 @@ mod tests {
         assert_eq!(attrs.alt, "Alt");
         assert_eq!(attrs.width, Some("300"));
         assert_eq!(attrs.height, None);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_text_only() {
+        let attrs = parse_link_attrs("Example Site");
+        assert_eq!(attrs.text, "Example Site");
+        assert_eq!(attrs.window, None);
+        assert!(!attrs.nofollow);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_with_window() {
+        let attrs = parse_link_attrs("Example,window=_blank");
+        assert_eq!(attrs.text, "Example");
+        assert_eq!(attrs.window, Some("_blank"));
+        assert!(!attrs.nofollow);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_with_nofollow() {
+        let attrs = parse_link_attrs("Example,opts=nofollow");
+        assert_eq!(attrs.text, "Example");
+        assert_eq!(attrs.window, None);
+        assert!(attrs.nofollow);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_with_all() {
+        let attrs = parse_link_attrs("Example,window=_blank,opts=nofollow");
+        assert_eq!(attrs.text, "Example");
+        assert_eq!(attrs.window, Some("_blank"));
+        assert!(attrs.nofollow);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_empty() {
+        let attrs = parse_link_attrs("");
+        assert_eq!(attrs.text, "");
+        assert_eq!(attrs.window, None);
+        assert!(!attrs.nofollow);
     }
 }

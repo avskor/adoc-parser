@@ -177,7 +177,7 @@ fn test_inline_bold_in_paragraph() {
 fn test_inline_link_in_paragraph() {
     let events = parse("Visit link:https://example.com[our site] for more.");
 
-    let has_link = events.iter().any(|e| matches!(e, Event::Start(Tag::Link { url }) if url == "https://example.com"));
+    let has_link = events.iter().any(|e| matches!(e, Event::Start(Tag::Link { url, .. }) if url == "https://example.com"));
     assert!(has_link);
 }
 

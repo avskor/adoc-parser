@@ -208,7 +208,7 @@ pub fn build_asg<'a>(
                     Tag::InlineSpan { .. } => BuildFrame::InlineSpan { inlines: vec![] },
                     Tag::Superscript => BuildFrame::Superscript { inlines: vec![] },
                     Tag::Subscript => BuildFrame::Subscript { inlines: vec![] },
-                    Tag::Link { url } => BuildFrame::Link {
+                    Tag::Link { url, .. } => BuildFrame::Link {
                         url: url.to_string(),
                         inlines: vec![],
                     },

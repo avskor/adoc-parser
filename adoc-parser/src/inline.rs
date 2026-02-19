@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::attributes::parse_link_attrs;
 use crate::event::{Event, Tag, TagEnd};
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
@@ -1151,7 +1152,7 @@ impl<'a> InlineState<'a> {
         }
 
         let url = &rest[..bracket_start];
-        let link_text = &rest[bracket_start + 1..bracket_end];
+        let bracket_content = &rest[bracket_start + 1..bracket_end];
 
         if url.is_empty() {
             return false;
@@ -1159,10 +1160,13 @@ impl<'a> InlineState<'a> {
 
         self.flush_text(*text_start, start_pos, events);
 
+        let link_attrs = parse_link_attrs(bracket_content);
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
+            window: link_attrs.window.map(Cow::Borrowed),
+            nofollow: link_attrs.nofollow,
         }));
-        let display = if link_text.is_empty() { url } else { link_text };
+        let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
         events.push(Event::Text(Cow::Borrowed(display)));
         events.push(Event::End(TagEnd::Link));
 
@@ -1192,7 +1196,7 @@ impl<'a> InlineState<'a> {
         }
 
         let email = &rest[..bracket_start];
-        let link_text = &rest[bracket_start + 1..bracket_end];
+        let bracket_content = &rest[bracket_start + 1..bracket_end];
 
         if email.is_empty() {
             return false;
@@ -1202,10 +1206,13 @@ impl<'a> InlineState<'a> {
 
         // Build mailto: URL
         let url = &self.input[start_pos..start_pos + 7 + bracket_start]; // "mailto:email"
+        let link_attrs = parse_link_attrs(bracket_content);
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
+            window: link_attrs.window.map(Cow::Borrowed),
+            nofollow: link_attrs.nofollow,
         }));
-        let display = if link_text.is_empty() { email } else { link_text };
+        let display = if link_attrs.text.is_empty() { email } else { link_attrs.text };
         events.push(Event::Text(Cow::Borrowed(display)));
         events.push(Event::End(TagEnd::Link));
 
@@ -1348,6 +1355,8 @@ impl<'a> InlineState<'a> {
 
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
+            window: None,
+            nofollow: false,
         }));
         events.push(Event::Text(Cow::Borrowed(url)));
         events.push(Event::End(TagEnd::Link));
@@ -1910,6 +1919,8 @@ mod tests {
             Event::Text(Cow::Borrowed("click ")),
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("https://example.com"),
+                window: None,
+                nofollow: false,
             }),
             Event::Text(Cow::Borrowed("here")),
             Event::End(TagEnd::Link),
@@ -1947,6 +1958,8 @@ mod tests {
             Event::Text(Cow::Borrowed("visit ")),
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("https://example.com"),
+                window: None,
+                nofollow: false,
             }),
             Event::Text(Cow::Borrowed("https://example.com")),
             Event::End(TagEnd::Link),
@@ -2919,6 +2932,8 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("mailto:user@example.com"),
+                window: None,
+                nofollow: false,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -2931,6 +2946,8 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("mailto:user@example.com"),
+                window: None,
+                nofollow: false,
             }),
             Event::Text(Cow::Borrowed("Email Me")),
             Event::End(TagEnd::Link),
@@ -2944,6 +2961,8 @@ mod tests {
             Event::Text(Cow::Borrowed("Contact ")),
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("mailto:user@example.com"),
+                window: None,
+                nofollow: false,
             }),
             Event::Text(Cow::Borrowed("us")),
             Event::End(TagEnd::Link),
@@ -2957,6 +2976,62 @@ mod tests {
         let events = parse("mailto:user@example.com");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("mailto:user@example.com")),
+        ]);
+    }
+
+    #[test]
+    fn test_link_macro_with_window() {
+        let events = parse("link:https://example.com[Example,window=_blank]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://example.com"),
+                window: Some(Cow::Borrowed("_blank")),
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("Example")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_link_macro_with_nofollow() {
+        let events = parse("link:https://example.com[Example,opts=nofollow]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://example.com"),
+                window: None,
+                nofollow: true,
+            }),
+            Event::Text(Cow::Borrowed("Example")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_link_macro_with_window_and_nofollow() {
+        let events = parse("link:https://example.com[Example,window=_blank,opts=nofollow]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://example.com"),
+                window: Some(Cow::Borrowed("_blank")),
+                nofollow: true,
+            }),
+            Event::Text(Cow::Borrowed("Example")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_mailto_with_window() {
+        let events = parse("mailto:user@example.com[Email,window=_blank]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:user@example.com"),
+                window: Some(Cow::Borrowed("_blank")),
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("Email")),
+            Event::End(TagEnd::Link),
         ]);
     }
 
