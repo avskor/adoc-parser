@@ -1869,6 +1869,12 @@ mod tests {
     }
 
     #[test]
+    fn test_email_autolink_html() {
+        let html = to_html("Contact user@example.com for info");
+        assert!(html.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"));
+    }
+
+    #[test]
     fn test_thematic_break() {
         let html = to_html("Before.\n\n'''\n\nAfter.");
         assert!(html.contains("<hr>"));

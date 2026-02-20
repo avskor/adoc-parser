@@ -475,6 +475,14 @@ impl<'a> InlineState<'a> {
                     self.pos += 1;
                 }
 
+                // Email autolink: user@example.com (MACROS)
+                b'@' if has_macros => {
+                    if self.try_email_autolink(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
                 // Inline attr span: [.class]#text# or [#id.class]#text# (QUOTES)
                 b'[' if has_quotes
                     && self.peek_at(1) != Some(b'[')
@@ -1392,6 +1400,75 @@ impl<'a> InlineState<'a> {
         events.push(Event::End(TagEnd::Link));
 
         self.pos = start_pos + url_end;
+        *text_start = self.pos;
+        true
+    }
+
+    fn try_email_autolink(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let at_pos = self.pos;
+        let bytes = self.input.as_bytes();
+
+        // Scan backwards for local part (a-zA-Z0-9._+-)
+        let mut local_start = at_pos;
+        while local_start > *text_start {
+            let b = bytes[local_start - 1];
+            if b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'+' || b == b'-' {
+                local_start -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Local part must be non-empty
+        if local_start == at_pos {
+            return false;
+        }
+
+        // Scan forward for domain (a-zA-Z0-9.-)
+        let mut domain_end = at_pos + 1;
+        let mut has_dot = false;
+        while domain_end < bytes.len() {
+            let b = bytes[domain_end];
+            if b.is_ascii_alphanumeric() || b == b'-' {
+                domain_end += 1;
+            } else if b == b'.' {
+                has_dot = true;
+                domain_end += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Domain must contain at least one dot
+        if !has_dot {
+            return false;
+        }
+
+        // Domain must not start or end with '.' or '-'
+        let domain = &self.input[at_pos + 1..domain_end];
+        if domain.starts_with('.') || domain.starts_with('-')
+            || domain.ends_with('.') || domain.ends_with('-')
+        {
+            return false;
+        }
+
+        let email = &self.input[local_start..domain_end];
+
+        self.flush_text(*text_start, local_start, events);
+
+        events.push(Event::Start(Tag::Link {
+            url: Cow::Owned(format!("mailto:{email}")),
+            window: None,
+            nofollow: false,
+        }));
+        events.push(Event::Text(Cow::Borrowed(email)));
+        events.push(Event::End(TagEnd::Link));
+
+        self.pos = domain_end;
         *text_start = self.pos;
         true
     }
@@ -3027,10 +3104,17 @@ mod tests {
 
     #[test]
     fn test_mailto_no_brackets() {
-        // Without [] — not recognized as macro
+        // Without [] — not recognized as macro, but email part is auto-linked
         let events = parse("mailto:user@example.com");
         assert_eq!(events, vec![
-            Event::Text(Cow::Borrowed("mailto:user@example.com")),
+            Event::Text(Cow::Borrowed("mailto:")),
+            Event::Start(Tag::Link {
+                url: Cow::Owned("mailto:user@example.com".to_string()),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("user@example.com")),
+            Event::End(TagEnd::Link),
         ]);
     }
 
@@ -3218,6 +3302,72 @@ mod tests {
         let events = parse("hello--world");
         assert_eq!(events, vec![
             Event::Text(Cow::Owned("hello\u{2013}world".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_email_autolink() {
+        let events = parse("user@example.com");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Owned("mailto:user@example.com".to_string()),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("user@example.com")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_email_autolink_in_sentence() {
+        let events = parse("Contact user@example.com for info");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Contact ")),
+            Event::Start(Tag::Link {
+                url: Cow::Owned("mailto:user@example.com".to_string()),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("user@example.com")),
+            Event::End(TagEnd::Link),
+            Event::Text(Cow::Borrowed(" for info")),
+        ]);
+    }
+
+    #[test]
+    fn test_email_autolink_with_subdomain() {
+        let events = parse("user@mail.example.com");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Owned("mailto:user@mail.example.com".to_string()),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("user@mail.example.com")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_email_autolink_with_plus() {
+        let events = parse("user+tag@example.com");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Link {
+                url: Cow::Owned("mailto:user+tag@example.com".to_string()),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("user+tag@example.com")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_email_autolink_no_domain_dot() {
+        let events = parse("user@localhost");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("user@localhost")),
         ]);
     }
 }
