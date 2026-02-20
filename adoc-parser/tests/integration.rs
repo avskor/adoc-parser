@@ -146,7 +146,7 @@ fn test_admonition_note() {
 fn test_block_image() {
     let events = parse("image::sunset.jpg[A beautiful sunset]");
 
-    assert!(matches!(&events[0], Event::Start(Tag::BlockImage { target, alt, width, height }) if target == "sunset.jpg" && alt == "A beautiful sunset" && width.is_none() && height.is_none()));
+    assert!(matches!(&events[0], Event::Start(Tag::BlockImage { target, alt, width, height, link }) if target == "sunset.jpg" && alt == "A beautiful sunset" && width.is_none() && height.is_none() && link.is_none()));
     assert_eq!(events[1], Event::End(TagEnd::BlockImage));
 }
 

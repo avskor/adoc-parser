@@ -525,6 +525,7 @@ impl<'a> BlockScanner<'a> {
                 alt: Cow::Borrowed(img_attrs.alt),
                 width: img_attrs.width.map(Cow::Borrowed),
                 height: img_attrs.height.map(Cow::Borrowed),
+                link: img_attrs.link.map(Cow::Borrowed),
             }));
             self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
             self.push_title_then_events(title_events);

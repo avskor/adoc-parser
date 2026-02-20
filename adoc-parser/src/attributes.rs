@@ -339,6 +339,7 @@ pub struct ImageAttrs<'a> {
     pub height: Option<&'a str>,
     pub align: Option<&'a str>,
     pub float: Option<&'a str>,
+    pub link: Option<&'a str>,
 }
 
 pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
@@ -349,6 +350,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
             height: None,
             align: None,
             float: None,
+            link: None,
         };
     }
 
@@ -357,6 +359,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
     let mut height: Option<&str> = None;
     let mut align: Option<&str> = None;
     let mut float: Option<&str> = None;
+    let mut link: Option<&str> = None;
     let mut positional = Vec::new();
 
     for part in split_respecting_quotes(bracket_content) {
@@ -378,6 +381,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
                 "height" => height = Some(value),
                 "align" => align = Some(value),
                 "float" => float = Some(value),
+                "link" => link = Some(value),
                 _ => {}
             }
         } else {
@@ -402,7 +406,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         height = Some(h);
     }
 
-    ImageAttrs { alt, width, height, align, float }
+    ImageAttrs { alt, width, height, align, float, link }
 }
 
 pub struct LinkAttrs<'a> {

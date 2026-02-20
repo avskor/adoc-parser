@@ -235,7 +235,7 @@
 | 11.4 | Блочное аудио | `audio::path[attrs]` | ✅ |
 | 11.5 | Размеры изображения | `image::path[alt,width,height]` | ✅ |
 | 11.6 | Позиционирование | `[.text-center]`, `[float=right]` | ✅ |
-| 11.7 | Thumbnail | `[link=fullsize.png]` | ❌ |
+| 11.7 | Thumbnail | `[link=fullsize.png]` | ✅ |
 
 ## 12. Макросы (Macros)
 

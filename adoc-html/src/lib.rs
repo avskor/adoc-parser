@@ -951,12 +951,19 @@ impl HtmlRenderer {
                     _ => {}
                 }
             }
-            Tag::BlockImage { target, alt, width, height } => {
+            Tag::BlockImage { target, alt, width, height, link } => {
                 // Build base class with align/float CSS classes from named attrs
                 let base_class = Self::image_base_class("imageblock", &meta);
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, &base_class);
-                output.push_str(">\n<div class=\"content\">\n<img src=\"");
+                output.push_str(">\n<div class=\"content\">\n");
+                let has_link = link.is_some();
+                if let Some(href) = link {
+                    output.push_str("<a class=\"image\" href=\"");
+                    html_escape(output, href);
+                    output.push_str("\">");
+                }
+                output.push_str("<img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
@@ -971,7 +978,11 @@ impl HtmlRenderer {
                     html_escape(output, h);
                     output.push('"');
                 }
-                output.push_str(">\n</div>\n");
+                output.push('>');
+                if has_link {
+                    output.push_str("</a>");
+                }
+                output.push_str("\n</div>\n");
             }
             Tag::BlockVideo { target, attrs } => {
                 output.push_str("<div");
@@ -985,7 +996,7 @@ impl HtmlRenderer {
                 output.push_str(">\n<div class=\"content\">\n");
                 render_audio_tag(output, target, attrs);
             }
-            Tag::InlineImage { target, alt, width, height, align, float } => {
+            Tag::InlineImage { target, alt, width, height, align, float, link } => {
                 let mut img_class = String::from("image");
                 if let Some(f) = float {
                     img_class.push(' ');
@@ -1003,7 +1014,14 @@ impl HtmlRenderer {
                 }
                 output.push_str("<span class=\"");
                 output.push_str(&img_class);
-                output.push_str("\"><img src=\"");
+                output.push_str("\">");
+                let has_link = link.is_some();
+                if let Some(href) = link {
+                    output.push_str("<a class=\"image\" href=\"");
+                    html_escape(output, href);
+                    output.push_str("\">");
+                }
+                output.push_str("<img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
@@ -1018,7 +1036,11 @@ impl HtmlRenderer {
                     html_escape(output, h);
                     output.push('"');
                 }
-                output.push_str("></span>");
+                output.push('>');
+                if has_link {
+                    output.push_str("</a>");
+                }
+                output.push_str("</span>");
             }
             Tag::Strong => {
                 output.push_str("<strong>");
@@ -1546,7 +1568,7 @@ impl HtmlRenderer {
             classes.push_str(r);
         }
 
-        if let Some(ref href) = link {
+        if let Some(href) = &link {
             output.push_str("<a class=\"icon\" href=\"");
             html_escape(output, href);
             output.push_str("\">");
@@ -3219,6 +3241,30 @@ mod tests {
     fn test_inline_image_align_center() {
         let html = to_html("text image:icon.png[Icon,align=center] more");
         assert!(html.contains("class=\"image text-center\""));
+    }
+
+    #[test]
+    fn test_block_image_with_link() {
+        let html = to_html("image::thumb.jpg[Alt,link=fullsize.jpg]");
+        assert!(html.contains("<a class=\"image\" href=\"fullsize.jpg\"><img src=\"thumb.jpg\" alt=\"Alt\"></a>"));
+    }
+
+    #[test]
+    fn test_inline_image_with_link() {
+        let html = to_html("text image:icon.png[Icon,link=https://example.com] more");
+        assert!(html.contains("<a class=\"image\" href=\"https://example.com\"><img src=\"icon.png\" alt=\"Icon\"></a>"));
+    }
+
+    #[test]
+    fn test_block_image_with_link_and_dimensions() {
+        let html = to_html("image::photo.jpg[Alt,300,200,link=big.jpg]");
+        assert!(html.contains("<a class=\"image\" href=\"big.jpg\"><img src=\"photo.jpg\" alt=\"Alt\" width=\"300\" height=\"200\"></a>"));
+    }
+
+    #[test]
+    fn test_block_image_without_link_no_anchor() {
+        let html = to_html("image::photo.jpg[Alt]");
+        assert!(!html.contains("<a "));
     }
 
     #[test]

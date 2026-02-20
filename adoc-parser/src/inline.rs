@@ -1364,6 +1364,7 @@ impl<'a> InlineState<'a> {
             height: img_attrs.height.map(Cow::Borrowed),
             align: img_attrs.align.map(Cow::Borrowed),
             float: img_attrs.float.map(Cow::Borrowed),
+            link: img_attrs.link.map(Cow::Borrowed),
         }));
         events.push(Event::End(TagEnd::InlineImage));
 
@@ -2085,6 +2086,7 @@ mod tests {
                 height: None,
                 align: None,
                 float: None,
+                link: None,
             }),
             Event::End(TagEnd::InlineImage),
         ]);
