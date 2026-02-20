@@ -3576,4 +3576,83 @@ mod tests {
         assert!(html.contains("My Code"), "should contain block title. Got: {html}");
         assert!(html.contains("class=\"language-rust\""), "should have language class. Got: {html}");
     }
+
+    // === Block style attributes (4.13) ===
+
+    #[test]
+    fn test_listing_style_on_paragraph() {
+        let html = to_html("[listing]\nsome code here");
+        assert!(html.contains("listingblock"), "should have listingblock class. Got: {html}");
+        assert!(html.contains("<pre>"), "should have <pre>. Got: {html}");
+        assert!(html.contains("some code here"), "should contain text. Got: {html}");
+        assert!(!html.contains("<p>"), "should NOT have <p>. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_style_on_paragraph() {
+        let html = to_html("[source,rust]\nfn main() {}");
+        assert!(html.contains("language-rust"), "should have language-rust. Got: {html}");
+        assert!(html.contains("fn main()"), "should contain code. Got: {html}");
+        assert!(!html.contains("<p>"), "should NOT have <p>. Got: {html}");
+    }
+
+    #[test]
+    fn test_verse_style_on_paragraph() {
+        let html = to_html("[verse]\nline one\nline two");
+        assert!(html.contains("verseblock"), "should have verseblock class. Got: {html}");
+        assert!(html.contains("<pre class=\"content\">"), "should have verse pre. Got: {html}");
+        assert!(html.contains("line one"), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_quote_style_on_paragraph() {
+        let html = to_html("[quote]\nThis is a quote.");
+        assert!(html.contains("quoteblock"), "should have quoteblock class. Got: {html}");
+        assert!(html.contains("<blockquote>"), "should have blockquote. Got: {html}");
+        assert!(html.contains("This is a quote."), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_sidebar_style_on_paragraph() {
+        let html = to_html("[sidebar]\nSidebar content.");
+        assert!(html.contains("sidebarblock"), "should have sidebarblock class. Got: {html}");
+        assert!(html.contains("Sidebar content."), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_example_style_on_paragraph() {
+        let html = to_html("[example]\nExample content.");
+        assert!(html.contains("exampleblock"), "should have exampleblock class. Got: {html}");
+        assert!(html.contains("Example content."), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_style_on_open_block() {
+        let html = to_html("[listing]\n--\ncode inside open\n--");
+        assert!(html.contains("listingblock"), "should have listingblock class. Got: {html}");
+        assert!(html.contains("<pre>"), "should have <pre>. Got: {html}");
+        assert!(html.contains("code inside open"), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_style_on_open_block() {
+        let html = to_html("[source,py]\n--\nprint('hello')\n--");
+        assert!(html.contains("language-py"), "should have language-py. Got: {html}");
+        assert!(html.contains("print("), "should contain code. Got: {html}");
+    }
+
+    #[test]
+    fn test_quote_style_on_open_block() {
+        let html = to_html("[quote]\n--\nQuoted text.\n--");
+        assert!(html.contains("quoteblock"), "should have quoteblock class. Got: {html}");
+        assert!(html.contains("<blockquote>"), "should have blockquote. Got: {html}");
+        assert!(html.contains("Quoted text."), "should contain text. Got: {html}");
+    }
+
+    #[test]
+    fn test_note_style_on_open_block() {
+        let html = to_html("[NOTE]\n--\nNote content.\n--");
+        assert!(html.contains("admonitionblock note"), "should have admonition. Got: {html}");
+        assert!(html.contains("Note content."), "should contain text. Got: {html}");
+    }
 }

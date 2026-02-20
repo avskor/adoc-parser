@@ -215,6 +215,13 @@ impl BlockAttributes {
         }
     }
 
+    pub fn block_style_kind(&self) -> Option<&str> {
+        match self.positional.first().map(|s| s.as_str())? {
+            s @ ("listing" | "literal" | "source" | "verse" | "quote" | "example" | "sidebar" | "pass") => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn admonition_kind(&self) -> Option<crate::event::AdmonitionKind> {
         match self.positional.first().map(|s| s.as_str())? {
             "NOTE" => Some(crate::event::AdmonitionKind::Note),

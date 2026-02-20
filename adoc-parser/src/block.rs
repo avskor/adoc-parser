@@ -193,6 +193,7 @@ impl<'a> BlockScanner<'a> {
                 "source" | "verse" | "stem" | "latexmath" | "asciimath"
                 | "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
                 | "discrete" | "normal"
+                | "listing" | "literal" | "quote" | "example" | "sidebar" | "pass"
                 | "csv" | "dsv" | "tsv"
             ))
             .map(|s| Cow::Owned(s.clone()));
@@ -1471,6 +1472,9 @@ impl<'a> BlockScanner<'a> {
         // Check for admonition style from block attributes
         let admonition_kind = self.pending_block_attrs.as_ref()
             .and_then(|a| a.admonition_kind());
+        let block_style = self.pending_block_attrs.as_ref()
+            .and_then(|a| a.block_style_kind())
+            .map(|s| s.to_string());
 
         let block_attrs = self.pending_block_attrs.take();
 
@@ -1487,6 +1491,90 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::Start(Tag::Admonition { kind }));
             if let Some(ref attrs) = block_attrs {
                 self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+            }
+        } else if let Some(style) = block_style {
+            match style.as_str() {
+                "listing" | "literal" => {
+                    let kind = if style == "listing" {
+                        DelimitedBlockKind::Listing
+                    } else {
+                        DelimitedBlockKind::Literal
+                    };
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::VERBATIM);
+                    }
+                }
+                "source" => {
+                    let language = block_attrs.as_ref()
+                        .and_then(|a| a.source_language())
+                        .map(|l| Cow::Owned(l.to_string()));
+                    self.push_event(Event::End(TagEnd::SourceBlock));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::SourceBlock { language }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::VERBATIM);
+                    }
+                }
+                "pass" => {
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Passthrough }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::NONE);
+                    }
+                }
+                "verse" => {
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Verse }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+                    }
+                }
+                "quote" | "example" | "sidebar" => {
+                    let kind = match style.as_str() {
+                        "quote" => DelimitedBlockKind::Quote,
+                        "example" => DelimitedBlockKind::Example,
+                        _ => DelimitedBlockKind::Sidebar,
+                    };
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    self.push_event(Event::End(TagEnd::Paragraph));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::Paragraph));
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+                    }
+                }
+                _ => unreachable!(),
             }
         } else {
             self.push_event(Event::End(TagEnd::Paragraph));
@@ -1663,6 +1751,88 @@ impl<'a> BlockScanner<'a> {
                 }
             }
             return self.scan_next_block();
+        }
+
+        // Open block style remapping: [style] on `--` block
+        if delim_type == scanner::DelimiterType::Open {
+            if let Some(style) = block_attrs.block_style_kind() {
+                match style {
+                    "source" => {
+                        let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
+                        return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
+                    }
+                    "verse" => {
+                        return self.scan_verse_block(delim_type, delim_len, title_events, &block_attrs);
+                    }
+                    "listing" | "literal" | "pass" => {
+                        let kind = match style {
+                            "listing" => DelimitedBlockKind::Listing,
+                            "literal" => DelimitedBlockKind::Literal,
+                            _ => DelimitedBlockKind::Passthrough,
+                        };
+                        let default_subs = if style == "pass" {
+                            SubstitutionSet::NONE
+                        } else {
+                            SubstitutionSet::VERBATIM
+                        };
+                        let mut content_lines: Vec<&'a str> = Vec::new();
+                        let mut closed = false;
+                        while let Some(line) = self.current_line() {
+                            if let Some((dt, dl)) = scanner::is_delimiter(line)
+                                && dt == delim_type && dl == delim_len {
+                                    self.advance();
+                                    closed = true;
+                                    break;
+                            }
+                            content_lines.push(line);
+                            self.advance();
+                        }
+                        if !closed && content_lines.last().is_some_and(|l| l.is_empty()) {
+                            content_lines.pop();
+                        }
+                        self.push_event(Event::End(TagEnd::DelimitedBlock));
+                        for (i, &cline) in content_lines.iter().enumerate().rev() {
+                            if i < content_lines.len() - 1 {
+                                self.push_event(Event::SoftBreak);
+                            }
+                            self.push_event(Event::Text(Cow::Borrowed(cline)));
+                        }
+                        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                        self.emit_block_metadata(&block_attrs, default_subs);
+                        self.push_title_then_events(title_events);
+                        return self.event_buffer.pop();
+                    }
+                    "quote" | "example" | "sidebar" => {
+                        let kind = match style {
+                            "quote" => DelimitedBlockKind::Quote,
+                            "example" => DelimitedBlockKind::Example,
+                            _ => DelimitedBlockKind::Sidebar,
+                        };
+                        self.context_stack.push(BlockContext::DelimitedBlock {
+                            kind: delim_type,
+                            delimiter_len: delim_len,
+                            admonition_kind: None,
+                        });
+                        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                        self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
+                        self.push_title_then_events(title_events);
+                        return self.event_buffer.pop();
+                    }
+                    _ => {}
+                }
+            }
+            // Admonition style on open block
+            if let Some(ak) = block_attrs.admonition_kind() {
+                self.context_stack.push(BlockContext::DelimitedBlock {
+                    kind: delim_type,
+                    delimiter_len: delim_len,
+                    admonition_kind: Some(ak.clone()),
+                });
+                self.push_event(Event::Start(Tag::Admonition { kind: ak }));
+                self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
+                self.push_title_then_events(title_events);
+                return self.event_buffer.pop();
+            }
         }
 
         let kind = match delim_type {
