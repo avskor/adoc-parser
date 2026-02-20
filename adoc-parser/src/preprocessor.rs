@@ -31,6 +31,8 @@ struct IncludeAttrs<'a> {
     lines: Option<Vec<LineRange>>,
     tags: Option<TagFilter<'a>>,
     optional: bool,
+    leveloffset: i8,
+    indent: Option<usize>,
 }
 
 fn parse_include_attrs(attrs: &str) -> IncludeAttrs<'_> {
@@ -85,8 +87,15 @@ fn parse_include_attrs(attrs: &str) -> IncludeAttrs<'_> {
             }
         } else if part == "opts=optional" {
             result.optional = true;
+        } else if let Some(value) = part.strip_prefix("leveloffset=") {
+            if let Ok(n) = value.trim().parse::<i8>() {
+                result.leveloffset = n;
+            }
+        } else if let Some(value) = part.strip_prefix("indent=")
+            && let Ok(n) = value.trim().parse::<usize>()
+        {
+            result.indent = Some(n);
         }
-        // Other keys (leveloffset, indent, encoding) — ignored
     }
 
     result
@@ -258,6 +267,69 @@ fn filter_by_tags<'a>(content: &str, filter: &TagFilter<'a>) -> String {
     result
 }
 
+/// Adjust section heading levels in `content` by `offset`.
+///
+/// Each ATX-style heading (`== Title`, `=== Title`, …) has its level shifted
+/// by `offset` positions.  The resulting level is clamped to 2–6 `=` signs.
+/// If `offset` is 0 the input is returned as-is.
+pub fn apply_level_offset(content: &str, offset: i8) -> String {
+    if offset == 0 {
+        return content.to_string();
+    }
+    let mut result = String::with_capacity(content.len());
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let eq_count = trimmed.chars().take_while(|&c| c == '=').count();
+        if eq_count >= 2 && trimmed[eq_count..].starts_with(' ') {
+            let new_level = (eq_count as i8 + offset).clamp(2, 6) as usize;
+            for _ in 0..new_level {
+                result.push('=');
+            }
+            result.push_str(&trimmed[eq_count..]);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+fn apply_indent(content: &str, indent: usize) -> String {
+    // Find minimum indent among non-empty lines
+    let min_indent = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    let prefix = " ".repeat(indent);
+    let mut result = String::with_capacity(content.len());
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            result.push('\n');
+        } else {
+            let stripped = if min_indent <= line.len() {
+                &line[min_indent..]
+            } else {
+                line.trim_start()
+            };
+            if indent > 0 {
+                result.push_str(&prefix);
+            }
+            result.push_str(stripped);
+            result.push('\n');
+        }
+    }
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
 /// Resolve `include::path[]` directives by reading and splicing file content.
 ///
 /// This is a text-to-text transformation that should run before conditional
@@ -279,8 +351,13 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
                         let trimmed = content.trim_end_matches(['\n', '\r']);
                         trimmed.to_string()
                     };
-                    if !filtered.is_empty() {
-                        output.push_str(&filtered);
+                    let adjusted = apply_level_offset(&filtered, attrs.leveloffset);
+                    let adjusted = match attrs.indent {
+                        Some(n) => apply_indent(&adjusted, n),
+                        None => adjusted,
+                    };
+                    if !adjusted.is_empty() {
+                        output.push_str(&adjusted);
                         output.push('\n');
                     }
                 }
@@ -1262,9 +1339,28 @@ matched");
 
     #[test]
     fn test_parse_include_attrs_ignore_unknown() {
-        let attrs = parse_include_attrs("leveloffset=+1,lines=1..3");
+        let attrs = parse_include_attrs("encoding=utf-8,lines=1..3");
         assert_eq!(attrs.lines, Some(vec![LineRange::Range(1, 3)]));
         assert!(!attrs.optional);
+    }
+
+    #[test]
+    fn test_parse_include_attrs_leveloffset() {
+        let attrs = parse_include_attrs("leveloffset=+1");
+        assert_eq!(attrs.leveloffset, 1);
+    }
+
+    #[test]
+    fn test_parse_include_attrs_indent() {
+        let attrs = parse_include_attrs("indent=0");
+        assert_eq!(attrs.indent, Some(0));
+    }
+
+    #[test]
+    fn test_parse_include_attrs_indent_and_leveloffset() {
+        let attrs = parse_include_attrs("leveloffset=+2,indent=4");
+        assert_eq!(attrs.leveloffset, 2);
+        assert_eq!(attrs.indent, Some(4));
     }
 
     // -----------------------------------------------------------------------
@@ -1714,6 +1810,73 @@ Value: {counter:x}";
         let input = ":desc: simple value\nifdef::desc[ok]";
         let result = preprocess(input);
         assert_eq!(result, ":desc: simple value\nok");
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_level_offset tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_level_offset_positive() {
+        assert_eq!(apply_level_offset("== Title", 1), "=== Title");
+    }
+
+    #[test]
+    fn test_level_offset_negative() {
+        assert_eq!(apply_level_offset("=== Title", -1), "== Title");
+    }
+
+    #[test]
+    fn test_level_offset_zero() {
+        assert_eq!(apply_level_offset("== Title", 0), "== Title");
+    }
+
+    #[test]
+    fn test_level_offset_clamp_min() {
+        // Cannot go below 2 '=' signs
+        assert_eq!(apply_level_offset("== Title", -5), "== Title");
+    }
+
+    #[test]
+    fn test_level_offset_clamp_max() {
+        // Cannot go above 6 '=' signs
+        assert_eq!(apply_level_offset("====== Title", 5), "====== Title");
+    }
+
+    #[test]
+    fn test_level_offset_multiline() {
+        let input = "== Chapter\n\nSome text\n\n=== Section";
+        let expected = "=== Chapter\n\nSome text\n\n==== Section";
+        assert_eq!(apply_level_offset(input, 1), expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_indent tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_indent_zero_removes_common() {
+        let input = "    line1\n    line2";
+        assert_eq!(apply_indent(input, 0), "line1\nline2");
+    }
+
+    #[test]
+    fn test_indent_set_value() {
+        let input = "    line1\n    line2";
+        assert_eq!(apply_indent(input, 2), "  line1\n  line2");
+    }
+
+    #[test]
+    fn test_indent_preserves_empty_lines() {
+        let input = "    line1\n\n    line2";
+        assert_eq!(apply_indent(input, 0), "line1\n\nline2");
+    }
+
+    #[test]
+    fn test_indent_mixed_indentation() {
+        let input = "  line1\n    line2";
+        // min indent=2, so line1 loses 2, line2 loses 2 (keeping 2)
+        assert_eq!(apply_indent(input, 0), "line1\n  line2");
     }
 
     #[test]

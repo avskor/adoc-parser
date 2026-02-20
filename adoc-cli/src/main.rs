@@ -32,32 +32,6 @@ fn parse_level_offset(attrs: &str) -> i8 {
     0
 }
 
-fn apply_level_offset(content: &str, offset: i8) -> String {
-    if offset == 0 {
-        return content.to_string();
-    }
-    let mut result = String::with_capacity(content.len());
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        let eq_count = trimmed.chars().take_while(|&c| c == '=').count();
-        if eq_count >= 2 && trimmed[eq_count..].starts_with(' ') {
-            let new_level = (eq_count as i8 + offset).clamp(2, 6) as usize;
-            for _ in 0..new_level {
-                result.push('=');
-            }
-            result.push_str(&trimmed[eq_count..]);
-        } else {
-            result.push_str(line);
-        }
-        result.push('\n');
-    }
-    // Remove trailing newline if original didn't end with one
-    if !content.ends_with('\n') && result.ends_with('\n') {
-        result.pop();
-    }
-    result
-}
-
 fn resolve_includes(
     content: &str,
     base_dir: &Path,
@@ -103,7 +77,7 @@ fn resolve_includes(
                 seen.remove(&canonical);
 
                 let offset = parse_level_offset(attrs);
-                let adjusted = apply_level_offset(&resolved, offset);
+                let adjusted = adoc_parser::apply_level_offset(&resolved, offset);
                 result.push_str(&adjusted);
                 result.push('\n');
                 continue;
