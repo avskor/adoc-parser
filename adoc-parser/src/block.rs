@@ -1709,6 +1709,21 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    /// Check if a delimiter line closes any parent structural block in the context stack.
+    /// Used by verbatim block scanning loops to avoid "eating" the parent's closing delimiter.
+    fn closes_parent_block(&self, line: &str) -> bool {
+        if let Some((dt, dl)) = scanner::is_delimiter(line) {
+            for ctx in self.context_stack.iter().rev() {
+                if let BlockContext::DelimitedBlock { kind, delimiter_len, .. } = ctx
+                    && *kind == dt && *delimiter_len == dl
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn scan_delimited_block(
         &mut self,
         delim_type: scanner::DelimiterType,
@@ -1783,6 +1798,9 @@ impl<'a> BlockScanner<'a> {
                                     self.advance();
                                     closed = true;
                                     break;
+                            }
+                            if self.closes_parent_block(line) {
+                                break;
                             }
                             content_lines.push(line);
                             self.advance();
@@ -1861,6 +1879,9 @@ impl<'a> BlockScanner<'a> {
                         closed = true;
                         break;
                 }
+                if self.closes_parent_block(line) {
+                    break;
+                }
                 content_lines.push(line);
                 self.advance();
             }
@@ -1936,6 +1957,9 @@ impl<'a> BlockScanner<'a> {
                 && dt == delim_type && dl == delim_len {
                     self.advance();
                     break;
+            }
+            if self.closes_parent_block(line) {
+                break;
             }
             content_lines.push(line);
             self.advance();
@@ -2056,6 +2080,9 @@ impl<'a> BlockScanner<'a> {
                     closed = true;
                     break;
             }
+            if self.closes_parent_block(line) {
+                break;
+            }
             content_lines.push(line);
             self.advance();
         }
@@ -2098,6 +2125,9 @@ impl<'a> BlockScanner<'a> {
                     self.advance();
                     closed = true;
                     break;
+            }
+            if self.closes_parent_block(line) {
+                break;
             }
             content_lines.push(line);
             self.advance();

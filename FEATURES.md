@@ -63,7 +63,7 @@
 | 4.9 | Verse block | `[verse]` + `____` | ✅ |
 | 4.10 | Source block | `[source,lang]` + `----` | ✅ |
 | 4.11 | STEM block | `[stem]`/`[latexmath]`/`[asciimath]` + `++++` | ✅ |
-| 4.12 | Вложенные delimited blocks | Блоки внутри блоков | ⚠️ |
+| 4.12 | Вложенные delimited blocks | Блоки внутри блоков | ✅ |
 | 4.13 | Стиль блока через атрибут | `[listing]`, `[source]`, `[quote]` и т.д. | ✅ |
 
 ## 5. Атрибуты блоков (Block Attributes)

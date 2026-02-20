@@ -3655,4 +3655,78 @@ mod tests {
         assert!(html.contains("admonitionblock note"), "should have admonition. Got: {html}");
         assert!(html.contains("Note content."), "should contain text. Got: {html}");
     }
+
+    // === Nested delimited blocks (4.12) ===
+
+    #[test]
+    fn test_nested_example_blocks_different_lengths() {
+        let html = to_html("======\nOuter\n====\nInner\n====\nAfter inner\n======");
+        // Should have two exampleblocks
+        assert_eq!(html.matches("<div class=\"exampleblock\">").count(), 2,
+            "should have two example blocks. Got: {html}");
+        assert!(html.contains("Outer"), "should contain outer text. Got: {html}");
+        assert!(html.contains("Inner"), "should contain inner text. Got: {html}");
+        assert!(html.contains("After inner"), "should contain text after inner. Got: {html}");
+    }
+
+    #[test]
+    fn test_nested_quote_inside_example() {
+        let html = to_html("====\nBefore\n____\nQuote text\n____\nAfter\n====");
+        assert!(html.contains("<div class=\"exampleblock\">"),
+            "should have example block. Got: {html}");
+        assert!(html.contains("<div class=\"quoteblock\">"),
+            "should have quote block. Got: {html}");
+        assert!(html.contains("Quote text"), "should contain quote text. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_inside_sidebar() {
+        let html = to_html("****\nBefore\n----\ncode here\n----\nAfter\n****");
+        assert!(html.contains("<div class=\"sidebarblock\">"),
+            "should have sidebar block. Got: {html}");
+        assert!(html.contains("<div class=\"listingblock\">"),
+            "should have listing block. Got: {html}");
+        assert!(html.contains("code here"), "should contain code. Got: {html}");
+        assert!(html.contains("After"), "should contain text after listing. Got: {html}");
+    }
+
+    #[test]
+    fn test_open_block_inside_example() {
+        let html = to_html("====\nBefore\n--\nOpen content\n--\nAfter\n====");
+        assert!(html.contains("<div class=\"exampleblock\">"),
+            "should have example block. Got: {html}");
+        assert!(html.contains("<div class=\"openblock\">"),
+            "should have open block. Got: {html}");
+        assert!(html.contains("Open content"), "should contain open block text. Got: {html}");
+    }
+
+    #[test]
+    fn test_unclosed_listing_inside_example_parent_delimiter_wins() {
+        // Listing block is not closed, but parent example delimiter should take priority
+        let html = to_html("====\nBefore\n----\ncode here\n====");
+        assert!(html.contains("<div class=\"exampleblock\">"),
+            "should have example block. Got: {html}");
+        assert!(html.contains("code here"), "should contain code. Got: {html}");
+        // The example block should be properly closed
+        assert!(html.contains("Before"), "should contain text before listing. Got: {html}");
+    }
+
+    #[test]
+    fn test_three_level_nesting() {
+        let html = to_html("======\nL1\n=====\nL2\n====\nL3\n====\nL2 after\n=====\nL1 after\n======");
+        assert_eq!(html.matches("<div class=\"exampleblock\">").count(), 3,
+            "should have three example blocks. Got: {html}");
+        assert!(html.contains("L1"), "should contain L1 text. Got: {html}");
+        assert!(html.contains("L2"), "should contain L2 text. Got: {html}");
+        assert!(html.contains("L3"), "should contain L3 text. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_inside_sidebar() {
+        let html = to_html("****\n[source,rust]\n----\nfn main() {}\n----\n****");
+        assert!(html.contains("<div class=\"sidebarblock\">"),
+            "should have sidebar block. Got: {html}");
+        assert!(html.contains("<code"), "should have code element. Got: {html}");
+        assert!(html.contains("fn main() {}"), "should contain source code. Got: {html}");
+    }
 }
