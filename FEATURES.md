@@ -146,9 +146,9 @@
 | 7.16 | CSV data | `[%header,format=csv]` | ✅ |
 | 7.17 | DSV data | `[format=dsv]` | ✅ |
 | 7.18 | TSV data | `[format=tsv]` | ✅ |
-| 7.19 | Striping | `[stripes=even]` | ❌ |
-| 7.20 | Autowidth | `[%autowidth]` | ❌ |
-| 7.21 | Table caption | `[caption="Table N. "]` | ❌ |
+| 7.19 | Striping | `[stripes=even]` | ✅ |
+| 7.20 | Autowidth | `[%autowidth]` | ✅ |
+| 7.21 | Table caption | `[caption="Table N. "]` | ✅ |
 
 ## 8. Предупреждения (Admonitions)
 

@@ -113,6 +113,7 @@ pub enum Event<'a> {
         id: Option<CowStr<'a>>,
         roles: Vec<CowStr<'a>>,
         options: Vec<CowStr<'a>>,
+        named: Vec<(CowStr<'a>, CowStr<'a>)>,
         subs: Option<SubstitutionSet>,
     },
 }
@@ -187,11 +188,12 @@ impl<'a> Event<'a> {
                 date: cow_owned(date),
                 remark: cow_owned(remark),
             },
-            Event::BlockMetadata { style, id, roles, options, subs } => Event::BlockMetadata {
+            Event::BlockMetadata { style, id, roles, options, named, subs } => Event::BlockMetadata {
                 style: style.map(cow_owned),
                 id: id.map(cow_owned),
                 roles: roles.into_iter().map(cow_owned).collect(),
                 options: options.into_iter().map(cow_owned).collect(),
+                named: named.into_iter().map(|(k, v)| (cow_owned(k), cow_owned(v))).collect(),
                 subs,
             },
         }

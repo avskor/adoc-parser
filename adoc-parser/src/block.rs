@@ -197,14 +197,20 @@ impl<'a> BlockScanner<'a> {
             ))
             .map(|s| Cow::Owned(s.clone()));
         let subs = attrs.substitution_set(default_subs);
+        // Pass through named attributes that are not consumed by the parser
+        let named: Vec<(Cow<'_, str>, Cow<'_, str>)> = attrs.named.iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "cols" | "format" | "start" | "subs"))
+            .map(|(k, v)| (Cow::Owned(k.clone()), Cow::Owned(v.clone())))
+            .collect();
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
-            || !attrs.options.is_empty() || subs.is_some()
+            || !attrs.options.is_empty() || !named.is_empty() || subs.is_some()
         {
             self.push_event(Event::BlockMetadata {
                 style,
                 id: attrs.id.as_ref().map(|s| Cow::Owned(s.clone())),
                 roles: attrs.roles.iter().map(|s| Cow::Owned(s.clone())).collect(),
                 options: attrs.options.iter().map(|s| Cow::Owned(s.clone())).collect(),
+                named,
                 subs,
             });
         }
@@ -2825,7 +2831,7 @@ mod tests {
         let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())], named: vec![], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -2856,7 +2862,7 @@ mod tests {
         let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())], named: vec![], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -2887,7 +2893,7 @@ mod tests {
         let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], named: vec![], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -3044,6 +3050,63 @@ mod tests {
             Event::End(TagEnd::TableBody),
             Event::End(TagEnd::Table),
         ]);
+    }
+
+    #[test]
+    fn test_table_autowidth_option() {
+        let input = "[%autowidth]\n|===\n| A | B\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::BlockMetadata {
+            style: None, id: None, roles: vec![], options: vec![Cow::Owned("autowidth".into())], named: vec![], subs: None,
+        });
+        assert_eq!(events[1], Event::Start(Tag::Table));
+    }
+
+    #[test]
+    fn test_table_stripes_named_attr() {
+        let input = "[stripes=even]\n|===\n| A | B\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::BlockMetadata {
+            style: None, id: None, roles: vec![], options: vec![],
+            named: vec![(Cow::Owned("stripes".into()), Cow::Owned("even".into()))],
+            subs: None,
+        });
+        assert_eq!(events[1], Event::Start(Tag::Table));
+    }
+
+    #[test]
+    fn test_table_caption_named_attr() {
+        let input = "[caption=\"Listing {counter:table-number}. \"]\n|===\n| A | B\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::BlockMetadata {
+            style: None, id: None, roles: vec![], options: vec![],
+            named: vec![(Cow::Owned("caption".into()), Cow::Owned("Listing {counter:table-number}. ".into()))],
+            subs: None,
+        });
+    }
+
+    #[test]
+    fn test_table_autowidth_stripes_combined() {
+        let input = "[%autowidth,stripes=odd]\n|===\n| A | B\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::BlockMetadata {
+            style: None, id: None, roles: vec![], options: vec![Cow::Owned("autowidth".into())],
+            named: vec![(Cow::Owned("stripes".into()), Cow::Owned("odd".into()))],
+            subs: None,
+        });
+    }
+
+    #[test]
+    fn test_table_cols_not_in_named() {
+        // cols is consumed by parser, should not appear in named
+        let input = "[cols=\"2\",stripes=even]\n|===\n| A\n| B\n| C\n| D\n|===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        if let Event::BlockMetadata { ref named, .. } = events[0] {
+            assert!(named.iter().all(|(k, _)| k != "cols"), "cols should be filtered out");
+            assert!(named.iter().any(|(k, _)| k == "stripes"), "stripes should be present");
+        } else {
+            panic!("Expected BlockMetadata");
+        }
     }
 
     #[test]

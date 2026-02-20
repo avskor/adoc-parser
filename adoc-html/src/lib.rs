@@ -31,6 +31,7 @@ struct BlockMeta {
     id: Option<String>,
     roles: Vec<String>,
     options: Vec<String>,
+    named: Vec<(String, String)>,
     subs: Option<SubstitutionSet>,
 }
 
@@ -60,6 +61,7 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
+    table_counter: usize,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
     dlist_stack: Vec<DlistStyle>,
@@ -100,6 +102,7 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
+            table_counter: 0,
             block_title_output_start: None,
             block_title_inner_html: None,
             dlist_stack: Vec::new(),
@@ -284,7 +287,7 @@ impl HtmlRenderer {
             Event::Revision { .. } => {
                 // Revision metadata — not rendered to HTML body
             }
-            Event::BlockMetadata { style, id, roles, options, subs } => {
+            Event::BlockMetadata { style, id, roles, options, named, subs } => {
                 if let Some(s) = subs {
                     self.pending_subs = Some(s);
                 }
@@ -293,6 +296,7 @@ impl HtmlRenderer {
                     id: id.map(|s| s.into_owned()),
                     roles: roles.into_iter().map(|s| s.into_owned()).collect(),
                     options: options.into_iter().map(|s| s.into_owned()).collect(),
+                    named: named.into_iter().map(|(k, v)| (k.into_owned(), v.into_owned())).collect(),
                     subs,
                 });
             }
@@ -781,9 +785,52 @@ impl HtmlRenderer {
                 output.push_str("</div>\n</td>\n<td class=\"content\">\n");
             }
             Tag::Table => {
+                // Collect extra CSS classes from options/named attrs
+                let has_autowidth = meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "autowidth"));
+                let stripes_value = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "stripes").map(|(_, v)| v.clone()));
+
+                let mut classes = String::new();
+                if has_autowidth {
+                    classes.push_str("fit-content");
+                }
+                if let Some(ref sv) = stripes_value {
+                    if !classes.is_empty() {
+                        classes.push(' ');
+                    }
+                    classes.push_str("stripes-");
+                    classes.push_str(sv);
+                }
+
                 output.push_str("<table");
-                Self::write_meta_attrs(output, &meta, "");
+                Self::write_meta_attrs(output, &meta, &classes);
                 output.push_str(">\n");
+
+                // Caption handling
+                let title_html = self.block_title_inner_html.take();
+                if let Some(start) = self.block_title_output_start.take() {
+                    output.truncate(start);
+                }
+                if let Some(title) = title_html {
+                    self.table_counter += 1;
+                    let caption_attr = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
+                    output.push_str("<caption class=\"title\">");
+                    match caption_attr.as_deref() {
+                        Some("") => {
+                            // Empty caption= means no prefix, just the title
+                        }
+                        Some(prefix) => {
+                            html_escape(output, prefix);
+                        }
+                        None => {
+                            // Default: "Table N. "
+                            output.push_str("Table ");
+                            output.push_str(&self.table_counter.to_string());
+                            output.push_str(". ");
+                        }
+                    }
+                    output.push_str(&title);
+                    output.push_str("</caption>\n");
+                }
             }
             Tag::TableHead => {
                 output.push_str("<thead>\n");
@@ -2430,6 +2477,71 @@ mod tests {
         let html = to_html("[#data.striped]\n|===\n| A | B\n|===");
         assert!(html.contains("id=\"data\""));
         assert!(html.contains("class=\"striped\""));
+    }
+
+    #[test]
+    fn test_table_autowidth_html() {
+        let html = to_html("[%autowidth]\n|===\n| A | B\n|===");
+        assert!(html.contains("<table class=\"fit-content\">"));
+    }
+
+    #[test]
+    fn test_table_stripes_html() {
+        let html = to_html("[stripes=even]\n|===\n| A | B\n|===");
+        assert!(html.contains("<table class=\"stripes-even\">"));
+    }
+
+    #[test]
+    fn test_table_stripes_odd_html() {
+        let html = to_html("[stripes=odd]\n|===\n| A | B\n|===");
+        assert!(html.contains("<table class=\"stripes-odd\">"));
+    }
+
+    #[test]
+    fn test_table_autowidth_stripes_html() {
+        let html = to_html("[%autowidth,stripes=even]\n|===\n| A | B\n|===");
+        assert!(html.contains("fit-content"));
+        assert!(html.contains("stripes-even"));
+    }
+
+    #[test]
+    fn test_table_caption_default_html() {
+        let html = to_html(".My Table\n|===\n| A | B\n|===");
+        assert!(html.contains("<caption class=\"title\">Table 1. My Table</caption>"));
+    }
+
+    #[test]
+    fn test_table_caption_auto_numbering_html() {
+        let html = to_html(".First\n|===\n| A\n|===\n\n.Second\n|===\n| B\n|===");
+        assert!(html.contains("<caption class=\"title\">Table 1. First</caption>"));
+        assert!(html.contains("<caption class=\"title\">Table 2. Second</caption>"));
+    }
+
+    #[test]
+    fn test_table_caption_custom_prefix_html() {
+        let html = to_html("[caption=\"Data Set \"]\n.Results\n|===\n| A | B\n|===");
+        assert!(html.contains("<caption class=\"title\">Data Set Results</caption>"));
+    }
+
+    #[test]
+    fn test_table_caption_empty_prefix_html() {
+        let html = to_html("[caption=]\n.Results\n|===\n| A | B\n|===");
+        assert!(html.contains("<caption class=\"title\">Results</caption>"));
+        assert!(!html.contains("Table 1"));
+    }
+
+    #[test]
+    fn test_table_no_title_no_caption_html() {
+        let html = to_html("|===\n| A | B\n|===");
+        assert!(!html.contains("<caption"));
+    }
+
+    #[test]
+    fn test_table_autowidth_with_id_and_role_html() {
+        let html = to_html("[%autowidth#mytable.custom]\n|===\n| A | B\n|===");
+        assert!(html.contains("id=\"mytable\""));
+        assert!(html.contains("fit-content"));
+        assert!(html.contains("custom"));
     }
 
     #[test]
