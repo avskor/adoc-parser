@@ -49,6 +49,9 @@ struct HtmlRenderer {
     toc_entries: Vec<TocEntry>,
     toc_insert_position: Option<usize>,
     toc_levels: u8,
+    toc_position: String,
+    toc_title: String,
+    toc_auto_seen: bool,
     in_section_title: bool,
     current_toc_entry: Option<TocEntry>,
     pending_block_meta: Option<BlockMeta>,
@@ -95,6 +98,9 @@ impl HtmlRenderer {
             toc_entries: Vec::new(),
             toc_insert_position: None,
             toc_levels: 2,
+            toc_position: String::new(),
+            toc_title: String::from("Table of Contents"),
+            toc_auto_seen: false,
             in_section_title: false,
             current_toc_entry: None,
             pending_block_meta: None,
@@ -153,6 +159,9 @@ impl HtmlRenderer {
                 output.push_str("<div id=\"preamble\">\n<div class=\"sectionbody\">\n");
                 output.push_str(&preamble_content);
                 output.push_str("</div>\n</div>\n");
+            }
+            if self.toc_position == "preamble" && self.toc_insert_position.is_none() {
+                self.toc_insert_position = Some(output.len());
             }
         }
 
@@ -215,6 +224,12 @@ impl HtmlRenderer {
                 if name == "toclevels"
                     && let Ok(n) = value.parse::<u8>() {
                         self.toc_levels = n;
+                }
+                if name == "toc-title" {
+                    self.toc_title = value.to_string();
+                }
+                if name == "toc" {
+                    self.toc_position = value.to_string();
                 }
                 if name == "sectnums" {
                     self.sectnums = true;
@@ -287,7 +302,17 @@ impl HtmlRenderer {
                 output.push_str(")</b>");
             }
             Event::Toc => {
-                self.toc_insert_position = Some(output.len());
+                if !self.toc_auto_seen {
+                    self.toc_auto_seen = true;
+                    // Auto-TOC: set position unless deferred to preamble or macro
+                    match self.toc_position.as_str() {
+                        "preamble" | "macro" => {}
+                        _ => { self.toc_insert_position = Some(output.len()); }
+                    }
+                } else {
+                    // Subsequent Toc = from toc::[] macro — always set position
+                    self.toc_insert_position = Some(output.len());
+                }
             }
             Event::Include { path, .. } => {
                 output.push_str("<!-- include::");
@@ -376,8 +401,14 @@ impl HtmlRenderer {
         }
 
         let mut toc = String::new();
-        toc.push_str("<div id=\"toc\" class=\"toc\">\n");
-        toc.push_str("<div id=\"toctitle\">Table of Contents</div>\n");
+        match self.toc_position.as_str() {
+            "left" => toc.push_str("<div id=\"toc\" class=\"toc2 toc-left\">\n"),
+            "right" => toc.push_str("<div id=\"toc\" class=\"toc2 toc-right\">\n"),
+            _ => toc.push_str("<div id=\"toc\" class=\"toc\">\n"),
+        }
+        toc.push_str("<div id=\"toctitle\">");
+        html_escape(&mut toc, &self.toc_title);
+        toc.push_str("</div>\n");
 
         let mut current_level = min_level;
         toc.push_str("<ul>\n");
@@ -2059,6 +2090,52 @@ mod tests {
         let input = "= Document Title\n\n== Section\n\nContent.";
         let html = to_html(input);
         assert!(!html.contains("<div id=\"toc\""));
+    }
+
+    #[test]
+    fn test_toc_custom_title() {
+        let input = "= Doc\n:toc:\n:toc-title: Содержание\n\n== S1\n\nText.";
+        let html = to_html(input);
+        assert!(html.contains("<div id=\"toctitle\">Содержание</div>"));
+        assert!(!html.contains("Table of Contents"));
+    }
+
+    #[test]
+    fn test_toc_left() {
+        let input = "= Doc\n:toc: left\n\n== S1\n\nText.";
+        let html = to_html(input);
+        assert!(html.contains("class=\"toc2 toc-left\""));
+    }
+
+    #[test]
+    fn test_toc_right() {
+        let input = "= Doc\n:toc: right\n\n== S1\n\nText.";
+        let html = to_html(input);
+        assert!(html.contains("class=\"toc2 toc-right\""));
+    }
+
+    #[test]
+    fn test_toc_preamble() {
+        let input = "= Title\n:toc: preamble\n\nPreamble text.\n\n== Section One\n\nContent.";
+        let html = to_html(input);
+        assert!(html.contains("<div id=\"toc\""));
+        // TOC should appear after preamble closing div, before section
+        let preamble_end = html.find("</div>\n</div>\n").unwrap() + "</div>\n</div>\n".len();
+        let toc_pos = html.find("<div id=\"toc\"").unwrap();
+        let section_pos = html.find("<div class=\"sect\"").unwrap();
+        assert!(toc_pos >= preamble_end, "TOC should be after preamble");
+        assert!(toc_pos < section_pos, "TOC should be before first section");
+    }
+
+    #[test]
+    fn test_toc_macro_only() {
+        let input = "= Title\n:toc: macro\n\n== S1\n\ntoc::[]\n\n== S2";
+        let html = to_html(input);
+        assert!(html.contains("<div id=\"toc\""));
+        // TOC should be placed at the macro position, after S1 heading
+        let s1_pos = html.find("S1</h2>").unwrap();
+        let toc_pos = html.find("<div id=\"toc\"").unwrap();
+        assert!(toc_pos > s1_pos, "TOC should appear after S1 heading");
     }
 
     #[test]
