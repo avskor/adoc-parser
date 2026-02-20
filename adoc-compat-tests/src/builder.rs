@@ -366,10 +366,16 @@ pub fn build_asg<'a>(
                 }
             }
 
-            Event::AttributeReference(name) => {
+            Event::AttributeReference { name, fallback } => {
                 let resolved = match attrs.get(name.as_ref()) {
                     Some(Some(value)) => value.clone(),
-                    _ => format!("{{{name}}}"),
+                    _ => {
+                        if let Some(fb) = fallback {
+                            fb.to_string()
+                        } else {
+                            format!("{{{name}}}")
+                        }
+                    }
                 };
                 push_inline_to_current(
                     &mut stack,

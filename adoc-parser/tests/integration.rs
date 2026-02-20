@@ -196,7 +196,7 @@ fn test_attribute_entry_and_reference() {
     let has_attr = events.iter().any(|e| matches!(e, Event::Attribute { name, value } if name == "version" && value == "1.0"));
     assert!(has_attr);
 
-    let has_ref = events.iter().any(|e| matches!(e, Event::AttributeReference(name) if name == "version"));
+    let has_ref = events.iter().any(|e| matches!(e, Event::AttributeReference { name, .. } if name == "version"));
     assert!(has_ref);
 }
 

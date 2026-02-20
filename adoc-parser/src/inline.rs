@@ -1337,14 +1337,27 @@ impl<'a> InlineState<'a> {
             Some(c) => c,
             None => return false,
         };
-        let name = &rest[..close];
+        let content = &rest[..close];
 
-        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        let (attr_name, fallback) = if let Some(bang) = content.find('!') {
+            (&content[..bang], Some(&content[bang + 1..]))
+        } else {
+            (content, None)
+        };
+
+        if attr_name.is_empty()
+            || !attr_name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
             return false;
         }
 
         self.flush_text(*text_start, start_pos, events);
-        events.push(Event::AttributeReference(Cow::Borrowed(name)));
+        events.push(Event::AttributeReference {
+            name: Cow::Borrowed(attr_name),
+            fallback: fallback.map(Cow::Borrowed),
+        });
 
         self.pos = start_pos + 1 + close + 1;
         *text_start = self.pos;
@@ -1964,7 +1977,32 @@ mod tests {
         let events = parse("version {version}");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("version ")),
-            Event::AttributeReference(Cow::Borrowed("version")),
+            Event::AttributeReference {
+                name: Cow::Borrowed("version"),
+                fallback: None,
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_attribute_reference_with_fallback() {
+        let events = parse("{name!default value}");
+        assert_eq!(events, vec![
+            Event::AttributeReference {
+                name: Cow::Borrowed("name"),
+                fallback: Some(Cow::Borrowed("default value")),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_attribute_reference_with_empty_fallback() {
+        let events = parse("{name!}");
+        assert_eq!(events, vec![
+            Event::AttributeReference {
+                name: Cow::Borrowed("name"),
+                fallback: Some(Cow::Borrowed("")),
+            },
         ]);
     }
 

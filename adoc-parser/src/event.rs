@@ -69,7 +69,10 @@ pub enum Event<'a> {
         name: CowStr<'a>,
         value: CowStr<'a>,
     },
-    AttributeReference(CowStr<'a>),
+    AttributeReference {
+        name: CowStr<'a>,
+        fallback: Option<CowStr<'a>>,
+    },
     Footnote {
         id: Option<CowStr<'a>>,
         text: CowStr<'a>,
@@ -134,7 +137,10 @@ impl<'a> Event<'a> {
                 name: cow_owned(name),
                 value: cow_owned(value),
             },
-            Event::AttributeReference(s) => Event::AttributeReference(cow_owned(s)),
+            Event::AttributeReference { name, fallback } => Event::AttributeReference {
+                name: cow_owned(name),
+                fallback: fallback.map(cow_owned),
+            },
             Event::Footnote { id, text } => Event::Footnote {
                 id: id.map(cow_owned),
                 text: cow_owned(text),

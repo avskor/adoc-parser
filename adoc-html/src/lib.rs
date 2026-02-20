@@ -231,9 +231,11 @@ impl HtmlRenderer {
                     self.document_attrs.insert(name.to_string(), value.to_string());
                 }
             }
-            Event::AttributeReference(name) => {
+            Event::AttributeReference { name, fallback } => {
                 if let Some(value) = self.document_attrs.get(name.as_ref()) {
                     html_escape(output, value);
+                } else if let Some(fb) = fallback {
+                    html_escape(output, &fb);
                 } else {
                     output.push('{');
                     output.push_str(&name);
@@ -3292,5 +3294,27 @@ mod tests {
         let html = to_html("= My Title\n\n{doctitle}");
         // The doctitle attribute should resolve to "My Title" in the body
         assert_eq!(html.matches("My Title").count(), 2, "doctitle should appear twice (h1 + reference). Got: {html}");
+    }
+
+    #[test]
+    fn test_attr_fallback() {
+        let html = to_html("{undefined!fallback value}");
+        assert!(html.contains("fallback value"), "fallback should be used when attr undefined. Got: {html}");
+        assert!(!html.contains("{undefined}"), "should not show raw reference. Got: {html}");
+    }
+
+    #[test]
+    fn test_attr_fallback_not_used() {
+        let html = to_html(":name: real\n\n{name!fallback}");
+        assert!(html.contains("real"), "defined attr should be used. Got: {html}");
+        assert!(!html.contains("fallback"), "fallback should not be used when attr defined. Got: {html}");
+    }
+
+    #[test]
+    fn test_attr_fallback_empty() {
+        let html = to_html("{undefined!}");
+        assert!(!html.contains("{undefined}"), "should not show raw reference. Got: {html}");
+        // Empty fallback means nothing is rendered for the attribute
+        assert!(!html.contains("undefined"), "empty fallback should render nothing for the attr. Got: {html}");
     }
 }
