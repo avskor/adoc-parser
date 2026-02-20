@@ -2,6 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 
+#[derive(Default, Clone)]
+pub struct HtmlOptions {
+    pub docinfo_head: Option<String>,
+    pub docinfo_footer: Option<String>,
+}
+
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
     let mut renderer = HtmlRenderer::new();
     renderer.run(s, iter);
@@ -11,6 +17,22 @@ pub fn to_html(input: &str) -> String {
     let parser = adoc_parser::Parser::new(input);
     let mut output = String::new();
     push_html(&mut output, parser);
+    output
+}
+
+pub fn push_html_with_options<'a>(
+    s: &mut String,
+    iter: impl Iterator<Item = Event<'a>>,
+    options: HtmlOptions,
+) {
+    let mut renderer = HtmlRenderer::new_with_options(options);
+    renderer.run(s, iter);
+}
+
+pub fn to_html_with_options(input: &str, options: HtmlOptions) -> String {
+    let parser = adoc_parser::Parser::new(input);
+    let mut output = String::new();
+    push_html_with_options(&mut output, parser, options);
     output
 }
 
@@ -98,6 +120,8 @@ struct HtmlRenderer {
     highlight_lines: HashSet<usize>,
     source_line_num: usize,
     source_line_highlighted: bool,
+    docinfo_head: Option<String>,
+    docinfo_footer: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -150,6 +174,16 @@ impl HtmlRenderer {
             highlight_lines: HashSet::new(),
             source_line_num: 0,
             source_line_highlighted: false,
+            docinfo_head: None,
+            docinfo_footer: None,
+        }
+    }
+
+    fn new_with_options(options: HtmlOptions) -> Self {
+        Self {
+            docinfo_head: options.docinfo_head,
+            docinfo_footer: options.docinfo_footer,
+            ..Self::new()
         }
     }
 
@@ -416,6 +450,21 @@ impl HtmlRenderer {
 
         if !self.footnotes.is_empty() {
             self.render_footnotes(output);
+        }
+
+        if let Some(ref footer) = self.docinfo_footer
+            && !footer.is_empty()
+        {
+            output.push('\n');
+            output.push_str(footer);
+        }
+
+        if let Some(ref head) = self.docinfo_head
+            && !head.is_empty()
+        {
+            let mut prefix = head.clone();
+            prefix.push('\n');
+            output.insert_str(0, &prefix);
         }
     }
 
@@ -4040,5 +4089,75 @@ mod tests {
         let html = to_html("my-custom_macro:target[attrs]");
         assert!(html.contains("<span class=\"custom-macro macro-my-custom_macro\">attrs</span>"),
             "macro names with hyphen/underscore should work. Got: {html}");
+    }
+
+    #[test]
+    fn test_docinfo_head() {
+        let html = to_html_with_options("Hello world", HtmlOptions {
+            docinfo_head: Some("<meta name=\"test\" content=\"value\">".to_string()),
+            ..Default::default()
+        });
+        assert!(html.starts_with("<meta name=\"test\" content=\"value\">\n"),
+            "docinfo head should be prepended. Got: {html}");
+        assert!(html.contains("<p>Hello world</p>"),
+            "content should follow head. Got: {html}");
+    }
+
+    #[test]
+    fn test_docinfo_footer() {
+        let html = to_html_with_options("Hello world", HtmlOptions {
+            docinfo_footer: Some("<script src=\"app.js\"></script>".to_string()),
+            ..Default::default()
+        });
+        assert!(html.ends_with("\n<script src=\"app.js\"></script>"),
+            "docinfo footer should be appended. Got: {html}");
+        assert!(html.contains("<p>Hello world</p>"),
+            "content should precede footer. Got: {html}");
+    }
+
+    #[test]
+    fn test_docinfo_head_and_footer() {
+        let html = to_html_with_options("Hello world", HtmlOptions {
+            docinfo_head: Some("<meta name=\"x\">".to_string()),
+            docinfo_footer: Some("<script></script>".to_string()),
+        });
+        assert!(html.starts_with("<meta name=\"x\">\n"),
+            "head should be first. Got: {html}");
+        assert!(html.ends_with("\n<script></script>"),
+            "footer should be last. Got: {html}");
+    }
+
+    #[test]
+    fn test_docinfo_default_options_same_as_to_html() {
+        let input = "= Title\n\nHello world";
+        let html_default = to_html(input);
+        let html_options = to_html_with_options(input, HtmlOptions::default());
+        assert_eq!(html_default, html_options,
+            "default options should produce identical output");
+    }
+
+    #[test]
+    fn test_docinfo_head_before_toc() {
+        let input = "= Title\n:toc:\n\n== Section 1\n\nContent";
+        let html = to_html_with_options(input, HtmlOptions {
+            docinfo_head: Some("<meta name=\"toc-test\">".to_string()),
+            ..Default::default()
+        });
+        let head_pos = html.find("<meta name=\"toc-test\">").unwrap();
+        let toc_pos = html.find("<div id=\"toc\"").unwrap();
+        assert!(head_pos < toc_pos,
+            "head should appear before TOC. Got: {html}");
+    }
+
+    #[test]
+    fn test_docinfo_empty_content_no_extra_newlines() {
+        let input = "Hello world";
+        let html_empty = to_html_with_options(input, HtmlOptions {
+            docinfo_head: Some(String::new()),
+            docinfo_footer: Some(String::new()),
+        });
+        let html_none = to_html(input);
+        assert_eq!(html_empty, html_none,
+            "empty docinfo should not add extra content");
     }
 }
