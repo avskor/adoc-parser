@@ -411,10 +411,10 @@ impl<'a> BlockScanner<'a> {
             }
         };
 
-        // Document header detection: `= Title` before any body content
+        // Document header detection: `= Title` or `# Title` before any body content
         // Skip if [discrete] attribute is pending — treat as discrete heading instead
         if !self.header_emitted && !self.body_started
-            && let Some((1, title)) = scanner::strip_section_marker(line)
+            && let Some((1, title)) = scanner::strip_any_section_marker(line)
             && !self.pending_block_attrs.as_ref().is_some_and(|a| {
                 a.positional.first().is_some_and(|s| s == "discrete")
             })
@@ -485,8 +485,8 @@ impl<'a> BlockScanner<'a> {
             return Some(Event::PageBreak);
         }
 
-        // Section heading `== Title`
-        if let Some((level, title)) = scanner::strip_section_marker(line) {
+        // Section heading `== Title` or `## Title`
+        if let Some((level, title)) = scanner::strip_any_section_marker(line) {
             return self.scan_section(level, title);
         }
 
@@ -586,6 +586,20 @@ impl<'a> BlockScanner<'a> {
             }
             self.in_continuation = false;
             return self.scan_delimited_block(delim_type, delim_len);
+        }
+
+        // Markdown code fence ``` or ```lang
+        if let Some((backtick_count, language)) = scanner::is_markdown_code_fence(line) {
+            // If in list context (and not via list continuation), close list first
+            if self.is_in_list_context() && !self.in_continuation {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return self.event_buffer.pop();
+            }
+            self.in_continuation = false;
+            return self.scan_markdown_code_fence(backtick_count, language);
         }
 
         // Single-line comment `// ...`
@@ -725,7 +739,7 @@ impl<'a> BlockScanner<'a> {
         if let Some(line) = self.current_line()
             && !scanner::is_blank(line)
             && scanner::is_attribute_entry(line).is_none()
-            && scanner::strip_section_marker(line).is_none()
+            && scanner::strip_any_section_marker(line).is_none()
         {
             // Parse as author line
             let authors = scanner::parse_authors(line);
@@ -745,7 +759,7 @@ impl<'a> BlockScanner<'a> {
             if let Some(rev_line) = self.current_line()
                 && !scanner::is_blank(rev_line)
                 && scanner::is_attribute_entry(rev_line).is_none()
-                && scanner::strip_section_marker(rev_line).is_none()
+                && scanner::strip_any_section_marker(rev_line).is_none()
                 && let Some(rev_info) = scanner::parse_revision_line(rev_line)
             {
                 header_events.push(Event::Revision {
@@ -848,7 +862,7 @@ impl<'a> BlockScanner<'a> {
                     name: Cow::Borrowed(name),
                     value,
                 });
-            } else if let Some((1, title)) = scanner::strip_section_marker(line)
+            } else if let Some((1, title)) = scanner::strip_any_section_marker(line)
                 && self.leveloffset == 0
             {
                 // Found `= Title` after attributes — transition to full document header
@@ -1422,8 +1436,9 @@ impl<'a> BlockScanner<'a> {
 
         while let Some(line) = self.current_line() {
             if scanner::is_blank(line)
-                || scanner::strip_section_marker(line).is_some()
+                || scanner::strip_any_section_marker(line).is_some()
                 || scanner::is_delimiter(line).is_some()
+                || scanner::is_markdown_code_fence(line).is_some()
                 || scanner::is_list_marker_unordered(line).is_some()
                 || scanner::is_list_marker_ordered(line).is_some()
                 || scanner::is_admonition(line).is_some()
@@ -1787,6 +1802,74 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    fn scan_markdown_code_fence(
+        &mut self,
+        backtick_count: usize,
+        language: Option<&'a str>,
+    ) -> Option<Event<'a>> {
+        self.advance(); // skip opening fence
+        let title_events = self.take_pending_block_title();
+        let block_attrs = self.pending_block_attrs.take().unwrap_or_default();
+
+        let mut content_lines: Vec<&'a str> = Vec::new();
+        let mut closed = false;
+        while let Some(line) = self.current_line() {
+            // Closing fence: >= backtick_count backticks, no info string
+            if let Some((count, info)) = scanner::is_markdown_code_fence(line)
+                && count >= backtick_count
+                && info.is_none()
+            {
+                self.advance();
+                closed = true;
+                break;
+            }
+            content_lines.push(line);
+            self.advance();
+        }
+
+        // For unclosed fences, trim one trailing empty line (artifact of split_lines)
+        if !closed && content_lines.last().is_some_and(|l| l.is_empty()) {
+            content_lines.pop();
+        }
+
+        if let Some(lang) = language {
+            // With language → SourceBlock
+            self.push_event(Event::End(TagEnd::SourceBlock));
+            for (i, &cline) in content_lines.iter().enumerate().rev() {
+                if i < content_lines.len() - 1 {
+                    self.push_event(Event::SoftBreak);
+                }
+                self.push_event(Event::Text(Cow::Borrowed(cline)));
+            }
+            self.push_event(Event::Start(Tag::SourceBlock {
+                language: Some(Cow::Borrowed(lang)),
+            }));
+            self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
+        } else {
+            // Without language → DelimitedBlock { Listing }
+            let kind = DelimitedBlockKind::Listing;
+            if content_lines.len() == 1 && content_lines[0].is_empty() {
+                self.push_event(Event::End(TagEnd::DelimitedBlock));
+                self.push_event(Event::Text(Cow::Borrowed("\n")));
+                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
+            } else {
+                self.push_event(Event::End(TagEnd::DelimitedBlock));
+                for (i, &cline) in content_lines.iter().enumerate().rev() {
+                    if i < content_lines.len() - 1 {
+                        self.push_event(Event::SoftBreak);
+                    }
+                    self.push_event(Event::Text(Cow::Borrowed(cline)));
+                }
+                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
+            }
+        }
+        self.push_title_then_events(title_events);
+
+        self.event_buffer.pop()
+    }
+
     fn scan_verse_block(
         &mut self,
         delim_type: scanner::DelimiterType,
@@ -1958,8 +2041,9 @@ impl<'a> BlockScanner<'a> {
     /// Check if a line is a continuation of a description list principal text.
     fn is_dlist_continuation_line(&self, line: &str) -> bool {
         !scanner::is_blank(line)
-            && scanner::strip_section_marker(line).is_none()
+            && scanner::strip_any_section_marker(line).is_none()
             && scanner::is_delimiter(line).is_none()
+            && scanner::is_markdown_code_fence(line).is_none()
             && scanner::is_list_marker_unordered(line).is_none()
             && scanner::is_list_marker_ordered(line).is_none()
             && scanner::is_admonition(line).is_none()
@@ -2110,8 +2194,9 @@ impl<'a> BlockScanner<'a> {
     /// Check if a line is a continuation of a list item principal (not a block element or new list item).
     fn is_list_continuation_line(&self, line: &str) -> bool {
         !scanner::is_blank(line)
-            && scanner::strip_section_marker(line).is_none()
+            && scanner::strip_any_section_marker(line).is_none()
             && scanner::is_delimiter(line).is_none()
+            && scanner::is_markdown_code_fence(line).is_none()
             && scanner::is_list_marker_unordered(line).is_none()
             && scanner::is_list_marker_ordered(line).is_none()
             && scanner::is_admonition(line).is_none()

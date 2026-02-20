@@ -12,16 +12,17 @@ CRITICAL: Never make commits directly on `master`. Before starting ANY task, ALW
 1. `git checkout master && git pull`
 2. `git checkout -b <branch-name>` (e.g., `feat/add-auth`, `fix/parse-error`)
 
-Only then begin writing code. Run `cargo clippy --workspace` before every commit and fix all warnings.
+Only then begin writing code. Before every commit run `cargo clippy --workspace` (fix all warnings) and `cargo test -p adoc-compat-tests -- --nocapture` (all 233 compatibility tests against `vendor/asciidoc-parsing-lab` must pass).
 
 ## Build & Test Commands
 
 ```bash
 cargo build --workspace          # Build everything
-cargo test --workspace           # Run all tests (83 tests)
+cargo test --workspace           # Run all tests
 cargo test -p adoc-parser        # Test core parser only
 cargo test -p adoc-html          # Test HTML backend only
 cargo test -p adoc-parser -- scanner::tests::test_is_delimiter   # Run single test
+cargo test -p adoc-compat-tests -- --nocapture  # Compatibility tests (233 cases from asciidoc-parsing-lab)
 cargo clippy --workspace         # Lint
 cargo build -p adoc-wasm --target wasm32-unknown-unknown         # WASM build
 ```

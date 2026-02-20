@@ -3488,4 +3488,92 @@ mod tests {
         // Empty fallback means nothing is rendered for the attribute
         assert!(!html.contains("undefined"), "empty fallback should render nothing for the attr. Got: {html}");
     }
+
+    // --- Markdown compatibility tests ---
+
+    #[test]
+    fn test_markdown_heading_h2() {
+        let html = to_html("## Title\n\nContent.");
+        assert!(html.contains("id=\"_title\""), "should generate id. Got: {html}");
+        assert!(html.contains("<h2"), "should render h2. Got: {html}");
+        assert!(html.contains("Title"), "should contain title text. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_heading_h3() {
+        let html = to_html("### Level Three\n\nContent.");
+        assert!(html.contains("id=\"_level_three\""), "should generate id. Got: {html}");
+        assert!(html.contains("<h3"), "should render h3. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_heading_document_title() {
+        let html = to_html("# Doc Title\n\nBody text.");
+        assert!(html.contains("Doc Title"), "should contain title. Got: {html}");
+        assert!(html.contains("<h1"), "document title should render h1. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_heading_mixed_with_asciidoc() {
+        let html = to_html("= Doc Title\n\n== AsciiDoc Section\n\nPara 1.\n\n### Markdown Section\n\nPara 2.");
+        assert!(html.contains("<h2"), "should have h2 for asciidoc section. Got: {html}");
+        assert!(html.contains("<h3"), "should have h3 for markdown section. Got: {html}");
+        assert!(html.contains("AsciiDoc Section"), "asciidoc heading. Got: {html}");
+        assert!(html.contains("Markdown Section"), "markdown heading. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_with_language() {
+        let html = to_html("```rust\nfn main() {}\n```");
+        assert!(html.contains("class=\"language-rust\""), "should have language class. Got: {html}");
+        assert!(html.contains("fn main() {}"), "should contain code. Got: {html}");
+        assert!(html.contains("<code"), "should have <code> tag. Got: {html}");
+        assert!(html.contains("listingblock"), "should have listingblock class. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_without_language() {
+        let html = to_html("```\nsome code\n```");
+        assert!(html.contains("some code"), "should contain code. Got: {html}");
+        assert!(html.contains("listingblock"), "should have listingblock class. Got: {html}");
+        assert!(html.contains("<pre>"), "should have <pre> tag. Got: {html}");
+        assert!(!html.contains("<code"), "listing block should not have <code> tag. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_4_backticks() {
+        let html = to_html("````python\nprint('hi')\n````");
+        assert!(html.contains("class=\"language-python\""), "should have python language. Got: {html}");
+        assert!(html.contains("print('hi')"), "should contain code. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_nested() {
+        // 4-backtick fence can contain 3-backtick fences
+        let html = to_html("````\n```\ninner\n```\n````");
+        assert!(html.contains("```"), "inner backticks should be verbatim. Got: {html}");
+        assert!(html.contains("inner"), "should contain inner text. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_unclosed() {
+        let html = to_html("```rust\nunclosed code");
+        assert!(html.contains("unclosed code"), "should contain code even if unclosed. Got: {html}");
+        assert!(html.contains("class=\"language-rust\""), "should still have language. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_with_highlighter() {
+        let html = to_html(":source-highlighter: highlight.js\n\n```rust\nfn main() {}\n```");
+        assert!(html.contains("highlightjs highlight"), "should use highlighter. Got: {html}");
+        assert!(html.contains("data-lang=\"rust\""), "should have data-lang. Got: {html}");
+        assert!(html.contains("class=\"language-rust\""), "should have language class. Got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_code_fence_with_title() {
+        let html = to_html(".My Code\n```rust\nfn main() {}\n```");
+        assert!(html.contains("My Code"), "should contain block title. Got: {html}");
+        assert!(html.contains("class=\"language-rust\""), "should have language class. Got: {html}");
+    }
 }

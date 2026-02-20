@@ -670,6 +670,44 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
     Some(cells)
 }
 
+pub fn strip_markdown_heading(line: &str) -> Option<(u8, &str)> {
+    let trimmed = line.trim_start();
+    let level = count_leading(trimmed, '#');
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    let title = rest[1..].trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some((level as u8, title))
+}
+
+pub fn is_markdown_code_fence(line: &str) -> Option<(usize, Option<&str>)> {
+    let trimmed = line.trim_end();
+    let backtick_count = count_leading(trimmed, '`');
+    if backtick_count < 3 {
+        return None;
+    }
+    let info = trimmed[backtick_count..].trim();
+    if info.is_empty() {
+        return Some((backtick_count, None));
+    }
+    // Reject info strings containing backticks (CommonMark spec)
+    if info.contains('`') {
+        return None;
+    }
+    Some((backtick_count, Some(info)))
+}
+
+pub fn strip_any_section_marker(line: &str) -> Option<(u8, &str)> {
+    strip_section_marker(line).or_else(|| strip_markdown_heading(line))
+}
+
 pub fn generate_id(title: &str, prefix: &str, separator: &str) -> String {
     let sep_char = separator.chars().next().unwrap_or('_');
     let mut id = String::with_capacity(title.len() + prefix.len());
@@ -1571,5 +1609,53 @@ mod tests {
     fn test_parse_tsv_fields_with_spaces() {
         let fields = parse_tsv_fields("a \t b \t c");
         assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_strip_markdown_heading() {
+        assert_eq!(strip_markdown_heading("# Title"), Some((1, "Title")));
+        assert_eq!(strip_markdown_heading("## Sub"), Some((2, "Sub")));
+        assert_eq!(strip_markdown_heading("### Level 3"), Some((3, "Level 3")));
+        assert_eq!(strip_markdown_heading("#### Level 4"), Some((4, "Level 4")));
+        assert_eq!(strip_markdown_heading("##### Level 5"), Some((5, "Level 5")));
+        assert_eq!(strip_markdown_heading("###### Level 6"), Some((6, "Level 6")));
+        assert_eq!(strip_markdown_heading("####### Too deep"), None);
+        assert_eq!(strip_markdown_heading("#NoSpace"), None);
+        assert_eq!(strip_markdown_heading("# "), None); // empty title
+        assert_eq!(strip_markdown_heading("not heading"), None);
+        assert_eq!(strip_markdown_heading("  ## Indented"), Some((2, "Indented")));
+    }
+
+    #[test]
+    fn test_is_markdown_code_fence() {
+        // Basic opening fence
+        assert_eq!(is_markdown_code_fence("```"), Some((3, None)));
+        // With language
+        assert_eq!(is_markdown_code_fence("```rust"), Some((3, Some("rust"))));
+        // 4+ backticks
+        assert_eq!(is_markdown_code_fence("````"), Some((4, None)));
+        assert_eq!(is_markdown_code_fence("````python"), Some((4, Some("python"))));
+        // Trailing whitespace
+        assert_eq!(is_markdown_code_fence("```  "), Some((3, None)));
+        assert_eq!(is_markdown_code_fence("```rust  "), Some((3, Some("rust"))));
+        // Not enough backticks
+        assert_eq!(is_markdown_code_fence("``"), None);
+        assert_eq!(is_markdown_code_fence("`"), None);
+        // Backticks in info string (rejected per CommonMark)
+        assert_eq!(is_markdown_code_fence("``` foo`bar"), None);
+        // Empty string
+        assert_eq!(is_markdown_code_fence(""), None);
+    }
+
+    #[test]
+    fn test_strip_any_section_marker() {
+        // AsciiDoc headings have priority
+        assert_eq!(strip_any_section_marker("= Title"), Some((1, "Title")));
+        assert_eq!(strip_any_section_marker("== Sub"), Some((2, "Sub")));
+        // Markdown headings work too
+        assert_eq!(strip_any_section_marker("# Title"), Some((1, "Title")));
+        assert_eq!(strip_any_section_marker("## Sub"), Some((2, "Sub")));
+        // Neither
+        assert_eq!(strip_any_section_marker("just text"), None);
     }
 }
