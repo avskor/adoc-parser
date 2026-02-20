@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
@@ -780,9 +781,17 @@ impl HtmlRenderer {
                 let adm_class = format!("admonitionblock {}", label.to_lowercase());
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, &adm_class);
-                output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n<div class=\"title\">");
-                output.push_str(label);
-                output.push_str("</div>\n</td>\n<td class=\"content\">\n");
+                output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n");
+                if self.document_attrs.get("icons").is_some_and(|v| v == "font") {
+                    let icon_name = label.to_lowercase();
+                    writeln!(output, "<i class=\"fa icon-{icon_name}\" title=\"{label}\"></i>")
+                        .unwrap();
+                } else {
+                    output.push_str("<div class=\"title\">");
+                    output.push_str(label);
+                    output.push_str("</div>\n");
+                }
+                output.push_str("</td>\n<td class=\"content\">\n");
             }
             Tag::Table => {
                 // Collect extra CSS classes from options/named attrs
@@ -2683,6 +2692,48 @@ mod tests {
         assert!(html.contains("<div class=\"admonitionblock note\">"));
         assert!(html.contains("<p>First paragraph.</p>"));
         assert!(html.contains("<p>Second paragraph.</p>"));
+    }
+
+    // Admonition icons tests
+
+    #[test]
+    fn test_admonition_icons_font() {
+        let html = to_html(":icons: font\n\nNOTE: This is a note.");
+        assert!(html.contains("<i class=\"fa icon-note\" title=\"Note\"></i>"));
+        assert!(!html.contains("<div class=\"title\">Note</div>"));
+    }
+
+    #[test]
+    fn test_admonition_icons_font_all_kinds() {
+        for (marker, icon, label) in [
+            ("NOTE", "note", "Note"),
+            ("TIP", "tip", "Tip"),
+            ("IMPORTANT", "important", "Important"),
+            ("WARNING", "warning", "Warning"),
+            ("CAUTION", "caution", "Caution"),
+        ] {
+            let input = format!(":icons: font\n\n{marker}: Some text.");
+            let html = to_html(&input);
+            let expected = format!("<i class=\"fa icon-{icon}\" title=\"{label}\"></i>");
+            assert!(
+                html.contains(&expected),
+                "Expected {expected} in HTML for {marker}, got: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_admonition_default_no_icons() {
+        let html = to_html("NOTE: This is a note.");
+        assert!(html.contains("<div class=\"title\">Note</div>"));
+        assert!(!html.contains("<i class=\"fa"));
+    }
+
+    #[test]
+    fn test_block_admonition_icons_font() {
+        let html = to_html(":icons: font\n\n[NOTE]\n====\nBlock note content.\n====");
+        assert!(html.contains("<i class=\"fa icon-note\" title=\"Note\"></i>"));
+        assert!(!html.contains("<div class=\"title\">Note</div>"));
     }
 
     // Preamble tests
