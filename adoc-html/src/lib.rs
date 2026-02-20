@@ -125,6 +125,7 @@ struct HtmlRenderer {
     doctitle_close_pos: Option<usize>,
     manpage_name_capture: bool,
     manpage_name_buf: String,
+    book_part_stack: Vec<bool>,
 }
 
 impl HtmlRenderer {
@@ -182,6 +183,7 @@ impl HtmlRenderer {
             doctitle_close_pos: None,
             manpage_name_capture: false,
             manpage_name_buf: String::new(),
+            book_part_stack: Vec::new(),
         }
     }
 
@@ -619,11 +621,17 @@ impl HtmlRenderer {
                     });
                 }
                 let h = section_level_to_h(*level);
+                let is_part = self.is_book() && *level == 1
+                    && self.book_part_stack.last() == Some(&true);
                 output.push_str("<h");
                 output.push_str(&h.to_string());
                 output.push_str(" id=\"");
                 html_escape(output, id);
-                output.push_str("\">");
+                output.push('"');
+                if is_part {
+                    output.push_str(" class=\"sect0\"");
+                }
+                output.push('>');
                 if self.sectnums && *level >= 2 && *level <= 5 && self.pending_section_caption.is_none() {
                     let lvl = *level as usize;
                     self.section_counters[lvl] += 1;
@@ -657,15 +665,19 @@ impl HtmlRenderer {
                 Self::write_meta_attrs(output, &meta, "");
                 output.push('>');
             }
-            Tag::Section { .. } => {
+            Tag::Section { level } => {
                 let style = meta.as_ref().and_then(|m| m.style.as_deref());
                 let is_special = matches!(style, Some(
                     "appendix" | "glossary" | "bibliography" | "colophon"
                     | "abstract" | "preface" | "dedication" | "index"
                 ));
-                output.push_str("<div");
-                Self::write_meta_attrs(output, &meta, "sect");
-                output.push_str(">\n");
+                let is_part = self.is_book() && *level == 1 && !is_special;
+                self.book_part_stack.push(is_part);
+                if !is_part {
+                    output.push_str("<div");
+                    Self::write_meta_attrs(output, &meta, "sect");
+                    output.push_str(">\n");
+                }
                 if style == Some("appendix") {
                     self.appendix_counter += 1;
                     let letter = (b'A' + self.appendix_counter - 1) as char;
@@ -1339,7 +1351,10 @@ impl HtmlRenderer {
                         self.document_attrs.insert("manpurpose".to_string(), trimmed[dash_pos + 3..].trim().to_string());
                     }
                 }
-                output.push_str("</div>\n");
+                let is_part = self.book_part_stack.pop().unwrap_or(false);
+                if !is_part {
+                    output.push_str("</div>\n");
+                }
             }
             TagEnd::Paragraph => {
                 output.push_str("</p>\n");
@@ -1795,6 +1810,10 @@ impl HtmlRenderer {
 
     fn current_dlist_style(&self) -> DlistStyle {
         self.dlist_stack.last().copied().unwrap_or(DlistStyle::Normal)
+    }
+
+    fn is_book(&self) -> bool {
+        self.document_attrs.get("doctype").map(|s| s.as_str()) == Some("book")
     }
 
     fn find_section_level(&self) -> u8 {
@@ -4252,5 +4271,62 @@ mod tests {
         let input = "= command(1)\n:doctype: manpage\n\ntype={doctype}";
         let html = to_html(input);
         assert!(html.contains("type=manpage"), "doctype should be 'manpage'. Got: {html}");
+    }
+
+    #[test]
+    fn test_book_part_rendering() {
+        let input = "= Book Title\n:doctype: book\n\n= Part One\n\npart intro\n\n== Chapter 1\n\ntext";
+        let html = to_html(input);
+        assert!(html.contains("class=\"sect0\""), "part title should have class=\"sect0\". Got: {html}");
+        assert!(html.contains("<h1 id=\"_part_one\" class=\"sect0\">Part One</h1>"),
+            "part should render as <h1> with sect0 class. Got: {html}");
+        // Part should NOT be wrapped in <div class="sect1">
+        assert!(!html.contains("<div class=\"sect1\">\n<h1 id=\"_part_one\""),
+            "part should not have div wrapper. Got: {html}");
+    }
+
+    #[test]
+    fn test_book_chapter_rendering() {
+        let input = "= Book Title\n:doctype: book\n\n= Part One\n\n== Chapter 1\n\ntext";
+        let html = to_html(input);
+        assert!(html.contains("<div class=\"sect\">"), "chapter should have div wrapper. Got: {html}");
+        assert!(html.contains("<h2 id=\"_chapter_1\">Chapter 1</h2>"),
+            "chapter should render as <h2>. Got: {html}");
+    }
+
+    #[test]
+    fn test_article_no_part_behavior() {
+        let input = "= Title\n\n== Section\n\ntext";
+        let html = to_html(input);
+        assert!(html.contains("<div class=\"sect\">"), "article sections should have div wrapper. Got: {html}");
+        assert!(!html.contains("sect0"), "article should not have sect0. Got: {html}");
+    }
+
+    #[test]
+    fn test_book_special_section_not_part() {
+        let input = "= Book Title\n:doctype: book\n\n[appendix]\n= Appendix A\n\ntext";
+        let html = to_html(input);
+        // Appendix at level 1 in book should NOT be treated as a part
+        assert!(!html.contains("class=\"sect0\""),
+            "appendix should not have sect0 class. Got: {html}");
+        assert!(html.contains("Appendix A:"),
+            "appendix should have caption. Got: {html}");
+    }
+
+    #[test]
+    fn test_book_multiple_parts() {
+        let input = "= Book Title\n:doctype: book\n\n= Part 1\n\n== Ch1\n\ntext1\n\n= Part 2\n\n== Ch2\n\ntext2";
+        let html = to_html(input);
+        assert!(html.contains("<h1 id=\"_part_1\" class=\"sect0\">Part 1</h1>"),
+            "first part should have sect0. Got: {html}");
+        assert!(html.contains("<h1 id=\"_part_2\" class=\"sect0\">Part 2</h1>"),
+            "second part should have sect0. Got: {html}");
+    }
+
+    #[test]
+    fn test_book_doctype_attr_ref() {
+        let input = "= Book Title\n:doctype: book\n\ntype={doctype}";
+        let html = to_html(input);
+        assert!(html.contains("type=book"), "doctype should be 'book'. Got: {html}");
     }
 }
