@@ -359,7 +359,7 @@
 | 20.4 | Block substitutions | `[subs="+macros"]` | ✅ |
 | 20.5 | Docinfo | `:docinfo: shared` | ✅ |
 | 20.6 | Preamble | Текст между заголовком и первой секцией | ✅ |
-| 20.7 | Manpage doctype | `:doctype: manpage` | ❌ |
+| 20.7 | Manpage doctype | `:doctype: manpage` | ✅ |
 | 20.8 | Book doctype | `:doctype: book` + part/chapter | ❌ |
 | 20.9 | Collapsible block | `[%collapsible]` + `====` | ✅ |
 | 20.10 | Line-oriented subs | `[subs=none]`, `[subs=normal]` | ✅ |
@@ -391,8 +391,8 @@
 | Экранирование | 5 | 0 | 0 | 5 |
 | Код | 5 | 0 | 0 | 5 |
 | TOC | 4 | 0 | 0 | 4 |
-| Продвинутые фичи | 10 | 0 | 2 | 12 |
-| **Итого** | **200** | **0** | **2** | **202** |
+| Продвинутые фичи | 11 | 0 | 1 | 12 |
+| **Итого** | **201** | **0** | **1** | **202** |
 
-**Покрытие: ~99% полное (200/202)**
+**Покрытие: ~99.5% полное (201/202)**
 

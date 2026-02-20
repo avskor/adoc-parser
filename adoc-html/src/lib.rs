@@ -122,6 +122,9 @@ struct HtmlRenderer {
     source_line_highlighted: bool,
     docinfo_head: Option<String>,
     docinfo_footer: Option<String>,
+    doctitle_close_pos: Option<usize>,
+    manpage_name_capture: bool,
+    manpage_name_buf: String,
 }
 
 impl HtmlRenderer {
@@ -176,6 +179,9 @@ impl HtmlRenderer {
             source_line_highlighted: false,
             docinfo_head: None,
             docinfo_footer: None,
+            doctitle_close_pos: None,
+            manpage_name_capture: false,
+            manpage_name_buf: String::new(),
         }
     }
 
@@ -232,6 +238,9 @@ impl HtmlRenderer {
                 if self.in_section_title
                     && let Some(ref mut entry) = self.current_toc_entry {
                         entry.title.push_str(&text);
+                }
+                if self.manpage_name_capture {
+                    self.manpage_name_buf.push_str(&text);
                 }
                 if self.kbd_mode {
                     self.render_kbd_keys(output, &text);
@@ -315,6 +324,19 @@ impl HtmlRenderer {
                     self.document_attrs.remove(stripped);
                 } else {
                     self.document_attrs.insert(name.to_string(), value.to_string());
+                    if name.as_ref() == "doctype" && value.as_ref() == "manpage" {
+                        // Retroactively insert " Manual Page" into the document title
+                        if let Some(pos) = self.doctitle_close_pos {
+                            output.insert_str(pos, " Manual Page");
+                        }
+                        // Extract mantitle/manvolnum from doctitle "command(N)"
+                        if let Some(doctitle) = self.document_attrs.get("doctitle").cloned()
+                            && let Some((mantitle, manvolnum)) = parse_manpage_title(&doctitle)
+                        {
+                            self.document_attrs.insert("mantitle".to_string(), mantitle);
+                            self.document_attrs.insert("manvolnum".to_string(), manvolnum);
+                        }
+                    }
                 }
             }
             Event::AttributeReference { name, fallback } => {
@@ -1276,6 +1298,7 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::DocumentTitle => {
+                self.doctitle_close_pos = Some(output.len());
                 output.push_str("</h1>\n");
                 self.capturing_doctitle = false;
                 let title = std::mem::take(&mut self.doctitle_buf);
@@ -1283,6 +1306,12 @@ impl HtmlRenderer {
             }
             TagEnd::SectionTitle => {
                 if self.in_section_title {
+                    if let Some(ref entry) = self.current_toc_entry
+                        && self.document_attrs.get("doctype").map(|s| s.as_str()) == Some("manpage")
+                        && entry.title.eq_ignore_ascii_case("NAME")
+                    {
+                        self.manpage_name_capture = true;
+                    }
                     if let Some(entry) = self.current_toc_entry.take() {
                         self.toc_entries.push(entry);
                     }
@@ -1301,6 +1330,15 @@ impl HtmlRenderer {
                 output.push_str(">\n");
             }
             TagEnd::Section { .. } => {
+                if self.manpage_name_capture {
+                    self.manpage_name_capture = false;
+                    let buf = std::mem::take(&mut self.manpage_name_buf);
+                    let trimmed = buf.trim();
+                    if let Some(dash_pos) = trimmed.find(" - ") {
+                        self.document_attrs.insert("manname".to_string(), trimmed[..dash_pos].trim().to_string());
+                        self.document_attrs.insert("manpurpose".to_string(), trimmed[dash_pos + 3..].trim().to_string());
+                    }
+                }
                 output.push_str("</div>\n");
             }
             TagEnd::Paragraph => {
@@ -1767,6 +1805,20 @@ impl HtmlRenderer {
         }
         1
     }
+}
+
+fn parse_manpage_title(title: &str) -> Option<(String, String)> {
+    let title = title.trim();
+    let paren_start = title.rfind('(')?;
+    if !title.ends_with(')') {
+        return None;
+    }
+    let name = title[..paren_start].trim();
+    let volnum = &title[paren_start + 1..title.len() - 1];
+    if name.is_empty() || volnum.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), volnum.to_string()))
 }
 
 fn section_level_to_h(level: u8) -> u8 {
@@ -4159,5 +4211,46 @@ mod tests {
         let html_none = to_html(input);
         assert_eq!(html_empty, html_none,
             "empty docinfo should not add extra content");
+    }
+
+    #[test]
+    fn test_manpage_title_suffix() {
+        let input = "= command(1)\n:doctype: manpage\n\n== SYNOPSIS\n\ntext";
+        let html = to_html(input);
+        assert!(html.contains("command(1) Manual Page</h1>"),
+            "manpage title should have ' Manual Page' suffix. Got: {html}");
+    }
+
+    #[test]
+    fn test_manpage_auto_attrs() {
+        let input = "= command(1)\n:doctype: manpage\n\nmanvol={manvolnum} mantitle={mantitle}";
+        let html = to_html(input);
+        assert!(html.contains("manvol=1"), "manvolnum should be '1'. Got: {html}");
+        assert!(html.contains("mantitle=command"), "mantitle should be 'command'. Got: {html}");
+    }
+
+    #[test]
+    fn test_manpage_name_extraction() {
+        let input = "= command(1)\n:doctype: manpage\n\n== NAME\n\nmycmd - manage things\n\n== SYNOPSIS\n\nname={manname} purpose={manpurpose}";
+        let html = to_html(input);
+        assert!(html.contains("name=mycmd"), "manname should be 'mycmd'. Got: {html}");
+        assert!(html.contains("purpose=manage things"), "manpurpose should be 'manage things'. Got: {html}");
+    }
+
+    #[test]
+    fn test_no_manpage_suffix_for_article() {
+        let input = "= Title\n\ntext";
+        let html = to_html(input);
+        assert!(html.contains("<h1>Title</h1>"),
+            "article title should not have ' Manual Page'. Got: {html}");
+        assert!(!html.contains("Manual Page"),
+            "article should not contain 'Manual Page'. Got: {html}");
+    }
+
+    #[test]
+    fn test_manpage_doctype_attr_ref() {
+        let input = "= command(1)\n:doctype: manpage\n\ntype={doctype}";
+        let html = to_html(input);
+        assert!(html.contains("type=manpage"), "doctype should be 'manpage'. Got: {html}");
     }
 }
