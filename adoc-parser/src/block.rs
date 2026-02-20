@@ -566,6 +566,26 @@ impl<'a> BlockScanner<'a> {
             return self.event_buffer.pop();
         }
 
+        // Custom block macro `name::target[attrs]`
+        if let Some((name, target, attrs)) = scanner::is_custom_block_macro(line) {
+            self.advance();
+            let title_events = self.take_pending_block_title();
+            let block_attrs = self.pending_block_attrs.take();
+            self.push_event(Event::End(TagEnd::CustomBlockMacro));
+            if !attrs.is_empty() {
+                self.push_event(Event::Text(Cow::Borrowed(attrs)));
+            }
+            self.push_event(Event::Start(Tag::CustomBlockMacro {
+                name: Cow::Borrowed(name),
+                target: Cow::Borrowed(target),
+            }));
+            if let Some(ref attrs) = block_attrs {
+                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+            }
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop();
+        }
+
         // Admonition `NOTE: text`
         if let Some((label, text)) = scanner::is_admonition(line) {
             return self.scan_admonition(label, text);

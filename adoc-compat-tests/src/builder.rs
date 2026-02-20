@@ -239,6 +239,8 @@ pub fn build_asg<'a>(
                     Tag::Icon { .. } => BuildFrame::Icon { inlines: vec![] },
                     Tag::Stem { .. } => BuildFrame::Stem { inlines: vec![] },
                     Tag::StemBlock { .. } => BuildFrame::StemBlock { children: vec![] },
+                    Tag::CustomInlineMacro { .. } => BuildFrame::Paragraph { inlines: vec![] },
+                    Tag::CustomBlockMacro { .. } => BuildFrame::Paragraph { inlines: vec![] },
                 };
                 stack.push(frame);
             }

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::attributes::parse_link_attrs;
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
+use crate::scanner;
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
@@ -524,6 +525,14 @@ impl<'a> InlineState<'a> {
                 // Flow index term ((term)) (MACROS)
                 b'(' if has_macros && self.peek_at(1) == Some(b'(') => {
                     if self.try_flow_index_term(events, &mut text_start) {
+                        continue;
+                    }
+                    self.pos += 1;
+                }
+
+                // Custom inline macro catch-all: name:target[attrs] (MACROS)
+                b'a'..=b'z' if has_macros => {
+                    if self.try_custom_inline_macro(events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -1931,6 +1940,78 @@ impl<'a> InlineState<'a> {
             i += 1;
         }
         None
+    }
+
+    /// Try to parse a custom inline macro: `name:target[attrs]`
+    fn try_custom_inline_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos..];
+        let bytes = rest.as_bytes();
+
+        // Find the single colon (not double colon)
+        let mut colon_pos = None;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b':' {
+                // Must be single colon, not double
+                if i + 1 < bytes.len() && bytes[i + 1] == b':' {
+                    return false;
+                }
+                colon_pos = Some(i);
+                break;
+            }
+            // Name chars: a-z, 0-9, _, -
+            if !(b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
+                return false;
+            }
+        }
+
+        let colon_pos = match colon_pos {
+            Some(p) if p > 0 => p,
+            _ => return false,
+        };
+
+        let name = &rest[..colon_pos];
+        if !scanner::is_valid_macro_name(name) || scanner::is_known_inline_macro(name) {
+            return false;
+        }
+
+        // Find `[` for start of attrs
+        let after_colon = &rest[colon_pos + 1..];
+        let bracket_start = match after_colon.find('[') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let target = &after_colon[..bracket_start];
+
+        // Find matching `]`
+        let after_bracket = &after_colon[bracket_start + 1..];
+        let bracket_end = match after_bracket.find(']') {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let attrs = &after_bracket[..bracket_end];
+
+        self.flush_text(*text_start, start_pos, events);
+
+        events.push(Event::Start(Tag::CustomInlineMacro {
+            name: Cow::Borrowed(name),
+            target: Cow::Borrowed(target),
+        }));
+        if !attrs.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(attrs)));
+        }
+        events.push(Event::End(TagEnd::CustomInlineMacro));
+
+        // Advance past `name:target[attrs]`
+        self.pos = start_pos + colon_pos + 1 + bracket_start + 1 + bracket_end + 1;
+        *text_start = self.pos;
+        true
     }
 }
 

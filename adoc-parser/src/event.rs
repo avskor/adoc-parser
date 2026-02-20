@@ -327,6 +327,10 @@ pub enum Tag<'a> {
 
     // Anchors
     Anchor { id: CowStr<'a> },
+
+    // Custom macros
+    CustomInlineMacro { name: CowStr<'a>, target: CowStr<'a> },
+    CustomBlockMacro { name: CowStr<'a>, target: CowStr<'a> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +392,9 @@ pub enum TagEnd {
     StemBlock,
 
     Anchor,
+
+    CustomInlineMacro,
+    CustomBlockMacro,
 }
 
 impl<'a> Tag<'a> {
@@ -484,6 +491,14 @@ impl<'a> Tag<'a> {
             Tag::Anchor { id } => Tag::Anchor {
                 id: Cow::Owned(id.into_owned()),
             },
+            Tag::CustomInlineMacro { name, target } => Tag::CustomInlineMacro {
+                name: cow_owned(name),
+                target: cow_owned(target),
+            },
+            Tag::CustomBlockMacro { name, target } => Tag::CustomBlockMacro {
+                name: cow_owned(name),
+                target: cow_owned(target),
+            },
         }
     }
 
@@ -535,6 +550,8 @@ impl<'a> Tag<'a> {
             Tag::Stem { .. } => TagEnd::Stem,
             Tag::StemBlock { .. } => TagEnd::StemBlock,
             Tag::Anchor { .. } => TagEnd::Anchor,
+            Tag::CustomInlineMacro { .. } => TagEnd::CustomInlineMacro,
+            Tag::CustomBlockMacro { .. } => TagEnd::CustomBlockMacro,
         }
     }
 }

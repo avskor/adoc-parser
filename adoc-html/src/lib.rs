@@ -1195,6 +1195,16 @@ impl HtmlRenderer {
                 html_escape(output, id);
                 output.push_str("\"></a>");
             }
+            Tag::CustomInlineMacro { name, .. } => {
+                output.push_str("<span class=\"custom-macro macro-");
+                html_escape(output, name);
+                output.push_str("\">");
+            }
+            Tag::CustomBlockMacro { name, .. } => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, &format!("custom-macro macro-{name}"));
+                output.push_str(">\n");
+            }
         }
     }
 
@@ -1425,6 +1435,12 @@ impl HtmlRenderer {
             }
             TagEnd::Anchor => {
                 // Already closed in start_tag
+            }
+            TagEnd::CustomInlineMacro => {
+                output.push_str("</span>");
+            }
+            TagEnd::CustomBlockMacro => {
+                output.push_str("</div>\n");
             }
         }
     }
@@ -3974,5 +3990,55 @@ mod tests {
         let html = to_html("Value: {env-ADOC_PARSER_TEST_VAR_12345!fallback}");
         assert!(html.contains("Value: fallback"),
             "missing env var with fallback should use fallback. Got: {html}");
+    }
+
+    #[test]
+    fn test_custom_inline_macro_with_attrs() {
+        let html = to_html("chart:sales[Q1,Q2]");
+        assert!(html.contains("<span class=\"custom-macro macro-chart\">Q1,Q2</span>"),
+            "custom inline macro should render. Got: {html}");
+    }
+
+    #[test]
+    fn test_custom_block_macro_with_attrs() {
+        let html = to_html("chart::sales-data[type=bar]");
+        assert!(html.contains("<div class=\"custom-macro macro-chart\">"),
+            "custom block macro should render div. Got: {html}");
+        assert!(html.contains("type=bar"),
+            "custom block macro should contain attrs text. Got: {html}");
+        assert!(html.contains("</div>"),
+            "custom block macro should close div. Got: {html}");
+    }
+
+    #[test]
+    fn test_custom_inline_macro_empty_attrs() {
+        let html = to_html("widget:component[]");
+        assert!(html.contains("<span class=\"custom-macro macro-widget\"></span>"),
+            "custom inline macro with empty attrs should render empty span. Got: {html}");
+    }
+
+    #[test]
+    fn test_kbd_not_captured_as_custom() {
+        let html = to_html("kbd:[Ctrl+S]");
+        assert!(html.contains("<kbd>"),
+            "kbd should remain a built-in macro, not custom. Got: {html}");
+        assert!(!html.contains("custom-macro"),
+            "kbd should not be treated as custom macro. Got: {html}");
+    }
+
+    #[test]
+    fn test_block_image_not_captured_as_custom() {
+        let html = to_html("image::photo.jpg[alt]");
+        assert!(html.contains("<img"),
+            "image:: should remain a built-in block image. Got: {html}");
+        assert!(!html.contains("custom-macro"),
+            "image:: should not be treated as custom macro. Got: {html}");
+    }
+
+    #[test]
+    fn test_custom_macro_with_hyphen_underscore_name() {
+        let html = to_html("my-custom_macro:target[attrs]");
+        assert!(html.contains("<span class=\"custom-macro macro-my-custom_macro\">attrs</span>"),
+            "macro names with hyphen/underscore should work. Got: {html}");
     }
 }

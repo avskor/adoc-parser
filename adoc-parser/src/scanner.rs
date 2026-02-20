@@ -923,6 +923,56 @@ pub fn parse_tsv_fields(line: &str) -> Vec<Cow<'_, str>> {
     line.split('\t').map(|f| Cow::Borrowed(f.trim())).collect()
 }
 
+/// Validate a macro name: must match `[a-z][a-z0-9_-]*`.
+pub fn is_valid_macro_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = name.as_bytes();
+    if !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[1..].iter().all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Returns true if the name is a known built-in inline macro (should not be captured as custom).
+pub fn is_known_inline_macro(name: &str) -> bool {
+    matches!(
+        name,
+        "kbd" | "btn" | "menu" | "icon" | "stem" | "latexmath" | "asciimath"
+            | "footnote" | "pass" | "link" | "mailto" | "image" | "xref"
+            | "indexterm" | "indexterm2" | "http" | "https"
+    )
+}
+
+/// Returns true if the name is a known built-in block macro (should not be captured as custom).
+fn is_known_block_macro(name: &str) -> bool {
+    matches!(name, "image" | "video" | "audio" | "toc" | "include")
+}
+
+/// Detect a block custom macro: `name::target[attrs]` on its own line.
+/// Returns `Some((name, target, attrs))` or `None`.
+pub fn is_custom_block_macro(line: &str) -> Option<(&str, &str, &str)> {
+    let trimmed = line.trim();
+    // Must end with `]`
+    let bracket_end = trimmed.len().checked_sub(1)?;
+    if trimmed.as_bytes().get(bracket_end)? != &b']' {
+        return None;
+    }
+    // Find the double colon
+    let colon_pos = trimmed.find("::")?;
+    let name = &trimmed[..colon_pos];
+    if !is_valid_macro_name(name) || is_known_block_macro(name) {
+        return None;
+    }
+    let after_colons = &trimmed[colon_pos + 2..];
+    // Find opening bracket
+    let bracket_start = after_colons.find('[')?;
+    let target = &after_colons[..bracket_start];
+    let attrs = &after_colons[bracket_start + 1..after_colons.len() - 1];
+    Some((name, target, attrs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

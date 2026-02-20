@@ -354,8 +354,8 @@
 | # | Элемент | Синтаксис | Статус |
 |---|---------|-----------|--------|
 | 20.1 | Inline role/class | `[.class]#text#` | ✅ |
-| 20.2 | Custom inline macro | `mymacro:target[attrs]` | ❌ |
-| 20.3 | Custom block macro | `mymacro::target[attrs]` | ❌ |
+| 20.2 | Custom inline macro | `mymacro:target[attrs]` | ✅ |
+| 20.3 | Custom block macro | `mymacro::target[attrs]` | ✅ |
 | 20.4 | Block substitutions | `[subs="+macros"]` | ✅ |
 | 20.5 | Docinfo | `:docinfo: shared` | ❌ |
 | 20.6 | Preamble | Текст между заголовком и первой секцией | ✅ |
@@ -391,8 +391,8 @@
 | Экранирование | 5 | 0 | 0 | 5 |
 | Код | 4 | 0 | 1 | 5 |
 | TOC | 4 | 0 | 0 | 4 |
-| Продвинутые фичи | 7 | 0 | 5 | 12 |
-| **Итого** | **193** | **0** | **9** | **202** |
+| Продвинутые фичи | 9 | 0 | 3 | 12 |
+| **Итого** | **195** | **0** | **7** | **202** |
 
-**Покрытие: ~96% полное**
+**Покрытие: ~97% полное**
 
