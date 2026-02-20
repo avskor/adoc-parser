@@ -68,6 +68,8 @@ struct HtmlRenderer {
     dlist_stack: Vec<DlistStyle>,
     hdlist_in_term_group: bool,
     has_document_title: bool,
+    capturing_doctitle: bool,
+    doctitle_buf: String,
     preamble_start: Option<usize>,
     appendix_counter: u8,
     pending_section_caption: Option<String>,
@@ -82,7 +84,10 @@ impl HtmlRenderer {
             in_source_block: false,
             subs_stack: Vec::new(),
             pending_subs: None,
-            document_attrs: HashMap::new(),
+            document_attrs: HashMap::from([
+                ("backend".to_string(), "html5".to_string()),
+                ("doctype".to_string(), "article".to_string()),
+            ]),
             delimited_block_stack: Vec::new(),
             footnotes: Vec::new(),
             footnote_counter: 0,
@@ -109,6 +114,8 @@ impl HtmlRenderer {
             dlist_stack: Vec::new(),
             hdlist_in_term_group: false,
             has_document_title: false,
+            capturing_doctitle: false,
+            doctitle_buf: String::new(),
             preamble_start: None,
             appendix_counter: 0,
             pending_section_caption: None,
@@ -153,6 +160,9 @@ impl HtmlRenderer {
             Event::Start(tag) => self.start_tag(output, &tag),
             Event::End(tag_end) => self.end_tag(output, &tag_end),
             Event::Text(text) => {
+                if self.capturing_doctitle {
+                    self.doctitle_buf.push_str(&text);
+                }
                 if self.in_section_title
                     && let Some(ref mut entry) = self.current_toc_entry {
                         entry.title.push_str(&text);
@@ -282,11 +292,28 @@ impl HtmlRenderer {
                 html_escape(output, &path);
                 output.push_str("[] -->\n");
             }
-            Event::Author { .. } => {
-                // Author metadata — not rendered to HTML body
+            Event::Author { fullname, firstname, middlename, lastname, initials, address } => {
+                self.document_attrs.insert("author".to_string(), fullname.to_string());
+                self.document_attrs.insert("firstname".to_string(), firstname.to_string());
+                if !middlename.is_empty() {
+                    self.document_attrs.insert("middlename".to_string(), middlename.to_string());
+                }
+                self.document_attrs.insert("lastname".to_string(), lastname.to_string());
+                self.document_attrs.insert("authorinitials".to_string(), initials.to_string());
+                if !address.is_empty() {
+                    self.document_attrs.insert("email".to_string(), address.to_string());
+                }
             }
-            Event::Revision { .. } => {
-                // Revision metadata — not rendered to HTML body
+            Event::Revision { version, date, remark } => {
+                if !version.is_empty() {
+                    self.document_attrs.insert("revnumber".to_string(), version.to_string());
+                }
+                if !date.is_empty() {
+                    self.document_attrs.insert("revdate".to_string(), date.to_string());
+                }
+                if !remark.is_empty() {
+                    self.document_attrs.insert("revremark".to_string(), remark.to_string());
+                }
             }
             Event::BlockMetadata { style, id, roles, options, named, subs } => {
                 if let Some(s) = subs {
@@ -427,6 +454,8 @@ impl HtmlRenderer {
             }
             Tag::DocumentTitle => {
                 self.has_document_title = true;
+                self.capturing_doctitle = true;
+                self.doctitle_buf.clear();
                 output.push_str("<h1>");
             }
             Tag::SectionTitle { level, id } => {
@@ -1058,6 +1087,9 @@ impl HtmlRenderer {
             }
             TagEnd::DocumentTitle => {
                 output.push_str("</h1>\n");
+                self.capturing_doctitle = false;
+                let title = std::mem::take(&mut self.doctitle_buf);
+                self.document_attrs.insert("doctitle".to_string(), title);
             }
             TagEnd::SectionTitle => {
                 if self.in_section_title {
@@ -3216,5 +3248,49 @@ mod tests {
         // Custom prefix
         let html = to_html(":idprefix: sec-\n\n== My Section\n\nContent.");
         assert!(html.contains("id=\"sec-my_section\""), "custom prefix. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_backend() {
+        let html = to_html("{backend}");
+        assert!(html.contains("html5"), "backend should be html5. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_doctype() {
+        let html = to_html("{doctype}");
+        assert!(html.contains("article"), "doctype should be article. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_doctype_override() {
+        let html = to_html(":doctype: book\n\n{doctype}");
+        assert!(html.contains("book"), "doctype should be overridden to book. Got: {html}");
+        assert!(!html.contains("article"), "should not contain default article. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_author() {
+        let html = to_html("= Title\nJohn Doe <john@example.com>\n\n{author} {firstname} {lastname} {authorinitials} {email}");
+        assert!(html.contains("John Doe"), "author. Got: {html}");
+        assert!(html.contains("John"), "firstname. Got: {html}");
+        assert!(html.contains("Doe"), "lastname. Got: {html}");
+        assert!(html.contains("JD"), "authorinitials. Got: {html}");
+        assert!(html.contains("john@example.com"), "email. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_revision() {
+        let html = to_html("= Title\nAuthor Name\nv1.0, 2024-01-01: Initial\n\n{revnumber} {revdate} {revremark}");
+        assert!(html.contains("v1.0"), "revnumber. Got: {html}");
+        assert!(html.contains("2024-01-01"), "revdate. Got: {html}");
+        assert!(html.contains("Initial"), "revremark. Got: {html}");
+    }
+
+    #[test]
+    fn test_builtin_attr_doctitle() {
+        let html = to_html("= My Title\n\n{doctitle}");
+        // The doctitle attribute should resolve to "My Title" in the body
+        assert_eq!(html.matches("My Title").count(), 2, "doctitle should appear twice (h1 + reference). Got: {html}");
     }
 }
