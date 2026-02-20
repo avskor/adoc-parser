@@ -330,6 +330,8 @@ pub struct ImageAttrs<'a> {
     pub alt: &'a str,
     pub width: Option<&'a str>,
     pub height: Option<&'a str>,
+    pub align: Option<&'a str>,
+    pub float: Option<&'a str>,
 }
 
 pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
@@ -338,12 +340,16 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
             alt: "",
             width: None,
             height: None,
+            align: None,
+            float: None,
         };
     }
 
     let mut alt: Option<&str> = None;
     let mut width: Option<&str> = None;
     let mut height: Option<&str> = None;
+    let mut align: Option<&str> = None;
+    let mut float: Option<&str> = None;
     let mut positional = Vec::new();
 
     for part in split_respecting_quotes(bracket_content) {
@@ -363,6 +369,8 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
                 "alt" => alt = Some(value),
                 "width" => width = Some(value),
                 "height" => height = Some(value),
+                "align" => align = Some(value),
+                "float" => float = Some(value),
                 _ => {}
             }
         } else {
@@ -387,7 +395,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         height = Some(h);
     }
 
-    ImageAttrs { alt, width, height }
+    ImageAttrs { alt, width, height, align, float }
 }
 
 pub struct LinkAttrs<'a> {
@@ -960,5 +968,29 @@ mod tests {
 
         let attrs = BlockAttributes::parse("source,rust");
         assert_eq!(attrs.substitution_set(SubstitutionSet::VERBATIM), None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_with_align() {
+        let attrs = parse_image_attrs("Alt,align=center");
+        assert_eq!(attrs.alt, "Alt");
+        assert_eq!(attrs.align, Some("center"));
+        assert_eq!(attrs.float, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_with_float() {
+        let attrs = parse_image_attrs("Alt,float=left");
+        assert_eq!(attrs.alt, "Alt");
+        assert_eq!(attrs.float, Some("left"));
+        assert_eq!(attrs.align, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_with_align_and_float() {
+        let attrs = parse_image_attrs("Alt,align=center,float=right");
+        assert_eq!(attrs.alt, "Alt");
+        assert_eq!(attrs.align, Some("center"));
+        assert_eq!(attrs.float, Some("right"));
     }
 }

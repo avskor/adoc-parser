@@ -952,8 +952,10 @@ impl HtmlRenderer {
                 }
             }
             Tag::BlockImage { target, alt, width, height } => {
+                // Build base class with align/float CSS classes from named attrs
+                let base_class = Self::image_base_class("imageblock", &meta);
                 output.push_str("<div");
-                Self::write_meta_attrs(output, &meta, "imageblock");
+                Self::write_meta_attrs(output, &meta, &base_class);
                 output.push_str(">\n<div class=\"content\">\n<img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
@@ -983,8 +985,25 @@ impl HtmlRenderer {
                 output.push_str(">\n<div class=\"content\">\n");
                 render_audio_tag(output, target, attrs);
             }
-            Tag::InlineImage { target, alt, width, height } => {
-                output.push_str("<span class=\"image\"><img src=\"");
+            Tag::InlineImage { target, alt, width, height, align, float } => {
+                let mut img_class = String::from("image");
+                if let Some(f) = float {
+                    img_class.push(' ');
+                    img_class.push_str(f);
+                }
+                if let Some(a) = align {
+                    let css = match a.as_ref() {
+                        "left" => "text-left",
+                        "center" => "text-center",
+                        "right" => "text-right",
+                        other => other,
+                    };
+                    img_class.push(' ');
+                    img_class.push_str(css);
+                }
+                output.push_str("<span class=\"");
+                output.push_str(&img_class);
+                output.push_str("\"><img src=\"");
                 html_escape(output, target);
                 output.push_str("\" alt=\"");
                 html_escape(output, alt);
@@ -1395,6 +1414,33 @@ impl HtmlRenderer {
             }
             output.push('"');
         }
+    }
+
+    /// Build a base CSS class for block images, appending align/float classes from named attrs.
+    fn image_base_class(default: &str, meta: &Option<BlockMeta>) -> String {
+        let mut class = String::from(default);
+        if let Some(m) = meta {
+            for (k, v) in &m.named {
+                match k.as_str() {
+                    "float" => {
+                        class.push(' ');
+                        class.push_str(v);
+                    }
+                    "align" => {
+                        let css = match v.as_str() {
+                            "left" => "text-left",
+                            "center" => "text-center",
+                            "right" => "text-right",
+                            other => other,
+                        };
+                        class.push(' ');
+                        class.push_str(css);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        class
     }
 
     fn render_kbd_keys(&self, output: &mut String, text: &str) {
@@ -3105,6 +3151,48 @@ mod tests {
         assert!(html.contains("alt=\"Icon\""));
         assert!(html.contains("width=\"32\""));
         assert!(html.contains("height=\"32\""));
+    }
+
+    #[test]
+    fn test_block_image_align_center() {
+        let html = to_html("image::photo.jpg[Alt,align=center]");
+        assert!(html.contains("class=\"imageblock text-center\""));
+    }
+
+    #[test]
+    fn test_block_image_float_left() {
+        let html = to_html("image::photo.jpg[Alt,float=left]");
+        assert!(html.contains("class=\"imageblock left\""));
+    }
+
+    #[test]
+    fn test_block_image_align_from_block_attrs() {
+        let html = to_html("[align=center]\nimage::photo.jpg[Alt]");
+        assert!(html.contains("class=\"imageblock text-center\""));
+    }
+
+    #[test]
+    fn test_block_image_float_right() {
+        let html = to_html("image::photo.jpg[Alt,float=right]");
+        assert!(html.contains("class=\"imageblock right\""));
+    }
+
+    #[test]
+    fn test_block_image_align_right() {
+        let html = to_html("image::photo.jpg[Alt,align=right]");
+        assert!(html.contains("class=\"imageblock text-right\""));
+    }
+
+    #[test]
+    fn test_inline_image_float_left() {
+        let html = to_html("text image:icon.png[Icon,float=left] more");
+        assert!(html.contains("class=\"image left\""));
+    }
+
+    #[test]
+    fn test_inline_image_align_center() {
+        let html = to_html("text image:icon.png[Icon,align=center] more");
+        assert!(html.contains("class=\"image text-center\""));
     }
 
     #[test]

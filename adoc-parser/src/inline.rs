@@ -1325,6 +1325,8 @@ impl<'a> InlineState<'a> {
             alt: Cow::Borrowed(img_attrs.alt),
             width: img_attrs.width.map(Cow::Borrowed),
             height: img_attrs.height.map(Cow::Borrowed),
+            align: img_attrs.align.map(Cow::Borrowed),
+            float: img_attrs.float.map(Cow::Borrowed),
         }));
         events.push(Event::End(TagEnd::InlineImage));
 
@@ -2044,6 +2046,8 @@ mod tests {
                 alt: Cow::Borrowed("icon"),
                 width: None,
                 height: None,
+                align: None,
+                float: None,
             }),
             Event::End(TagEnd::InlineImage),
         ]);

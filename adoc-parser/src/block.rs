@@ -509,8 +509,15 @@ impl<'a> BlockScanner<'a> {
         if let Some((target, alt)) = scanner::is_block_image(line) {
             self.advance();
             let title_events = self.take_pending_block_title();
-            let block_attrs = self.pending_block_attrs.take();
+            let mut block_attrs = self.pending_block_attrs.take().unwrap_or_default();
             let img_attrs = crate::attributes::parse_image_attrs(alt);
+            // Merge align/float from image macro attrs into block metadata (block attrs take priority)
+            if let Some(align) = img_attrs.align {
+                block_attrs.named.entry("align".to_string()).or_insert_with(|| align.to_string());
+            }
+            if let Some(float) = img_attrs.float {
+                block_attrs.named.entry("float".to_string()).or_insert_with(|| float.to_string());
+            }
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),
@@ -518,9 +525,7 @@ impl<'a> BlockScanner<'a> {
                 width: img_attrs.width.map(Cow::Borrowed),
                 height: img_attrs.height.map(Cow::Borrowed),
             }));
-            if let Some(ref attrs) = block_attrs {
-                self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
-            }
+            self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
             self.push_title_then_events(title_events);
             return self.event_buffer.pop();
         }
