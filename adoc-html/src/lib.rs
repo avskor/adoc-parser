@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 
@@ -34,6 +34,23 @@ struct BlockMeta {
     options: Vec<String>,
     named: Vec<(String, String)>,
     subs: Option<SubstitutionSet>,
+}
+
+fn parse_highlight_spec(spec: &str) -> HashSet<usize> {
+    let mut result = HashSet::new();
+    for part in spec.split([',', ';']) {
+        let part = part.trim();
+        if let Some((start_s, end_s)) = part.split_once("..") {
+            if let (Ok(start), Ok(end)) = (start_s.trim().parse::<usize>(), end_s.trim().parse::<usize>()) {
+                for n in start..=end {
+                    result.insert(n);
+                }
+            }
+        } else if let Ok(n) = part.parse::<usize>() {
+            result.insert(n);
+        }
+    }
+    result
 }
 
 struct HtmlRenderer {
@@ -78,6 +95,9 @@ struct HtmlRenderer {
     pending_section_caption: Option<String>,
     sectnums: bool,
     section_counters: [u32; 6],
+    highlight_lines: HashSet<usize>,
+    source_line_num: usize,
+    source_line_highlighted: bool,
 }
 
 impl HtmlRenderer {
@@ -127,6 +147,9 @@ impl HtmlRenderer {
             pending_section_caption: None,
             sectnums: false,
             section_counters: [0; 6],
+            highlight_lines: HashSet::new(),
+            source_line_num: 0,
+            source_line_highlighted: false,
         }
     }
 
@@ -187,6 +210,13 @@ impl HtmlRenderer {
                 } else if self.stem_block_variant.is_some() {
                     self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
                 } else if self.current_subs().has(SubstitutionSet::SPECIALCHARS) {
+                    if self.in_source_block && self.source_line_num > 0
+                        && self.highlight_lines.contains(&self.source_line_num)
+                        && !self.source_line_highlighted
+                    {
+                        output.push_str("<span class=\"hll\">");
+                        self.source_line_highlighted = true;
+                    }
                     html_escape(output, &text);
                 } else {
                     output.push_str(&text);
@@ -208,6 +238,13 @@ impl HtmlRenderer {
                 if self.stem_block_variant.is_some() {
                     self.stem_block_content.get_or_insert_with(String::new).push('\n');
                 } else {
+                    if self.source_line_highlighted {
+                        output.push_str("</span>");
+                        self.source_line_highlighted = false;
+                    }
+                    if self.in_source_block && self.source_line_num > 0 {
+                        self.source_line_num += 1;
+                    }
                     output.push('\n');
                 }
             }
@@ -723,6 +760,16 @@ impl HtmlRenderer {
                     }
                 }
 
+                if let Some(hl_spec) = meta.as_ref()
+                    .and_then(|m| m.named.iter().find(|(k, _)| k == "highlight").map(|(_, v)| v.clone()))
+                {
+                    self.highlight_lines = parse_highlight_spec(&hl_spec);
+                    self.source_line_num = 1;
+                } else {
+                    self.source_line_num = 0;
+                }
+                self.source_line_highlighted = false;
+
                 output.push('>');
             }
             Tag::BlockTitle => {
@@ -1227,6 +1274,12 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::SourceBlock => {
+                if self.source_line_highlighted {
+                    output.push_str("</span>");
+                    self.source_line_highlighted = false;
+                }
+                self.highlight_lines.clear();
+                self.source_line_num = 0;
                 self.in_source_block = false;
                 output.push_str("</code></pre>\n</div>\n</div>\n");
             }
@@ -3488,6 +3541,43 @@ mod tests {
         let html = to_html(":source-highlighter: coderay\n\n[source,java]\n----\nSystem.out.println();\n----");
         assert!(html.contains("<pre class=\"CodeRay highlight\">"), "coderay: pre class. Got: {html}");
         assert!(html.contains("data-lang=\"java\""), "coderay: data-lang. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_highlight_single_line() {
+        let html = to_html("[source,rust,highlight=2]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
+        assert!(html.contains("let a = 1;\n<span class=\"hll\">let b = 2;</span>\nlet c = 3;"), "single line highlight. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_highlight_multiple_lines() {
+        let html = to_html("[source,rust,highlight=1;3]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
+        assert!(html.contains("<span class=\"hll\">let a = 1;</span>\nlet b = 2;\n<span class=\"hll\">let c = 3;</span>"), "multiple lines highlight. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_highlight_range() {
+        let html = to_html("[source,rust,highlight=2..4]\n----\nline 1\nline 2\nline 3\nline 4\nline 5\n----");
+        assert!(html.contains("line 1\n<span class=\"hll\">line 2</span>\n<span class=\"hll\">line 3</span>\n<span class=\"hll\">line 4</span>\nline 5"), "range highlight. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_no_highlight_no_change() {
+        let html = to_html("[source,rust]\n----\nlet a = 1;\nlet b = 2;\n----");
+        assert!(!html.contains("hll"), "no highlight attr should produce no hll. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_highlight_last_line() {
+        let html = to_html("[source,rust,highlight=3]\n----\nline 1\nline 2\nline 3\n----");
+        assert!(html.contains("<span class=\"hll\">line 3</span></code>"), "last line highlight should close span before </code>. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_highlight_comma_separator() {
+        let html = to_html("[source,rust,highlight=\"1,3\"]\n----\nline 1\nline 2\nline 3\n----");
+        assert!(html.contains("<span class=\"hll\">line 1</span>"), "comma-separated highlight. Got: {html}");
+        assert!(html.contains("<span class=\"hll\">line 3</span>"), "comma-separated highlight. Got: {html}");
     }
 
     #[test]
