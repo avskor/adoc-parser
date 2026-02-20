@@ -249,6 +249,16 @@ impl HtmlRenderer {
             Event::AttributeReference { name, fallback } => {
                 if let Some(value) = self.document_attrs.get(name.as_ref()) {
                     html_escape(output, value);
+                } else if let Some(env_name) = name.strip_prefix("env-") {
+                    if let Ok(value) = std::env::var(env_name) {
+                        html_escape(output, &value);
+                    } else if let Some(fb) = fallback {
+                        html_escape(output, &fb);
+                    } else {
+                        output.push('{');
+                        output.push_str(&name);
+                        output.push('}');
+                    }
                 } else if let Some(fb) = fallback {
                     html_escape(output, &fb);
                 } else {
@@ -3800,5 +3810,27 @@ mod tests {
             "should have sidebar block. Got: {html}");
         assert!(html.contains("<code"), "should have code element. Got: {html}");
         assert!(html.contains("fn main() {}"), "should contain source code. Got: {html}");
+    }
+
+    #[test]
+    fn test_env_attribute_existing_var() {
+        // PATH is set on all platforms
+        let html = to_html("Value: {env-PATH}");
+        assert!(!html.contains("{env-PATH}"), "env-PATH should be resolved, not literal. Got: {html}");
+        assert!(html.contains("Value: "), "should contain prefix. Got: {html}");
+    }
+
+    #[test]
+    fn test_env_attribute_missing_var() {
+        let html = to_html("Value: {env-ADOC_PARSER_TEST_VAR_12345}");
+        assert!(html.contains("{env-ADOC_PARSER_TEST_VAR_12345}"),
+            "missing env var should render as literal. Got: {html}");
+    }
+
+    #[test]
+    fn test_env_attribute_missing_var_with_fallback() {
+        let html = to_html("Value: {env-ADOC_PARSER_TEST_VAR_12345!fallback}");
+        assert!(html.contains("Value: fallback"),
+            "missing env var with fallback should use fallback. Got: {html}");
     }
 }
