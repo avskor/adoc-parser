@@ -1164,6 +1164,43 @@ impl<'a> InlineState<'a> {
         let start_pos = self.pos;
         let rest = &self.input[start_pos + 5..]; // skip "link:"
 
+        // Handle ++url with spaces++ passthrough in URL
+        if let Some(after_open) = rest.strip_prefix("++") {
+            let close_pp = match after_open.find("++") {
+                Some(p) => p,
+                None => return false,
+            };
+            let url = &after_open[..close_pp];
+            let after_close = &rest[2 + close_pp + 2..]; // after closing ++
+            if !after_close.starts_with('[') {
+                return false;
+            }
+            let bracket_end = match after_close.find(']') {
+                Some(p) => p,
+                None => return false,
+            };
+            let bracket_content = &after_close[1..bracket_end];
+
+            if url.is_empty() {
+                return false;
+            }
+
+            self.flush_text(*text_start, start_pos, events);
+            let link_attrs = parse_link_attrs(bracket_content);
+            events.push(Event::Start(Tag::Link {
+                url: Cow::Borrowed(url),
+                window: link_attrs.window.map(Cow::Borrowed),
+                nofollow: link_attrs.nofollow,
+            }));
+            let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
+            events.push(Event::Text(Cow::Borrowed(display)));
+            events.push(Event::End(TagEnd::Link));
+
+            self.pos = start_pos + 5 + 2 + close_pp + 2 + bracket_end + 1;
+            *text_start = self.pos;
+            return true;
+        }
+
         let bracket_start = match rest.find('[') {
             Some(p) => p,
             None => return false,

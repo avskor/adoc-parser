@@ -1915,6 +1915,32 @@ mod tests {
     }
 
     #[test]
+    fn test_link_passthrough_url_with_spaces() {
+        let html = to_html("link:++https://example.com/my page++[Click]");
+        assert!(html.contains("<a href=\"https://example.com/my page\">Click</a>"));
+    }
+
+    #[test]
+    fn test_link_passthrough_url_with_brackets() {
+        let html = to_html("link:++https://example.com/path[1]++[Click]");
+        assert!(html.contains("<a href=\"https://example.com/path[1]\">Click</a>"));
+    }
+
+    #[test]
+    fn test_link_passthrough_url_empty_text() {
+        let html = to_html("link:++https://example.com/my page++[]");
+        assert!(html.contains("<a href=\"https://example.com/my page\">https://example.com/my page</a>"));
+    }
+
+    #[test]
+    fn test_link_passthrough_url_with_attrs() {
+        let html = to_html("link:++https://example.com/my page++[Click,window=_blank]");
+        assert!(html.contains("<a href=\"https://example.com/my page\""));
+        assert!(html.contains("target=\"_blank\""));
+        assert!(html.contains(">Click</a>"));
+    }
+
+    #[test]
     fn test_email_autolink_html() {
         let html = to_html("Contact user@example.com for info");
         assert!(html.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"));
