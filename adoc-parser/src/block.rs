@@ -1735,17 +1735,14 @@ impl<'a> BlockScanner<'a> {
 
         let block_attrs = self.pending_block_attrs.take().unwrap_or_default();
 
-        // Check for source block (applies to both listing `----` and literal `....` delimiters)
-        if (delim_type == scanner::DelimiterType::Listing
-            || delim_type == scanner::DelimiterType::Literal)
-            && block_attrs.is_source_block()
-        {
+        // Check for source block (applies to any delimiter type with [source] style)
+        if block_attrs.is_source_block() {
             let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
             return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
         }
 
-        // Verse block: [verse] on quote delimiter
-        if delim_type == scanner::DelimiterType::Quote && block_attrs.is_verse_style() {
+        // Verse block: [verse] on any delimiter type
+        if block_attrs.is_verse_style() {
             return self.scan_verse_block(delim_type, delim_len, title_events, &block_attrs);
         }
 
@@ -1769,89 +1766,81 @@ impl<'a> BlockScanner<'a> {
             return self.scan_next_block();
         }
 
-        // Open block style remapping: [style] on `--` block
-        if delim_type == scanner::DelimiterType::Open {
-            if let Some(style) = block_attrs.block_style_kind() {
-                match style {
-                    "source" => {
-                        let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
-                        return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
-                    }
-                    "verse" => {
-                        return self.scan_verse_block(delim_type, delim_len, title_events, &block_attrs);
-                    }
-                    "listing" | "literal" | "pass" => {
-                        let kind = match style {
-                            "listing" => DelimitedBlockKind::Listing,
-                            "literal" => DelimitedBlockKind::Literal,
-                            _ => DelimitedBlockKind::Passthrough,
-                        };
-                        let default_subs = if style == "pass" {
-                            SubstitutionSet::NONE
-                        } else {
-                            SubstitutionSet::VERBATIM
-                        };
-                        let mut content_lines: Vec<&'a str> = Vec::new();
-                        let mut closed = false;
-                        while let Some(line) = self.current_line() {
-                            if let Some((dt, dl)) = scanner::is_delimiter(line)
-                                && dt == delim_type && dl == delim_len {
-                                    self.advance();
-                                    closed = true;
-                                    break;
-                            }
-                            if self.closes_parent_block(line) {
+        // Style remapping: [style] on any delimited block
+        if let Some(style) = block_attrs.block_style_kind() {
+            match style {
+                "source" | "verse" => {} // already handled above
+                "listing" | "literal" | "pass" => {
+                    let kind = match style {
+                        "listing" => DelimitedBlockKind::Listing,
+                        "literal" => DelimitedBlockKind::Literal,
+                        _ => DelimitedBlockKind::Passthrough,
+                    };
+                    let default_subs = if style == "pass" {
+                        SubstitutionSet::NONE
+                    } else {
+                        SubstitutionSet::VERBATIM
+                    };
+                    let mut content_lines: Vec<&'a str> = Vec::new();
+                    let mut closed = false;
+                    while let Some(line) = self.current_line() {
+                        if let Some((dt, dl)) = scanner::is_delimiter(line)
+                            && dt == delim_type && dl == delim_len {
+                                self.advance();
+                                closed = true;
                                 break;
-                            }
-                            content_lines.push(line);
-                            self.advance();
                         }
-                        if !closed && content_lines.last().is_some_and(|l| l.is_empty()) {
-                            content_lines.pop();
+                        if self.closes_parent_block(line) {
+                            break;
                         }
-                        self.push_event(Event::End(TagEnd::DelimitedBlock));
-                        for (i, &cline) in content_lines.iter().enumerate().rev() {
-                            if i < content_lines.len() - 1 {
-                                self.push_event(Event::SoftBreak);
-                            }
-                            self.push_event(Event::Text(Cow::Borrowed(cline)));
-                        }
-                        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                        self.emit_block_metadata(&block_attrs, default_subs);
-                        self.push_title_then_events(title_events);
-                        return self.event_buffer.pop();
+                        content_lines.push(line);
+                        self.advance();
                     }
-                    "quote" | "example" | "sidebar" => {
-                        let kind = match style {
-                            "quote" => DelimitedBlockKind::Quote,
-                            "example" => DelimitedBlockKind::Example,
-                            _ => DelimitedBlockKind::Sidebar,
-                        };
-                        self.context_stack.push(BlockContext::DelimitedBlock {
-                            kind: delim_type,
-                            delimiter_len: delim_len,
-                            admonition_kind: None,
-                        });
-                        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                        self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
-                        self.push_title_then_events(title_events);
-                        return self.event_buffer.pop();
+                    if !closed && content_lines.last().is_some_and(|l| l.is_empty()) {
+                        content_lines.pop();
                     }
-                    _ => {}
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    for (i, &cline) in content_lines.iter().enumerate().rev() {
+                        if i < content_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(cline)));
+                    }
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    self.emit_block_metadata(&block_attrs, default_subs);
+                    self.push_title_then_events(title_events);
+                    return self.event_buffer.pop();
                 }
+                "quote" | "example" | "sidebar" => {
+                    let kind = match style {
+                        "quote" => DelimitedBlockKind::Quote,
+                        "example" => DelimitedBlockKind::Example,
+                        _ => DelimitedBlockKind::Sidebar,
+                    };
+                    self.context_stack.push(BlockContext::DelimitedBlock {
+                        kind: delim_type,
+                        delimiter_len: delim_len,
+                        admonition_kind: None,
+                    });
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
+                    self.push_title_then_events(title_events);
+                    return self.event_buffer.pop();
+                }
+                _ => {}
             }
-            // Admonition style on open block
-            if let Some(ak) = block_attrs.admonition_kind() {
-                self.context_stack.push(BlockContext::DelimitedBlock {
-                    kind: delim_type,
-                    delimiter_len: delim_len,
-                    admonition_kind: Some(ak.clone()),
-                });
-                self.push_event(Event::Start(Tag::Admonition { kind: ak }));
-                self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
-                self.push_title_then_events(title_events);
-                return self.event_buffer.pop();
-            }
+        }
+        // Admonition style on any delimited block
+        if let Some(ak) = block_attrs.admonition_kind() {
+            self.context_stack.push(BlockContext::DelimitedBlock {
+                kind: delim_type,
+                delimiter_len: delim_len,
+                admonition_kind: Some(ak.clone()),
+            });
+            self.push_event(Event::Start(Tag::Admonition { kind: ak }));
+            self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop();
         }
 
         let kind = match delim_type {
@@ -1922,12 +1911,7 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Structural blocks (example, sidebar, quote, open): recursively parse content
-        // Check for admonition style on Example blocks
-        let adm_kind = if delim_type == scanner::DelimiterType::Example {
-            block_attrs.admonition_kind()
-        } else {
-            None
-        };
+        let adm_kind = block_attrs.admonition_kind();
 
         self.context_stack.push(BlockContext::DelimitedBlock {
             kind: delim_type,

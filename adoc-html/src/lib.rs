@@ -3828,6 +3828,58 @@ mod tests {
         assert!(html.contains("Note content."), "should contain text. Got: {html}");
     }
 
+    // --- Universal style remapping on non-native delimiters ---
+
+    #[test]
+    fn test_source_style_on_example_delimiter() {
+        let html = to_html("[source,rust]\n====\nfn main() {}\n====");
+        assert!(html.contains("language-rust"), "should have language-rust. Got: {html}");
+        assert!(html.contains("fn main()"), "should contain code. Got: {html}");
+        assert!(!html.contains("exampleblock"), "should NOT have exampleblock. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_style_on_example_delimiter() {
+        let html = to_html("[listing]\n====\ncode here\n====");
+        assert!(html.contains("listingblock"), "should have listingblock. Got: {html}");
+        assert!(html.contains("<pre>"), "should have <pre>. Got: {html}");
+        assert!(html.contains("code here"), "should contain text. Got: {html}");
+        assert!(!html.contains("exampleblock"), "should NOT have exampleblock. Got: {html}");
+    }
+
+    #[test]
+    fn test_quote_style_on_listing_delimiter() {
+        let html = to_html("[quote]\n----\nQuoted text.\n----");
+        assert!(html.contains("quoteblock"), "should have quoteblock. Got: {html}");
+        assert!(html.contains("<blockquote>"), "should have blockquote. Got: {html}");
+        assert!(html.contains("Quoted text."), "should contain text. Got: {html}");
+        assert!(!html.contains("listingblock"), "should NOT have listingblock. Got: {html}");
+    }
+
+    #[test]
+    fn test_verse_style_on_listing_delimiter() {
+        let html = to_html("[verse]\n----\nVerse line one\nVerse line two\n----");
+        assert!(html.contains("verseblock"), "should have verseblock. Got: {html}");
+        assert!(html.contains("Verse line one"), "should contain text. Got: {html}");
+        assert!(!html.contains("listingblock"), "should NOT have listingblock. Got: {html}");
+    }
+
+    #[test]
+    fn test_note_style_on_listing_delimiter() {
+        let html = to_html("[NOTE]\n----\nNote content.\n----");
+        assert!(html.contains("admonitionblock note"), "should have admonition. Got: {html}");
+        assert!(html.contains("Note content."), "should contain text. Got: {html}");
+        assert!(!html.contains("listingblock"), "should NOT have listingblock. Got: {html}");
+    }
+
+    #[test]
+    fn test_sidebar_style_on_example_delimiter() {
+        let html = to_html("[sidebar]\n====\nSidebar content.\n====");
+        assert!(html.contains("sidebarblock"), "should have sidebarblock. Got: {html}");
+        assert!(html.contains("Sidebar content."), "should contain text. Got: {html}");
+        assert!(!html.contains("exampleblock"), "should NOT have exampleblock. Got: {html}");
+    }
+
     // === Nested delimited blocks (4.12) ===
 
     #[test]
