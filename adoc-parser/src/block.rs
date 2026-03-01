@@ -588,11 +588,27 @@ impl<'a> BlockScanner<'a> {
 
         // Admonition `NOTE: text`
         if let Some((label, text)) = scanner::is_admonition(line) {
+            // If in list context with blank line (not continuation), close list first
+            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return self.event_buffer.pop();
+            }
             return self.scan_admonition(label, text);
         }
 
         // Table `|===`
         if scanner::is_table_delimiter(line) {
+            // If in list context with blank line (not continuation), close list first
+            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return self.event_buffer.pop();
+            }
             return self.scan_table();
         }
 
@@ -1744,7 +1760,7 @@ impl<'a> BlockScanner<'a> {
             {
                 break;
             }
-            continuation_lines.push(line);
+            continuation_lines.push(line.trim_end());
             self.advance();
         }
 
@@ -1752,9 +1768,10 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::End(TagEnd::Paragraph));
 
         // Push all lines in reverse (reversed stack pattern)
+        // Stack order: text is popped first, then SoftBreak+cline pairs
         for &cline in continuation_lines.iter().rev() {
-            self.push_event(Event::SoftBreak);
             self.push_event(Event::Text(Cow::Borrowed(cline)));
+            self.push_event(Event::SoftBreak);
         }
         self.push_event(Event::Text(Cow::Borrowed(text)));
 

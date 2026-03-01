@@ -1511,6 +1511,10 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::Paragraph => {
+                // Trim trailing whitespace before closing <p>
+                let trimmed = output.trim_end_matches([' ', '\t']);
+                output.truncate(trimmed.len());
+
                 if self.is_direct_child_of_admonition() {
                     // Inline admonitions: no </p>
                     output.push('\n');
