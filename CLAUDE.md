@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use context7 MCP server to fetch up-to-date documentation for libraries and frameworks before answering questions or writing code that depends on them.
 
+When working with Rust code, use rust-analyzer LSP for code navigation:
+go-to-definition, find-references, diagnostics. Do not use text search
+to find function and type definitions — use LSP instead.
+
 ## Git Workflow
 
 CRITICAL: Never make commits directly on `master`. Before starting ANY task, ALWAYS:
