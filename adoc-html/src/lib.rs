@@ -133,6 +133,9 @@ struct HtmlRenderer {
     standalone: bool,
     last_updated: Option<String>,
     content_start: Option<usize>,
+    in_unlabeled_xref: bool,
+    xref_placeholder_counter: usize,
+    xref_placeholders: Vec<(String, String)>,
 }
 
 impl HtmlRenderer {
@@ -194,6 +197,9 @@ impl HtmlRenderer {
             standalone: false,
             last_updated: None,
             content_start: None,
+            in_unlabeled_xref: false,
+            xref_placeholder_counter: 0,
+            xref_placeholders: Vec::new(),
         }
     }
 
@@ -293,7 +299,11 @@ impl HtmlRenderer {
                 if self.manpage_name_capture {
                     self.manpage_name_buf.push_str(&text);
                 }
-                if self.kbd_mode {
+                if self.in_unlabeled_xref {
+                    let (ref placeholder, _) = *self.xref_placeholders.last().unwrap();
+                    output.push_str(placeholder);
+                    self.in_unlabeled_xref = false;
+                } else if self.kbd_mode {
                     self.render_kbd_keys(output, &text);
                 } else if self.menu_target.is_some() {
                     self.menu_items = Some(text.to_string());
@@ -519,6 +529,25 @@ impl HtmlRenderer {
         if let Some(pos) = self.toc_insert_position {
             let toc_html = self.generate_toc();
             output.insert_str(pos, &toc_html);
+        }
+
+        if !self.xref_placeholders.is_empty() {
+            let mut id_to_title: HashMap<String, String> = HashMap::new();
+            for entry in &self.toc_entries {
+                id_to_title.insert(entry.id.clone(), entry.title.clone());
+            }
+            for (placeholder, target_id) in &self.xref_placeholders {
+                let replacement = if let Some(title) = id_to_title.get(target_id) {
+                    let mut escaped = String::new();
+                    html_escape(&mut escaped, title);
+                    escaped
+                } else {
+                    let mut escaped = String::new();
+                    html_escape(&mut escaped, target_id);
+                    escaped
+                };
+                *output = output.replace(placeholder, &replacement);
+            }
         }
 
         if !self.footnotes.is_empty() {
@@ -1299,10 +1328,16 @@ impl HtmlRenderer {
                 }
                 output.push('>');
             }
-            Tag::CrossReference { target, .. } => {
+            Tag::CrossReference { target, label } => {
                 output.push_str("<a href=\"#");
                 html_escape(output, target);
                 output.push_str("\">");
+                if label.is_none() {
+                    self.in_unlabeled_xref = true;
+                    self.xref_placeholder_counter += 1;
+                    let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
+                    self.xref_placeholders.push((placeholder, target.to_string()));
+                }
             }
             Tag::Keyboard => {
                 self.kbd_mode = true;
@@ -1573,6 +1608,7 @@ impl HtmlRenderer {
                 output.push_str("</a>");
             }
             TagEnd::CrossReference => {
+                self.in_unlabeled_xref = false;
                 output.push_str("</a>");
             }
             TagEnd::Keyboard => {

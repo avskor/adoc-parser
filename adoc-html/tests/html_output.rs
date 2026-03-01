@@ -335,3 +335,43 @@ fn test_standalone_footer_div() {
     });
     assert!(html.contains("<div id=\"footer\">"), "should have footer div. Got: {html}");
 }
+
+#[test]
+fn test_xref_unlabeled_resolves_section_title() {
+    let input = "[#requests]\n== Запросы\n\nСм. <<requests>>";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#requests\">Запросы</a>"),
+        "unlabeled xref should resolve to section title. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_forward_reference() {
+    let input = "См. <<later-section>>\n\n[#later-section]\n== Later Section";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#later-section\">Later Section</a>"),
+        "forward xref should resolve to section title. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_with_explicit_label_unchanged() {
+    let input = "[#requests]\n== Запросы\n\nСм. <<requests,Все запросы>>";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#requests\">Все запросы</a>"),
+        "xref with explicit label should use that label. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_unresolvable_falls_back_to_id() {
+    let input = "См. <<nonexistent>>";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#nonexistent\">nonexistent</a>"),
+        "unresolvable xref should fall back to target ID. Got: {html}"
+    );
+}
