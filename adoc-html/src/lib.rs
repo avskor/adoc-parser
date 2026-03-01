@@ -137,6 +137,7 @@ struct HtmlRenderer {
     in_unlabeled_xref: bool,
     xref_placeholder_counter: usize,
     xref_placeholders: Vec<(String, String)>,
+    in_header: bool,
 }
 
 impl HtmlRenderer {
@@ -202,6 +203,7 @@ impl HtmlRenderer {
             in_unlabeled_xref: false,
             xref_placeholder_counter: 0,
             xref_placeholders: Vec::new(),
+            in_header: false,
         }
     }
 
@@ -690,6 +692,7 @@ impl HtmlRenderer {
 
         match tag {
             Tag::Header => {
+                self.in_header = true;
                 if self.standalone {
                     output.push_str("<div id=\"header\">\n");
                 } else {
@@ -716,9 +719,11 @@ impl HtmlRenderer {
                     && self.book_part_stack.last() == Some(&true);
                 output.push_str("<h");
                 output.push_str(&h.to_string());
-                output.push_str(" id=\"");
-                html_escape(output, id);
-                output.push('"');
+                if !self.in_header {
+                    output.push_str(" id=\"");
+                    html_escape(output, id);
+                    output.push('"');
+                }
                 if is_part {
                     output.push_str(" class=\"sect0\"");
                 }
@@ -1392,6 +1397,7 @@ impl HtmlRenderer {
 
         match tag_end {
             TagEnd::Header => {
+                self.in_header = false;
                 output.push_str("</div>\n");
                 if self.standalone {
                     self.content_start = Some(output.len());
@@ -2192,8 +2198,8 @@ mod tests {
         let h1_count = html.matches("<h1").count();
         assert_eq!(h1_count, 1, "expected exactly one <h1> tag, got {h1_count}. HTML:\n{html}");
         assert!(
-            html.contains("<h1 id=\"_document_title\">Document Title</h1>"),
-            "expected <h1 id=\"_document_title\">Document Title</h1>, got:\n{html}"
+            html.contains("<h1>Document Title</h1>"),
+            "expected <h1>Document Title</h1> (no id in header), got:\n{html}"
         );
     }
 
@@ -2367,8 +2373,8 @@ mod tests {
     #[test]
     fn test_document_header() {
         let html = to_html("= My Document\n\nContent.");
-        assert!(html.contains("<h1 id=\"_my_document\">My Document</h1>"),
-            "expected <h1 id=\"_my_document\">My Document</h1>, got:\n{html}");
+        assert!(html.contains("<h1>My Document</h1>"),
+            "expected <h1>My Document</h1> (no id in header), got:\n{html}");
     }
 
     #[test]
@@ -4432,7 +4438,7 @@ mod tests {
     fn test_no_manpage_suffix_for_article() {
         let input = "= Title\n\ntext";
         let html = to_html(input);
-        assert!(html.contains("<h1 id=\"_title\">Title</h1>"),
+        assert!(html.contains("<h1>Title</h1>"),
             "article title should not have ' Manual Page'. Got: {html}");
         assert!(!html.contains("Manual Page"),
             "article should not contain 'Manual Page'. Got: {html}");

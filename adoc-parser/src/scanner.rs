@@ -708,14 +708,67 @@ pub fn strip_any_section_marker(line: &str) -> Option<(u8, &str)> {
     strip_section_marker(line).or_else(|| strip_markdown_heading(line))
 }
 
+/// Strip URLs from title text for ID generation.
+/// - `https://url[text]` / `http://url[text]` → `text`
+/// - `link:url[text]` → `text`
+/// - bare `https://url` / `http://url` (no bracket text) → removed
+fn strip_urls_for_id(title: &str) -> String {
+    let mut result = String::with_capacity(title.len());
+    let mut rest = title;
+
+    while !rest.is_empty() {
+        // Check for link: macro or http(s):// URL
+        let url_match = if rest.starts_with("link:") {
+            Some(("link:", 5))
+        } else if rest.starts_with("https://") {
+            Some(("https://", 0))
+        } else if rest.starts_with("http://") {
+            Some(("http://", 0))
+        } else {
+            None
+        };
+
+        if let Some((_prefix, url_body_offset)) = url_match {
+            let search_from = if url_body_offset > 0 { url_body_offset } else { 0 };
+            // Find the bracket part [text]
+            if let Some(bracket_pos) = rest[search_from..].find('[') {
+                let abs_bracket = search_from + bracket_pos;
+                if let Some(close_pos) = rest[abs_bracket..].find(']') {
+                    let text = &rest[abs_bracket + 1..abs_bracket + close_pos];
+                    result.push_str(text);
+                    rest = &rest[abs_bracket + close_pos + 1..];
+                    continue;
+                }
+            }
+            // Bare URL (no brackets) — skip entirely
+            let url_end = rest.find(' ').unwrap_or(rest.len());
+            rest = &rest[url_end..];
+            continue;
+        }
+
+        // Regular character — advance by one char
+        let mut chars = rest.chars();
+        if let Some(ch) = chars.next() {
+            result.push(ch);
+            rest = chars.as_str();
+        }
+    }
+
+    result
+}
+
 pub fn generate_id(title: &str, prefix: &str, separator: &str) -> String {
+    let processed = strip_urls_for_id(title);
+    let title = &processed;
     let sep_char = separator.chars().next().unwrap_or('_');
     let mut id = String::with_capacity(title.len() + prefix.len());
     id.push_str(prefix);
     let mut prev_was_separator = false;
     for ch in title.chars() {
         if ch.is_alphanumeric() {
-            id.push(ch.to_ascii_lowercase());
+            for lc in ch.to_lowercase() {
+                id.push(lc);
+            }
             prev_was_separator = false;
         } else if (ch == ' ' || ch == '-' || ch == '_')
             && !prev_was_separator {
@@ -1095,6 +1148,27 @@ mod tests {
 
         // Empty separator (no separator char — falls back to '_')
         assert_eq!(generate_id("My Title", "_", ""), "_my_title");
+
+        // Unicode (Cyrillic) — should lowercase properly
+        assert_eq!(generate_id("Базовые Принципы", "_", "_"), "_базовые_принципы");
+
+        // URLs in title — should use link text, not URL
+        assert_eq!(
+            generate_id("Text https://example.com/api[Open API] more", "_", "_"),
+            "_text_open_api_more"
+        );
+
+        // Bare URL — should be stripped
+        assert_eq!(
+            generate_id("Text https://example.com/api more", "_", "_"),
+            "_text_more"
+        );
+
+        // link: macro
+        assert_eq!(
+            generate_id("See link:file.html[the docs]", "_", "_"),
+            "_see_the_docs"
+        );
     }
 
     #[test]

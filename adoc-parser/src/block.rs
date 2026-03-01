@@ -839,12 +839,12 @@ impl<'a> BlockScanner<'a> {
         });
 
         // Build buffer in reverse pop order:
-        // Start(Header) -> Start(SectionTitle) -> Start(DocTitle) -> Text -> End(DocTitle) -> End(SectionTitle) -> [header content] -> End(Header) -> [Toc]
-        // Toc is pushed first (bottom of stack), emitted last — right after End(Header)
+        // Start(Header) -> Start(SectionTitle) -> Start(DocTitle) -> Text -> End(DocTitle) -> End(SectionTitle) -> [header content] -> [Toc] -> End(Header)
+        // End(Header) is pushed first (bottom of stack), emitted last
+        self.push_event(Event::End(TagEnd::Header));
         if has_toc {
             self.push_event(Event::Toc);
         }
-        self.push_event(Event::End(TagEnd::Header));
         for ev in header_events.into_iter().rev() {
             self.push_event(ev);
         }
@@ -937,10 +937,10 @@ impl<'a> BlockScanner<'a> {
             matches!(ev, Event::Attribute { name, .. } if name == "toc")
         });
 
+        self.push_event(Event::End(TagEnd::Header));
         if has_toc {
             self.push_event(Event::Toc);
         }
-        self.push_event(Event::End(TagEnd::Header));
         for ev in header_events.into_iter().rev() {
             self.push_event(ev);
         }
@@ -1716,9 +1716,48 @@ impl<'a> BlockScanner<'a> {
             _ => AdmonitionKind::Note,
         };
 
+        // Collect continuation lines (same break conditions as scan_paragraph)
+        let mut continuation_lines: Vec<&'a str> = Vec::new();
+        while let Some(line) = self.current_line() {
+            if scanner::is_blank(line)
+                || scanner::strip_any_section_marker(line).is_some()
+                || scanner::is_delimiter(line).is_some()
+                || scanner::is_markdown_code_fence(line).is_some()
+                || scanner::is_list_marker_unordered(line).is_some()
+                || scanner::is_list_marker_ordered(line).is_some()
+                || scanner::is_admonition(line).is_some()
+                || scanner::is_block_image(line).is_some()
+                || scanner::is_block_video(line).is_some()
+                || scanner::is_block_audio(line).is_some()
+                || scanner::is_toc_macro(line)
+                || scanner::is_include_directive(line).is_some()
+                || scanner::is_thematic_break(line)
+                || scanner::is_page_break(line)
+                || scanner::is_attribute_entry(line).is_some()
+                || scanner::is_block_attribute(line).is_some()
+                || scanner::is_block_title(line).is_some()
+                || scanner::is_line_comment(line)
+                || scanner::is_description_list_marker(line).is_some()
+                || scanner::is_callout_list_item(line).is_some()
+                || scanner::is_list_continuation(line)
+                || scanner::is_table_delimiter(line)
+            {
+                break;
+            }
+            continuation_lines.push(line);
+            self.advance();
+        }
+
         self.push_event(Event::End(TagEnd::Admonition));
         self.push_event(Event::End(TagEnd::Paragraph));
+
+        // Push all lines in reverse (reversed stack pattern)
+        for &cline in continuation_lines.iter().rev() {
+            self.push_event(Event::SoftBreak);
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
+        }
         self.push_event(Event::Text(Cow::Borrowed(text)));
+
         self.push_event(Event::Start(Tag::Paragraph));
         self.push_event(Event::Start(Tag::Admonition { kind }));
         let block_attrs = self.pending_block_attrs.take();
@@ -2420,7 +2459,6 @@ impl<'a> BlockScanner<'a> {
             && scanner::is_callout_list_item(line).is_none()
             && !scanner::is_list_continuation(line)
             && !scanner::is_table_delimiter(line)
-            && !line.starts_with(' ') && !line.starts_with('\t')
     }
 
     fn scan_unordered_list_item(&mut self, depth: u8, text: &'a str) -> Option<Event<'a>> {
@@ -2464,7 +2502,7 @@ impl<'a> BlockScanner<'a> {
         // Push text events in reverse (bottom of stack = last to emit)
         // Order: first text, then SoftBreak + continuation lines
         for &cline in continuation_lines.iter().rev() {
-            self.push_event(Event::Text(Cow::Borrowed(cline)));
+            self.push_event(Event::Text(Cow::Borrowed(cline.trim_start())));
             self.push_event(Event::SoftBreak);
         }
         self.push_event(Event::Text(Cow::Borrowed(actual_text)));
@@ -2890,8 +2928,8 @@ mod tests {
             Event::End(TagEnd::DocumentTitle),
             Event::End(TagEnd::SectionTitle),
             Event::Attribute { name: Cow::Borrowed("toc"), value: Cow::Borrowed("left") },
-            Event::End(TagEnd::Header),
             Event::Toc,
+            Event::End(TagEnd::Header),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
@@ -3416,8 +3454,8 @@ mod tests {
             Event::End(TagEnd::DocumentTitle),
             Event::End(TagEnd::SectionTitle),
             Event::Attribute { name: Cow::Borrowed("toc"), value: Cow::Borrowed("") },
-            Event::End(TagEnd::Header),
             Event::Toc,
+            Event::End(TagEnd::Header),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
