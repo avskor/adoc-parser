@@ -664,7 +664,7 @@ impl HtmlRenderer {
                 self.has_document_title = true;
                 self.capturing_doctitle = true;
                 self.doctitle_buf.clear();
-                output.push_str("<h1>");
+                // No <h1> here — the enclosing SectionTitle already emits <h1 id="...">.
             }
             Tag::SectionTitle { level, id } => {
                 if *level >= 2 {
@@ -1369,7 +1369,7 @@ impl HtmlRenderer {
             }
             TagEnd::DocumentTitle => {
                 self.doctitle_close_pos = Some(output.len());
-                output.push_str("</h1>\n");
+                // No </h1> here — the enclosing SectionTitle's End emits </h1>.
                 self.capturing_doctitle = false;
                 let title = std::mem::take(&mut self.doctitle_buf);
                 self.document_attrs.insert("doctitle".to_string(), title);
@@ -2132,6 +2132,18 @@ mod tests {
     fn test_italic_text() {
         let html = to_html("Hello _italic_ world.");
         assert_eq!(html, "<p>Hello <em>italic</em> world.</p>\n");
+    }
+
+    #[test]
+    fn test_document_title_no_duplicate_h1() {
+        let html = to_html("= Document Title\n\nContent.");
+        // Must produce exactly one <h1> opening tag, not <h1 id="..."><h1>
+        let h1_count = html.matches("<h1").count();
+        assert_eq!(h1_count, 1, "expected exactly one <h1> tag, got {h1_count}. HTML:\n{html}");
+        assert!(
+            html.contains("<h1 id=\"_document_title\">Document Title</h1>"),
+            "expected <h1 id=\"_document_title\">Document Title</h1>, got:\n{html}"
+        );
     }
 
     #[test]
