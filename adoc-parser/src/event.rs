@@ -312,7 +312,7 @@ pub enum Tag<'a> {
     Subscript,
 
     // Links and references
-    Link { url: CowStr<'a>, window: Option<CowStr<'a>>, nofollow: bool },
+    Link { url: CowStr<'a>, window: Option<CowStr<'a>>, nofollow: bool, is_bare: bool },
     CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>> },
 
     // UI macros
@@ -465,10 +465,11 @@ impl<'a> Tag<'a> {
             },
             Tag::Superscript => Tag::Superscript,
             Tag::Subscript => Tag::Subscript,
-            Tag::Link { url, window, nofollow } => Tag::Link {
+            Tag::Link { url, window, nofollow, is_bare } => Tag::Link {
                 url: Cow::Owned(url.into_owned()),
                 window: window.map(|w| Cow::Owned(w.into_owned())),
                 nofollow,
+                is_bare,
             },
             Tag::CrossReference { target, label } => Tag::CrossReference {
                 target: Cow::Owned(target.into_owned()),

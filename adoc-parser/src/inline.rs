@@ -1203,6 +1203,7 @@ impl<'a> InlineState<'a> {
                 url: Cow::Borrowed(url),
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
+                is_bare: false,
             }));
             let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
             events.push(Event::Text(Cow::Borrowed(display)));
@@ -1239,6 +1240,7 @@ impl<'a> InlineState<'a> {
             url: Cow::Borrowed(url),
             window: link_attrs.window.map(Cow::Borrowed),
             nofollow: link_attrs.nofollow,
+            is_bare: false,
         }));
         let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
         events.push(Event::Text(Cow::Borrowed(display)));
@@ -1285,6 +1287,7 @@ impl<'a> InlineState<'a> {
             url: Cow::Borrowed(url),
             window: link_attrs.window.map(Cow::Borrowed),
             nofollow: link_attrs.nofollow,
+            is_bare: false,
         }));
         let display = if link_attrs.text.is_empty() { email } else { link_attrs.text };
         events.push(Event::Text(Cow::Borrowed(display)));
@@ -1436,10 +1439,16 @@ impl<'a> InlineState<'a> {
             .find(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '<' || c == '>')
             .unwrap_or(rest.len());
 
-        let url = &rest[..url_end];
+        let mut url = &rest[..url_end];
         if url.len() <= 8 {
             return false;
         }
+
+        // Strip trailing punctuation from bare URLs
+        while url.len() > 8 && matches!(url.as_bytes()[url.len() - 1], b'.' | b',' | b';' | b':' | b'!' | b'?') {
+            url = &url[..url.len() - 1];
+        }
+        let url_end = url.len();
 
         self.flush_text(*text_start, start_pos, events);
 
@@ -1454,6 +1463,7 @@ impl<'a> InlineState<'a> {
                 url: Cow::Borrowed(url),
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
+                is_bare: false,
             }));
             let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
             events.push(Event::Text(Cow::Borrowed(display)));
@@ -1467,6 +1477,7 @@ impl<'a> InlineState<'a> {
             url: Cow::Borrowed(url),
             window: None,
             nofollow: false,
+            is_bare: true,
         }));
         events.push(Event::Text(Cow::Borrowed(url)));
         events.push(Event::End(TagEnd::Link));
@@ -1536,6 +1547,7 @@ impl<'a> InlineState<'a> {
             url: Cow::Owned(format!("mailto:{email}")),
             window: None,
             nofollow: false,
+            is_bare: true,
         }));
         events.push(Event::Text(Cow::Borrowed(email)));
         events.push(Event::End(TagEnd::Link));
@@ -2200,6 +2212,7 @@ mod tests {
                 url: Cow::Borrowed("https://example.com"),
                 window: None,
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("here")),
             Event::End(TagEnd::Link),
@@ -2267,6 +2280,7 @@ mod tests {
                 url: Cow::Borrowed("https://example.com"),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("https://example.com")),
             Event::End(TagEnd::Link),
@@ -2285,6 +2299,7 @@ mod tests {
                 url: Cow::Borrowed("https://tools.ietf.org/html/rfc7231#section-6"),
                 window: None,
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("HTTP response code spec")),
             Event::End(TagEnd::Link),
@@ -3258,6 +3273,7 @@ mod tests {
                 url: Cow::Borrowed("mailto:user@example.com"),
                 window: None,
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -3272,6 +3288,7 @@ mod tests {
                 url: Cow::Borrowed("mailto:user@example.com"),
                 window: None,
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("Email Me")),
             Event::End(TagEnd::Link),
@@ -3287,6 +3304,7 @@ mod tests {
                 url: Cow::Borrowed("mailto:user@example.com"),
                 window: None,
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("us")),
             Event::End(TagEnd::Link),
@@ -3304,6 +3322,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -3318,6 +3337,7 @@ mod tests {
                 url: Cow::Borrowed("https://example.com"),
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -3332,6 +3352,7 @@ mod tests {
                 url: Cow::Borrowed("https://example.com"),
                 window: None,
                 nofollow: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -3346,6 +3367,7 @@ mod tests {
                 url: Cow::Borrowed("https://example.com"),
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -3360,6 +3382,7 @@ mod tests {
                 url: Cow::Borrowed("mailto:user@example.com"),
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: false,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("Email")),
             Event::End(TagEnd::Link),
@@ -3505,6 +3528,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -3520,6 +3544,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -3535,6 +3560,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@mail.example.com".to_string()),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("user@mail.example.com")),
             Event::End(TagEnd::Link),
@@ -3549,6 +3575,7 @@ mod tests {
                 url: Cow::Owned("mailto:user+tag@example.com".to_string()),
                 window: None,
                 nofollow: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("user+tag@example.com")),
             Event::End(TagEnd::Link),

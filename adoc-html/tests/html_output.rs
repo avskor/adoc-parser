@@ -56,9 +56,9 @@ H~2~O and E=mc^2^.";
 
     // Lists
     assert!(html.contains("<ul>"));
-    assert!(html.contains("<li>Item one</li>"));
+    assert!(html.contains("<li>\n<p>Item one</p>\n</li>"));
     assert!(html.contains("<ol>"));
-    assert!(html.contains("<li>First</li>"));
+    assert!(html.contains("<li>\n<p>First</p>\n</li>"));
 
     // Source block
     assert!(html.contains("language-rust"));
@@ -85,7 +85,7 @@ H~2~O and E=mc^2^.";
 fn test_html_escaping_in_source_block() {
     let input = "[source,html]\n----\n<div class=\"test\">&amp;</div>\n----";
     let html = to_html(input);
-    assert!(html.contains("&lt;div class=&quot;test&quot;&gt;&amp;amp;&lt;/div&gt;"));
+    assert!(html.contains("&lt;div class=\"test\"&gt;&amp;amp;&lt;/div&gt;"));
 }
 
 #[test]

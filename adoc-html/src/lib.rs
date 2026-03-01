@@ -53,6 +53,7 @@ struct TocEntry {
     title: String,
 }
 
+#[derive(Clone)]
 struct BlockMeta {
     style: Option<String>,
     id: Option<String>,
@@ -138,6 +139,8 @@ struct HtmlRenderer {
     xref_placeholder_counter: usize,
     xref_placeholders: Vec<(String, String)>,
     in_header: bool,
+    /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
+    li_p_open: Vec<bool>,
 }
 
 impl HtmlRenderer {
@@ -204,6 +207,7 @@ impl HtmlRenderer {
             xref_placeholder_counter: 0,
             xref_placeholders: Vec::new(),
             in_header: false,
+            li_p_open: Vec::new(),
         }
     }
 
@@ -325,7 +329,7 @@ impl HtmlRenderer {
                         output.push_str("<span class=\"hll\">");
                         self.source_line_highlighted = true;
                     }
-                    html_escape(output, &text);
+                    html_escape_text(output, &text);
                 } else {
                     output.push_str(&text);
                 }
@@ -339,7 +343,7 @@ impl HtmlRenderer {
                         entry.title.push_str(&code);
                 }
                 output.push_str("<code>");
-                html_escape(output, &code);
+                html_escape_text(output, &code);
                 output.push_str("</code>");
             }
             Event::SoftBreak => {
@@ -452,7 +456,7 @@ impl HtmlRenderer {
                 }
             }
             Event::IndexTerm { text } => {
-                html_escape(output, &text);
+                html_escape_text(output, &text);
             }
             Event::ConcealedIndexTerm { .. } => {
                 // Concealed index terms produce no visible output
@@ -595,7 +599,7 @@ impl HtmlRenderer {
             output.push_str("\">");
             output.push_str(&num.to_string());
             output.push_str("</a>. ");
-            html_escape(output, text);
+            html_escape_text(output, text);
             output.push_str("\n</div>\n");
         }
         output.push_str("</div>\n");
@@ -666,6 +670,19 @@ impl HtmlRenderer {
     }
 
     fn start_tag(&mut self, output: &mut String, tag: &Tag) {
+        // Close <p> inside list item when a sub-block starts
+        match tag {
+            Tag::Paragraph | Tag::UnorderedList { .. } | Tag::OrderedList { .. }
+            | Tag::DescriptionList | Tag::DelimitedBlock { .. } | Tag::SourceBlock { .. }
+            | Tag::BlockImage { .. } | Tag::Table => {
+                if self.li_p_open.last() == Some(&true) {
+                    output.push_str("</p>\n");
+                    *self.li_p_open.last_mut().unwrap() = false;
+                }
+            }
+            _ => {}
+        }
+
         let tag_end = tag.to_end();
         self.tag_stack.push(tag_end);
         let meta = self.take_block_meta();
@@ -785,9 +802,17 @@ impl HtmlRenderer {
                 }
             }
             Tag::Paragraph => {
-                output.push_str("<p");
-                Self::write_meta_attrs(output, &meta, "");
-                output.push('>');
+                if self.is_direct_child_of_admonition() {
+                    // Inline admonitions: no <p> wrapper
+                } else if !self.is_inside_compact_context() {
+                    output.push_str("<div class=\"paragraph\">\n<p");
+                    Self::write_meta_attrs(output, &meta, "");
+                    output.push('>');
+                } else {
+                    output.push_str("<p");
+                    Self::write_meta_attrs(output, &meta, "");
+                    output.push('>');
+                }
             }
             Tag::LiteralParagraph => {
                 output.push_str("<pre");
@@ -948,33 +973,50 @@ impl HtmlRenderer {
                 self.block_title_output_start = Some(output.len());
                 output.push_str("<div class=\"title\">");
             }
-            Tag::UnorderedList { has_checklist: true } => {
-                output.push_str("<ul");
-                Self::write_meta_attrs(output, &meta, "checklist");
-                output.push_str(">\n");
-            }
-            Tag::UnorderedList { has_checklist: false } => {
-                output.push_str("<ul");
-                Self::write_meta_attrs(output, &meta, "");
-                output.push_str(">\n");
+            Tag::UnorderedList { has_checklist } => {
+                if !self.is_inside_list_item() {
+                    let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
+                    output.push_str("<div");
+                    Self::write_meta_attrs(output, &meta, wrapper_class);
+                    output.push_str(">\n<ul");
+                    if *has_checklist {
+                        output.push_str(" class=\"checklist\"");
+                    }
+                    output.push_str(">\n");
+                } else {
+                    output.push_str("<ul");
+                    let class = if *has_checklist { "checklist" } else { "" };
+                    Self::write_meta_attrs(output, &meta, class);
+                    output.push_str(">\n");
+                }
             }
             Tag::OrderedList { start, reversed } => {
-                output.push_str("<ol");
-                if let Some(ref m) = meta
-                    && let Some(ref style) = m.style
-                {
-                    let type_attr = match style.as_str() {
-                        "loweralpha" => Some("a"),
-                        "upperalpha" => Some("A"),
-                        "lowerroman" => Some("i"),
-                        "upperroman" => Some("I"),
-                        _ => None,
-                    };
-                    if let Some(t) = type_attr {
-                        output.push_str(" type=\"");
-                        output.push_str(t);
-                        output.push('"');
+                let style_name = meta.as_ref()
+                    .and_then(|m| m.style.as_deref())
+                    .unwrap_or("arabic");
+                if !self.is_inside_list_item() {
+                    let wrapper_class = format!("olist {style_name}");
+                    output.push_str("<div");
+                    // Write id/roles from meta onto the wrapper div
+                    let mut wrapper_meta = meta.clone();
+                    if let Some(ref mut m) = wrapper_meta {
+                        m.style = None; // style goes into wrapper class
                     }
+                    Self::write_meta_attrs(output, &wrapper_meta, &wrapper_class);
+                    output.push_str(">\n");
+                }
+                output.push_str("<ol");
+                let type_attr = match style_name {
+                    "loweralpha" => Some("a"),
+                    "upperalpha" => Some("A"),
+                    "lowerroman" => Some("i"),
+                    "upperroman" => Some("I"),
+                    _ => None,
+                };
+                if let Some(t) = type_attr {
+                    output.push_str(" type=\"");
+                    output.push_str(t);
+                    output.push('"');
                 }
                 if let Some(s) = start {
                     use std::fmt::Write;
@@ -983,17 +1025,19 @@ impl HtmlRenderer {
                 if *reversed {
                     output.push_str(" reversed");
                 }
-                Self::write_meta_attrs(output, &meta, "");
                 output.push_str(">\n");
             }
             Tag::ListItem { checked: Some(true), .. } => {
-                output.push_str("<li><input type=\"checkbox\" disabled checked> ");
+                output.push_str("<li>\n<p><input type=\"checkbox\" disabled checked> ");
+                self.li_p_open.push(true);
             }
             Tag::ListItem { checked: Some(false), .. } => {
-                output.push_str("<li><input type=\"checkbox\" disabled> ");
+                output.push_str("<li>\n<p><input type=\"checkbox\" disabled> ");
+                self.li_p_open.push(true);
             }
             Tag::ListItem { checked: None, .. } => {
-                output.push_str("<li>");
+                output.push_str("<li>\n<p>");
+                self.li_p_open.push(true);
             }
             Tag::DescriptionList => {
                 let style_str = meta.as_ref().and_then(|m| m.style.as_deref());
@@ -1019,9 +1063,9 @@ impl HtmlRenderer {
                         output.push_str(">\n<ol>\n");
                     }
                     DlistStyle::Normal => {
-                        output.push_str("<dl");
-                        Self::write_meta_attrs(output, &adjusted_meta, "");
-                        output.push_str(">\n");
+                        output.push_str("<div");
+                        Self::write_meta_attrs(output, &adjusted_meta, "dlist");
+                        output.push_str(">\n<dl>\n");
                     }
                 }
             }
@@ -1039,7 +1083,7 @@ impl HtmlRenderer {
                         output.push_str("<li>\n<p><em>");
                     }
                     DlistStyle::Normal => {
-                        output.push_str("<dt>");
+                        output.push_str("<dt class=\"hdlist1\">");
                     }
                 }
             }
@@ -1051,7 +1095,8 @@ impl HtmlRenderer {
                     }
                     DlistStyle::Qanda => {}
                     DlistStyle::Normal => {
-                        output.push_str("<dd>");
+                        output.push_str("<dd>\n<p>");
+                        self.li_p_open.push(true);
                     }
                 }
             }
@@ -1306,7 +1351,7 @@ impl HtmlRenderer {
             Tag::Subscript => {
                 output.push_str("<sub>");
             }
-            Tag::Link { url, window, nofollow } => {
+            Tag::Link { url, window, nofollow, is_bare } => {
                 output.push_str("<a href=\"");
                 html_escape(output, url);
                 output.push('"');
@@ -1328,6 +1373,9 @@ impl HtmlRenderer {
                         output.push_str("nofollow");
                     }
                     output.push('"');
+                }
+                if *is_bare {
+                    output.push_str(" class=\"bare\"");
                 }
                 output.push('>');
             }
@@ -1463,7 +1511,14 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::Paragraph => {
-                output.push_str("</p>\n");
+                if self.is_direct_child_of_admonition() {
+                    // Inline admonitions: no </p>
+                    output.push('\n');
+                } else if !self.is_inside_compact_context() {
+                    output.push_str("</p>\n</div>\n");
+                } else {
+                    output.push_str("</p>\n");
+                }
             }
             TagEnd::LiteralParagraph => {
                 output.push_str("</pre>\n");
@@ -1510,20 +1565,32 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::UnorderedList => {
-                output.push_str("</ul>\n");
+                if !self.is_inside_list_item() {
+                    output.push_str("</ul>\n</div>\n");
+                } else {
+                    output.push_str("</ul>\n");
+                }
             }
             TagEnd::OrderedList => {
-                output.push_str("</ol>\n");
+                if !self.is_inside_list_item() {
+                    output.push_str("</ol>\n</div>\n");
+                } else {
+                    output.push_str("</ol>\n");
+                }
             }
             TagEnd::ListItem => {
-                output.push_str("</li>\n");
+                if self.li_p_open.pop() == Some(true) {
+                    output.push_str("</p>\n</li>\n");
+                } else {
+                    output.push_str("</li>\n");
+                }
             }
             TagEnd::DescriptionList => {
                 let style = self.dlist_stack.pop().unwrap_or(DlistStyle::Normal);
                 match style {
                     DlistStyle::Horizontal => output.push_str("</table>\n</div>\n"),
                     DlistStyle::Qanda => output.push_str("</ol>\n</div>\n"),
-                    DlistStyle::Normal => output.push_str("</dl>\n"),
+                    DlistStyle::Normal => output.push_str("</dl>\n</div>\n"),
                 }
             }
             TagEnd::DescriptionTerm => {
@@ -1537,7 +1604,13 @@ impl HtmlRenderer {
                 match self.current_dlist_style() {
                     DlistStyle::Horizontal => output.push_str("</td>\n</tr>\n"),
                     DlistStyle::Qanda => output.push_str("</li>\n"),
-                    DlistStyle::Normal => output.push_str("</dd>\n"),
+                    DlistStyle::Normal => {
+                        if self.li_p_open.pop() == Some(true) {
+                            output.push_str("</p>\n</dd>\n");
+                        } else {
+                            output.push_str("</dd>\n");
+                        }
+                    }
                 }
             }
             TagEnd::CalloutList => {
@@ -1989,6 +2062,54 @@ impl HtmlRenderer {
         }
         1
     }
+
+    /// Returns true when the immediate parent on the tag stack is an Admonition.
+    /// Used to suppress <p> tags for inline admonitions.
+    fn is_direct_child_of_admonition(&self) -> bool {
+        // In start_tag: stack has [..., Admonition, Paragraph], so check second-to-last
+        // In end_tag: stack has [..., Admonition] (Paragraph already popped), so check last
+        // Both cases: look for Admonition as the nearest non-Paragraph ancestor
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::Paragraph => continue, // skip self during start_tag
+                TagEnd::Admonition => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Returns true when inside a list item (for skipping list wrapper divs on nested lists).
+    fn is_inside_list_item(&self) -> bool {
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::ListItem | TagEnd::DescriptionDescription | TagEnd::CalloutListItem => return true,
+                TagEnd::Section { .. } | TagEnd::DelimitedBlock => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Returns true when inside a context that should NOT get paragraph/list wrapper divs.
+    /// These are: ListItem, DescriptionDescription, Admonition, CalloutListItem, TableCell, TableHeaderCell.
+    fn is_inside_compact_context(&self) -> bool {
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::ListItem
+                | TagEnd::DescriptionDescription
+                | TagEnd::Admonition
+                | TagEnd::CalloutListItem
+                | TagEnd::TableCell
+                | TagEnd::TableHeaderCell => return true,
+                TagEnd::Section { .. }
+                | TagEnd::DelimitedBlock
+                | TagEnd::SourceBlock => return false,
+                _ => {}
+            }
+        }
+        false
+    }
 }
 
 fn parse_manpage_title(title: &str) -> Option<(String, String)> {
@@ -2169,6 +2290,18 @@ fn html_escape(output: &mut String, text: &str) {
     }
 }
 
+/// Like `html_escape` but does NOT escape `"` — for use in text content (not attributes).
+fn html_escape_text(output: &mut String, text: &str) {
+    for ch in text.chars() {
+        match ch {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            _ => output.push(ch),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2176,19 +2309,19 @@ mod tests {
     #[test]
     fn test_simple_paragraph() {
         let html = to_html("Hello world.");
-        assert_eq!(html, "<p>Hello world.</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>Hello world.</p>\n</div>\n");
     }
 
     #[test]
     fn test_bold_text() {
         let html = to_html("Hello *bold* world.");
-        assert_eq!(html, "<p>Hello <strong>bold</strong> world.</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>Hello <strong>bold</strong> world.</p>\n</div>\n");
     }
 
     #[test]
     fn test_italic_text() {
         let html = to_html("Hello _italic_ world.");
-        assert_eq!(html, "<p>Hello <em>italic</em> world.</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>Hello <em>italic</em> world.</p>\n</div>\n");
     }
 
     #[test]
@@ -2213,36 +2346,36 @@ mod tests {
     #[test]
     fn test_unordered_list() {
         let html = to_html("* item 1\n* item 2");
-        assert!(html.contains("<ul>"));
-        assert!(html.contains("<li>item 1</li>"));
-        assert!(html.contains("<li>item 2</li>"));
-        assert!(html.contains("</ul>"));
+        assert!(html.contains("<div class=\"ulist\">\n<ul>"));
+        assert!(html.contains("<li>\n<p>item 1</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>item 2</p>\n</li>"));
+        assert!(html.contains("</ul>\n</div>"));
     }
 
     #[test]
     fn test_ordered_list() {
         let html = to_html(". first\n. second");
-        assert!(html.contains("<ol>"));
+        assert!(html.contains("<div class=\"olist arabic\">\n<ol"));
         assert!(!html.contains("type="));
         assert!(!html.contains("start="));
         assert!(!html.contains("reversed"));
-        assert!(html.contains("<li>first</li>"));
-        assert!(html.contains("<li>second</li>"));
-        assert!(html.contains("</ol>"));
+        assert!(html.contains("<li>\n<p>first</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>second</p>\n</li>"));
+        assert!(html.contains("</ol>\n</div>"));
     }
 
     #[test]
     fn test_ordered_list_loweralpha() {
         let html = to_html("[loweralpha]\n. a\n. b");
         assert!(html.contains("<ol type=\"a\""));
-        assert!(html.contains("class=\"loweralpha\""));
+        assert!(html.contains("class=\"olist loweralpha\""));
     }
 
     #[test]
     fn test_ordered_list_upperroman() {
         let html = to_html("[upperroman]\n. x\n. y");
         assert!(html.contains("<ol type=\"I\""));
-        assert!(html.contains("class=\"upperroman\""));
+        assert!(html.contains("class=\"olist upperroman\""));
     }
 
     #[test]
@@ -2262,7 +2395,7 @@ mod tests {
         let html = to_html("[loweralpha,start=2]\n. x");
         assert!(html.contains("type=\"a\""));
         assert!(html.contains("start=\"2\""));
-        assert!(html.contains("class=\"loweralpha\""));
+        assert!(html.contains("class=\"olist loweralpha\""));
     }
 
     #[test]
@@ -2270,7 +2403,7 @@ mod tests {
         let html = to_html("[source,rust]\n----\nfn main() {\n    println!(\"hello\");\n}\n----");
         assert!(html.contains("language-rust"));
         assert!(html.contains("fn main()"));
-        assert!(html.contains("&quot;hello&quot;"));
+        assert!(html.contains("\"hello\""));
     }
 
     #[test]
@@ -2341,7 +2474,7 @@ mod tests {
     #[test]
     fn test_email_autolink_html() {
         let html = to_html("Contact user@example.com for info");
-        assert!(html.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"));
+        assert!(html.contains("<a href=\"mailto:user@example.com\" class=\"bare\">user@example.com</a>"));
     }
 
     #[test]
@@ -2355,7 +2488,8 @@ mod tests {
         let html = to_html("Use <b> & \"quotes\".");
         assert!(html.contains("&lt;b&gt;"));
         assert!(html.contains("&amp;"));
-        assert!(html.contains("&quot;quotes&quot;"));
+        assert!(html.contains("\"quotes\""));
+        assert!(!html.contains("&quot;"));
     }
 
     #[test]
@@ -2382,7 +2516,7 @@ mod tests {
         let html = to_html("CPU:: The brain\nRAM:: Memory");
         assert_eq!(
             html,
-            "<dl>\n<dt>CPU</dt>\n<dd>The brain</dd>\n<dt>RAM</dt>\n<dd>Memory</dd>\n</dl>\n"
+            "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">CPU</dt>\n<dd>\n<p>The brain</p>\n</dd>\n<dt class=\"hdlist1\">RAM</dt>\n<dd>\n<p>Memory</p>\n</dd>\n</dl>\n</div>\n"
         );
     }
 
@@ -2391,20 +2525,20 @@ mod tests {
         let html = to_html("CPU:: The brain\nSpeed::: Fast");
         assert_eq!(
             html,
-            "<dl>\n<dt>CPU</dt>\n<dd>The brain<dl>\n<dt>Speed</dt>\n<dd>Fast</dd>\n</dl>\n</dd>\n</dl>\n"
+            "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">CPU</dt>\n<dd>\n<p>The brain</p>\n<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">Speed</dt>\n<dd>\n<p>Fast</p>\n</dd>\n</dl>\n</div>\n</dd>\n</dl>\n</div>\n"
         );
     }
 
     #[test]
     fn test_list_continuation_html() {
         let html = to_html("* item\n+\nContinued.");
-        assert!(html.contains("<li>item<p>Continued.</p>"));
+        assert!(html.contains("<li>\n<p>item</p>\n<p>Continued.</p>\n</li>"), "unexpected list continuation format in:\n{html}");
     }
 
     #[test]
     fn test_description_list_continuation_html() {
         let html = to_html("Term:: desc\n+\nMore.");
-        assert!(html.contains("<dd>desc<p>More.</p>"));
+        assert!(html.contains("<dd>\n<p>desc</p>\n<p>More.</p>\n</dd>"), "unexpected dlist continuation format in:\n{html}");
     }
 
     #[test]
@@ -2640,19 +2774,19 @@ mod tests {
     #[test]
     fn test_checklist_html() {
         let html = to_html("* [x] Done\n* [ ] Todo");
-        assert!(html.contains("<ul class=\"checklist\">"));
-        assert!(html.contains("<li><input type=\"checkbox\" disabled checked> Done</li>"));
-        assert!(html.contains("<li><input type=\"checkbox\" disabled> Todo</li>"));
-        assert!(html.contains("</ul>"));
+        assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));
+        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled checked> Done</p>\n</li>"));
+        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled> Todo</p>\n</li>"));
+        assert!(html.contains("</ul>\n</div>"));
     }
 
     #[test]
     fn test_checklist_mixed_html() {
         let html = to_html("* [x] Checked\n* Regular\n* [ ] Unchecked");
-        assert!(html.contains("<ul class=\"checklist\">"));
-        assert!(html.contains("<li><input type=\"checkbox\" disabled checked> Checked</li>"));
-        assert!(html.contains("<li>Regular</li>"));
-        assert!(html.contains("<li><input type=\"checkbox\" disabled> Unchecked</li>"));
+        assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));
+        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled checked> Checked</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>Regular</p>\n</li>"));
+        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled> Unchecked</p>\n</li>"));
     }
 
     #[test]
@@ -2795,19 +2929,19 @@ mod tests {
     #[test]
     fn test_kbd_single_key_html() {
         let html = to_html("kbd:[F11]");
-        assert_eq!(html, "<p><kbd>F11</kbd></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><kbd>F11</kbd></p>\n</div>\n");
     }
 
     #[test]
     fn test_kbd_combo_html() {
         let html = to_html("kbd:[Ctrl+C]");
-        assert_eq!(html, "<p><span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>C</kbd></span></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>C</kbd></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_btn_html() {
         let html = to_html("btn:[OK]");
-        assert_eq!(html, "<p><b class=\"button\">OK</b></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><b class=\"button\">OK</b></p>\n</div>\n");
     }
 
     #[test]
@@ -2815,62 +2949,62 @@ mod tests {
         let html = to_html("menu:File[Save As]");
         assert_eq!(
             html,
-            "<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Save As</span></span></p>\n"
+            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Save As</span></span></p>\n</div>\n"
         );
     }
 
     #[test]
     fn test_menu_no_items_html() {
         let html = to_html("menu:File[]");
-        assert_eq!(html, "<p><span class=\"menu\">File</span></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"menu\">File</span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_basic_html() {
         let html = to_html("icon:heart[]");
-        assert_eq!(html, "<p><i class=\"fa fa-heart\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_size_html() {
         let html = to_html("icon:heart[2x]");
-        assert_eq!(html, "<p><i class=\"fa fa-heart fa-2x\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart fa-2x\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_role_html() {
         let html = to_html("icon:tags[role=blue]");
-        assert_eq!(html, "<p><i class=\"fa fa-tags blue\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-tags blue\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_title_html() {
         let html = to_html("icon:info[title=Info]");
-        assert_eq!(html, "<p><i class=\"fa fa-info\" title=\"Info\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-info\" title=\"Info\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_rotate_html() {
         let html = to_html("icon:shield[rotate=90]");
-        assert_eq!(html, "<p><i class=\"fa fa-shield fa-rotate-90\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-shield fa-rotate-90\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_flip_html() {
         let html = to_html("icon:shield[flip=vertical]");
-        assert_eq!(html, "<p><i class=\"fa fa-shield fa-flip-vertical\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-shield fa-flip-vertical\"></i></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_link_html() {
         let html = to_html("icon:download[link=https://example.com]");
-        assert_eq!(html, "<p><a class=\"icon\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><a class=\"icon\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_combined_html() {
         let html = to_html("icon:heart[2x,role=red]");
-        assert_eq!(html, "<p><i class=\"fa fa-heart fa-2x red\"></i></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart fa-2x red\"></i></p>\n</div>\n");
     }
 
     #[test]
@@ -2878,7 +3012,7 @@ mod tests {
         let html = to_html("menu:File[New > Doc]");
         assert_eq!(
             html,
-            "<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"submenu\">New</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Doc</span></span></p>\n"
+            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"submenu\">New</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Doc</span></span></p>\n</div>\n"
         );
     }
 
@@ -2887,19 +3021,19 @@ mod tests {
     #[test]
     fn test_stem_inline_html() {
         let html = to_html("stem:[x^2]");
-        assert_eq!(html, "<p>\\$x^2\\$</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>\\$x^2\\$</p>\n</div>\n");
     }
 
     #[test]
     fn test_latexmath_inline_html() {
         let html = to_html("latexmath:[C = \\alpha]");
-        assert_eq!(html, "<p>\\(C = \\alpha\\)</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>\\(C = \\alpha\\)</p>\n</div>\n");
     }
 
     #[test]
     fn test_asciimath_inline_html() {
         let html = to_html("asciimath:[sqrt(4)]");
-        assert_eq!(html, "<p>\\$sqrt(4)\\$</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>\\$sqrt(4)\\$</p>\n</div>\n");
     }
 
     #[test]
@@ -2986,31 +3120,31 @@ mod tests {
     #[test]
     fn test_flow_index_term_html() {
         let html = to_html("I love ((tigers)) very much");
-        assert_eq!(html, "<p>I love tigers very much</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>I love tigers very much</p>\n</div>\n");
     }
 
     #[test]
     fn test_concealed_index_term_html() {
         let html = to_html("(((animals, cats)))Visible text");
-        assert_eq!(html, "<p>Visible text</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>Visible text</p>\n</div>\n");
     }
 
     #[test]
     fn test_indexterm2_macro_html() {
         let html = to_html("indexterm2:[tigers]");
-        assert_eq!(html, "<p>tigers</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>tigers</p>\n</div>\n");
     }
 
     #[test]
     fn test_indexterm_macro_html() {
         let html = to_html("indexterm:[animals, cats]");
-        assert_eq!(html, "<p></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p></p>\n</div>\n");
     }
 
     #[test]
     fn test_flow_index_term_escaping_html() {
         let html = to_html("((a <b> & c))");
-        assert_eq!(html, "<p>a &lt;b&gt; &amp; c</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>a &lt;b&gt; &amp; c</p>\n</div>\n");
     }
 
     // Block metadata: custom id/class tests
@@ -3066,7 +3200,7 @@ mod tests {
     #[test]
     fn test_list_with_id() {
         let html = to_html("[#mylist]\n* item 1\n* item 2");
-        assert!(html.contains("<ul id=\"mylist\">"));
+        assert!(html.contains("<div id=\"mylist\" class=\"ulist\">"));
     }
 
     #[test]
@@ -3237,49 +3371,49 @@ mod tests {
     #[test]
     fn test_inline_span_single_role_html() {
         let html = to_html("[.lead]#text#");
-        assert_eq!(html, "<p><span class=\"lead\">text</span></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"lead\">text</span></p>\n</div>\n");
     }
 
     #[test]
     fn test_inline_span_multiple_roles_html() {
         let html = to_html("[.big.red]#text#");
-        assert_eq!(html, "<p><span class=\"big red\">text</span></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"big red\">text</span></p>\n</div>\n");
     }
 
     #[test]
     fn test_inline_span_id_and_role_html() {
         let html = to_html("[#myid.lead]#text#");
-        assert_eq!(html, "<p><span id=\"myid\" class=\"lead\">text</span></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span id=\"myid\" class=\"lead\">text</span></p>\n</div>\n");
     }
 
     #[test]
     fn test_inline_span_unconstrained_html() {
         let html = to_html("hel[.x]##lo##rld");
-        assert_eq!(html, "<p>hel<span class=\"x\">lo</span>rld</p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p>hel<span class=\"x\">lo</span>rld</p>\n</div>\n");
     }
 
     #[test]
     fn test_bare_highlight_no_regression_html() {
         let html = to_html("#highlight#");
-        assert_eq!(html, "<p><mark>highlight</mark></p>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><mark>highlight</mark></p>\n</div>\n");
     }
 
     #[test]
     fn test_block_admonition_html() {
         let html = to_html("[NOTE]\n====\nThis is a note.\n====");
-        assert!(html.contains("<div class=\"admonitionblock note\">"));
-        assert!(html.contains("<div class=\"title\">Note</div>"));
-        assert!(html.contains("<td class=\"content\">"));
-        assert!(html.contains("<p>This is a note.</p>"));
-        assert!(html.contains("</td>\n</tr>\n</table>\n</div>"));
+        assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonitionblock note in:\n{html}");
+        assert!(html.contains("<div class=\"title\">Note</div>"), "no title in:\n{html}");
+        assert!(html.contains("<td class=\"content\">\nThis is a note.\n</td>"), "no td content in:\n{html}");
+        assert!(html.contains("</td>\n</tr>\n</table>\n</div>"), "no closing tags in:\n{html}");
     }
 
     #[test]
     fn test_block_admonition_multi_para_html() {
         let html = to_html("[NOTE]\n====\nFirst paragraph.\n\nSecond paragraph.\n====");
-        assert!(html.contains("<div class=\"admonitionblock note\">"));
-        assert!(html.contains("<p>First paragraph.</p>"));
-        assert!(html.contains("<p>Second paragraph.</p>"));
+        assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonition class in:\n{html}");
+        assert!(html.contains("First paragraph."), "no first para in:\n{html}");
+        assert!(html.contains("Second paragraph."), "no second para in:\n{html}");
+        assert!(html.contains("<td class=\"content\">"), "no td content in:\n{html}");
     }
 
     // Admonition icons tests
@@ -3501,7 +3635,7 @@ mod tests {
         let html = to_html("CPU:: The brain\nRAM:: Memory");
         assert_eq!(
             html,
-            "<dl>\n<dt>CPU</dt>\n<dd>The brain</dd>\n<dt>RAM</dt>\n<dd>Memory</dd>\n</dl>\n"
+            "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">CPU</dt>\n<dd>\n<p>The brain</p>\n</dd>\n<dt class=\"hdlist1\">RAM</dt>\n<dd>\n<p>Memory</p>\n</dd>\n</dl>\n</div>\n"
         );
     }
 
