@@ -367,6 +367,30 @@ fn test_xref_with_explicit_label_unchanged() {
 }
 
 #[test]
+fn test_xref_hash_prefix_resolves_section_title() {
+    let input = "[#divide-large-responses]\n== Разделение больших ответов\n\nСм. <<#divide-large-responses>>";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#divide-large-responses\">Разделение больших ответов</a>"),
+        "xref with # prefix should strip # and resolve section title. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_hash_prefix_no_double_hash() {
+    let input = "См. <<#some-id>>";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#some-id\">"),
+        "xref with # prefix should not produce ## in href. Got: {html}"
+    );
+    assert!(
+        !html.contains("##"),
+        "href must not contain double ##. Got: {html}"
+    );
+}
+
+#[test]
 fn test_xref_unresolvable_falls_back_to_id() {
     let input = "См. <<nonexistent>>";
     let html = to_html(input);

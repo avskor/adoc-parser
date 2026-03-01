@@ -1152,6 +1152,9 @@ impl<'a> InlineState<'a> {
             (content, None)
         };
 
+        // Strip leading '#' — it's just an explicit anchor marker, not part of the ID
+        let target = target.strip_prefix('#').unwrap_or(target);
+
         events.push(Event::Start(Tag::CrossReference {
             target: Cow::Borrowed(target),
             label: label.clone(),
@@ -2122,6 +2125,34 @@ mod tests {
                 label: None,
             }),
             Event::Text(Cow::Borrowed("my-section")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+    }
+
+    #[test]
+    fn test_cross_reference_with_hash_prefix() {
+        let events = parse("see <<#my-section>>");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("see ")),
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("my-section"),
+                label: None,
+            }),
+            Event::Text(Cow::Borrowed("my-section")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+    }
+
+    #[test]
+    fn test_cross_reference_with_hash_prefix_and_label() {
+        let events = parse("see <<#my-section, My Section>>");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("see ")),
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("my-section"),
+                label: Some(Cow::Borrowed("My Section")),
+            }),
+            Event::Text(Cow::Borrowed("My Section")),
             Event::End(TagEnd::CrossReference),
         ]);
     }
