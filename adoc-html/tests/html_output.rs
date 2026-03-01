@@ -159,7 +159,7 @@ fn test_bibliography_section_with_anchors() {
     // Bibliography anchor with custom label
     assert!(html.contains("<a id=\"gof\"></a>[2]"));
     // Section has bibliography style class
-    assert!(html.contains("class=\"sect bibliography\""));
+    assert!(html.contains("class=\"sect1 bibliography\""));
 }
 
 #[test]

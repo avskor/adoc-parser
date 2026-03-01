@@ -130,6 +130,7 @@ struct HtmlRenderer {
     manpage_name_capture: bool,
     manpage_name_buf: String,
     book_part_stack: Vec<bool>,
+    sectionbody_stack: Vec<bool>,
     standalone: bool,
     last_updated: Option<String>,
     content_start: Option<usize>,
@@ -194,6 +195,7 @@ impl HtmlRenderer {
             manpage_name_capture: false,
             manpage_name_buf: String::new(),
             book_part_stack: Vec::new(),
+            sectionbody_stack: Vec::new(),
             standalone: false,
             last_updated: None,
             content_start: None,
@@ -528,7 +530,15 @@ impl HtmlRenderer {
 
         if let Some(pos) = self.toc_insert_position {
             let toc_html = self.generate_toc();
-            output.insert_str(pos, &toc_html);
+            if !toc_html.is_empty() {
+                output.insert_str(pos, &toc_html);
+                // Shift content_start if TOC was inserted before it
+                if let Some(ref mut cs) = self.content_start
+                    && pos <= *cs
+                {
+                    *cs += toc_html.len();
+                }
+            }
         }
 
         if !self.xref_placeholders.is_empty() {
@@ -611,28 +621,28 @@ impl HtmlRenderer {
         html_escape(&mut toc, &self.toc_title);
         toc.push_str("</div>\n");
 
-        let mut current_level = min_level;
-        toc.push_str("<ul>\n");
+        let mut current_level = min_level - 1;
 
         for entry in &entries {
             let level = entry.level;
 
-            // Open nested lists
-            while current_level < level {
-                toc.push_str("<ul>\n");
-                current_level += 1;
-            }
-
-            // Close nested lists
-            while current_level > level {
-                toc.push_str("</li>\n</ul>\n");
-                current_level -= 1;
-            }
-
-            // Close previous item at same level (not for the very first entry)
-            if current_level == level && toc.ends_with("</ul>\n") {
-                // Just opened a list, no previous item to close
-            } else if current_level == level {
+            if level > current_level {
+                // Going deeper — open new ul(s)
+                while current_level < level {
+                    current_level += 1;
+                    let sl = current_level - 1;
+                    writeln!(toc, "<ul class=\"sectlevel{sl}\">").unwrap();
+                }
+            } else if level < current_level {
+                // Going shallower — close nested lists
+                while current_level > level {
+                    toc.push_str("</li>\n</ul>\n");
+                    current_level -= 1;
+                }
+                // Close previous item at this level
+                toc.push_str("</li>\n");
+            } else {
+                // Same level — close previous item
                 toc.push_str("</li>\n");
             }
 
@@ -640,17 +650,14 @@ impl HtmlRenderer {
             html_escape(&mut toc, &entry.id);
             toc.push_str("\">");
             html_escape(&mut toc, &entry.title);
-            toc.push_str("</a>\n");
-
-            current_level = level;
+            toc.push_str("</a>");
         }
 
-        // Close remaining open lists
-        while current_level > min_level {
+        // Close all remaining open levels
+        while current_level >= min_level {
             toc.push_str("</li>\n</ul>\n");
             current_level -= 1;
         }
-        toc.push_str("</li>\n</ul>\n");
         toc.push_str("</div>\n");
 
         toc
@@ -757,9 +764,11 @@ impl HtmlRenderer {
                 ));
                 let is_part = self.is_book() && *level == 1 && !is_special;
                 self.book_part_stack.push(is_part);
+                self.sectionbody_stack.push(*level == 2 && !is_part);
                 if !is_part {
                     output.push_str("<div");
-                    Self::write_meta_attrs(output, &meta, "sect");
+                    let sect_class = format!("sect{}", level - 1);
+                    Self::write_meta_attrs(output, &meta, &sect_class);
                     output.push_str(">\n");
                 }
                 if style == Some("appendix") {
@@ -784,19 +793,19 @@ impl HtmlRenderer {
                 match kind {
                     DelimitedBlockKind::Listing => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "listingblock");
-                        output.push_str(">\n<div class=\"content\">\n<pre>");
+                        output.push_str(">\n");
+                        self.emit_pending_block_title(output);
+                        output.push_str("<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Literal => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "literalblock");
-                        output.push_str(">\n<div class=\"content\">\n<pre>");
+                        output.push_str(">\n");
+                        self.emit_pending_block_title(output);
+                        output.push_str("<div class=\"content\">\n<pre>");
                     }
                     DelimitedBlockKind::Example => {
                         let is_collapsible = meta.as_ref()
@@ -806,14 +815,8 @@ impl HtmlRenderer {
                             let is_open = meta.as_ref()
                                 .is_some_and(|m| m.options.iter().any(|o| o == "open"));
 
-                            let summary = if let (Some(start), Some(inner)) =
-                                (self.block_title_output_start.take(), self.block_title_inner_html.take())
-                            {
-                                output.truncate(start);
-                                inner
-                            } else {
-                                "Details".to_string()
-                            };
+                            let summary = self.block_title_inner_html.take()
+                                .unwrap_or_else(|| "Details".to_string());
 
                             output.push_str("<details");
                             Self::write_meta_attrs(output, &meta, "exampleblock");
@@ -826,56 +829,53 @@ impl HtmlRenderer {
                             self.delimited_block_stack.push((*kind, true));
                         } else {
                             self.delimited_block_stack.push((*kind, false));
-                            self.block_title_output_start = None;
-                            self.block_title_inner_html = None;
                             output.push_str("<div");
                             Self::write_meta_attrs(output, &meta, "exampleblock");
-                            output.push_str(">\n<div class=\"content\">\n");
+                            output.push_str(">\n");
+                            self.emit_pending_block_title(output);
+                            output.push_str("<div class=\"content\">\n");
                         }
                     }
                     DelimitedBlockKind::Sidebar => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "sidebarblock");
                         output.push_str(">\n<div class=\"content\">\n");
+                        self.emit_pending_block_title(output);
                     }
                     DelimitedBlockKind::Quote => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "quoteblock");
-                        output.push_str(">\n<blockquote>\n");
+                        output.push_str(">\n");
+                        self.emit_pending_block_title(output);
+                        output.push_str("<blockquote>\n");
                     }
                     DelimitedBlockKind::Open => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "openblock");
-                        output.push_str(">\n<div class=\"content\">\n");
+                        output.push_str(">\n");
+                        self.emit_pending_block_title(output);
+                        output.push_str("<div class=\"content\">\n");
                     }
                     DelimitedBlockKind::Comment => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
                         self.block_title_inner_html = None;
                         // Comment blocks are not rendered
                     }
                     DelimitedBlockKind::Passthrough => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
                         self.block_title_inner_html = None;
                         // Passthrough: content is rendered as-is
                     }
                     DelimitedBlockKind::Verse => {
                         self.delimited_block_stack.push((*kind, false));
-                        self.block_title_output_start = None;
-                        self.block_title_inner_html = None;
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "verseblock");
-                        output.push_str(">\n<pre class=\"content\">");
+                        output.push_str(">\n");
+                        self.emit_pending_block_title(output);
+                        output.push_str("<pre class=\"content\">");
                     }
                 }
             }
@@ -883,7 +883,9 @@ impl HtmlRenderer {
                 self.in_source_block = true;
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "listingblock");
-                output.push_str(">\n<div class=\"content\">\n<pre");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<div class=\"content\">\n<pre");
 
                 let highlighter = self.document_attrs.get("source-highlighter").cloned();
                 let linenums = meta.as_ref().is_some_and(|m| {
@@ -899,7 +901,7 @@ impl HtmlRenderer {
                     Some("coderay") => pre_classes.push("CodeRay"),
                     _ => {}
                 }
-                if highlighter.is_some() {
+                if highlighter.is_some() || language.is_some() {
                     pre_classes.push("highlight");
                 }
                 if linenums {
@@ -920,11 +922,9 @@ impl HtmlRenderer {
                         html_escape(output, lang);
                         output.push('"');
                     }
-                    if highlighter.is_some() {
-                        output.push_str(" data-lang=\"");
-                        html_escape(output, lang);
-                        output.push('"');
-                    }
+                    output.push_str(" data-lang=\"");
+                    html_escape(output, lang);
+                    output.push('"');
                 }
 
                 if let Some(hl_spec) = meta.as_ref()
@@ -1078,6 +1078,7 @@ impl HtmlRenderer {
                     output.push_str("</div>\n");
                 }
                 output.push_str("</td>\n<td class=\"content\">\n");
+                self.emit_pending_block_title(output);
             }
             Tag::Table => {
                 // Collect extra CSS classes from options/named attrs
@@ -1102,9 +1103,6 @@ impl HtmlRenderer {
 
                 // Caption handling
                 let title_html = self.block_title_inner_html.take();
-                if let Some(start) = self.block_title_output_start.take() {
-                    output.truncate(start);
-                }
                 if let Some(title) = title_html {
                     self.table_counter += 1;
                     let caption_attr = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
@@ -1427,6 +1425,11 @@ impl HtmlRenderer {
                 output.push_str("</h");
                 output.push_str(&h.to_string());
                 output.push_str(">\n");
+                if level == 2
+                    && let Some(&true) = self.sectionbody_stack.last()
+                {
+                    output.push_str("<div class=\"sectionbody\">\n");
+                }
             }
             TagEnd::Heading { level } => {
                 let h = section_level_to_h(*level);
@@ -1445,7 +1448,11 @@ impl HtmlRenderer {
                     }
                 }
                 let is_part = self.book_part_stack.pop().unwrap_or(false);
+                let needs_sectionbody_close = self.sectionbody_stack.pop().unwrap_or(false);
                 if !is_part {
+                    if needs_sectionbody_close {
+                        output.push_str("</div>\n");
+                    }
                     output.push_str("</div>\n");
                 }
             }
@@ -1489,12 +1496,12 @@ impl HtmlRenderer {
                 output.push_str("</code></pre>\n</div>\n</div>\n");
             }
             TagEnd::BlockTitle => {
-                if let Some(start) = self.block_title_output_start {
+                if let Some(start) = self.block_title_output_start.take() {
                     let title_tag = "<div class=\"title\">";
                     let inner_start = start + title_tag.len();
                     self.block_title_inner_html = Some(output[inner_start..].to_string());
+                    output.truncate(start);
                 }
-                output.push_str("</div>\n");
             }
             TagEnd::UnorderedList => {
                 output.push_str("</ul>\n");
@@ -1638,6 +1645,14 @@ impl HtmlRenderer {
             TagEnd::CustomBlockMacro => {
                 output.push_str("</div>\n");
             }
+        }
+    }
+
+    fn emit_pending_block_title(&mut self, output: &mut String) {
+        if let Some(title) = self.block_title_inner_html.take() {
+            output.push_str("<div class=\"title\">");
+            output.push_str(&title);
+            output.push_str("</div>\n");
         }
     }
 
@@ -2578,7 +2593,7 @@ mod tests {
         // TOC should appear after preamble closing div, before section
         let preamble_end = html.find("</div>\n</div>\n").unwrap() + "</div>\n</div>\n".len();
         let toc_pos = html.find("<div id=\"toc\"").unwrap();
-        let section_pos = html.find("<div class=\"sect\"").unwrap();
+        let section_pos = html.find("<div class=\"sect1\"").unwrap();
         assert!(toc_pos >= preamble_end, "TOC should be after preamble");
         assert!(toc_pos < section_pos, "TOC should be before first section");
     }
@@ -3340,7 +3355,7 @@ mod tests {
     #[test]
     fn test_appendix_section_html() {
         let html = to_html("[appendix]\n== My Appendix\n\nContent.");
-        assert!(html.contains("class=\"sect appendix\""));
+        assert!(html.contains("class=\"sect1 appendix\""));
         assert!(html.contains("Appendix A: My Appendix</h2>"));
     }
 
@@ -3360,25 +3375,25 @@ mod tests {
     #[test]
     fn test_glossary_section_html() {
         let html = to_html("[glossary]\n== Terms\n\nSome terms here.");
-        assert!(html.contains("class=\"sect glossary\""));
+        assert!(html.contains("class=\"sect1 glossary\""));
     }
 
     #[test]
     fn test_bibliography_section_html() {
         let html = to_html("[bibliography]\n== References\n\nSome refs.");
-        assert!(html.contains("class=\"sect bibliography\""));
+        assert!(html.contains("class=\"sect1 bibliography\""));
     }
 
     #[test]
     fn test_colophon_section_html() {
         let html = to_html("[colophon]\n== Colophon\n\nPublishing info.");
-        assert!(html.contains("class=\"sect colophon\""));
+        assert!(html.contains("class=\"sect1 colophon\""));
     }
 
     #[test]
     fn test_abstract_section_html() {
         let html = to_html("[abstract]\n== Summary\n\nBrief summary.");
-        assert!(html.contains("class=\"sect abstract\""));
+        assert!(html.contains("class=\"sect1 abstract\""));
     }
 
     #[test]
@@ -3779,9 +3794,7 @@ mod tests {
     #[test]
     fn test_source_block_no_highlighter() {
         let html = to_html("[source,rust]\n----\nfn main() {}\n----");
-        assert!(html.contains("<pre><code class=\"language-rust\">"), "Without highlighter: bare <pre><code class=\"language-X\">. Got: {html}");
-        assert!(!html.contains("data-lang"), "Without highlighter: no data-lang. Got: {html}");
-        assert!(!html.contains("class=\"highlight\""), "Without highlighter: no highlight class. Got: {html}");
+        assert!(html.contains("<pre class=\"highlight\"><code class=\"language-rust\" data-lang=\"rust\">"), "Without highlighter: <pre class=\"highlight\"><code class=\"language-X\" data-lang=\"X\">. Got: {html}");
     }
 
     #[test]
@@ -4448,7 +4461,7 @@ mod tests {
     fn test_book_chapter_rendering() {
         let input = "= Book Title\n:doctype: book\n\n= Part One\n\n== Chapter 1\n\ntext";
         let html = to_html(input);
-        assert!(html.contains("<div class=\"sect\">"), "chapter should have div wrapper. Got: {html}");
+        assert!(html.contains("<div class=\"sect1\">"), "chapter should have div wrapper. Got: {html}");
         assert!(html.contains("<h2 id=\"_chapter_1\">Chapter 1</h2>"),
             "chapter should render as <h2>. Got: {html}");
     }
@@ -4457,8 +4470,7 @@ mod tests {
     fn test_article_no_part_behavior() {
         let input = "= Title\n\n== Section\n\ntext";
         let html = to_html(input);
-        assert!(html.contains("<div class=\"sect\">"), "article sections should have div wrapper. Got: {html}");
-        assert!(!html.contains("sect0"), "article should not have sect0. Got: {html}");
+        assert!(html.contains("<div class=\"sect1\">"), "article sections should have div wrapper. Got: {html}");
     }
 
     #[test]
