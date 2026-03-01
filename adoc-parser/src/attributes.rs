@@ -163,6 +163,17 @@ impl BlockAttributes {
             return attrs;
         }
 
+        // Legacy anchor syntax: [[id]] → outer brackets stripped by is_block_attribute,
+        // so attr_str is "[id]". Treat as ID shorthand.
+        if attr_str.starts_with('[') && attr_str.ends_with(']') && attr_str.len() > 2 {
+            let id = &attr_str[1..attr_str.len() - 1];
+            // Only treat as legacy anchor if the inner part doesn't contain brackets
+            if !id.contains('[') && !id.contains(']') {
+                attrs.id = Some(id.to_string());
+                return attrs;
+            }
+        }
+
         let parts = split_respecting_quotes(attr_str);
         for part in &parts {
             let part = part.trim();
