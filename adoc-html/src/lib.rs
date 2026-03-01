@@ -2,10 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 
+const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
+
 #[derive(Default, Clone)]
 pub struct HtmlOptions {
     pub docinfo_head: Option<String>,
     pub docinfo_footer: Option<String>,
+    pub standalone: bool,
+    pub last_updated: Option<String>,
 }
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
@@ -126,6 +130,9 @@ struct HtmlRenderer {
     manpage_name_capture: bool,
     manpage_name_buf: String,
     book_part_stack: Vec<bool>,
+    standalone: bool,
+    last_updated: Option<String>,
+    content_start: Option<usize>,
 }
 
 impl HtmlRenderer {
@@ -184,6 +191,9 @@ impl HtmlRenderer {
             manpage_name_capture: false,
             manpage_name_buf: String::new(),
             book_part_stack: Vec::new(),
+            standalone: false,
+            last_updated: None,
+            content_start: None,
         }
     }
 
@@ -191,6 +201,8 @@ impl HtmlRenderer {
         Self {
             docinfo_head: options.docinfo_head,
             docinfo_footer: options.docinfo_footer,
+            standalone: options.standalone,
+            last_updated: options.last_updated,
             ..Self::new()
         }
     }
@@ -208,10 +220,47 @@ impl HtmlRenderer {
     }
 
     fn run<'a>(&mut self, output: &mut String, iter: impl Iterator<Item = Event<'a>>) {
-        for event in iter {
-            self.push_event(output, event);
+        if self.standalone {
+            // Render body content into a temporary buffer
+            let mut body = String::new();
+            for event in iter {
+                self.push_event(&mut body, event);
+            }
+            self.finish(&mut body);
+
+            // Write HTML head (<!DOCTYPE>, <head>, <body>)
+            self.write_document_head(output);
+
+            if let Some(split) = self.content_start {
+                // Has a document header — emit it, then wrap the rest in <div id="content">
+                output.push_str(&body[..split]);
+                output.push_str("<div id=\"content\">\n");
+                output.push_str(&body[split..]);
+                output.push_str("</div>\n");
+            } else {
+                // No document header — insert empty header, wrap everything in <div id="content">
+                output.push_str("<div id=\"header\">\n</div>\n");
+                output.push_str("<div id=\"content\">\n");
+                output.push_str(&body);
+                output.push_str("</div>\n");
+            }
+
+            // Footer div
+            output.push_str("<div id=\"footer\">\n");
+            if let Some(ref ts) = self.last_updated {
+                output.push_str("<div id=\"footer-text\">\n");
+                writeln!(output, "Last updated {ts}").unwrap();
+                output.push_str("</div>\n");
+            }
+            output.push_str("</div>\n");
+
+            self.write_document_tail(output);
+        } else {
+            for event in iter {
+                self.push_event(output, event);
+            }
+            self.finish(output);
         }
-        self.finish(output);
     }
 
     fn push_event<'a>(&mut self, output: &mut String, event: Event<'a>) {
@@ -476,19 +525,22 @@ impl HtmlRenderer {
             self.render_footnotes(output);
         }
 
-        if let Some(ref footer) = self.docinfo_footer
-            && !footer.is_empty()
-        {
-            output.push('\n');
-            output.push_str(footer);
-        }
+        // In standalone mode, docinfo is handled by write_document_head/tail
+        if !self.standalone {
+            if let Some(ref footer) = self.docinfo_footer
+                && !footer.is_empty()
+            {
+                output.push('\n');
+                output.push_str(footer);
+            }
 
-        if let Some(ref head) = self.docinfo_head
-            && !head.is_empty()
-        {
-            let mut prefix = head.clone();
-            prefix.push('\n');
-            output.insert_str(0, &prefix);
+            if let Some(ref head) = self.docinfo_head
+                && !head.is_empty()
+            {
+                let mut prefix = head.clone();
+                prefix.push('\n');
+                output.insert_str(0, &prefix);
+            }
         }
     }
 
@@ -602,8 +654,11 @@ impl HtmlRenderer {
 
         match tag {
             Tag::Header => {
-                // Document header rendered as header div
-                output.push_str("<div class=\"header\">\n");
+                if self.standalone {
+                    output.push_str("<div id=\"header\">\n");
+                } else {
+                    output.push_str("<div class=\"header\">\n");
+                }
             }
             Tag::DocumentTitle => {
                 self.has_document_title = true;
@@ -1305,6 +1360,9 @@ impl HtmlRenderer {
         match tag_end {
             TagEnd::Header => {
                 output.push_str("</div>\n");
+                if self.standalone {
+                    self.content_start = Some(output.len());
+                }
                 if self.has_document_title {
                     self.preamble_start = Some(output.len());
                 }
@@ -1810,6 +1868,56 @@ impl HtmlRenderer {
 
     fn current_dlist_style(&self) -> DlistStyle {
         self.dlist_stack.last().copied().unwrap_or(DlistStyle::Normal)
+    }
+
+    fn write_document_head(&self, output: &mut String) {
+        let doctitle = self.document_attrs.get("doctitle")
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str())
+            .unwrap_or("Untitled");
+        let doctype = self.document_attrs.get("doctype").map(|s| s.as_str()).unwrap_or("article");
+
+        output.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
+        output.push_str("<meta charset=\"UTF-8\">\n");
+        output.push_str("<meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\">\n");
+        output.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
+        output.push_str("<meta name=\"generator\" content=\"adoc-parser\">\n");
+        output.push_str("<title>");
+        html_escape(output, doctitle);
+        output.push_str("</title>\n");
+        output.push_str("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700\">\n");
+        output.push_str("<style>\n");
+        output.push_str(DEFAULT_STYLESHEET);
+        output.push_str("\n</style>\n");
+        if let Some(ref head) = self.docinfo_head
+            && !head.is_empty()
+        {
+            output.push_str(head);
+            output.push('\n');
+        }
+        output.push_str("</head>\n");
+
+        // Build body classes
+        let mut body_classes = String::from(doctype);
+        if !self.toc_position.is_empty() {
+            body_classes.push_str(" toc2");
+            if self.toc_position == "right" {
+                body_classes.push_str(" toc-right");
+            }
+        }
+        output.push_str("<body class=\"");
+        output.push_str(&body_classes);
+        output.push_str("\">\n");
+    }
+
+    fn write_document_tail(&self, output: &mut String) {
+        if let Some(ref footer) = self.docinfo_footer
+            && !footer.is_empty()
+        {
+            output.push_str(footer);
+            output.push('\n');
+        }
+        output.push_str("</body>\n</html>");
     }
 
     fn is_book(&self) -> bool {
@@ -4191,6 +4299,7 @@ mod tests {
         let html = to_html_with_options("Hello world", HtmlOptions {
             docinfo_head: Some("<meta name=\"x\">".to_string()),
             docinfo_footer: Some("<script></script>".to_string()),
+            ..Default::default()
         });
         assert!(html.starts_with("<meta name=\"x\">\n"),
             "head should be first. Got: {html}");
@@ -4226,6 +4335,7 @@ mod tests {
         let html_empty = to_html_with_options(input, HtmlOptions {
             docinfo_head: Some(String::new()),
             docinfo_footer: Some(String::new()),
+            ..Default::default()
         });
         let html_none = to_html(input);
         assert_eq!(html_empty, html_none,

@@ -1,4 +1,4 @@
-use adoc_html::to_html;
+use adoc_html::{to_html, to_html_with_options, HtmlOptions};
 
 #[test]
 fn test_full_document() {
@@ -209,4 +209,129 @@ This is a lead paragraph.";
     let html = to_html(input);
     assert!(html.contains("<p class=\"lead\">"), "Expected lead class. Got: {html}");
     assert!(html.contains("This is a lead paragraph."));
+}
+
+// ─── Standalone mode tests ───
+
+#[test]
+fn test_standalone_empty_document() {
+    let html = to_html_with_options("", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.starts_with("<!DOCTYPE html>"), "should start with DOCTYPE. Got: {html}");
+    assert!(html.contains("<title>Untitled</title>"), "empty doc should have Untitled title. Got: {html}");
+    assert!(html.contains("</html>"), "should close html tag. Got: {html}");
+}
+
+#[test]
+fn test_standalone_with_title() {
+    let html = to_html_with_options("= My Title\n\nHello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<title>My Title</title>"), "should use document title. Got: {html}");
+}
+
+#[test]
+fn test_standalone_body_class_article() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<body class=\"article\">"), "default doctype should be article. Got: {html}");
+}
+
+#[test]
+fn test_standalone_has_style_block() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<style>"), "should contain style tag. Got: {html}");
+    assert!(html.contains("</style>"), "should close style tag. Got: {html}");
+}
+
+#[test]
+fn test_standalone_meta_tags() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<meta charset=\"UTF-8\">"), "should have charset meta. Got: {html}");
+    assert!(html.contains("name=\"viewport\""), "should have viewport meta. Got: {html}");
+    assert!(html.contains("name=\"generator\" content=\"adoc-parser\""), "should have generator meta. Got: {html}");
+}
+
+#[test]
+fn test_standalone_docinfo_head() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        docinfo_head: Some("<link rel=\"icon\" href=\"favicon.ico\">".to_string()),
+        ..Default::default()
+    });
+    assert!(html.contains("<link rel=\"icon\" href=\"favicon.ico\">"), "docinfo_head should be in <head>. Got: {html}");
+    let head_end = html.find("</head>").unwrap();
+    let docinfo_pos = html.find("<link rel=\"icon\" href=\"favicon.ico\">").unwrap();
+    assert!(docinfo_pos < head_end, "docinfo_head should be inside <head>. Got: {html}");
+}
+
+#[test]
+fn test_standalone_docinfo_footer() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        docinfo_footer: Some("<script src=\"app.js\"></script>".to_string()),
+        ..Default::default()
+    });
+    assert!(html.contains("<script src=\"app.js\"></script>"), "docinfo_footer should be present. Got: {html}");
+    let body_end = html.find("</body>").unwrap();
+    let docinfo_pos = html.find("<script src=\"app.js\"></script>").unwrap();
+    assert!(docinfo_pos < body_end, "docinfo_footer should be inside <body>. Got: {html}");
+}
+
+#[test]
+fn test_standalone_last_updated() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        last_updated: Some("2026-03-01 12:00:00 +0300".to_string()),
+        ..Default::default()
+    });
+    assert!(html.contains("Last updated 2026-03-01 12:00:00 +0300"), "should contain last_updated. Got: {html}");
+    assert!(html.contains("<div id=\"footer-text\">"), "should have footer-text div. Got: {html}");
+}
+
+#[test]
+fn test_standalone_content_wrapped() {
+    let html = to_html_with_options("= Title\n\nHello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<div id=\"content\">"), "content should be wrapped. Got: {html}");
+    assert!(html.contains("<div id=\"header\">"), "should have id=header in standalone. Got: {html}");
+}
+
+#[test]
+fn test_standalone_no_title_has_empty_header() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<div id=\"header\">\n</div>"), "should have empty header div. Got: {html}");
+    assert!(html.contains("<div id=\"content\">"), "should have content div. Got: {html}");
+}
+
+#[test]
+fn test_to_html_still_fragment() {
+    let html = to_html("= Title\n\nHello");
+    assert!(!html.contains("<!DOCTYPE"), "to_html should NOT produce DOCTYPE. Got: {html}");
+    assert!(!html.contains("<html"), "to_html should NOT produce <html>. Got: {html}");
+}
+
+#[test]
+fn test_standalone_footer_div() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<div id=\"footer\">"), "should have footer div. Got: {html}");
 }

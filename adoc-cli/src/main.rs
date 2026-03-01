@@ -15,6 +15,10 @@ struct Cli {
     /// Output file (writes to stdout if omitted)
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Generate an HTML fragment instead of a full standalone document
+    #[arg(long)]
+    no_standalone: bool,
 }
 
 const MAX_INCLUDE_DEPTH: usize = 10;
@@ -120,7 +124,14 @@ fn run(cli: Cli) -> Result<(), String> {
     let resolved = resolve_includes(&input, base_dir, 0, &mut seen)?;
     let preprocessed = adoc_parser::preprocess(&resolved);
 
-    let html = adoc_html::to_html(&preprocessed);
+    let html = if cli.no_standalone {
+        adoc_html::to_html(&preprocessed)
+    } else {
+        adoc_html::to_html_with_options(&preprocessed, adoc_html::HtmlOptions {
+            standalone: true,
+            ..Default::default()
+        })
+    };
 
     match &cli.output {
         Some(path) => fs::write(path, &html)
