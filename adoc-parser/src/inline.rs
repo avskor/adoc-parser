@@ -1443,6 +1443,26 @@ impl<'a> InlineState<'a> {
 
         self.flush_text(*text_start, start_pos, events);
 
+        // Check for [link text] immediately after the URL
+        let after_url = &rest[url_end..];
+        if after_url.starts_with('[')
+            && let Some(close) = after_url.find(']')
+        {
+            let bracket_content = &after_url[1..close];
+            let link_attrs = parse_link_attrs(bracket_content);
+            events.push(Event::Start(Tag::Link {
+                url: Cow::Borrowed(url),
+                window: link_attrs.window.map(Cow::Borrowed),
+                nofollow: link_attrs.nofollow,
+            }));
+            let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
+            events.push(Event::Text(Cow::Borrowed(display)));
+            events.push(Event::End(TagEnd::Link));
+            self.pos = start_pos + url_end + close + 1;
+            *text_start = self.pos;
+            return true;
+        }
+
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
             window: None,
@@ -2251,6 +2271,23 @@ mod tests {
             Event::Text(Cow::Borrowed("https://example.com")),
             Event::End(TagEnd::Link),
             Event::Text(Cow::Borrowed(" for info")),
+        ]);
+    }
+
+    #[test]
+    fn test_autolink_with_link_text() {
+        let events = parse(
+            "Обратитесь к https://tools.ietf.org/html/rfc7231#section-6[HTTP response code spec]",
+        );
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("Обратитесь к ")),
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://tools.ietf.org/html/rfc7231#section-6"),
+                window: None,
+                nofollow: false,
+            }),
+            Event::Text(Cow::Borrowed("HTTP response code spec")),
+            Event::End(TagEnd::Link),
         ]);
     }
 

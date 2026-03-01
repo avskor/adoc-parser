@@ -42,7 +42,7 @@ H~2~O and E=mc^2^.";
     let html = to_html(input);
 
     // Document header
-    assert!(html.contains("<h1>My Document</h1>"));
+    assert!(html.contains("<h1 id=\"_my_document\">My Document</h1>"));
 
     // Sections
     assert!(html.contains("id=\"_introduction\""));

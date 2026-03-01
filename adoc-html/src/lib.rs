@@ -2352,7 +2352,8 @@ mod tests {
     #[test]
     fn test_document_header() {
         let html = to_html("= My Document\n\nContent.");
-        assert!(html.contains("<h1>My Document</h1>"));
+        assert!(html.contains("<h1 id=\"_my_document\">My Document</h1>"),
+            "expected <h1 id=\"_my_document\">My Document</h1>, got:\n{html}");
     }
 
     #[test]
@@ -4418,7 +4419,7 @@ mod tests {
     fn test_no_manpage_suffix_for_article() {
         let input = "= Title\n\ntext";
         let html = to_html(input);
-        assert!(html.contains("<h1>Title</h1>"),
+        assert!(html.contains("<h1 id=\"_title\">Title</h1>"),
             "article title should not have ' Manual Page'. Got: {html}");
         assert!(!html.contains("Manual Page"),
             "article should not contain 'Manual Page'. Got: {html}");
