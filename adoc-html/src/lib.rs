@@ -635,6 +635,9 @@ impl HtmlRenderer {
             if level > current_level {
                 // Going deeper — open new ul(s)
                 while current_level < level {
+                    if !toc.ends_with('\n') {
+                        toc.push('\n');
+                    }
                     current_level += 1;
                     let sl = current_level - 1;
                     writeln!(toc, "<ul class=\"sectlevel{sl}\">").unwrap();

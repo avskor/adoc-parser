@@ -4,6 +4,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use chrono::{DateTime, Local};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -124,11 +125,19 @@ fn run(cli: Cli) -> Result<(), String> {
     let resolved = resolve_includes(&input, base_dir, 0, &mut seen)?;
     let preprocessed = adoc_parser::preprocess(&resolved);
 
+    let last_updated = cli.input.as_ref().and_then(|p| {
+        let meta = fs::metadata(p).ok()?;
+        let mtime = meta.modified().ok()?;
+        let dt: DateTime<Local> = mtime.into();
+        Some(dt.format("%Y-%m-%d %H:%M:%S %z").to_string())
+    });
+
     let html = if cli.no_standalone {
         adoc_html::to_html(&preprocessed)
     } else {
         adoc_html::to_html_with_options(&preprocessed, adoc_html::HtmlOptions {
             standalone: true,
+            last_updated,
             ..Default::default()
         })
     };
