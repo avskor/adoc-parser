@@ -391,3 +391,8 @@ div.page-break{display:block;-moz-column-break-after:page;break-after:page}
 #footer{background:none}
 #footer-text{color:rgba(0,0,0,.6);font-size:.9em}}
 @media amzn-kf8{body>div[id]{padding:0}}
+table.linenotable{border-collapse:collapse;border:0;background:none;margin:0;padding:0;width:100%}
+table.linenotable td{vertical-align:top;padding:0}
+table.linenotable td.linenos{text-align:right;padding-right:.5em;user-select:none;opacity:.5;width:1%}
+table.linenotable td.linenos pre{background:none;border:none;padding:0;margin:0}
+table.linenotable td.code pre{background:none;border:none;padding:0;margin:0}

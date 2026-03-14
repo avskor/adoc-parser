@@ -141,6 +141,9 @@ struct HtmlRenderer {
     in_header: bool,
     /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
     li_p_open: Vec<bool>,
+    linenums_active: bool,
+    linenums_start: usize,
+    source_code_buffer: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -208,6 +211,9 @@ impl HtmlRenderer {
             xref_placeholders: Vec::new(),
             in_header: false,
             li_p_open: Vec::new(),
+            linenums_active: false,
+            linenums_start: 1,
+            source_code_buffer: None,
         }
     }
 
@@ -322,14 +328,19 @@ impl HtmlRenderer {
                 } else if self.stem_block_variant.is_some() {
                     self.stem_block_content.get_or_insert_with(String::new).push_str(&text);
                 } else if self.current_subs().has(SubstitutionSet::SPECIALCHARS) {
+                    let target = if self.in_source_block {
+                        if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
+                    } else {
+                        output
+                    };
                     if self.in_source_block && self.source_line_num > 0
                         && self.highlight_lines.contains(&self.source_line_num)
                         && !self.source_line_highlighted
                     {
-                        output.push_str("<span class=\"hll\">");
+                        target.push_str("<span class=\"hll\">");
                         self.source_line_highlighted = true;
                     }
-                    html_escape_text(output, &text);
+                    html_escape_text(target, &text);
                 } else {
                     output.push_str(&text);
                 }
@@ -350,14 +361,19 @@ impl HtmlRenderer {
                 if self.stem_block_variant.is_some() {
                     self.stem_block_content.get_or_insert_with(String::new).push('\n');
                 } else {
+                    let target = if self.in_source_block {
+                        if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
+                    } else {
+                        output
+                    };
                     if self.source_line_highlighted {
-                        output.push_str("</span>");
+                        target.push_str("</span>");
                         self.source_line_highlighted = false;
                     }
                     if self.in_source_block && self.source_line_num > 0 {
                         self.source_line_num += 1;
                     }
-                    output.push('\n');
+                    target.push('\n');
                 }
             }
             Event::HardBreak => {
@@ -469,9 +485,14 @@ impl HtmlRenderer {
                 output.push(']');
             }
             Event::CalloutRef(num) => {
-                output.push_str("<b class=\"conum\">(");
-                output.push_str(&num.to_string());
-                output.push_str(")</b>");
+                let target = if self.in_source_block {
+                    if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
+                } else {
+                    output
+                };
+                target.push_str("<b class=\"conum\">(");
+                target.push_str(&num.to_string());
+                target.push_str(")</b>");
             }
             Event::Toc => {
                 if !self.toc_auto_seen {
@@ -969,6 +990,18 @@ impl HtmlRenderer {
                     self.source_line_num = 0;
                 }
                 self.source_line_highlighted = false;
+
+                if linenums {
+                    self.linenums_active = true;
+                    self.linenums_start = meta.as_ref()
+                        .and_then(|m| m.named.iter().find(|(k, _)| k == "start"))
+                        .and_then(|(_, v)| v.parse::<usize>().ok())
+                        .unwrap_or(1);
+                    self.source_code_buffer = Some(String::new());
+                    if self.source_line_num == 0 {
+                        self.source_line_num = 1;
+                    }
+                }
 
                 output.push('>');
             }
@@ -1554,9 +1587,34 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::SourceBlock => {
-                if self.source_line_highlighted {
-                    output.push_str("</span>");
-                    self.source_line_highlighted = false;
+                if self.linenums_active {
+                    if self.source_line_highlighted {
+                        self.source_code_buffer.as_mut().unwrap().push_str("</span>");
+                        self.source_line_highlighted = false;
+                    }
+                    let code = self.source_code_buffer.take().unwrap();
+                    let code_trimmed = code.strip_suffix('\n').unwrap_or(&code);
+                    let line_count = code_trimmed.split('\n').count();
+                    let start = self.linenums_start;
+
+                    output.push_str("<table class=\"linenotable\"><tbody><tr>\n<td class=\"linenos\"><pre class=\"linenos\">");
+                    for i in 0..line_count {
+                        if i > 0 {
+                            output.push('\n');
+                        }
+                        let _ = write!(output, "{}", start + i);
+                    }
+                    output.push_str("</pre></td>\n<td class=\"code\"><pre>");
+                    output.push_str(code_trimmed);
+                    output.push_str("</pre></td>\n</tr></tbody></table>");
+
+                    self.linenums_active = false;
+                    self.linenums_start = 1;
+                } else {
+                    if self.source_line_highlighted {
+                        output.push_str("</span>");
+                        self.source_line_highlighted = false;
+                    }
                 }
                 self.highlight_lines.clear();
                 self.source_line_num = 0;
@@ -3965,12 +4023,48 @@ mod tests {
         let html = to_html(":source-highlighter: highlight.js\n\n[source,rust,%linenums]\n----\nfn main() {}\n----");
         assert!(html.contains("linenums"), "linenums option should add linenums class. Got: {html}");
         assert!(html.contains("highlightjs highlight"), "highlightjs highlight classes should be present. Got: {html}");
+        assert!(html.contains("<table class=\"linenotable\">"), "linenums should produce linenotable. Got: {html}");
     }
 
     #[test]
     fn test_source_block_linenums_no_highlighter() {
         let html = to_html("[source,rust,%linenums]\n----\nfn main() {}\n----");
         assert!(html.contains("linenums"), "linenums should work even without highlighter. Got: {html}");
+        assert!(html.contains("<table class=\"linenotable\">"), "linenums should produce linenotable. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_basic() {
+        let html = to_html("[source,ruby,%linenums]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
+        assert!(html.contains("<td class=\"linenos\"><pre class=\"linenos\">1\n2\n3</pre></td>"), "should have line numbers 1-3. Got: {html}");
+        assert!(html.contains("<td class=\"code\"><pre>puts \"Hello\"\nx = 42\nputs x</pre></td>"), "should have code in td. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_start() {
+        let html = to_html("[source,ruby,%linenums,start=10]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
+        assert!(html.contains("<td class=\"linenos\"><pre class=\"linenos\">10\n11\n12</pre></td>"), "should have line numbers 10-12. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_with_highlight() {
+        let html = to_html("[source,rust,%linenums,highlight=2]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
+        assert!(html.contains("<table class=\"linenotable\">"), "should have linenotable. Got: {html}");
+        assert!(html.contains("<span class=\"hll\">let b = 2;</span>"), "should have highlight span in code. Got: {html}");
+        assert!(html.contains("<td class=\"code\">"), "should have code td. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_single_line() {
+        let html = to_html("[source,ruby,%linenums]\n----\nputs \"hi\"\n----");
+        assert!(html.contains("<pre class=\"linenos\">1</pre>"), "single line should have just 1. Got: {html}");
+    }
+
+    #[test]
+    fn test_source_block_linenums_with_callouts() {
+        let html = to_html("[source,ruby,%linenums]\n----\nputs \"Hello\" <1>\nx = 42 <2>\n----");
+        assert!(html.contains("<td class=\"code\">"), "should have code td. Got: {html}");
+        assert!(html.contains("<b class=\"conum\">(1)</b>"), "should have callout. Got: {html}");
     }
 
     #[test]

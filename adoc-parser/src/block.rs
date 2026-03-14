@@ -200,7 +200,7 @@ impl<'a> BlockScanner<'a> {
         let subs = attrs.substitution_set(default_subs);
         // Pass through named attributes that are not consumed by the parser
         let named: Vec<(Cow<'_, str>, Cow<'_, str>)> = attrs.named.iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "cols" | "format" | "start" | "subs"))
+            .filter(|(k, _)| !matches!(k.as_str(), "cols" | "format" | "subs"))
             .map(|(k, v)| (Cow::Owned(k.clone()), Cow::Owned(v.clone())))
             .collect();
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
