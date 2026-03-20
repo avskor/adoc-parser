@@ -4,6 +4,43 @@ use adoc_parser::{CellStyle, Event, HAlign, Tag, TagEnd, AdmonitionKind, Delimit
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
 
+const INTRINSIC_ATTRIBUTES: &[(&str, &str)] = &[
+    ("amp", "&amp;"),
+    ("asterisk", "*"),
+    ("backslash", "\\"),
+    ("backtick", "`"),
+    ("blank", ""),
+    ("brvbar", "&#166;"),
+    ("caret", "^"),
+    ("cpp", "C++"),
+    ("deg", "&#176;"),
+    ("empty", ""),
+    ("endsb", "]"),
+    ("gt", "&gt;"),
+    ("ldquo", "&#8220;"),
+    ("lsquo", "&#8216;"),
+    ("lt", "&lt;"),
+    ("nbsp", "&#160;"),
+    ("plus", "&#43;"),
+    ("rdquo", "&#8221;"),
+    ("rsquo", "&#8217;"),
+    ("sp", " "),
+    ("startsb", "["),
+    ("tilde", "~"),
+    ("two-colons", "::"),
+    ("two-semicolons", ";;"),
+    ("vbar", "|"),
+    ("wj", "&#8288;"),
+    ("zwsp", "&#8203;"),
+];
+
+fn intrinsic_attribute(name: &str) -> Option<&'static str> {
+    INTRINSIC_ATTRIBUTES
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| *v)
+}
+
 #[derive(Default, Clone)]
 pub struct HtmlOptions {
     pub docinfo_head: Option<String>,
@@ -431,8 +468,12 @@ impl HtmlRenderer {
                 }
             }
             Event::AttributeReference { name, fallback } => {
-                if let Some(value) = self.document_attrs.get(name.as_ref()) {
+                let lower_name = name.to_ascii_lowercase();
+                if let Some(value) = self.document_attrs.get(lower_name.as_str()) {
                     html_escape(output, value);
+                } else if let Some(value) = intrinsic_attribute(&lower_name) {
+                    // Intrinsic values are pre-encoded HTML — push raw
+                    output.push_str(value);
                 } else if let Some(env_name) = name.strip_prefix("env-") {
                     if let Ok(value) = std::env::var(env_name) {
                         html_escape(output, &value);
@@ -446,9 +487,18 @@ impl HtmlRenderer {
                 } else if let Some(fb) = fallback {
                     html_escape(output, &fb);
                 } else {
-                    output.push('{');
-                    output.push_str(&name);
-                    output.push('}');
+                    let mode = self.document_attrs.get("attribute-missing").map(|s| s.as_str());
+                    match mode {
+                        Some("drop") | Some("drop-line") => {
+                            // Output nothing
+                        }
+                        _ => {
+                            // "skip" (default) / "warn"
+                            output.push('{');
+                            output.push_str(&name);
+                            output.push('}');
+                        }
+                    }
                 }
             }
             Event::Footnote { id, text } => {

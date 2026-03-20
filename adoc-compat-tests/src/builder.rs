@@ -6,6 +6,43 @@ use adoc_parser::{
 
 use crate::asg::{AsgHeader, AsgNode, AuthorInfo};
 
+const INTRINSIC_ATTRIBUTES_TEXT: &[(&str, &str)] = &[
+    ("amp", "&"),
+    ("asterisk", "*"),
+    ("backslash", "\\"),
+    ("backtick", "`"),
+    ("blank", ""),
+    ("brvbar", "\u{00a6}"),
+    ("caret", "^"),
+    ("cpp", "C++"),
+    ("deg", "\u{00b0}"),
+    ("empty", ""),
+    ("endsb", "]"),
+    ("gt", ">"),
+    ("ldquo", "\u{201c}"),
+    ("lsquo", "\u{2018}"),
+    ("lt", "<"),
+    ("nbsp", "\u{00a0}"),
+    ("plus", "+"),
+    ("rdquo", "\u{201d}"),
+    ("rsquo", "\u{2019}"),
+    ("sp", " "),
+    ("startsb", "["),
+    ("tilde", "~"),
+    ("two-colons", "::"),
+    ("two-semicolons", ";;"),
+    ("vbar", "|"),
+    ("wj", "\u{2060}"),
+    ("zwsp", "\u{200b}"),
+];
+
+fn intrinsic_attribute_text(name: &str) -> Option<&'static str> {
+    INTRINSIC_ATTRIBUTES_TEXT
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| *v)
+}
+
 /// Stack frame representing an open tag being built.
 enum BuildFrame {
     Document {
@@ -369,10 +406,13 @@ pub fn build_asg<'a>(
             }
 
             Event::AttributeReference { name, fallback } => {
-                let resolved = match attrs.get(name.as_ref()) {
+                let lower_name = name.to_ascii_lowercase();
+                let resolved = match attrs.get(lower_name.as_str()) {
                     Some(Some(value)) => value.clone(),
                     _ => {
-                        if let Some(fb) = fallback {
+                        if let Some(value) = intrinsic_attribute_text(&lower_name) {
+                            value.to_string()
+                        } else if let Some(fb) = fallback {
                             fb.to_string()
                         } else {
                             format!("{{{name}}}")
@@ -974,7 +1014,10 @@ fn resolve_attr_refs(value: &str, attrs: &HashMap<String, Option<String>>) -> St
         let after_brace = &rest[start + 1..];
         if let Some(end) = after_brace.find('}') {
             let name = &after_brace[..end];
-            if let Some(Some(resolved)) = attrs.get(name) {
+            let lower_name = name.to_ascii_lowercase();
+            if let Some(Some(resolved)) = attrs.get(lower_name.as_str()) {
+                result.push_str(resolved);
+            } else if let Some(resolved) = intrinsic_attribute_text(&lower_name) {
                 result.push_str(resolved);
             } else {
                 // Unresolved — passthrough

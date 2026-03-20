@@ -1412,16 +1412,27 @@ impl<'a> InlineState<'a> {
         };
         let content = &rest[..close];
 
+        // Handle {set:name:value} / {set:name!} / {set:name} inline macro
+        if let Some(set_rest) = content.strip_prefix("set:") {
+            return self.try_inline_set(set_rest, events, text_start, start_pos, close);
+        }
+
         let (attr_name, fallback) = if let Some(bang) = content.find('!') {
             (&content[..bang], Some(&content[bang + 1..]))
         } else {
             (content, None)
         };
 
-        if attr_name.is_empty()
-            || !attr_name
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        if attr_name.is_empty() {
+            return false;
+        }
+        let first = attr_name.as_bytes()[0];
+        if !(first.is_ascii_alphanumeric() || first == b'_') {
+            return false;
+        }
+        if !attr_name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
         {
             return false;
         }
@@ -1435,6 +1446,64 @@ impl<'a> InlineState<'a> {
         self.pos = start_pos + 1 + close + 1;
         *text_start = self.pos;
         true
+    }
+
+    fn try_inline_set(
+        &mut self,
+        set_rest: &'a str,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+        start_pos: usize,
+        close: usize,
+    ) -> bool {
+        // {set:name!} — unset attribute
+        if let Some(name) = set_rest.strip_suffix('!') {
+            if name.is_empty() || !Self::is_valid_attr_name(name) {
+                return false;
+            }
+            self.flush_text(*text_start, start_pos, events);
+            let unset_name = format!("!{name}");
+            events.push(Event::Attribute {
+                name: Cow::Owned(unset_name),
+                value: Cow::Borrowed(""),
+            });
+            self.pos = start_pos + 1 + close + 1;
+            *text_start = self.pos;
+            return true;
+        }
+
+        // {set:name:value} or {set:name} (empty value)
+        let (name, value) = if let Some(colon_pos) = set_rest.find(':') {
+            (&set_rest[..colon_pos], &set_rest[colon_pos + 1..])
+        } else {
+            (set_rest, "")
+        };
+
+        if name.is_empty() || !Self::is_valid_attr_name(name) {
+            return false;
+        }
+
+        self.flush_text(*text_start, start_pos, events);
+        events.push(Event::Attribute {
+            name: Cow::Borrowed(name),
+            value: Cow::Borrowed(value),
+        });
+
+        self.pos = start_pos + 1 + close + 1;
+        *text_start = self.pos;
+        true
+    }
+
+    fn is_valid_attr_name(name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let first = name.as_bytes()[0];
+        if !(first.is_ascii_alphanumeric() || first == b'_') {
+            return false;
+        }
+        name.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
     }
 
     fn try_autolink(

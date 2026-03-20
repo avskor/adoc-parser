@@ -1,0 +1,39 @@
+= Intrinsic Attributes
+
+Ampersand: {amp}
+
+Less than: {lt}
+
+Greater than: {gt}
+
+Plus: {plus}
+
+Blank: {blank}end
+
+C{plus}{plus} language
+
+Open bracket: {startsb}
+
+Close bracket: {endsb}
+
+Pipe: {vbar}
+
+Nbsp: {nbsp}
+
+Space: {sp}
+
+Backslash: {backslash}
+
+Backtick: {backtick}
+
+Asterisk: {asterisk}
+
+Caret: {caret}
+
+Tilde: {tilde}
+
+Two colons: {two-colons}
+
+Two semicolons: {two-semicolons}
+
+Cpp: {cpp}
