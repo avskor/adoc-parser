@@ -1,0 +1,9 @@
+NOTE: This is a note.
+
+TIP: This is a tip.
+
+WARNING: This is a warning.
+
+CAUTION: This is a caution.
+
+IMPORTANT: This is important.

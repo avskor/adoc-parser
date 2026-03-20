@@ -1,0 +1,9 @@
+This is *bold* text.
+
+This is _italic_ text.
+
+This is `monospace` text.
+
+This is #highlighted# text.
+
+This is ^super^script and ~sub~script.

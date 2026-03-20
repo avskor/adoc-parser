@@ -200,8 +200,15 @@ impl<'a> BlockScanner<'a> {
         let subs = attrs.substitution_set(default_subs);
         // Pass through named attributes that are not consumed by the parser
         let named: Vec<(Cow<'_, str>, Cow<'_, str>)> = attrs.named.iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "cols" | "format" | "subs"))
+            .filter(|(k, _)| !matches!(k.as_str(), "format" | "subs"))
             .map(|(k, v)| (Cow::Owned(k.clone()), Cow::Owned(v.clone())))
+            // Pass positional[1] as "attribution" and positional[2] as "citetitle" only for quote/verse blocks
+            .chain(attrs.positional.get(1).filter(|s| !s.is_empty())
+                .filter(|_| matches!(attrs.positional.first().map(|s| s.as_str()), Some("quote") | Some("verse")))
+                .map(|s| (Cow::Borrowed("attribution"), Cow::Owned(s.clone()))))
+            .chain(attrs.positional.get(2).filter(|s| !s.is_empty())
+                .filter(|_| matches!(attrs.positional.first().map(|s| s.as_str()), Some("quote") | Some("verse")))
+                .map(|s| (Cow::Borrowed("citetitle"), Cow::Owned(s.clone()))))
             .collect();
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
             || !attrs.options.is_empty() || !named.is_empty() || subs.is_some()
@@ -3153,6 +3160,7 @@ mod tests {
         let input = "[cols=\"2\"]\n|===\n| A\n| B\n| C\n| D\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3340,6 +3348,7 @@ mod tests {
         let input = "[cols=\"<,^,>\"]\n|===\n| A | B | C\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("<,^,>".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3387,6 +3396,7 @@ mod tests {
         let input = "[cols=\"<,<\"]\n|===\n^| centered | normal\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("<,<".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3447,12 +3457,12 @@ mod tests {
     }
 
     #[test]
-    fn test_table_cols_not_in_named() {
-        // cols is consumed by parser, should not appear in named
+    fn test_table_cols_in_named() {
+        // cols passes through to renderer for colgroup generation
         let input = "[cols=\"2\",stripes=even]\n|===\n| A\n| B\n| C\n| D\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         if let Event::BlockMetadata { ref named, .. } = events[0] {
-            assert!(named.iter().all(|(k, _)| k != "cols"), "cols should be filtered out");
+            assert!(named.iter().any(|(k, _)| k == "cols"), "cols should be present");
             assert!(named.iter().any(|(k, _)| k == "stripes"), "stripes should be present");
         } else {
             panic!("Expected BlockMetadata");

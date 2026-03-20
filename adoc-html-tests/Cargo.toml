@@ -1,0 +1,11 @@
+[package]
+name = "adoc-html-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+adoc-html = { path = "../adoc-html" }
+ego-tree = "0.10"
+scraper = "0.22"
+similar = "2"

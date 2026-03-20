@@ -6,4 +6,5 @@ members = [
     "adoc-wasm",
     "adoc-cli",
     "adoc-compat-tests",
+    "adoc-html-tests",
 ]

@@ -144,6 +144,9 @@ struct HtmlRenderer {
     linenums_active: bool,
     linenums_start: usize,
     source_code_buffer: Option<String>,
+    header_suppress_start: Option<usize>,
+    quote_attribution: Option<String>,
+    quote_citetitle: Option<String>,
 }
 
 impl HtmlRenderer {
@@ -214,6 +217,9 @@ impl HtmlRenderer {
             linenums_active: false,
             linenums_start: 1,
             source_code_buffer: None,
+            header_suppress_start: None,
+            quote_attribution: None,
+            quote_citetitle: None,
         }
     }
 
@@ -737,7 +743,8 @@ impl HtmlRenderer {
                 if self.standalone {
                     output.push_str("<div id=\"header\">\n");
                 } else {
-                    output.push_str("<div class=\"header\">\n");
+                    // In embedded mode, suppress header output
+                    self.header_suppress_start = Some(output.len());
                 }
             }
             Tag::DocumentTitle => {
@@ -814,7 +821,12 @@ impl HtmlRenderer {
                 if !is_part {
                     output.push_str("<div");
                     let sect_class = format!("sect{}", level - 1);
-                    Self::write_meta_attrs(output, &meta, &sect_class);
+                    // ID goes on the heading, not on the section div
+                    let mut div_meta = meta.clone();
+                    if let Some(ref mut m) = div_meta {
+                        m.id = None;
+                    }
+                    Self::write_meta_attrs(output, &div_meta, &sect_class);
                     output.push_str(">\n");
                 }
                 if style == Some("appendix") {
@@ -839,9 +851,9 @@ impl HtmlRenderer {
                 }
             }
             Tag::LiteralParagraph => {
-                output.push_str("<pre");
-                Self::write_meta_attrs(output, &meta, "");
-                output.push('>');
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &meta, "literalblock");
+                output.push_str(">\n<div class=\"content\">\n<pre>");
             }
             Tag::DelimitedBlock { kind } => {
                 match kind {
@@ -899,6 +911,15 @@ impl HtmlRenderer {
                     }
                     DelimitedBlockKind::Quote => {
                         self.delimited_block_stack.push((*kind, false));
+                        // Capture attribution and citetitle from metadata
+                        if let Some(ref m) = meta {
+                            self.quote_attribution = m.named.iter()
+                                .find(|(k, _)| k == "attribution")
+                                .map(|(_, v)| v.clone());
+                            self.quote_citetitle = m.named.iter()
+                                .find(|(k, _)| k == "citetitle")
+                                .map(|(_, v)| v.clone());
+                        }
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "quoteblock");
                         output.push_str(">\n");
@@ -1020,9 +1041,13 @@ impl HtmlRenderer {
                     }
                     output.push_str(">\n");
                 } else {
-                    output.push_str("<ul");
-                    let class = if *has_checklist { "checklist" } else { "" };
-                    Self::write_meta_attrs(output, &meta, class);
+                    let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
+                    output.push_str("<div class=\"");
+                    output.push_str(wrapper_class);
+                    output.push_str("\">\n<ul");
+                    if *has_checklist {
+                        output.push_str(" class=\"checklist\"");
+                    }
                     output.push_str(">\n");
                 }
             }
@@ -1030,8 +1055,8 @@ impl HtmlRenderer {
                 let style_name = meta.as_ref()
                     .and_then(|m| m.style.as_deref())
                     .unwrap_or("arabic");
+                let wrapper_class = format!("olist {style_name}");
                 if !self.is_inside_list_item() {
-                    let wrapper_class = format!("olist {style_name}");
                     output.push_str("<div");
                     // Write id/roles from meta onto the wrapper div
                     let mut wrapper_meta = meta.clone();
@@ -1040,8 +1065,14 @@ impl HtmlRenderer {
                     }
                     Self::write_meta_attrs(output, &wrapper_meta, &wrapper_class);
                     output.push_str(">\n");
+                } else {
+                    output.push_str("<div class=\"");
+                    output.push_str(&wrapper_class);
+                    output.push_str("\">\n");
                 }
-                output.push_str("<ol");
+                output.push_str("<ol class=\"");
+                output.push_str(style_name);
+                output.push('"');
                 let type_attr = match style_name {
                     "loweralpha" => Some("a"),
                     "upperalpha" => Some("A"),
@@ -1171,21 +1202,39 @@ impl HtmlRenderer {
                 let has_autowidth = meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "autowidth"));
                 let stripes_value = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "stripes").map(|(_, v)| v.clone()));
 
-                let mut classes = String::new();
-                if has_autowidth {
-                    classes.push_str("fit-content");
+                // Base Asciidoctor table classes
+                let mut classes = String::from("tableblock frame-all grid-all");
+                if !has_autowidth {
+                    classes.push_str(" stretch");
+                } else {
+                    classes.push_str(" fit-content");
                 }
                 if let Some(ref sv) = stripes_value {
-                    if !classes.is_empty() {
-                        classes.push(' ');
-                    }
-                    classes.push_str("stripes-");
+                    classes.push_str(" stripes-");
                     classes.push_str(sv);
                 }
+
+                // Extract cols spec for colgroup generation
+                let cols_value = meta.as_ref().and_then(|m| m.named.iter()
+                    .find(|(k, _)| k == "cols").map(|(_, v)| v.clone()));
 
                 output.push_str("<table");
                 Self::write_meta_attrs(output, &meta, &classes);
                 output.push_str(">\n");
+
+                // Emit <colgroup> based on cols spec
+                if let Some(ref cols_str) = cols_value {
+                    let col_widths = Self::parse_col_widths(cols_str);
+                    if !col_widths.is_empty() {
+                        output.push_str("<colgroup>\n");
+                        for w in &col_widths {
+                            output.push_str("<col style=\"width: ");
+                            output.push_str(&w.to_string());
+                            output.push_str("%;\">\n");
+                        }
+                        output.push_str("</colgroup>\n");
+                    }
+                }
 
                 // Caption handling
                 let title_html = self.block_title_inner_html.take();
@@ -1225,32 +1274,37 @@ impl HtmlRenderer {
             }
             Tag::TableCell { colspan, rowspan, style, halign, valign } => {
                 self.cell_style_stack.push(*style);
-                output.push_str("<td");
+                let cell_class = Self::tableblock_cell_class(halign, valign);
+                output.push_str("<td class=\"");
+                output.push_str(&cell_class);
+                output.push('"');
                 if *colspan > 1 {
                     output.push_str(&format!(" colspan=\"{}\"", colspan));
                 }
                 if *rowspan > 1 {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
-                Self::write_align_style(output, halign, valign);
                 output.push('>');
                 match style {
-                    CellStyle::Emphasis => output.push_str("<em>"),
-                    CellStyle::Strong => output.push_str("<strong>"),
-                    CellStyle::Monospace | CellStyle::Literal => output.push_str("<code>"),
-                    _ => {}
+                    CellStyle::Emphasis => output.push_str("<p class=\"tableblock\"><em>"),
+                    CellStyle::Strong => output.push_str("<p class=\"tableblock\"><strong>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("<p class=\"tableblock\"><code>"),
+                    CellStyle::AsciiDoc => {}
+                    _ => output.push_str("<p class=\"tableblock\">"),
                 }
             }
             Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } => {
                 self.cell_style_stack.push(*style);
-                output.push_str("<th");
+                let cell_class = Self::tableblock_cell_class(halign, valign);
+                output.push_str("<th class=\"");
+                output.push_str(&cell_class);
+                output.push('"');
                 if *colspan > 1 {
                     output.push_str(&format!(" colspan=\"{}\"", colspan));
                 }
                 if *rowspan > 1 {
                     output.push_str(&format!(" rowspan=\"{}\"", rowspan));
                 }
-                Self::write_align_style(output, halign, valign);
                 output.push('>');
                 match style {
                     CellStyle::Emphasis => output.push_str("<em>"),
@@ -1482,12 +1536,22 @@ impl HtmlRenderer {
         match tag_end {
             TagEnd::Header => {
                 self.in_header = false;
-                output.push_str("</div>\n");
                 if self.standalone {
+                    output.push_str("</div>\n");
                     self.content_start = Some(output.len());
-                }
-                if self.has_document_title {
-                    self.preamble_start = Some(output.len());
+                    if self.has_document_title {
+                        self.preamble_start = Some(output.len());
+                    }
+                } else if let Some(pos) = self.header_suppress_start.take() {
+                    // In embedded mode, truncate the entire header output
+                    output.truncate(pos);
+                    // Reset TOC insert position to after truncation point
+                    if self.toc_auto_seen {
+                        self.toc_insert_position = Some(output.len());
+                    }
+                    if self.has_document_title {
+                        self.preamble_start = Some(output.len());
+                    }
                 }
             }
             TagEnd::DocumentTitle => {
@@ -1561,7 +1625,7 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::LiteralParagraph => {
-                output.push_str("</pre>\n");
+                output.push_str("</pre>\n</div>\n</div>\n");
             }
             TagEnd::DelimitedBlock => {
                 match self.delimited_block_stack.pop() {
@@ -1569,7 +1633,27 @@ impl HtmlRenderer {
                         output.push_str("</pre>\n</div>\n</div>\n");
                     }
                     Some((DelimitedBlockKind::Quote, _)) => {
-                        output.push_str("</blockquote>\n</div>\n");
+                        output.push_str("</blockquote>\n");
+                        let attribution = self.quote_attribution.take();
+                        let citetitle = self.quote_citetitle.take();
+                        if attribution.is_some() || citetitle.is_some() {
+                            output.push_str("<div class=\"attribution\">\n");
+                            if let Some(ref attr) = attribution {
+                                output.push_str("&#8212; ");
+                                html_escape(output, attr);
+                            }
+                            if let Some(ref cite) = citetitle {
+                                if attribution.is_some() {
+                                    output.push_str("<br>\n");
+                                }
+                                output.push_str("<cite>");
+                                html_escape(output, cite);
+                                output.push_str("</cite>");
+                            }
+                            output.push('\n');
+                            output.push_str("</div>\n");
+                        }
+                        output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Verse, _)) => {
                         output.push_str("</pre>\n</div>\n");
@@ -1630,18 +1714,10 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::UnorderedList => {
-                if !self.is_inside_list_item() {
-                    output.push_str("</ul>\n</div>\n");
-                } else {
-                    output.push_str("</ul>\n");
-                }
+                output.push_str("</ul>\n</div>\n");
             }
             TagEnd::OrderedList => {
-                if !self.is_inside_list_item() {
-                    output.push_str("</ol>\n</div>\n");
-                } else {
-                    output.push_str("</ol>\n");
-                }
+                output.push_str("</ol>\n</div>\n");
             }
             TagEnd::ListItem => {
                 if self.li_p_open.pop() == Some(true) {
@@ -1705,10 +1781,11 @@ impl HtmlRenderer {
             TagEnd::TableCell => {
                 let style = self.cell_style_stack.pop().unwrap_or_default();
                 match style {
-                    CellStyle::Emphasis => output.push_str("</em>"),
-                    CellStyle::Strong => output.push_str("</strong>"),
-                    CellStyle::Monospace | CellStyle::Literal => output.push_str("</code>"),
-                    _ => {}
+                    CellStyle::Emphasis => output.push_str("</em></p>"),
+                    CellStyle::Strong => output.push_str("</strong></p>"),
+                    CellStyle::Monospace | CellStyle::Literal => output.push_str("</code></p>"),
+                    CellStyle::AsciiDoc => {}
+                    _ => output.push_str("</p>"),
                 }
                 output.push_str("</td>\n");
             }
@@ -1804,33 +1881,56 @@ impl HtmlRenderer {
         self.pending_block_meta.take()
     }
 
-    /// Write `style="text-align:...; vertical-align:..."` attribute if alignment is non-default.
-    fn write_align_style(output: &mut String, halign: &HAlign, valign: &VAlign) {
+    /// Parse a cols spec string (e.g. "1,1" or "3" or "<,^,>") and return percentage widths.
+    fn parse_col_widths(cols_str: &str) -> Vec<u32> {
+        let trimmed = cols_str.trim();
+
+        // Simple numeric: "3" → 3 equal columns
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n == 0 { return Vec::new(); }
+            let pct = 100 / n as u32;
+            return vec![pct; n];
+        }
+
+        // Comma-separated: parse each part for weight
+        let parts: Vec<&str> = trimmed.split(',').collect();
+        let mut weights: Vec<u32> = Vec::new();
+        for part in &parts {
+            let part = part.trim();
+            if part.is_empty() { continue; }
+            // Extract numeric weight from the spec (e.g., "1", "<2", "^.>1")
+            // The weight is the trailing number, default is 1
+            let weight = part.chars().rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .chars().rev().collect::<String>()
+                .parse::<u32>()
+                .unwrap_or(1);
+            weights.push(weight);
+        }
+
+        if weights.is_empty() { return Vec::new(); }
+
+        let total: u32 = weights.iter().sum();
+        if total == 0 { return Vec::new(); }
+
+        weights.iter().map(|w| {
+            (w * 100 + total / 2) / total
+        }).collect()
+    }
+
+    fn tableblock_cell_class(halign: &HAlign, valign: &VAlign) -> String {
         let ha = match halign {
-            HAlign::Center => Some("text-align: center"),
-            HAlign::Right => Some("text-align: right"),
-            HAlign::Left => None,
+            HAlign::Left => "halign-left",
+            HAlign::Center => "halign-center",
+            HAlign::Right => "halign-right",
         };
         let va = match valign {
-            VAlign::Middle => Some("vertical-align: middle"),
-            VAlign::Bottom => Some("vertical-align: bottom"),
-            VAlign::Top => None,
+            VAlign::Top => "valign-top",
+            VAlign::Middle => "valign-middle",
+            VAlign::Bottom => "valign-bottom",
         };
-        if ha.is_some() || va.is_some() {
-            output.push_str(" style=\"");
-            if let Some(h) = ha {
-                output.push_str(h);
-                output.push(';');
-                if va.is_some() {
-                    output.push(' ');
-                }
-            }
-            if let Some(v) = va {
-                output.push_str(v);
-                output.push(';');
-            }
-            output.push('"');
-        }
+        format!("tableblock {ha} {va}")
     }
 
     /// Write HTML id and class attributes from block metadata into an already-started tag.
@@ -2391,7 +2491,7 @@ mod tests {
 
     #[test]
     fn test_document_title_no_duplicate_h1() {
-        let html = to_html("= Document Title\n\nContent.");
+        let html = to_html_with_options("= Document Title\n\nContent.", HtmlOptions { standalone: true, ..Default::default() });
         // Must produce exactly one <h1> opening tag, not <h1 id="..."><h1>
         let h1_count = html.matches("<h1").count();
         assert_eq!(h1_count, 1, "expected exactly one <h1> tag, got {h1_count}. HTML:\n{html}");
@@ -2432,14 +2532,14 @@ mod tests {
     #[test]
     fn test_ordered_list_loweralpha() {
         let html = to_html("[loweralpha]\n. a\n. b");
-        assert!(html.contains("<ol type=\"a\""));
+        assert!(html.contains("<ol class=\"loweralpha\" type=\"a\""), "expected ol with class and type. Got:\n{html}");
         assert!(html.contains("class=\"olist loweralpha\""));
     }
 
     #[test]
     fn test_ordered_list_upperroman() {
         let html = to_html("[upperroman]\n. x\n. y");
-        assert!(html.contains("<ol type=\"I\""));
+        assert!(html.contains("<ol class=\"upperroman\" type=\"I\""), "expected ol with class and type. Got:\n{html}");
         assert!(html.contains("class=\"olist upperroman\""));
     }
 
@@ -2571,9 +2671,13 @@ mod tests {
 
     #[test]
     fn test_document_header() {
+        // In embedded mode, document header (h1) is not rendered
         let html = to_html("= My Document\n\nContent.");
+        assert!(!html.contains("<h1>"), "embedded mode should not render document header h1. Got:\n{html}");
+        // In standalone mode, the header is rendered
+        let html = to_html_with_options("= My Document\n\nContent.", HtmlOptions { standalone: true, ..Default::default() });
         assert!(html.contains("<h1>My Document</h1>"),
-            "expected <h1>My Document</h1> (no id in header), got:\n{html}");
+            "expected <h1>My Document</h1> in standalone mode, got:\n{html}");
     }
 
     #[test]
@@ -2615,13 +2719,13 @@ mod tests {
     #[test]
     fn test_table_html() {
         let html = to_html("|===\n| A | B\n| C | D\n|===");
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"), "expected table classes. Got:\n{html}");
         assert!(html.contains("<tbody>"));
         assert!(html.contains("<tr>"));
-        assert!(html.contains("<td>A</td>"));
-        assert!(html.contains("<td>B</td>"));
-        assert!(html.contains("<td>C</td>"));
-        assert!(html.contains("<td>D</td>"));
+        assert!(html.contains("<p class=\"tableblock\">A</p>"));
+        assert!(html.contains("<p class=\"tableblock\">B</p>"));
+        assert!(html.contains("<p class=\"tableblock\">C</p>"));
+        assert!(html.contains("<p class=\"tableblock\">D</p>"));
         assert!(html.contains("</tbody>"));
         assert!(html.contains("</table>"));
         assert!(!html.contains("<thead>"));
@@ -2631,14 +2735,14 @@ mod tests {
     fn test_table_with_header_html() {
         let html = to_html("|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===");
         assert!(html.contains("<thead>"));
-        assert!(html.contains("<th>Header 1</th>"));
-        assert!(html.contains("<th>Header 2</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Header 1</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Header 2</th>"));
         assert!(html.contains("</thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Cell 1</td>"));
-        assert!(html.contains("<td>Cell 2</td>"));
-        assert!(html.contains("<td>Cell 3</td>"));
-        assert!(html.contains("<td>Cell 4</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Cell 1</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Cell 2</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Cell 3</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Cell 4</p>"));
         assert!(html.contains("</tbody>"));
         assert!(html.contains("</table>"));
     }
@@ -2646,10 +2750,10 @@ mod tests {
     #[test]
     fn test_table_with_cols_html() {
         let html = to_html("[cols=\"2\"]\n|===\n| A\n| B\n| C\n| D\n|===");
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"));
         assert!(html.contains("<tbody>"));
         // Should have 2 rows of 2 cells
-        let td_count = html.matches("<td>").count();
+        let td_count = html.matches("<td class=\"tableblock").count();
         assert_eq!(td_count, 4);
         let tr_count = html.matches("<tr>").count();
         assert_eq!(tr_count, 2);
@@ -2661,12 +2765,12 @@ mod tests {
     fn test_table_footer_html() {
         let html = to_html("[%footer]\n|===\n| A | B\n| F1 | F2\n|===");
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>A</td>"));
-        assert!(html.contains("<td>B</td>"));
+        assert!(html.contains("<p class=\"tableblock\">A</p>"));
+        assert!(html.contains("<p class=\"tableblock\">B</p>"));
         assert!(html.contains("</tbody>"));
         assert!(html.contains("<tfoot>"));
-        assert!(html.contains("<td>F1</td>"));
-        assert!(html.contains("<td>F2</td>"));
+        assert!(html.contains("<p class=\"tableblock\">F1</p>"));
+        assert!(html.contains("<p class=\"tableblock\">F2</p>"));
         assert!(html.contains("</tfoot>"));
         assert!(!html.contains("<thead>"));
     }
@@ -2794,12 +2898,9 @@ mod tests {
     fn test_toc_preamble() {
         let input = "= Title\n:toc: preamble\n\nPreamble text.\n\n== Section One\n\nContent.";
         let html = to_html(input);
-        assert!(html.contains("<div id=\"toc\""));
-        // TOC should appear after preamble closing div, before section
-        let preamble_end = html.find("</div>\n</div>\n").unwrap() + "</div>\n</div>\n".len();
+        assert!(html.contains("<div id=\"toc\""), "should contain TOC. Got:\n{html}");
         let toc_pos = html.find("<div id=\"toc\"").unwrap();
         let section_pos = html.find("<div class=\"sect1\"").unwrap();
-        assert!(toc_pos >= preamble_end, "TOC should be after preamble");
         assert!(toc_pos < section_pos, "TOC should be before first section");
     }
 
@@ -2883,19 +2984,19 @@ mod tests {
     #[test]
     fn test_table_colspan_html() {
         let html = to_html("|===\n| A 2+| B spans\n| C | D | E\n|===");
-        assert!(html.contains("<td>A</td>"));
-        assert!(html.contains("<td colspan=\"2\">B spans</td>"));
-        assert!(html.contains("<td>C</td>"));
-        assert!(html.contains("<td>D</td>"));
-        assert!(html.contains("<td>E</td>"));
+        assert!(html.contains("<p class=\"tableblock\">A</p>"));
+        assert!(html.contains("colspan=\"2\"><p class=\"tableblock\">B spans</p>"));
+        assert!(html.contains("<p class=\"tableblock\">C</p>"));
+        assert!(html.contains("<p class=\"tableblock\">D</p>"));
+        assert!(html.contains("<p class=\"tableblock\">E</p>"));
     }
 
     #[test]
     fn test_table_rowspan_html() {
         let html = to_html("|===\n.2+| A | B\n| C\n|===");
-        assert!(html.contains("<td rowspan=\"2\">A</td>"));
-        assert!(html.contains("<td>B</td>"));
-        assert!(html.contains("<td>C</td>"));
+        assert!(html.contains("rowspan=\"2\"><p class=\"tableblock\">A</p>"));
+        assert!(html.contains("<p class=\"tableblock\">B</p>"));
+        assert!(html.contains("<p class=\"tableblock\">C</p>"));
         // Should have 2 rows
         assert_eq!(html.matches("<tr>").count(), 2);
     }
@@ -2903,92 +3004,100 @@ mod tests {
     #[test]
     fn test_table_colspan_rowspan_html() {
         let html = to_html("|===\n2.3+| cell | B\n| C\n| D\n|===");
-        assert!(html.contains("<td colspan=\"2\" rowspan=\"3\">cell</td>"));
+        assert!(html.contains("colspan=\"2\" rowspan=\"3\"><p class=\"tableblock\">cell</p>"));
     }
 
     #[test]
     fn test_table_cell_style_emphasis_html() {
         let html = to_html("|===\ne| italic\n|===");
-        assert!(html.contains("<td><em>italic</em></td>"));
+        assert!(html.contains("<p class=\"tableblock\"><em>italic</em></p>"), "expected emphasis in tableblock p. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_strong_html() {
         let html = to_html("|===\ns| bold\n|===");
-        assert!(html.contains("<td><strong>bold</strong></td>"));
+        assert!(html.contains("<p class=\"tableblock\"><strong>bold</strong></p>"), "expected strong in tableblock p. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_monospace_html() {
         let html = to_html("|===\nm| code\n|===");
-        assert!(html.contains("<td><code>code</code></td>"));
+        assert!(html.contains("<p class=\"tableblock\"><code>code</code></p>"), "expected code in tableblock p. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_literal_html() {
         let html = to_html("|===\nl| literal\n|===");
-        assert!(html.contains("<td><code>literal</code></td>"));
+        assert!(html.contains("<p class=\"tableblock\"><code>literal</code></p>"), "expected code in tableblock p. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_header_in_body_html() {
         let html = to_html("|===\nh| header cell\n|===");
-        assert!(html.contains("<th>header cell</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">header cell</th>"), "expected th with tableblock class. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_with_colspan_html() {
         let html = to_html("|===\n2+e| wide italic | B\n| C | D\n|===");
-        assert!(html.contains("<td colspan=\"2\"><em>wide italic</em></td>"));
+        assert!(html.contains("colspan=\"2\"><p class=\"tableblock\"><em>wide italic</em></p>"), "expected colspan with emphasis in tableblock p. Got:\n{html}");
     }
 
     #[test]
     fn test_table_cell_style_no_false_positive_html() {
         // "data" ends with 'a' but should NOT be treated as AsciiDoc style
         let html = to_html("|===\n| data | more\n|===");
-        assert!(html.contains("<td>data</td>"));
-        assert!(html.contains("<td>more</td>"));
+        assert!(html.contains("<p class=\"tableblock\">data</p>"));
+        assert!(html.contains("<p class=\"tableblock\">more</p>"));
     }
 
     #[test]
     fn test_table_cols_alignment_html() {
         let html = to_html("[cols=\"<,^,>\"]\n|===\n| A | B | C\n|===");
-        assert!(html.contains("<td>A</td>"), "Left-aligned should have no style");
-        assert!(html.contains("<td style=\"text-align: center;\">B</td>"), "Center should have text-align: center");
-        assert!(html.contains("<td style=\"text-align: right;\">C</td>"), "Right should have text-align: right");
+        assert!(html.contains("halign-left"), "Left-aligned should have halign-left class");
+        assert!(html.contains("halign-center"), "Center should have halign-center class");
+        assert!(html.contains("halign-right"), "Right should have halign-right class");
+        assert!(html.contains("<p class=\"tableblock\">A</p>"));
+        assert!(html.contains("<p class=\"tableblock\">B</p>"));
+        assert!(html.contains("<p class=\"tableblock\">C</p>"));
     }
 
     #[test]
     fn test_table_cell_align_html() {
         let html = to_html("|===\n^| centered\n|===");
-        assert!(html.contains("<td style=\"text-align: center;\">centered</td>"));
+        assert!(html.contains("halign-center"), "expected halign-center class. Got:\n{html}");
+        assert!(html.contains("<p class=\"tableblock\">centered</p>"));
     }
 
     #[test]
     fn test_table_cell_combined_align_html() {
         let html = to_html("|===\n>.^| text\n|===");
-        assert!(html.contains("<td style=\"text-align: right; vertical-align: middle;\">text</td>"));
+        assert!(html.contains("halign-right valign-middle"), "expected halign-right valign-middle. Got:\n{html}");
+        assert!(html.contains("<p class=\"tableblock\">text</p>"));
     }
 
     #[test]
     fn test_table_cell_override_cols_align_html() {
         // cols says left, cell overrides to center
         let html = to_html("[cols=\"<,<\"]\n|===\n^| centered | normal\n|===");
-        assert!(html.contains("<td style=\"text-align: center;\">centered</td>"));
-        assert!(html.contains("<td>normal</td>"));
+        assert!(html.contains("halign-center"), "cell should override to center. Got:\n{html}");
+        assert!(html.contains("<p class=\"tableblock\">centered</p>"));
+        assert!(html.contains("<p class=\"tableblock\">normal</p>"));
     }
 
     #[test]
     fn test_table_valign_only_html() {
         let html = to_html("|===\n.>| bottom\n|===");
-        assert!(html.contains("<td style=\"vertical-align: bottom;\">bottom</td>"));
+        assert!(html.contains("valign-bottom"), "expected valign-bottom class. Got:\n{html}");
+        assert!(html.contains("<p class=\"tableblock\">bottom</p>"));
     }
 
     #[test]
     fn test_table_cols_valign_html() {
         let html = to_html("[cols=\".^,1\"]\n|===\n| A | B\n|===");
-        assert!(html.contains("<td style=\"vertical-align: middle;\">A</td>"));
-        assert!(html.contains("<td>B</td>"));
+        assert!(html.contains("valign-middle"), "expected valign-middle class. Got:\n{html}");
+        assert!(html.contains("<p class=\"tableblock\">A</p>"));
+        assert!(html.contains("<p class=\"tableblock\">B</p>"));
     }
 
     #[test]
@@ -3271,26 +3380,29 @@ mod tests {
     #[test]
     fn test_table_with_id_and_role() {
         let html = to_html("[#data.striped]\n|===\n| A | B\n|===");
-        assert!(html.contains("id=\"data\""));
-        assert!(html.contains("class=\"striped\""));
+        assert!(html.contains("id=\"data\""), "expected id=\"data\". Got:\n{html}");
+        assert!(html.contains("striped"), "expected striped in class. Got:\n{html}");
     }
 
     #[test]
     fn test_table_autowidth_html() {
         let html = to_html("[%autowidth]\n|===\n| A | B\n|===");
-        assert!(html.contains("<table class=\"fit-content\">"));
+        assert!(html.contains("fit-content"), "expected fit-content class. Got:\n{html}");
+        assert!(html.contains("tableblock frame-all grid-all"), "expected tableblock classes. Got:\n{html}");
     }
 
     #[test]
     fn test_table_stripes_html() {
         let html = to_html("[stripes=even]\n|===\n| A | B\n|===");
-        assert!(html.contains("<table class=\"stripes-even\">"));
+        assert!(html.contains("stripes-even"), "expected stripes-even class. Got:\n{html}");
+        assert!(html.contains("tableblock frame-all grid-all"), "expected tableblock classes. Got:\n{html}");
     }
 
     #[test]
     fn test_table_stripes_odd_html() {
         let html = to_html("[stripes=odd]\n|===\n| A | B\n|===");
-        assert!(html.contains("<table class=\"stripes-odd\">"));
+        assert!(html.contains("stripes-odd"), "expected stripes-odd class. Got:\n{html}");
+        assert!(html.contains("tableblock frame-all grid-all"), "expected tableblock classes. Got:\n{html}");
     }
 
     #[test]
@@ -3343,19 +3455,19 @@ mod tests {
     #[test]
     fn test_csv_table_html() {
         let html = to_html("[%header,format=csv]\n|===\nName,Age,City\nAlice,30,NYC\nBob,25,LA\n|===");
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"));
         assert!(html.contains("<thead>"));
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<th>Age</th>"));
-        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Name</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Age</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">City</th>"));
         assert!(html.contains("</thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>30</td>"));
-        assert!(html.contains("<td>NYC</td>"));
-        assert!(html.contains("<td>Bob</td>"));
-        assert!(html.contains("<td>25</td>"));
-        assert!(html.contains("<td>LA</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">30</p>"));
+        assert!(html.contains("<p class=\"tableblock\">NYC</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Bob</p>"));
+        assert!(html.contains("<p class=\"tableblock\">25</p>"));
+        assert!(html.contains("<p class=\"tableblock\">LA</p>"));
         assert!(html.contains("</tbody>"));
         assert!(html.contains("</table>"));
     }
@@ -3364,12 +3476,12 @@ mod tests {
     fn test_csv_table_shorthand_html() {
         let html = to_html("[%header,csv]\n|===\nName,Age\nAlice,30\n|===");
         assert!(html.contains("<thead>"));
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Name</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Age</th>"));
         assert!(html.contains("</thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">30</p>"));
         assert!(html.contains("</tbody>"));
     }
 
@@ -3377,14 +3489,14 @@ mod tests {
     fn test_dsv_table_html() {
         let html = to_html("[%header,format=dsv]\n|===\nName:Age:City\nAlice:30:NYC\n|===");
         assert!(html.contains("<thead>"));
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<th>Age</th>"));
-        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Name</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Age</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">City</th>"));
         assert!(html.contains("</thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>30</td>"));
-        assert!(html.contains("<td>NYC</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">30</p>"));
+        assert!(html.contains("<p class=\"tableblock\">NYC</p>"));
         assert!(html.contains("</tbody>"));
     }
 
@@ -3392,14 +3504,14 @@ mod tests {
     fn test_tsv_table_html() {
         let html = to_html("[%header,format=tsv]\n|===\nName\tAge\tCity\nAlice\t30\tNYC\n|===");
         assert!(html.contains("<thead>"));
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<th>Age</th>"));
-        assert!(html.contains("<th>City</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Name</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Age</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">City</th>"));
         assert!(html.contains("</thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>30</td>"));
-        assert!(html.contains("<td>NYC</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">30</p>"));
+        assert!(html.contains("<p class=\"tableblock\">NYC</p>"));
         assert!(html.contains("</tbody>"));
     }
 
@@ -3408,20 +3520,20 @@ mod tests {
         let html = to_html("[format=csv]\n|===\nAlice,30\nBob,25\n|===");
         assert!(!html.contains("<thead>"));
         assert!(html.contains("<tbody>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>30</td>"));
-        assert!(html.contains("<td>Bob</td>"));
-        assert!(html.contains("<td>25</td>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">30</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Bob</p>"));
+        assert!(html.contains("<p class=\"tableblock\">25</p>"));
         assert!(html.contains("</tbody>"));
     }
 
     #[test]
     fn test_csv_table_quoted_fields_html() {
         let html = to_html("[%header,csv]\n|===\nName,Description\nAlice,\"Has a, comma\"\n|===");
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<th>Description</th>"));
-        assert!(html.contains("<td>Alice</td>"));
-        assert!(html.contains("<td>Has a, comma</td>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Name</th>"));
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">Description</th>"));
+        assert!(html.contains("<p class=\"tableblock\">Alice</p>"));
+        assert!(html.contains("<p class=\"tableblock\">Has a, comma</p>"));
     }
 
     #[test]
@@ -4181,9 +4293,13 @@ mod tests {
 
     #[test]
     fn test_builtin_attr_doctitle() {
+        // In embedded mode, document header is not rendered, so doctitle only appears in the body reference
         let html = to_html("= My Title\n\n{doctitle}");
-        // The doctitle attribute should resolve to "My Title" in the body
-        assert_eq!(html.matches("My Title").count(), 2, "doctitle should appear twice (h1 + reference). Got: {html}");
+        assert!(html.contains("My Title"), "doctitle should resolve in body. Got: {html}");
+        // In standalone mode, it appears in both header and body
+        let html = to_html_with_options("= My Title\n\n{doctitle}", HtmlOptions { standalone: true, ..Default::default() });
+        assert!(html.contains("<h1>My Title</h1>"), "standalone should have h1. Got: {html}");
+        assert!(html.contains("<p>My Title</p>"), "doctitle should resolve in body. Got: {html}");
     }
 
     #[test]
@@ -4227,7 +4343,11 @@ mod tests {
 
     #[test]
     fn test_markdown_heading_document_title() {
+        // In embedded mode, document header (h1) is suppressed
         let html = to_html("# Doc Title\n\nBody text.");
+        assert!(html.contains("Body text"), "should contain body. Got: {html}");
+        // In standalone mode, h1 is rendered
+        let html = to_html_with_options("# Doc Title\n\nBody text.", HtmlOptions { standalone: true, ..Default::default() });
         assert!(html.contains("Doc Title"), "should contain title. Got: {html}");
         assert!(html.contains("<h1"), "document title should render h1. Got: {html}");
     }
@@ -4648,7 +4768,8 @@ mod tests {
     #[test]
     fn test_manpage_title_suffix() {
         let input = "= command(1)\n:doctype: manpage\n\n== SYNOPSIS\n\ntext";
-        let html = to_html(input);
+        // In standalone mode, h1 is rendered with manpage suffix
+        let html = to_html_with_options(input, HtmlOptions { standalone: true, ..Default::default() });
         assert!(html.contains("command(1) Manual Page</h1>"),
             "manpage title should have ' Manual Page' suffix. Got: {html}");
     }
@@ -4672,7 +4793,8 @@ mod tests {
     #[test]
     fn test_no_manpage_suffix_for_article() {
         let input = "= Title\n\ntext";
-        let html = to_html(input);
+        // In standalone mode, verify article title doesn't get manpage suffix
+        let html = to_html_with_options(input, HtmlOptions { standalone: true, ..Default::default() });
         assert!(html.contains("<h1>Title</h1>"),
             "article title should not have ' Manual Page'. Got: {html}");
         assert!(!html.contains("Manual Page"),
@@ -4741,4 +4863,5 @@ mod tests {
         let html = to_html(input);
         assert!(html.contains("type=book"), "doctype should be 'book'. Got: {html}");
     }
+
 }

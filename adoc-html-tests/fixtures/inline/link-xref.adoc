@@ -1,0 +1,7 @@
+== First Section
+
+See <<_second_section>>.
+
+== Second Section
+
+This is the target.

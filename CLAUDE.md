@@ -16,7 +16,7 @@ CRITICAL: Never make commits directly on `master`. Before starting ANY task, ALW
 1. `git checkout master && git pull`
 2. `git checkout -b <branch-name>` (e.g., `feat/add-auth`, `fix/parse-error`)
 
-Only then begin writing code. Before every commit run `cargo clippy --workspace` (fix all warnings) and `cargo test -p adoc-compat-tests -- --nocapture` (all 233 compatibility tests against `vendor/asciidoc-parsing-lab` must pass).
+Only then begin writing code. Before every commit run `cargo clippy --workspace` (fix all warnings), `cargo test -p adoc-compat-tests -- --nocapture` (all 233 compatibility tests against `vendor/asciidoc-parsing-lab` must pass), and `cargo test -p adoc-html-tests -- --nocapture` (HTML compatibility tests vs Asciidoctor).
 
 ## Build & Test Commands
 
@@ -27,17 +27,19 @@ cargo test -p adoc-parser        # Test core parser only
 cargo test -p adoc-html          # Test HTML backend only
 cargo test -p adoc-parser -- scanner::tests::test_is_delimiter   # Run single test
 cargo test -p adoc-compat-tests -- --nocapture  # Compatibility tests (233 cases from asciidoc-parsing-lab)
+cargo test -p adoc-html-tests -- --nocapture    # HTML compatibility tests vs Asciidoctor
 cargo clippy --workspace         # Lint
 cargo build -p adoc-wasm --target wasm32-unknown-unknown         # WASM build
 ```
 
 ## Architecture
 
-Rust 2024 edition Cargo workspace with three crates:
+Rust 2024 edition Cargo workspace with crates:
 
 - **adoc-parser** — core pull parser, zero external dependencies
 - **adoc-html** — HTML renderer consuming parser events
 - **adoc-wasm** — thin wasm-bindgen wrapper exposing `to_html`
+- **adoc-html-tests** — HTML compatibility tests comparing adoc-html output against Asciidoctor reference HTML using semantic DOM comparison (scraper + similar)
 
 ### Two-Phase Pull Parser
 

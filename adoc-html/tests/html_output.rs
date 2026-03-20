@@ -39,9 +39,9 @@ See <<introduction>> for the intro.
 
 H~2~O and E=mc^2^.";
 
-    let html = to_html(input);
+    let html = to_html_with_options(input, adoc_html::HtmlOptions { standalone: true, ..Default::default() });
 
-    // Document header
+    // Document header (standalone mode)
     assert!(html.contains("<h1>My Document</h1>"));
 
     // Sections
@@ -57,7 +57,7 @@ H~2~O and E=mc^2^.";
     // Lists
     assert!(html.contains("<ul>"));
     assert!(html.contains("<li>\n<p>Item one</p>\n</li>"));
-    assert!(html.contains("<ol>"));
+    assert!(html.contains("<ol class=\"arabic\">"));
     assert!(html.contains("<li>\n<p>First</p>\n</li>"));
 
     // Source block

@@ -1,0 +1,3 @@
+The text +*not bold*+ is not formatted.
+
+The text pass:[<em>raw HTML</em>] is passed through.

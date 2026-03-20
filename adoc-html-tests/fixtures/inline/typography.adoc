@@ -1,0 +1,5 @@
+Use an em dash -- like this.
+
+An ellipsis... is three dots.
+
+Copyright (C), registered (R), and trademark (TM).

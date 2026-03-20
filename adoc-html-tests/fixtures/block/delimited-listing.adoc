@@ -1,0 +1,4 @@
+----
+This is a listing block.
+It preserves formatting.
+----

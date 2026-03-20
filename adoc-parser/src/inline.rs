@@ -25,7 +25,17 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 Some(("\u{2014}", 3)) // em-dash
             }
             b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
-                Some(("\u{2013}", 2)) // en-dash
+                // ` -- ` (space-dash-dash-space) → thin-space + em-dash + thin-space
+                if i > 0 && bytes[i - 1] == b' ' && i + 2 < len && bytes[i + 2] == b' ' {
+                    // Flush up to and including the space before --
+                    let buf = result.get_or_insert_with(|| String::from(&text[..copied_up_to]));
+                    buf.push_str(&text[copied_up_to..i - 1]);
+                    buf.push_str("\u{2009}\u{2014}\u{2009}");
+                    i += 3; // skip `-- ` (the leading space was already consumed)
+                    copied_up_to = i;
+                    continue;
+                }
+                Some(("\u{2014}", 2)) // em-dash (bare --)
             }
             // -> right arrow (but not -->)
             b'-' if i + 1 < len && bytes[i + 1] == b'>'
@@ -34,7 +44,7 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 Some(("\u{2192}", 2)) // →
             }
             b'.' if i + 2 < len && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' => {
-                Some(("\u{2026}", 3)) // ellipsis
+                Some(("\u{2026}\u{200B}", 3)) // ellipsis + zero-width space
             }
             b'(' if i + 2 < len
                 && bytes[i + 1] == b'C'
@@ -2412,10 +2422,10 @@ mod tests {
     }
 
     #[test]
-    fn test_typographic_en_dash() {
+    fn test_typographic_bare_em_dash() {
         let events = parse("hello--world");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2013}world".to_string())),
+            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
         ]);
     }
 
@@ -2423,7 +2433,7 @@ mod tests {
     fn test_typographic_ellipsis() {
         let events = parse("wait...");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("wait\u{2026}".to_string())),
+            Event::Text(Cow::Owned("wait\u{2026}\u{200B}".to_string())),
         ]);
     }
 
@@ -2462,7 +2472,15 @@ mod tests {
     fn test_typographic_mixed() {
         let events = parse("(C) 2024---all rights...");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("\u{00A9} 2024\u{2014}all rights\u{2026}".to_string())),
+            Event::Text(Cow::Owned("\u{00A9} 2024\u{2014}all rights\u{2026}\u{200B}".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_typographic_spaced_em_dash() {
+        let events = parse("hello -- world");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("hello\u{2009}\u{2014}\u{2009}world".to_string())),
         ]);
     }
 
@@ -3478,9 +3496,10 @@ mod tests {
     #[test]
     fn test_arrow_triple_not_replaced() {
         // --> should NOT be replaced (triple sequence)
+        // -- becomes em-dash, > stays
         let events = parse("A --> B");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("A \u{2013}> B".to_string())), // -- becomes en-dash, > stays
+            Event::Text(Cow::Owned("A \u{2014}> B".to_string())),
         ]);
     }
 
@@ -3513,10 +3532,10 @@ mod tests {
     }
 
     #[test]
-    fn test_arrow_en_dash_still_works() {
+    fn test_arrow_em_dash_bare_still_works() {
         let events = parse("hello--world");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2013}world".to_string())),
+            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
         ]);
     }
 

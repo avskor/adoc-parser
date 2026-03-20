@@ -1,0 +1,4 @@
+= Document Title
+John Doe <john@example.com>
+
+This document has an author.

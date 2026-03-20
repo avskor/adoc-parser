@@ -1,0 +1,2 @@
+ This is a literal paragraph.
+ It preserves leading spaces.

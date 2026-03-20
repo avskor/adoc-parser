@@ -1,0 +1,4 @@
+[#my-custom-id]
+== Custom ID Section
+
+This section has a custom ID.
