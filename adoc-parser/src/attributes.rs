@@ -182,19 +182,32 @@ impl BlockAttributes {
             }
             if let Some((key, value)) = part.split_once('=') {
                 // named: key=value
+                let key = key.trim();
                 let value = value.trim();
                 let value = value
                     .strip_prefix('"')
                     .and_then(|v| v.strip_suffix('"'))
                     .unwrap_or(value);
-                attrs.named.insert(key.trim().to_string(), value.to_string());
+                // Promote id= and role= to structural fields
+                match key {
+                    "id" => { attrs.id = Some(value.to_string()); }
+                    "role" => { attrs.roles.push(value.to_string()); }
+                    _ => { attrs.named.insert(key.to_string(), value.to_string()); }
+                }
             } else if part.starts_with('#') || part.starts_with('.') || part.starts_with('%') {
                 // Pure shorthand: #id.role1.role2%opt1
                 Self::parse_shorthand(part, &mut attrs);
             } else if let Some(pos) = part.find(['#', '.', '%']) {
                 // Mixed: "discrete#myid.role" → positional + shorthand
-                attrs.positional.push(part[..pos].to_string());
-                Self::parse_shorthand(&part[pos..], &mut attrs);
+                // But only if the shorthand marker is not preceded by a space
+                // (e.g., "Captain James T. Kirk" is plain text, not shorthand)
+                let before = &part[..pos];
+                if !before.contains(' ') {
+                    attrs.positional.push(before.to_string());
+                    Self::parse_shorthand(&part[pos..], &mut attrs);
+                } else {
+                    attrs.positional.push(part.to_string());
+                }
             } else {
                 attrs.positional.push(part.to_string());
             }

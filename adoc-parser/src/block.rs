@@ -1977,12 +1977,29 @@ impl<'a> BlockScanner<'a> {
             }
 
             // Push content (bottom of buffer)
+            let resolved_subs = block_attrs
+                .substitution_set(SubstitutionSet::VERBATIM)
+                .unwrap_or(SubstitutionSet::VERBATIM);
+            let process_callouts = matches!(kind, DelimitedBlockKind::Listing)
+                || resolved_subs.has(SubstitutionSet::CALLOUTS);
             self.push_event(Event::End(TagEnd::DelimitedBlock));
             for (i, &cline) in content_lines.iter().enumerate().rev() {
                 if i < content_lines.len() - 1 {
                     self.push_event(Event::SoftBreak);
                 }
-                self.push_event(Event::Text(Cow::Borrowed(cline)));
+                if process_callouts {
+                    let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
+                    if callout_nums.is_empty() {
+                        self.push_event(Event::Text(Cow::Borrowed(cline)));
+                    } else {
+                        for &n in callout_nums.iter().rev() {
+                            self.push_event(Event::CalloutRef(n));
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(stripped)));
+                    }
+                } else {
+                    self.push_event(Event::Text(Cow::Borrowed(cline)));
+                }
             }
             // Push Start on top of content
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
@@ -2561,6 +2578,17 @@ impl<'a> BlockScanner<'a> {
         self.advance();
         let title_events = self.take_pending_block_title();
 
+        // Collect wrapped continuation lines
+        let mut continuation_lines: Vec<&'a str> = Vec::new();
+        while let Some(line) = self.current_line() {
+            if self.is_list_continuation_line(line) {
+                continuation_lines.push(line);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
         let mut close_events = self.close_list_items_for_depth(depth);
 
         let mut need_new_list = !self.is_in_list_at_depth(depth, false);
@@ -2579,17 +2607,22 @@ impl<'a> BlockScanner<'a> {
             .map(|a| (a.list_start(), a.is_reversed()))
             .unwrap_or((None, false));
 
+        // Push text events in reverse (bottom of stack = last to emit)
+        for &cline in continuation_lines.iter().rev() {
+            self.push_event(Event::Text(Cow::Borrowed(cline.trim_start())));
+            self.push_event(Event::SoftBreak);
+        }
+        self.push_event(Event::Text(Cow::Borrowed(text)));
+
         if need_new_list {
             self.context_stack.push(BlockContext::OrderedList { depth });
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(text)));
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
             self.push_event(Event::Start(Tag::OrderedList { start: list_start, reversed: list_reversed }));
         } else {
             self.context_stack.push(BlockContext::ListItem { depth });
 
-            self.push_event(Event::Text(Cow::Borrowed(text)));
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
         }
 
@@ -2614,6 +2647,17 @@ impl<'a> BlockScanner<'a> {
         self.advance();
         let title_events = self.take_pending_block_title();
 
+        // Collect wrapped continuation lines
+        let mut continuation_lines: Vec<&'a str> = Vec::new();
+        while let Some(line) = self.current_line() {
+            if self.is_list_continuation_line(line) {
+                continuation_lines.push(line);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
         let need_new_list = !self.is_in_callout_list();
 
         // Close previous CalloutListItem if one is open
@@ -2631,6 +2675,10 @@ impl<'a> BlockScanner<'a> {
         self.context_stack.push(BlockContext::CalloutListItem);
 
         // Buffer (bottom to top for FIFO via pop):
+        for &cline in continuation_lines.iter().rev() {
+            self.push_event(Event::Text(Cow::Borrowed(cline.trim_start())));
+            self.push_event(Event::SoftBreak);
+        }
         if !text.is_empty() {
             self.push_event(Event::Text(Cow::Borrowed(text)));
         }

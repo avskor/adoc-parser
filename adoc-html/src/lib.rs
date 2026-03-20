@@ -326,6 +326,24 @@ impl HtmlRenderer {
         }
     }
 
+    /// Render an attribute value through inline parsing, so that URLs, formatting,
+    /// etc. inside attribute values are properly converted to HTML.
+    fn render_inline_value(&mut self, output: &mut String, value: &str) {
+        let events = adoc_parser::InlineParser::parse_str_with_subs(value, SubstitutionSet::NORMAL);
+        // If inline parsing produced only a single Text event identical to the input,
+        // there is no inline markup — just escape and output directly.
+        if events.len() == 1
+            && let Event::Text(ref t) = events[0]
+            && t.as_ref() == value
+        {
+            html_escape(output, value);
+            return;
+        }
+        for event in events {
+            self.push_event(output, event);
+        }
+    }
+
     fn push_event<'a>(&mut self, output: &mut String, event: Event<'a>) {
         // Wrap preamble content when a section starts
         if matches!(event, Event::Start(Tag::Section { .. }))
@@ -470,7 +488,8 @@ impl HtmlRenderer {
             Event::AttributeReference { name, fallback } => {
                 let lower_name = name.to_ascii_lowercase();
                 if let Some(value) = self.document_attrs.get(lower_name.as_str()) {
-                    html_escape(output, value);
+                    let value = value.clone();
+                    self.render_inline_value(output, &value);
                 } else if let Some(value) = intrinsic_attribute(&lower_name) {
                     // Intrinsic values are pre-encoded HTML — push raw
                     output.push_str(value);
@@ -1104,7 +1123,21 @@ impl HtmlRenderer {
             Tag::OrderedList { start, reversed } => {
                 let style_name = meta.as_ref()
                     .and_then(|m| m.style.as_deref())
-                    .unwrap_or("arabic");
+                    .unwrap_or_else(|| {
+                        // Auto-assign style based on nesting depth (like Asciidoctor).
+                        // tag_stack already contains the current OrderedList, so subtract 1.
+                        let depth = self.tag_stack.iter()
+                            .filter(|t| matches!(t, TagEnd::OrderedList))
+                            .count()
+                            .saturating_sub(1);
+                        match depth {
+                            0 => "arabic",
+                            1 => "loweralpha",
+                            2 => "lowerroman",
+                            3 => "upperalpha",
+                            _ => "upperroman",
+                        }
+                    });
                 let wrapper_class = format!("olist {style_name}");
                 if !self.is_inside_list_item() {
                     output.push_str("<div");
@@ -1145,11 +1178,11 @@ impl HtmlRenderer {
                 output.push_str(">\n");
             }
             Tag::ListItem { checked: Some(true), .. } => {
-                output.push_str("<li>\n<p><input type=\"checkbox\" disabled checked> ");
+                output.push_str("<li>\n<p>&#10003; ");
                 self.li_p_open.push(true);
             }
             Tag::ListItem { checked: Some(false), .. } => {
-                output.push_str("<li>\n<p><input type=\"checkbox\" disabled> ");
+                output.push_str("<li>\n<p>&#10063; ");
                 self.li_p_open.push(true);
             }
             Tag::ListItem { checked: None, .. } => {
@@ -1520,8 +1553,24 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::CrossReference { target, label } => {
-                output.push_str("<a href=\"#");
-                html_escape(output, target);
+                if target.contains('.') && !target.starts_with('#') {
+                    // Inter-document xref: rewrite .adoc to .html
+                    output.push_str("<a href=\"");
+                    let rewritten = if let Some(base) = target.strip_suffix(".adoc") {
+                        format!("{base}.html")
+                    } else if let Some((file_part, anchor)) = target.split_once('#')
+                        && file_part.ends_with(".adoc")
+                    {
+                        format!("{}.html#{anchor}", &file_part[..file_part.len()-5])
+                    } else {
+                        target.to_string()
+                    };
+                    html_escape(output, &rewritten);
+                } else {
+                    // Internal xref (anchor reference)
+                    output.push_str("<a href=\"#");
+                    html_escape(output, target);
+                }
                 output.push_str("\">");
                 if label.is_none() {
                     self.in_unlabeled_xref = true;
@@ -2422,56 +2471,120 @@ fn parse_media_attrs(attrs: &str) -> MediaAttrs<'_> {
     result
 }
 
+/// Detect video provider from the first positional attribute.
+fn detect_video_provider(attrs: &str) -> Option<&str> {
+    let first = attrs.split(',').next().unwrap_or("").trim();
+    match first {
+        "youtube" | "vimeo" => Some(first),
+        _ => None,
+    }
+}
+
 fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
     let media = parse_media_attrs(attrs);
 
-    output.push_str("<video src=\"");
-    html_escape(output, target);
-    // Append time fragment if start/end present
-    match (media.start, media.end) {
-        (Some(s), Some(e)) => {
-            output.push_str("#t=");
-            output.push_str(s);
-            output.push(',');
-            output.push_str(e);
+    match detect_video_provider(attrs) {
+        Some("youtube") => {
+            output.push_str("<iframe");
+            if let Some(w) = media.width {
+                output.push_str(" width=\"");
+                output.push_str(w);
+                output.push('"');
+            }
+            if let Some(h) = media.height {
+                output.push_str(" height=\"");
+                output.push_str(h);
+                output.push('"');
+            }
+            output.push_str(" src=\"https://www.youtube.com/embed/");
+            html_escape(output, target);
+            output.push_str("?rel=0");
+            if media.autoplay {
+                output.push_str("&amp;autoplay=1");
+            }
+            if media.loop_ {
+                output.push_str("&amp;loop=1");
+            }
+            if media.nocontrols {
+                output.push_str("&amp;controls=0");
+            }
+            if let Some(s) = media.start {
+                output.push_str("&amp;start=");
+                output.push_str(s);
+            }
+            if let Some(e) = media.end {
+                output.push_str("&amp;end=");
+                output.push_str(e);
+            }
+            output.push_str("\" frameborder=\"0\" allowfullscreen></iframe>\n</div>\n");
         }
-        (Some(s), None) => {
-            output.push_str("#t=");
-            output.push_str(s);
+        Some("vimeo") => {
+            output.push_str("<iframe");
+            if let Some(w) = media.width {
+                output.push_str(" width=\"");
+                output.push_str(w);
+                output.push('"');
+            }
+            if let Some(h) = media.height {
+                output.push_str(" height=\"");
+                output.push_str(h);
+                output.push('"');
+            }
+            output.push_str(" src=\"https://player.vimeo.com/video/");
+            html_escape(output, target);
+            output.push_str("\" frameborder=\"0\" allowfullscreen></iframe>\n</div>\n");
         }
-        (None, Some(e)) => {
-            output.push_str("#t=,");
-            output.push_str(e);
-        }
-        (None, None) => {}
-    }
-    output.push('"');
+        _ => {
+            // Regular HTML5 video
+            output.push_str("<video src=\"");
+            html_escape(output, target);
+            // Append time fragment if start/end present
+            match (media.start, media.end) {
+                (Some(s), Some(e)) => {
+                    output.push_str("#t=");
+                    output.push_str(s);
+                    output.push(',');
+                    output.push_str(e);
+                }
+                (Some(s), None) => {
+                    output.push_str("#t=");
+                    output.push_str(s);
+                }
+                (None, Some(e)) => {
+                    output.push_str("#t=,");
+                    output.push_str(e);
+                }
+                (None, None) => {}
+            }
+            output.push('"');
 
-    if let Some(w) = media.width {
-        output.push_str(" width=\"");
-        output.push_str(w);
-        output.push('"');
+            if let Some(w) = media.width {
+                output.push_str(" width=\"");
+                output.push_str(w);
+                output.push('"');
+            }
+            if let Some(h) = media.height {
+                output.push_str(" height=\"");
+                output.push_str(h);
+                output.push('"');
+            }
+            if let Some(p) = media.poster {
+                output.push_str(" poster=\"");
+                html_escape(output, p);
+                output.push('"');
+            }
+            if !media.nocontrols {
+                output.push_str(" controls");
+            }
+            if media.autoplay {
+                output.push_str(" autoplay");
+            }
+            if media.loop_ {
+                output.push_str(" loop");
+            }
+            output.push_str(">\nYour browser does not support the video tag.\n</video>\n</div>\n");
+        }
     }
-    if let Some(h) = media.height {
-        output.push_str(" height=\"");
-        output.push_str(h);
-        output.push('"');
-    }
-    if let Some(p) = media.poster {
-        output.push_str(" poster=\"");
-        html_escape(output, p);
-        output.push('"');
-    }
-    if !media.nocontrols {
-        output.push_str(" controls");
-    }
-    if media.autoplay {
-        output.push_str(" autoplay");
-    }
-    if media.loop_ {
-        output.push_str(" loop");
-    }
-    output.push_str(">\nYour browser does not support the video tag.\n</video>\n</div>\n");
 }
 
 fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
@@ -2991,8 +3104,8 @@ mod tests {
     fn test_checklist_html() {
         let html = to_html("* [x] Done\n* [ ] Todo");
         assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));
-        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled checked> Done</p>\n</li>"));
-        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled> Todo</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>&#10003; Done</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>&#10063; Todo</p>\n</li>"));
         assert!(html.contains("</ul>\n</div>"));
     }
 
@@ -3000,9 +3113,9 @@ mod tests {
     fn test_checklist_mixed_html() {
         let html = to_html("* [x] Checked\n* Regular\n* [ ] Unchecked");
         assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));
-        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled checked> Checked</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>&#10003; Checked</p>\n</li>"));
         assert!(html.contains("<li>\n<p>Regular</p>\n</li>"));
-        assert!(html.contains("<li>\n<p><input type=\"checkbox\" disabled> Unchecked</p>\n</li>"));
+        assert!(html.contains("<li>\n<p>&#10063; Unchecked</p>\n</li>"));
     }
 
     #[test]

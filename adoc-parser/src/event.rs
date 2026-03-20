@@ -38,6 +38,10 @@ impl SubstitutionSet {
         self.0 &= !flag;
     }
 
+    pub fn without(self, flag: u8) -> Self {
+        Self(self.0 & !flag)
+    }
+
     /// Whether inline parsing is needed (quotes, macros, attributes, replacements, post_replacements).
     pub fn needs_inline_parsing(self) -> bool {
         self.0

@@ -413,6 +413,8 @@ pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
 pub fn parse_checklist_marker(text: &str) -> (Option<bool>, &str) {
     if let Some(rest) = text.strip_prefix("[x] ") {
         (Some(true), rest)
+    } else if let Some(rest) = text.strip_prefix("[*] ") {
+        (Some(true), rest)
     } else if let Some(rest) = text.strip_prefix("[ ] ") {
         (Some(false), rest)
     } else {

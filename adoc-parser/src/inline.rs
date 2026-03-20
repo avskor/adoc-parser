@@ -7,6 +7,7 @@ use crate::scanner;
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
     if !text.contains('-') && !text.contains('.') && !text.contains('(') && !text.contains('\'')
+        && !text.contains('`')
         && !text.contains("->") && !text.contains("<-")
         && !text.contains("=>") && !text.contains("<=")
     {
@@ -91,6 +92,10 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 && !(i + 2 < len && bytes[i + 2] == b'=') =>
             {
                 Some(("\u{21D0}", 2)) // ⇐
+            }
+            // `' → right single curly quote (closing smart quote)
+            b'`' if i + 1 < len && bytes[i + 1] == b'\'' => {
+                Some(("\u{2019}", 2))
             }
             _ => None,
         };
@@ -651,7 +656,13 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            let mut inner_parser = InlineState::new(inner, self.subs);
+            // Monospace (backtick) content is literal — no typographic replacements
+            let inner_subs = if marker == b'`' {
+                self.subs.without(SubstitutionSet::REPLACEMENTS)
+            } else {
+                self.subs
+            };
+            let mut inner_parser = InlineState::new(inner, inner_subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -737,7 +748,13 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            let mut inner_parser = InlineState::new(inner, self.subs);
+            // Monospace (backtick) content is literal — no typographic replacements
+            let inner_subs = if marker == b'`' {
+                self.subs.without(SubstitutionSet::REPLACEMENTS)
+            } else {
+                self.subs
+            };
+            let mut inner_parser = InlineState::new(inner, inner_subs);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
