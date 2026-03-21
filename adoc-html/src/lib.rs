@@ -161,6 +161,8 @@ struct HtmlRenderer {
     pending_section_caption: Option<String>,
     sectnums: bool,
     sectanchors: bool,
+    showtitle: bool,
+    doctitle_h1_end: Option<usize>,
     section_counters: [u32; 6],
     highlight_lines: HashSet<usize>,
     source_line_num: usize,
@@ -239,6 +241,8 @@ impl HtmlRenderer {
             pending_section_caption: None,
             sectnums: false,
             sectanchors: false,
+            showtitle: false,
+            doctitle_h1_end: None,
             section_counters: [0; 6],
             highlight_lines: HashSet::new(),
             source_line_num: 0,
@@ -476,6 +480,12 @@ impl HtmlRenderer {
                 }
                 if name == "!sectanchors" || name == "sectanchors!" {
                     self.sectanchors = false;
+                }
+                if name == "showtitle" {
+                    self.showtitle = true;
+                }
+                if name == "!showtitle" || name == "showtitle!" {
+                    self.showtitle = false;
                 }
                 // Store for attribute reference resolution
                 if let Some(stripped) = name.strip_prefix('!') {
@@ -1720,8 +1730,15 @@ impl HtmlRenderer {
                         self.preamble_start = Some(output.len());
                     }
                 } else if let Some(pos) = self.header_suppress_start.take() {
-                    // In embedded mode, truncate the entire header output
-                    output.truncate(pos);
+                    if self.showtitle {
+                        if let Some(h1_end) = self.doctitle_h1_end {
+                            output.truncate(h1_end);
+                        } else {
+                            output.truncate(pos);
+                        }
+                    } else {
+                        output.truncate(pos);
+                    }
                     // Reset TOC insert position to after truncation point
                     if self.toc_auto_seen {
                         self.toc_insert_position = Some(output.len());
@@ -1756,6 +1773,9 @@ impl HtmlRenderer {
                 output.push_str("</h");
                 output.push_str(&h.to_string());
                 output.push_str(">\n");
+                if self.in_header && self.has_document_title {
+                    self.doctitle_h1_end = Some(output.len());
+                }
                 if level == 2
                     && let Some(&true) = self.sectionbody_stack.last()
                 {

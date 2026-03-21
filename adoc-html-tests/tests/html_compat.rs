@@ -5,8 +5,6 @@ use adoc_html_tests::normalize::assert_html_eq;
 /// Patterns to skip (relative to fixtures root).
 /// These fixtures test features not yet implemented in the renderer.
 const SKIP_PATTERNS: &[&str] = &[
-    // :showtitle: attribute (render document title in embedded mode) not implemented
-    "document/attribute-showtitle",
     // Bibliography class propagation to nested ulist/ul not implemented
     "inline/bibliography-anchor",
 ];
