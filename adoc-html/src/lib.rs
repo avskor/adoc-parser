@@ -160,6 +160,7 @@ struct HtmlRenderer {
     appendix_counter: u8,
     pending_section_caption: Option<String>,
     sectnums: bool,
+    sectanchors: bool,
     section_counters: [u32; 6],
     highlight_lines: HashSet<usize>,
     source_line_num: usize,
@@ -237,6 +238,7 @@ impl HtmlRenderer {
             appendix_counter: 0,
             pending_section_caption: None,
             sectnums: false,
+            sectanchors: false,
             section_counters: [0; 6],
             highlight_lines: HashSet::new(),
             source_line_num: 0,
@@ -468,6 +470,12 @@ impl HtmlRenderer {
                 }
                 if name == "!sectnums" || name == "sectnums!" {
                     self.sectnums = false;
+                }
+                if name == "sectanchors" {
+                    self.sectanchors = true;
+                }
+                if name == "!sectanchors" || name == "sectanchors!" {
+                    self.sectanchors = false;
                 }
                 // Store for attribute reference resolution
                 if let Some(stripped) = name.strip_prefix('!') {
@@ -857,6 +865,11 @@ impl HtmlRenderer {
                     output.push_str(" class=\"sect0\"");
                 }
                 output.push('>');
+                if self.sectanchors && !self.in_header {
+                    output.push_str("<a class=\"anchor\" href=\"#");
+                    html_escape(output, id);
+                    output.push_str("\"></a>");
+                }
                 if self.sectnums && *level >= 2 && *level <= 5 && self.pending_section_caption.is_none() {
                     let lvl = *level as usize;
                     self.section_counters[lvl] += 1;
