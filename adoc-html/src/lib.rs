@@ -174,6 +174,7 @@ struct HtmlRenderer {
     manpage_name_buf: String,
     book_part_stack: Vec<bool>,
     sectionbody_stack: Vec<bool>,
+    section_style_stack: Vec<Option<String>>,
     standalone: bool,
     last_updated: Option<String>,
     content_start: Option<usize>,
@@ -254,6 +255,7 @@ impl HtmlRenderer {
             manpage_name_buf: String::new(),
             book_part_stack: Vec::new(),
             sectionbody_stack: Vec::new(),
+            section_style_stack: Vec::new(),
             standalone: false,
             last_updated: None,
             content_start: None,
@@ -922,6 +924,9 @@ impl HtmlRenderer {
                 let is_part = self.is_book() && *level == 1 && !is_special;
                 self.book_part_stack.push(is_part);
                 self.sectionbody_stack.push(*level == 2 && !is_part);
+                self.section_style_stack.push(
+                    if is_special { style.map(|s| s.to_string()) } else { None }
+                );
                 if !is_part {
                     output.push_str("<div");
                     let sect_class = format!("sect{}", level - 1);
@@ -929,6 +934,9 @@ impl HtmlRenderer {
                     let mut div_meta = meta.clone();
                     if let Some(ref mut m) = div_meta {
                         m.id = None;
+                        if style == Some("bibliography") {
+                            m.style = None;
+                        }
                     }
                     Self::write_meta_attrs(output, &div_meta, &sect_class);
                     output.push_str(">\n");
@@ -1171,13 +1179,23 @@ impl HtmlRenderer {
                 output.push_str("<div class=\"title\">");
             }
             Tag::UnorderedList { has_checklist } => {
+                let is_bibliography = self.section_style_stack.last()
+                    .and_then(|s| s.as_deref()) == Some("bibliography");
                 if !self.is_inside_list_item() {
-                    let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
+                    let wrapper_class = if *has_checklist {
+                        "ulist checklist"
+                    } else if is_bibliography {
+                        "ulist bibliography"
+                    } else {
+                        "ulist"
+                    };
                     output.push_str("<div");
                     Self::write_meta_attrs(output, &meta, wrapper_class);
                     output.push_str(">\n<ul");
                     if *has_checklist {
                         output.push_str(" class=\"checklist\"");
+                    } else if is_bibliography {
+                        output.push_str(" class=\"bibliography\"");
                     }
                     output.push_str(">\n");
                 } else {
@@ -1800,6 +1818,7 @@ impl HtmlRenderer {
                 }
                 let is_part = self.book_part_stack.pop().unwrap_or(false);
                 let needs_sectionbody_close = self.sectionbody_stack.pop().unwrap_or(false);
+                self.section_style_stack.pop();
                 if !is_part {
                     if needs_sectionbody_close {
                         output.push_str("</div>\n");
@@ -4060,8 +4079,11 @@ mod tests {
 
     #[test]
     fn test_bibliography_section_html() {
-        let html = to_html("[bibliography]\n== References\n\nSome refs.");
-        assert!(html.contains("class=\"sect1 bibliography\""));
+        let html = to_html("[bibliography]\n== References\n\n* [[[ref1]]] First ref.");
+        // bibliography style is not added to section div, but propagated to child list
+        assert!(html.contains("class=\"sect1\""));
+        assert!(html.contains("class=\"ulist bibliography\""));
+        assert!(html.contains("class=\"bibliography\""));
     }
 
     #[test]

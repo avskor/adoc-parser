@@ -4,10 +4,7 @@ use adoc_html_tests::normalize::assert_html_eq;
 
 /// Patterns to skip (relative to fixtures root).
 /// These fixtures test features not yet implemented in the renderer.
-const SKIP_PATTERNS: &[&str] = &[
-    // Bibliography class propagation to nested ulist/ul not implemented
-    "inline/bibliography-anchor",
-];
+const SKIP_PATTERNS: &[&str] = &[];
 
 fn should_skip(test_path: &str) -> bool {
     SKIP_PATTERNS
