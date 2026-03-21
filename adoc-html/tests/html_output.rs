@@ -196,8 +196,8 @@ fn test_block_metadata_paragraph_id_and_role() {
 This is the introduction.";
 
     let html = to_html(input);
-    assert!(html.contains("<p id=\"intro\" class=\"lead\">"));
-    assert!(html.contains("This is the introduction."));
+    assert!(html.contains("<div id=\"intro\" class=\"paragraph lead\">"), "id/role on wrapper div. Got: {html}");
+    assert!(html.contains("<p>This is the introduction.</p>"), "p should be plain. Got: {html}");
 }
 
 #[test]
@@ -207,8 +207,8 @@ fn test_lead_paragraph() {
 This is a lead paragraph.";
 
     let html = to_html(input);
-    assert!(html.contains("<p class=\"lead\">"), "Expected lead class. Got: {html}");
-    assert!(html.contains("This is a lead paragraph."));
+    assert!(html.contains("class=\"paragraph lead\""), "Expected lead class on div. Got: {html}");
+    assert!(html.contains("<p>This is a lead paragraph.</p>"), "p should be plain. Got: {html}");
 }
 
 // ─── Standalone mode tests ───

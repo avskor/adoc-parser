@@ -1,0 +1,3 @@
+This has an indexterm:[primary, secondary] index entry.
+
+This uses ((double parentheses)) for indexing.

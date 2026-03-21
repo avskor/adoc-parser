@@ -1,0 +1,4 @@
+:project-name: MyProject
+:version: 1.0
+
+Welcome to {project-name} version {version}.

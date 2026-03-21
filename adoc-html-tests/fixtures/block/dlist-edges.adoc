@@ -1,0 +1,7 @@
+term only::
+
+term with text:: description text
+
+first::
+second::
+both have no text

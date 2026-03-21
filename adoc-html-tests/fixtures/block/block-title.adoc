@@ -1,0 +1,12 @@
+.A titled paragraph
+This paragraph has a title.
+
+.Example title
+====
+Example with a title.
+====
+
+.Listing title
+----
+code with title
+----

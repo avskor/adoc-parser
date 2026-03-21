@@ -147,9 +147,11 @@ struct HtmlRenderer {
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
     table_counter: usize,
+    example_counter: usize,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
     dlist_stack: Vec<DlistStyle>,
+    dd_output_start: Option<usize>,
     hdlist_in_term_group: bool,
     has_document_title: bool,
     capturing_doctitle: bool,
@@ -178,6 +180,7 @@ struct HtmlRenderer {
     in_header: bool,
     /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
     li_p_open: Vec<bool>,
+    li_para_count: Vec<u32>,
     linenums_active: bool,
     linenums_start: usize,
     source_code_buffer: Option<String>,
@@ -221,9 +224,11 @@ impl HtmlRenderer {
             stem_block_content: None,
             cell_style_stack: Vec::new(),
             table_counter: 0,
+            example_counter: 0,
             block_title_output_start: None,
             block_title_inner_html: None,
             dlist_stack: Vec::new(),
+            dd_output_start: None,
             hdlist_in_term_group: false,
             has_document_title: false,
             capturing_doctitle: false,
@@ -251,6 +256,7 @@ impl HtmlRenderer {
             xref_placeholders: Vec::new(),
             in_header: false,
             li_p_open: Vec::new(),
+            li_para_count: Vec::new(),
             linenums_active: false,
             linenums_start: 1,
             source_code_buffer: None,
@@ -527,21 +533,27 @@ impl HtmlRenderer {
                     self.named_footnotes.insert(id.to_string(), num);
                 }
                 self.footnotes.push((num, id.as_ref().map(|s| s.to_string()), text.to_string()));
-                output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
+                output.push_str("<sup class=\"footnote\"");
+                if let Some(ref id) = id {
+                    output.push_str(" id=\"_footnote_");
+                    html_escape(output, id);
+                    output.push('"');
+                }
+                output.push_str(">[<a class=\"footnote\" id=\"_footnoteref_");
                 output.push_str(&num.to_string());
                 output.push_str("\" href=\"#_footnotedef_");
                 output.push_str(&num.to_string());
-                output.push_str("\">");
+                output.push_str("\" title=\"View footnote.\">");
                 output.push_str(&num.to_string());
                 output.push_str("</a>]</sup>");
             }
             Event::FootnoteRef { id } => {
                 if let Some(&num) = self.named_footnotes.get(id.as_ref()) {
-                    output.push_str("<sup class=\"footnote\">[<a id=\"_footnoteref_");
+                    output.push_str("<sup class=\"footnote\">[<a class=\"footnote\" id=\"_footnoteref_");
                     output.push_str(&num.to_string());
                     output.push_str("\" href=\"#_footnotedef_");
                     output.push_str(&num.to_string());
-                    output.push_str("\">");
+                    output.push_str("\" title=\"View footnote.\">");
                     output.push_str(&num.to_string());
                     output.push_str("</a>]</sup>");
                 }
@@ -907,16 +919,21 @@ impl HtmlRenderer {
                 }
             }
             Tag::Paragraph => {
+                // Track paragraph count in list items
+                if let Some(count) = self.li_para_count.last_mut() {
+                    *count += 1;
+                }
+                let is_continuation_para = self.li_para_count.last().is_some_and(|&c| c > 1);
                 if self.is_direct_child_of_admonition() {
                     // Inline admonitions: no <p> wrapper
-                } else if !self.is_inside_compact_context() {
-                    output.push_str("<div class=\"paragraph\">\n<p");
-                    Self::write_meta_attrs(output, &meta, "");
-                    output.push('>');
+                } else if !self.is_inside_compact_context() || is_continuation_para {
+                    output.push_str("<div");
+                    Self::write_meta_attrs(output, &meta, "paragraph");
+                    output.push_str(">\n");
+                    self.emit_pending_block_title(output);
+                    output.push_str("<p>");
                 } else {
-                    output.push_str("<p");
-                    Self::write_meta_attrs(output, &meta, "");
-                    output.push('>');
+                    output.push_str("<p>");
                 }
             }
             Tag::LiteralParagraph => {
@@ -954,7 +971,7 @@ impl HtmlRenderer {
                                 .unwrap_or_else(|| "Details".to_string());
 
                             output.push_str("<details");
-                            Self::write_meta_attrs(output, &meta, "exampleblock");
+                            Self::write_meta_attrs(output, &meta, "");
                             if is_open {
                                 output.push_str(" open");
                             }
@@ -967,7 +984,26 @@ impl HtmlRenderer {
                             output.push_str("<div");
                             Self::write_meta_attrs(output, &meta, "exampleblock");
                             output.push_str(">\n");
-                            self.emit_pending_block_title(output);
+                            if let Some(title) = self.block_title_inner_html.take() {
+                                self.example_counter += 1;
+                                let caption_attr = meta.as_ref().and_then(|m| {
+                                    m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone())
+                                });
+                                output.push_str("<div class=\"title\">");
+                                match caption_attr.as_deref() {
+                                    Some("") => {}
+                                    Some(prefix) => {
+                                        html_escape(output, prefix);
+                                    }
+                                    None => {
+                                        output.push_str("Example ");
+                                        output.push_str(&self.example_counter.to_string());
+                                        output.push_str(". ");
+                                    }
+                                }
+                                output.push_str(&title);
+                                output.push_str("</div>\n");
+                            }
                             output.push_str("<div class=\"content\">\n");
                         }
                     }
@@ -1015,6 +1051,15 @@ impl HtmlRenderer {
                     }
                     DelimitedBlockKind::Verse => {
                         self.delimited_block_stack.push((*kind, false));
+                        // Capture attribution and citetitle from metadata
+                        if let Some(ref m) = meta {
+                            self.quote_attribution = m.named.iter()
+                                .find(|(k, _)| k == "attribution")
+                                .map(|(_, v)| v.clone());
+                            self.quote_citetitle = m.named.iter()
+                                .find(|(k, _)| k == "citetitle")
+                                .map(|(_, v)| v.clone());
+                        }
                         output.push_str("<div");
                         Self::write_meta_attrs(output, &meta, "verseblock");
                         output.push_str(">\n");
@@ -1045,9 +1090,8 @@ impl HtmlRenderer {
                     Some("coderay") => pre_classes.push("CodeRay"),
                     _ => {}
                 }
-                if highlighter.is_some() || language.is_some() {
-                    pre_classes.push("highlight");
-                }
+                // Source blocks always get "highlight" class (matches Asciidoctor behavior)
+                pre_classes.push("highlight");
                 if linenums {
                     pre_classes.push("linenums");
                 }
@@ -1061,7 +1105,11 @@ impl HtmlRenderer {
 
                 // Build <code> attrs
                 if let Some(lang) = language {
-                    if matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs") | None) {
+                    if matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs")) {
+                        output.push_str(" class=\"hljs language-");
+                        html_escape(output, lang);
+                        output.push('"');
+                    } else if highlighter.is_none() {
                         output.push_str(" class=\"language-");
                         html_escape(output, lang);
                         output.push('"');
@@ -1180,14 +1228,17 @@ impl HtmlRenderer {
             Tag::ListItem { checked: Some(true), .. } => {
                 output.push_str("<li>\n<p>&#10003; ");
                 self.li_p_open.push(true);
+                self.li_para_count.push(1); // count the initial <p>
             }
             Tag::ListItem { checked: Some(false), .. } => {
                 output.push_str("<li>\n<p>&#10063; ");
                 self.li_p_open.push(true);
+                self.li_para_count.push(1); // count the initial <p>
             }
             Tag::ListItem { checked: None, .. } => {
                 output.push_str("<li>\n<p>");
                 self.li_p_open.push(true);
+                self.li_para_count.push(1); // count the initial <p>
             }
             Tag::DescriptionList => {
                 let style_str = meta.as_ref().and_then(|m| m.style.as_deref());
@@ -1238,13 +1289,16 @@ impl HtmlRenderer {
                 }
             }
             Tag::DescriptionDescription => {
+                self.li_para_count.push(1); // count the initial <p> in <dd>
                 match self.current_dlist_style() {
                     DlistStyle::Horizontal => {
-                        output.push_str("</td>\n<td class=\"hdlist2\">");
+                        output.push_str("</td>\n<td class=\"hdlist2\">\n<p>");
                         self.hdlist_in_term_group = false;
+                        self.li_p_open.push(true);
                     }
                     DlistStyle::Qanda => {}
                     DlistStyle::Normal => {
+                        self.dd_output_start = Some(output.len());
                         output.push_str("<dd>\n<p>");
                         self.li_p_open.push(true);
                     }
@@ -1409,9 +1463,15 @@ impl HtmlRenderer {
                     output.push_str("\">");
                 }
                 output.push_str("<img src=\"");
-                html_escape(output, target);
+                html_escape(output, &target.as_ref().replace(' ', "%20"));
+                // Auto-generate alt from filename if empty
+                let effective_alt = if alt.as_ref().is_empty() {
+                    auto_alt_from_target(target)
+                } else {
+                    alt.to_string()
+                };
                 output.push_str("\" alt=\"");
-                html_escape(output, alt);
+                html_escape(output, &effective_alt);
                 output.push('"');
                 if let Some(w) = width {
                     output.push_str(" width=\"");
@@ -1467,9 +1527,14 @@ impl HtmlRenderer {
                     output.push_str("\">");
                 }
                 output.push_str("<img src=\"");
-                html_escape(output, target);
+                html_escape(output, &target.as_ref().replace(' ', "%20"));
+                let effective_alt = if alt.as_ref().is_empty() {
+                    auto_alt_from_target(target)
+                } else {
+                    alt.to_string()
+                };
                 output.push_str("\" alt=\"");
-                html_escape(output, alt);
+                html_escape(output, &effective_alt);
                 output.push('"');
                 if let Some(w) = width {
                     output.push_str(" width=\"");
@@ -1714,10 +1779,11 @@ impl HtmlRenderer {
                 let trimmed = output.trim_end_matches([' ', '\t']);
                 output.truncate(trimmed.len());
 
+                let is_continuation_para = self.li_para_count.last().is_some_and(|&c| c > 1);
                 if self.is_direct_child_of_admonition() {
                     // Inline admonitions: no </p>
                     output.push('\n');
-                } else if !self.is_inside_compact_context() {
+                } else if !self.is_inside_compact_context() || is_continuation_para {
                     output.push_str("</p>\n</div>\n");
                 } else {
                     output.push_str("</p>\n");
@@ -1729,6 +1795,8 @@ impl HtmlRenderer {
             TagEnd::DelimitedBlock => {
                 match self.delimited_block_stack.pop() {
                     Some((DelimitedBlockKind::Listing | DelimitedBlockKind::Literal, _)) => {
+                        // Trim leading/trailing blank lines in verbatim content (matches Asciidoctor)
+                        Self::trim_verbatim_content(output);
                         output.push_str("</pre>\n</div>\n</div>\n");
                     }
                     Some((DelimitedBlockKind::Quote, _)) => {
@@ -1755,7 +1823,27 @@ impl HtmlRenderer {
                         output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Verse, _)) => {
-                        output.push_str("</pre>\n</div>\n");
+                        output.push_str("</pre>\n");
+                        let attribution = self.quote_attribution.take();
+                        let citetitle = self.quote_citetitle.take();
+                        if attribution.is_some() || citetitle.is_some() {
+                            output.push_str("<div class=\"attribution\">\n");
+                            if let Some(ref attr) = attribution {
+                                output.push_str("&#8212; ");
+                                html_escape(output, attr);
+                            }
+                            if let Some(ref cite) = citetitle {
+                                if attribution.is_some() {
+                                    output.push_str("<br>\n");
+                                }
+                                output.push_str("<cite>");
+                                html_escape(output, cite);
+                                output.push_str("</cite>");
+                            }
+                            output.push('\n');
+                            output.push_str("</div>\n");
+                        }
+                        output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Example, true)) => {
                         output.push_str("</div>\n</details>\n");
@@ -1819,6 +1907,7 @@ impl HtmlRenderer {
                 output.push_str("</ol>\n</div>\n");
             }
             TagEnd::ListItem => {
+                self.li_para_count.pop();
                 if self.li_p_open.pop() == Some(true) {
                     output.push_str("</p>\n</li>\n");
                 } else {
@@ -1841,11 +1930,30 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::DescriptionDescription => {
+                self.li_para_count.pop();
                 match self.current_dlist_style() {
-                    DlistStyle::Horizontal => output.push_str("</td>\n</tr>\n"),
+                    DlistStyle::Horizontal => {
+                        if self.li_p_open.pop() == Some(true) {
+                            output.push_str("</p>\n");
+                        }
+                        output.push_str("</td>\n</tr>\n");
+                    }
                     DlistStyle::Qanda => output.push_str("</li>\n"),
                     DlistStyle::Normal => {
-                        if self.li_p_open.pop() == Some(true) {
+                        // Check if dd is empty (term-only) — if so, rollback
+                        if let Some(start) = self.dd_output_start.take() {
+                            let dd_content = &output[start..];
+                            // "<dd>\n<p>" is 8 chars; if nothing was added after, it's empty
+                            if dd_content == "<dd>\n<p>" {
+                                output.truncate(start);
+                                self.li_p_open.pop();
+                                // skip emitting </dd>
+                            } else if self.li_p_open.pop() == Some(true) {
+                                output.push_str("</p>\n</dd>\n");
+                            } else {
+                                output.push_str("</dd>\n");
+                            }
+                        } else if self.li_p_open.pop() == Some(true) {
                             output.push_str("</p>\n</dd>\n");
                         } else {
                             output.push_str("</dd>\n");
@@ -1978,6 +2086,30 @@ impl HtmlRenderer {
 
     fn take_block_meta(&mut self) -> Option<BlockMeta> {
         self.pending_block_meta.take()
+    }
+
+    /// Trim leading and trailing blank lines from verbatim (pre) content in the output buffer.
+    /// Finds the last `<pre>` or `<pre ...>` tag and trims blank lines after it and before end.
+    fn trim_verbatim_content(output: &mut String) {
+        // Find the position right after the last <pre> or <pre ...> tag
+        if let Some(pre_start) = output.rfind("<pre") {
+            let after_pre = if let Some(gt) = output[pre_start..].find('>') {
+                pre_start + gt + 1
+            } else {
+                return;
+            };
+            let content = &output[after_pre..];
+            // Trim leading blank lines
+            let leading_trimmed = content.trim_start_matches('\n');
+            let leading_removed = content.len() - leading_trimmed.len();
+            // Trim trailing blank lines
+            let trailing_trimmed = leading_trimmed.trim_end_matches('\n');
+            if leading_removed > 0 || trailing_trimmed.len() != leading_trimmed.len() {
+                let new_content = trailing_trimmed.to_string();
+                output.truncate(after_pre);
+                output.push_str(&new_content);
+            }
+        }
     }
 
     /// Parse a cols spec string (e.g. "1,1" or "3" or "<,^,>") and return percentage widths.
@@ -2133,19 +2265,19 @@ impl HtmlRenderer {
             output.push_str("</span>");
         } else {
             let parts: Vec<&str> = items_str.split('>').map(|s| s.trim()).collect();
-            output.push_str("<span class=\"menuseq\"><span class=\"menu\">");
+            output.push_str("<span class=\"menuseq\"><b class=\"menu\">");
             html_escape(output, &target);
-            output.push_str("</span>");
+            output.push_str("</b>");
             for (i, part) in parts.iter().enumerate() {
-                output.push_str("\u{00A0}\u{25B8} ");
+                output.push_str("&#160;<b class=\"caret\">&#8250;</b> ");
                 if i < parts.len() - 1 {
-                    output.push_str("<span class=\"submenu\">");
+                    output.push_str("<b class=\"submenu\">");
                     html_escape(output, part);
-                    output.push_str("</span>");
+                    output.push_str("</b>");
                 } else {
-                    output.push_str("<span class=\"menuitem\">");
+                    output.push_str("<b class=\"menuitem\">");
                     html_escape(output, part);
-                    output.push_str("</span>");
+                    output.push_str("</b>");
                 }
             }
             output.push_str("</span>");
@@ -2205,6 +2337,8 @@ impl HtmlRenderer {
             output.push_str("<a class=\"icon\" href=\"");
             html_escape(output, href);
             output.push_str("\">");
+        } else {
+            output.push_str("<span class=\"icon\">");
         }
 
         output.push_str("<i class=\"");
@@ -2219,6 +2353,8 @@ impl HtmlRenderer {
 
         if link.is_some() {
             output.push_str("</a>");
+        } else {
+            output.push_str("</span>");
         }
     }
 
@@ -2229,7 +2365,16 @@ impl HtmlRenderer {
         };
         let content = self.stem_content.take().unwrap_or_default();
 
-        if variant == "latexmath" {
+        // Resolve "stem" to the document attribute :stem: value
+        let resolved = if variant == "stem" {
+            self.document_attrs.get("stem")
+                .map(|s| s.as_str())
+                .unwrap_or("asciimath")
+        } else {
+            &variant
+        };
+
+        if resolved == "latexmath" {
             output.push_str("\\(");
             output.push_str(&content);
             output.push_str("\\)");
@@ -2248,7 +2393,16 @@ impl HtmlRenderer {
         };
         let content = self.stem_block_content.take().unwrap_or_default();
 
-        if variant == "latexmath" {
+        // Resolve "stem" to the document attribute :stem: value
+        let resolved = if variant == "stem" {
+            self.document_attrs.get("stem")
+                .map(|s| s.as_str())
+                .unwrap_or("asciimath")
+        } else {
+            &variant
+        };
+
+        if resolved == "latexmath" {
             output.push_str("\\[");
             output.push_str(&content);
             output.push_str("\\]");
@@ -2606,6 +2760,19 @@ fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
     output.push_str(">\nYour browser does not support the audio tag.\n</audio>\n</div>\n");
 }
 
+/// Generate alt text from image target: strip path, strip extension, replace `-_` with spaces.
+fn auto_alt_from_target(target: &str) -> String {
+    // Get filename (last path component)
+    let filename = target.rsplit('/').next().unwrap_or(target);
+    // Strip extension
+    let stem = match filename.rfind('.') {
+        Some(pos) if pos > 0 => &filename[..pos],
+        _ => filename,
+    };
+    // Replace hyphens and underscores with spaces
+    stem.replace(['-', '_'], " ")
+}
+
 fn html_escape(output: &mut String, text: &str) {
     for ch in text.chars() {
         match ch {
@@ -2864,13 +3031,13 @@ mod tests {
     #[test]
     fn test_list_continuation_html() {
         let html = to_html("* item\n+\nContinued.");
-        assert!(html.contains("<li>\n<p>item</p>\n<p>Continued.</p>\n</li>"), "unexpected list continuation format in:\n{html}");
+        assert!(html.contains("<p>item</p>\n<div class=\"paragraph\">\n<p>Continued.</p>\n</div>"), "continuation should be wrapped in div.paragraph:\n{html}");
     }
 
     #[test]
     fn test_description_list_continuation_html() {
         let html = to_html("Term:: desc\n+\nMore.");
-        assert!(html.contains("<dd>\n<p>desc</p>\n<p>More.</p>\n</dd>"), "unexpected dlist continuation format in:\n{html}");
+        assert!(html.contains("<p>desc</p>\n<div class=\"paragraph\">\n<p>More.</p>\n</div>"), "dlist continuation should be wrapped in div.paragraph:\n{html}");
     }
 
     #[test]
@@ -2941,7 +3108,7 @@ mod tests {
     #[test]
     fn test_footnote_html() {
         let html = to_html("Hello footnote:[This is a note] world.");
-        assert!(html.contains("<sup class=\"footnote\">[<a id=\"_footnoteref_1\" href=\"#_footnotedef_1\">1</a>]</sup>"));
+        assert!(html.contains("<sup class=\"footnote\">[<a class=\"footnote\" id=\"_footnoteref_1\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
         assert!(html.contains("<div id=\"footnotes\">"));
         assert!(html.contains("<hr>"));
         assert!(html.contains("<div class=\"footnote\" id=\"_footnotedef_1\">"));
@@ -2952,7 +3119,7 @@ mod tests {
     fn test_footnote_named_html() {
         let html = to_html("First footnote:fn1[Named note] and again footnote:fn1[].");
         // Definition
-        assert!(html.contains("<sup class=\"footnote\">[<a id=\"_footnoteref_1\" href=\"#_footnotedef_1\">1</a>]</sup>"));
+        assert!(html.contains("<sup class=\"footnote\" id=\"_footnote_fn1\">[<a class=\"footnote\" id=\"_footnoteref_1\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
         // Reference should use the same number
         let refs: Vec<_> = html.match_indices("_footnoteref_1").collect();
         assert!(refs.len() >= 2, "Expected at least 2 references to footnote 1, got {}", refs.len());
@@ -3286,7 +3453,7 @@ mod tests {
         let html = to_html("menu:File[Save As]");
         assert_eq!(
             html,
-            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Save As</span></span></p>\n</div>\n"
+            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Save As</b></span></p>\n</div>\n"
         );
     }
 
@@ -3299,37 +3466,37 @@ mod tests {
     #[test]
     fn test_icon_basic_html() {
         let html = to_html("icon:heart[]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart\"></i></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_size_html() {
         let html = to_html("icon:heart[2x]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart fa-2x\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x\"></i></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_role_html() {
         let html = to_html("icon:tags[role=blue]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-tags blue\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-tags blue\"></i></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_title_html() {
         let html = to_html("icon:info[title=Info]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-info\" title=\"Info\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-info\" title=\"Info\"></i></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_rotate_html() {
         let html = to_html("icon:shield[rotate=90]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-shield fa-rotate-90\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-shield fa-rotate-90\"></i></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_icon_flip_html() {
         let html = to_html("icon:shield[flip=vertical]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-shield fa-flip-vertical\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-shield fa-flip-vertical\"></i></span></p>\n</div>\n");
     }
 
     #[test]
@@ -3341,7 +3508,7 @@ mod tests {
     #[test]
     fn test_icon_combined_html() {
         let html = to_html("icon:heart[2x,role=red]");
-        assert_eq!(html, "<div class=\"paragraph\">\n<p><i class=\"fa fa-heart fa-2x red\"></i></p>\n</div>\n");
+        assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x red\"></i></span></p>\n</div>\n");
     }
 
     #[test]
@@ -3349,7 +3516,7 @@ mod tests {
         let html = to_html("menu:File[New > Doc]");
         assert_eq!(
             html,
-            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><span class=\"menu\">File</span>\u{00A0}\u{25B8} <span class=\"submenu\">New</span>\u{00A0}\u{25B8} <span class=\"menuitem\">Doc</span></span></p>\n</div>\n"
+            "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"submenu\">New</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Doc</b></span></p>\n</div>\n"
         );
     }
 
@@ -3489,29 +3656,29 @@ mod tests {
     #[test]
     fn test_paragraph_with_id_and_role() {
         let html = to_html("[#notice.important]\nText");
-        assert!(html.contains("id=\"notice\""));
-        assert!(html.contains("class=\"important\""));
-        assert!(html.contains("Text"));
+        assert!(html.contains("id=\"notice\""), "should have id on div. Got: {html}");
+        assert!(html.contains("class=\"paragraph important\""), "should have class on div. Got: {html}");
+        assert!(html.contains("<p>Text</p>"), "p should be plain. Got: {html}");
     }
 
     #[test]
     fn test_paragraph_with_id_only() {
         let html = to_html("[#myid]\nHello");
-        assert!(html.contains("id=\"myid\""));
-        assert!(html.contains("Hello"));
+        assert!(html.contains("<div id=\"myid\" class=\"paragraph\">"), "id on div. Got: {html}");
+        assert!(html.contains("<p>Hello</p>"), "p should be plain. Got: {html}");
     }
 
     #[test]
     fn test_paragraph_with_role_only() {
         let html = to_html("[.lead]\nText");
-        assert!(html.contains("class=\"lead\""));
-        assert!(html.contains("Text"));
+        assert!(html.contains("class=\"paragraph lead\""), "role on div. Got: {html}");
+        assert!(html.contains("<p>Text</p>"), "p should be plain. Got: {html}");
     }
 
     #[test]
     fn test_paragraph_with_multiple_roles() {
         let html = to_html("[.r1.r2.r3]\nText");
-        assert!(html.contains("class=\"r1 r2 r3\""));
+        assert!(html.contains("class=\"paragraph r1 r2 r3\""), "roles on div. Got: {html}");
     }
 
     #[test]
@@ -3702,8 +3869,8 @@ mod tests {
     #[test]
     fn test_discrete_heading_with_id_and_role() {
         let html = to_html("[discrete#myh.special]\n== Heading");
-        assert!(html.contains("id=\"myh\""));
-        assert!(html.contains("class=\"special\""));
+        assert!(html.contains("id=\"myh\""), "should have explicit id. Got: {html}");
+        assert!(html.contains("class=\"discrete special\""), "should have discrete + role class. Got: {html}");
     }
 
     // Inline span tests
@@ -3936,8 +4103,8 @@ mod tests {
         assert_eq!(
             html,
             "<div class=\"hdlist\">\n<table>\n\
-             <tr>\n<td class=\"hdlist1\">CPU</td>\n<td class=\"hdlist2\">The brain</td>\n</tr>\n\
-             <tr>\n<td class=\"hdlist1\">RAM</td>\n<td class=\"hdlist2\">Memory</td>\n</tr>\n\
+             <tr>\n<td class=\"hdlist1\">CPU</td>\n<td class=\"hdlist2\">\n<p>The brain</p>\n</td>\n</tr>\n\
+             <tr>\n<td class=\"hdlist1\">RAM</td>\n<td class=\"hdlist2\">\n<p>Memory</p>\n</td>\n</tr>\n\
              </table>\n</div>\n"
         );
     }
@@ -3948,9 +4115,9 @@ mod tests {
         // This test verifies multiple entries render correctly
         let html = to_html("[horizontal]\nTerm1:: Desc1\nTerm2:: Desc2");
         assert!(html.contains("<td class=\"hdlist1\">Term1</td>"));
-        assert!(html.contains("<td class=\"hdlist2\">Desc1</td>"));
+        assert!(html.contains("<td class=\"hdlist2\">\n<p>Desc1</p>\n</td>"));
         assert!(html.contains("<td class=\"hdlist1\">Term2</td>"));
-        assert!(html.contains("<td class=\"hdlist2\">Desc2</td>"));
+        assert!(html.contains("<td class=\"hdlist2\">\n<p>Desc2</p>\n</td>"));
         assert_eq!(html.matches("<tr>").count(), 2);
     }
 
@@ -4281,7 +4448,7 @@ mod tests {
     fn test_source_block_highlightjs() {
         let html = to_html(":source-highlighter: highlight.js\n\n[source,rust]\n----\nfn main() {}\n----");
         assert!(html.contains("<pre class=\"highlightjs highlight\">"), "highlight.js: pre class. Got: {html}");
-        assert!(html.contains("class=\"language-rust\""), "highlight.js: language class on code. Got: {html}");
+        assert!(html.contains("class=\"hljs language-rust\""), "highlight.js: hljs + language class on code. Got: {html}");
         assert!(html.contains("data-lang=\"rust\""), "highlight.js: data-lang on code. Got: {html}");
     }
 
@@ -4569,7 +4736,7 @@ mod tests {
         let html = to_html(":source-highlighter: highlight.js\n\n```rust\nfn main() {}\n```");
         assert!(html.contains("highlightjs highlight"), "should use highlighter. Got: {html}");
         assert!(html.contains("data-lang=\"rust\""), "should have data-lang. Got: {html}");
-        assert!(html.contains("class=\"language-rust\""), "should have language class. Got: {html}");
+        assert!(html.contains("class=\"hljs language-rust\""), "should have hljs + language class. Got: {html}");
     }
 
     #[test]

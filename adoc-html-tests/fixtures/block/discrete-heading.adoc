@@ -1,0 +1,12 @@
+[discrete]
+== Discrete Heading
+
+paragraph after discrete heading.
+
+[discrete]
+=== Level 3 Discrete
+
+[discrete]
+== Another Discrete
+
+More text.

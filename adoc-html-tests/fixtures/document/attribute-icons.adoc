@@ -1,0 +1,5 @@
+:icons: font
+
+NOTE: This is a note with icon.
+
+WARNING: This is a warning with icon.

@@ -1,0 +1,5 @@
+.Click to reveal
+[%collapsible]
+====
+Hidden content inside collapsible block.
+====

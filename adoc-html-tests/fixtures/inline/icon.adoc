@@ -1,0 +1,3 @@
+:icons: font
+
+An icon icon:heart[] in text.

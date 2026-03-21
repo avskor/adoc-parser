@@ -1,0 +1,5 @@
+[bibliography]
+== References
+
+* [[[ref1]]] First reference.
+* [[[ref2]]] Second reference.

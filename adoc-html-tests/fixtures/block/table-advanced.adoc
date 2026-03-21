@@ -1,0 +1,10 @@
+[cols="1,2,1"]
+|===
+|Cell A1 |Cell B1 |Cell C1
+
+2+|Merged cells |Cell C2
+
+|Cell A3
+|Cell B3
+|Cell C3
+|===

@@ -1,0 +1,4 @@
+[[bookmark]]
+This paragraph has a block anchor.
+
+An [[inline-anchor]]inline anchor in text.

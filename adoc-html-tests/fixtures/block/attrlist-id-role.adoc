@@ -1,0 +1,15 @@
+[#myid]
+Paragraph with ID.
+
+[.myrole]
+Paragraph with role.
+
+[#p1.lead]
+Paragraph with ID and role.
+
+[#p2.role1.role2]
+Paragraph with mixed shorthand.
+
+[.rolename]
+.Block Title
+Paragraph with role and title.

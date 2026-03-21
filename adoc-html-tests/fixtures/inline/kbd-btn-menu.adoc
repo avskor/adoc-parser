@@ -1,0 +1,7 @@
+:experimental:
+
+Press kbd:[Ctrl+C] to copy.
+
+Click btn:[OK] to continue.
+
+Select menu:File[Save].

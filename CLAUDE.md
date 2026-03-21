@@ -66,3 +66,14 @@ Both `BlockScanner` and `Parser` use `Vec<Event>` as a reversed stack — events
 ### HTML Backend
 
 `adoc-html` converts events to HTML via `HtmlRenderer` with a `tag_stack` for tracking open elements. Public API: `to_html(input) -> String` and `push_html(buf, iter)`.
+
+Переведи на русский
+
+
+## Compact Instructions
+When compressing, preserve in priority order:
+- Architecture decisions (NEVER summarize)
+- Modified files and their key changes
+- Current verification status (pass/fail)
+- Open TODOs and rollback notes
+- Tool outputs (can delete, keep pass/fail only)

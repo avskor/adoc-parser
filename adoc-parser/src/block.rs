@@ -192,7 +192,7 @@ impl<'a> BlockScanner<'a> {
             .filter(|s| !matches!(s.as_str(),
                 "source" | "verse" | "stem" | "latexmath" | "asciimath"
                 | "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
-                | "discrete" | "normal"
+                | "normal"
                 | "listing" | "literal" | "quote" | "example" | "sidebar" | "pass"
                 | "csv" | "dsv" | "tsv"
             ))
@@ -1044,11 +1044,19 @@ impl<'a> BlockScanner<'a> {
 
     fn scan_discrete_heading(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
         self.advance();
-        let block_attrs = self.pending_block_attrs.take();
+        let mut block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
 
         // Apply leveloffset to heading level
         let effective_level = (level as i32 + self.leveloffset).max(1) as u8;
+
+        // Auto-generate id for discrete headings if not explicitly set
+        if let Some(ref mut attrs) = block_attrs
+            && attrs.positional.first().is_some_and(|s| s == "discrete")
+            && attrs.id.is_none()
+        {
+            attrs.id = Some(scanner::generate_id(title, &self.idprefix, &self.idseparator));
+        }
 
         // Emit: Start(Heading) Text(title) End(Heading) — no context push
         self.push_event(Event::End(TagEnd::Heading { level: effective_level }));

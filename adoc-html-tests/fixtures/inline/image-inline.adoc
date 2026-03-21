@@ -1,0 +1,1 @@
+This has an inline image:image:logo.png[Logo] in the text.

@@ -1,0 +1,6 @@
+:idprefix: id_
+:idseparator: -
+
+== My Section
+
+Content.

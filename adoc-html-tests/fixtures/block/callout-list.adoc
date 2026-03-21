@@ -1,0 +1,9 @@
+[source,ruby]
+----
+require 'asciidoctor' # <1>
+doc = Asciidoctor.load 'Hello' # <2>
+puts doc.convert # <3>
+----
+<1> Loads the library
+<2> Instantiates a new instance
+<3> Calls the convert method

@@ -1,0 +1,5 @@
+image::the-target.png[]
+
+image::player-status.png[]
+
+image::the image.png[]

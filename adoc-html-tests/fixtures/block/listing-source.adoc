@@ -1,0 +1,20 @@
+[source]
+----
+true
+----
+
+[source,ruby]
+----
+puts "hello"
+----
+
+----
+
+leading blank
+
+----
+
+----
+trailing blank
+
+----
