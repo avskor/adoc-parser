@@ -1,0 +1,8 @@
+.Table caption test
+[cols="1,1"]
+|===
+|Header 1 |Header 2
+
+|Cell 1
+|Cell 2
+|===

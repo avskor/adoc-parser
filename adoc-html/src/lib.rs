@@ -1413,21 +1413,7 @@ impl HtmlRenderer {
                 Self::write_meta_attrs(output, &meta, &classes);
                 output.push_str(">\n");
 
-                // Emit <colgroup> based on cols spec
-                if let Some(ref cols_str) = cols_value {
-                    let col_widths = Self::parse_col_widths(cols_str);
-                    if !col_widths.is_empty() {
-                        output.push_str("<colgroup>\n");
-                        for w in &col_widths {
-                            output.push_str("<col style=\"width: ");
-                            output.push_str(&w.to_string());
-                            output.push_str("%;\">\n");
-                        }
-                        output.push_str("</colgroup>\n");
-                    }
-                }
-
-                // Caption handling
+                // Caption must come before colgroup per HTML5 spec
                 let title_html = self.block_title_inner_html.take();
                 if let Some(title) = title_html {
                     self.table_counter += 1;
@@ -1449,6 +1435,20 @@ impl HtmlRenderer {
                     }
                     output.push_str(&title);
                     output.push_str("</caption>\n");
+                }
+
+                // Emit <colgroup> based on cols spec
+                if let Some(ref cols_str) = cols_value {
+                    let col_widths = Self::parse_col_widths(cols_str);
+                    if !col_widths.is_empty() {
+                        output.push_str("<colgroup>\n");
+                        for w in &col_widths {
+                            output.push_str("<col style=\"width: ");
+                            output.push_str(&w.to_string());
+                            output.push_str("%;\">\n");
+                        }
+                        output.push_str("</colgroup>\n");
+                    }
                 }
             }
             Tag::TableHead => {
