@@ -162,6 +162,7 @@ struct HtmlRenderer {
     sectnums: bool,
     sectanchors: bool,
     showtitle: bool,
+    nofooter: bool,
     doctitle_h1_end: Option<usize>,
     section_counters: [u32; 6],
     highlight_lines: HashSet<usize>,
@@ -243,6 +244,7 @@ impl HtmlRenderer {
             sectnums: false,
             sectanchors: false,
             showtitle: false,
+            nofooter: false,
             doctitle_h1_end: None,
             section_counters: [0; 6],
             highlight_lines: HashSet::new(),
@@ -323,13 +325,15 @@ impl HtmlRenderer {
             }
 
             // Footer div
-            output.push_str("<div id=\"footer\">\n");
-            if let Some(ref ts) = self.last_updated {
-                output.push_str("<div id=\"footer-text\">\n");
-                writeln!(output, "Last updated {ts}").unwrap();
+            if !self.nofooter {
+                output.push_str("<div id=\"footer\">\n");
+                if let Some(ref ts) = self.last_updated {
+                    output.push_str("<div id=\"footer-text\">\n");
+                    writeln!(output, "Last updated {ts}").unwrap();
+                    output.push_str("</div>\n");
+                }
                 output.push_str("</div>\n");
             }
-            output.push_str("</div>\n");
 
             self.write_document_tail(output);
         } else {
@@ -488,6 +492,12 @@ impl HtmlRenderer {
                 }
                 if name == "!showtitle" || name == "showtitle!" {
                     self.showtitle = false;
+                }
+                if name == "nofooter" {
+                    self.nofooter = true;
+                }
+                if name == "!nofooter" || name == "nofooter!" {
+                    self.nofooter = false;
                 }
                 // Store for attribute reference resolution
                 if let Some(stripped) = name.strip_prefix('!') {

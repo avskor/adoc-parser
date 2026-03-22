@@ -321,6 +321,26 @@ fn test_standalone_no_title_has_empty_header() {
 }
 
 #[test]
+fn test_standalone_nofooter_attribute() {
+    let html = to_html_with_options(":nofooter:\n\nHello", HtmlOptions {
+        standalone: true,
+        last_updated: Some("2026-03-01 12:00:00 +0300".to_string()),
+        ..Default::default()
+    });
+    assert!(!html.contains("<div id=\"footer\">"), "nofooter should suppress footer. Got: {html}");
+    assert!(!html.contains("Last updated"), "nofooter should suppress last_updated. Got: {html}");
+}
+
+#[test]
+fn test_standalone_footer_present_by_default() {
+    let html = to_html_with_options("Hello", HtmlOptions {
+        standalone: true,
+        ..Default::default()
+    });
+    assert!(html.contains("<div id=\"footer\">"), "footer should be present by default. Got: {html}");
+}
+
+#[test]
 fn test_to_html_still_fragment() {
     let html = to_html("= Title\n\nHello");
     assert!(!html.contains("<!DOCTYPE"), "to_html should NOT produce DOCTYPE. Got: {html}");
