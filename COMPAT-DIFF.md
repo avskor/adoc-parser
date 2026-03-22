@@ -20,7 +20,7 @@
 - [x] **1. Footer генерируется при `-a nofooter`** (89 файлов)
   Asciidoctor с `-a nofooter` не выводит footer. Наш парсер всегда генерирует `<div id="footer">` с `<div id="footer-text">Last updated ...`.
 
-- [ ] **2. Include — фатальная ошибка вместо fallback** (101 файл)
+- [x] **2. Include — фатальная ошибка вместо fallback** (101 файл)
   `include::` с Antora-синтаксисом (`example$`, `partial$`, `text:`) вызывает ошибку. Asciidoctor выводит placeholder. Также `include::` внутри listing-блоков экранируется как `\include::` вместо отображения как есть.
 
 - [ ] **3. Таблицы — отсутствует `<colgroup>/<col>`** (16+ файлов)

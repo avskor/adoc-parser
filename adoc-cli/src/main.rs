@@ -60,31 +60,36 @@ fn resolve_includes(
 
             if !path_str.is_empty() {
                 let file_path = base_dir.join(path_str);
-                let canonical = file_path.canonicalize().map_err(|e| {
-                    format!("failed to resolve include '{}': {e}", file_path.display())
-                })?;
+                match fs::read_to_string(&file_path) {
+                    Ok(file_content) => {
+                        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                        if seen.contains(&canonical) {
+                            result.push_str("Unresolved directive - include::");
+                            result.push_str(path_str);
+                            result.push('[');
+                            result.push_str(attrs);
+                            result.push_str("]\n");
+                            continue;
+                        }
+                        seen.insert(canonical.clone());
+                        let child_dir = canonical.parent().unwrap_or(base_dir);
+                        let resolved =
+                            resolve_includes(&file_content, child_dir, depth + 1, seen)?;
+                        seen.remove(&canonical);
 
-                if seen.contains(&canonical) {
-                    return Err(format!(
-                        "circular include detected: '{}'",
-                        canonical.display()
-                    ));
+                        let offset = parse_level_offset(attrs);
+                        let adjusted = adoc_parser::apply_level_offset(&resolved, offset);
+                        result.push_str(&adjusted);
+                        result.push('\n');
+                    }
+                    Err(_) => {
+                        result.push_str("Unresolved directive - include::");
+                        result.push_str(path_str);
+                        result.push('[');
+                        result.push_str(attrs);
+                        result.push_str("]\n");
+                    }
                 }
-
-                let file_content = fs::read_to_string(&canonical).map_err(|e| {
-                    format!("failed to read include '{}': {e}", canonical.display())
-                })?;
-
-                seen.insert(canonical.clone());
-                let child_dir = canonical.parent().unwrap_or(base_dir);
-                let resolved =
-                    resolve_includes(&file_content, child_dir, depth + 1, seen)?;
-                seen.remove(&canonical);
-
-                let offset = parse_level_offset(attrs);
-                let adjusted = adoc_parser::apply_level_offset(&resolved, offset);
-                result.push_str(&adjusted);
-                result.push('\n');
                 continue;
             }
         }

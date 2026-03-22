@@ -362,7 +362,13 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
                     }
                 }
                 Err(_) if attrs.optional => { /* skip silently */ }
-                Err(_) => { /* skip (current behavior) */ }
+                Err(_) => {
+                    output.push_str("Unresolved directive - include::");
+                    output.push_str(path);
+                    output.push('[');
+                    output.push_str(attrs_str);
+                    output.push_str("]\n");
+                }
             }
         } else {
             output.push_str(line);
@@ -1570,6 +1576,23 @@ end::foo[]";
         let input = "before\ninclude::nonexistent.adoc[opts=optional]\nafter";
         let result = resolve_includes(input, &dir);
         assert_eq!(result, "before\nafter");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_missing_file_placeholder() {
+        let dir = std::env::temp_dir().join("adoc_test_missing_placeholder");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let input = "before\ninclude::nonexistent.adoc[]\nafter";
+        let result = resolve_includes(input, &dir);
+        assert!(
+            result.contains("Unresolved directive - include::nonexistent.adoc[]"),
+            "missing include should produce placeholder. Got: {result}"
+        );
+        assert!(result.contains("before"), "text before include should remain");
+        assert!(result.contains("after"), "text after include should remain");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
