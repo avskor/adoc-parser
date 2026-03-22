@@ -40,6 +40,7 @@ fn parse_level_offset(attrs: &str) -> i8 {
 fn resolve_includes(
     content: &str,
     base_dir: &Path,
+    source_file: &str,
     depth: usize,
     seen: &mut HashSet<PathBuf>,
 ) -> Result<String, String> {
@@ -64,17 +65,16 @@ fn resolve_includes(
                     Ok(file_content) => {
                         let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                         if seen.contains(&canonical) {
-                            result.push_str("Unresolved directive - include::");
-                            result.push_str(path_str);
-                            result.push('[');
-                            result.push_str(attrs);
-                            result.push_str("]\n");
+                            result.push_str(&format!("Unresolved directive in {source_file} - include::{path_str}[{attrs}]\n"));
                             continue;
                         }
                         seen.insert(canonical.clone());
                         let child_dir = canonical.parent().unwrap_or(base_dir);
+                        let child_name = canonical.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| source_file.to_string());
                         let resolved =
-                            resolve_includes(&file_content, child_dir, depth + 1, seen)?;
+                            resolve_includes(&file_content, child_dir, &child_name, depth + 1, seen)?;
                         seen.remove(&canonical);
 
                         let offset = parse_level_offset(attrs);
@@ -83,11 +83,7 @@ fn resolve_includes(
                         result.push('\n');
                     }
                     Err(_) => {
-                        result.push_str("Unresolved directive - include::");
-                        result.push_str(path_str);
-                        result.push('[');
-                        result.push_str(attrs);
-                        result.push_str("]\n");
+                        result.push_str(&format!("Unresolved directive in {source_file} - include::{path_str}[{attrs}]\n"));
                     }
                 }
                 continue;
@@ -127,7 +123,11 @@ fn run(cli: Cli) -> Result<(), String> {
     {
         seen.insert(canonical);
     }
-    let resolved = resolve_includes(&input, base_dir, 0, &mut seen)?;
+    let source_name = cli.input.as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<stdin>".to_string());
+    let resolved = resolve_includes(&input, base_dir, &source_name, 0, &mut seen)?;
     let preprocessed = adoc_parser::preprocess(&resolved);
 
     let last_updated = cli.input.as_ref().and_then(|p| {

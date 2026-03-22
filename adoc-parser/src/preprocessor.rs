@@ -335,6 +335,12 @@ fn apply_indent(content: &str, indent: usize) -> String {
 /// This is a text-to-text transformation that should run before conditional
 /// directive processing and parsing.
 pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
+    resolve_includes_with_source(input, base_dir, None)
+}
+
+/// Like [`resolve_includes`], but includes the source filename in unresolved
+/// directive placeholders (matching Asciidoctor output format).
+pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: Option<&str>) -> String {
     let mut output = String::with_capacity(input.len());
 
     for line in input.lines() {
@@ -363,7 +369,9 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
                 }
                 Err(_) if attrs.optional => { /* skip silently */ }
                 Err(_) => {
-                    output.push_str("Unresolved directive - include::");
+                    output.push_str("Unresolved directive in ");
+                    output.push_str(source_file.unwrap_or("<stdin>"));
+                    output.push_str(" - include::");
                     output.push_str(path);
                     output.push('[');
                     output.push_str(attrs_str);
@@ -1588,11 +1596,26 @@ end::foo[]";
         let input = "before\ninclude::nonexistent.adoc[]\nafter";
         let result = resolve_includes(input, &dir);
         assert!(
-            result.contains("Unresolved directive - include::nonexistent.adoc[]"),
-            "missing include should produce placeholder. Got: {result}"
+            result.contains("Unresolved directive in <stdin> - include::nonexistent.adoc[]"),
+            "missing include should produce placeholder with <stdin>. Got: {result}"
         );
         assert!(result.contains("before"), "text before include should remain");
         assert!(result.contains("after"), "text after include should remain");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_with_source_file_in_placeholder() {
+        let dir = std::env::temp_dir().join("adoc_test_source_placeholder");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let input = "include::missing.adoc[]";
+        let result = resolve_includes_with_source(input, &dir, Some("myfile.adoc"));
+        assert!(
+            result.contains("Unresolved directive in myfile.adoc - include::missing.adoc[]"),
+            "placeholder should include source filename. Got: {result}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
