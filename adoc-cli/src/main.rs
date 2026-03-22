@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,6 +20,10 @@ struct Cli {
     /// Generate an HTML fragment instead of a full standalone document
     #[arg(long)]
     no_standalone: bool,
+
+    /// Set a document attribute (e.g. -a nofooter -a icons=font)
+    #[arg(short = 'a', long = "attribute", value_name = "NAME[=VALUE]")]
+    attributes: Vec<String>,
 }
 
 const MAX_INCLUDE_DEPTH: usize = 10;
@@ -133,7 +137,30 @@ fn run(cli: Cli) -> Result<(), String> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "<stdin>".to_string());
     let resolved = resolve_includes(&input, base_dir, &source_name, 0, &mut seen)?;
-    let preprocessed = adoc_parser::preprocess(&resolved);
+
+    let mut initial_attrs: HashMap<String, Option<String>> = HashMap::new();
+    let mut locked_attrs: HashSet<String> = HashSet::new();
+    let mut html_attrs: HashMap<String, String> = HashMap::new();
+
+    for attr_str in &cli.attributes {
+        if let Some(name) = attr_str.strip_suffix('!') {
+            initial_attrs.insert(name.to_string(), None);
+            locked_attrs.insert(name.to_string());
+        } else if let Some(name) = attr_str.strip_prefix('!') {
+            initial_attrs.insert(name.to_string(), None);
+            locked_attrs.insert(name.to_string());
+        } else if let Some((name, value)) = attr_str.split_once('=') {
+            initial_attrs.insert(name.to_string(), Some(value.to_string()));
+            locked_attrs.insert(name.to_string());
+            html_attrs.insert(name.to_string(), value.to_string());
+        } else {
+            initial_attrs.insert(attr_str.to_string(), Some(String::new()));
+            locked_attrs.insert(attr_str.to_string());
+            html_attrs.insert(attr_str.to_string(), String::new());
+        }
+    }
+
+    let preprocessed = adoc_parser::preprocess_with_attrs(&resolved, &initial_attrs, &locked_attrs);
 
     let last_updated = cli.input.as_ref().and_then(|p| {
         let meta = fs::metadata(p).ok()?;
@@ -143,11 +170,15 @@ fn run(cli: Cli) -> Result<(), String> {
     });
 
     let html = if cli.no_standalone {
-        adoc_html::to_html(&preprocessed)
+        adoc_html::to_html_with_options(&preprocessed, adoc_html::HtmlOptions {
+            attributes: html_attrs,
+            ..Default::default()
+        })
     } else {
         adoc_html::to_html_with_options(&preprocessed, adoc_html::HtmlOptions {
             standalone: true,
             last_updated,
+            attributes: html_attrs,
             ..Default::default()
         })
     };

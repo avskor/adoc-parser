@@ -47,6 +47,7 @@ pub struct HtmlOptions {
     pub docinfo_footer: Option<String>,
     pub standalone: bool,
     pub last_updated: Option<String>,
+    pub attributes: HashMap<String, String>,
 }
 
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
@@ -277,12 +278,44 @@ impl HtmlRenderer {
     }
 
     fn new_with_options(options: HtmlOptions) -> Self {
-        Self {
+        let mut renderer = Self {
             docinfo_head: options.docinfo_head,
             docinfo_footer: options.docinfo_footer,
             standalone: options.standalone,
             last_updated: options.last_updated,
             ..Self::new()
+        };
+        for (name, value) in &options.attributes {
+            renderer.apply_attribute(name, value);
+        }
+        renderer
+    }
+
+    fn apply_attribute(&mut self, name: &str, value: &str) {
+        match name {
+            "toclevels" => {
+                if let Ok(n) = value.parse::<u8>() {
+                    self.toc_levels = n;
+                }
+            }
+            "toc-title" => self.toc_title = value.to_string(),
+            "toc" => self.toc_position = value.to_string(),
+            "sectnums" => self.sectnums = true,
+            "!sectnums" | "sectnums!" => self.sectnums = false,
+            "sectanchors" => self.sectanchors = true,
+            "!sectanchors" | "sectanchors!" => self.sectanchors = false,
+            "showtitle" => self.showtitle = true,
+            "!showtitle" | "showtitle!" => self.showtitle = false,
+            "nofooter" => self.nofooter = true,
+            "!nofooter" | "nofooter!" => self.nofooter = false,
+            _ => {}
+        }
+        if let Some(stripped) = name.strip_prefix('!') {
+            self.document_attrs.remove(stripped);
+        } else if let Some(stripped) = name.strip_suffix('!') {
+            self.document_attrs.remove(stripped);
+        } else {
+            self.document_attrs.insert(name.to_string(), value.to_string());
         }
     }
 
@@ -465,59 +498,17 @@ impl HtmlRenderer {
                 output.push_str("<div style=\"page-break-after: always;\"></div>\n");
             }
             Event::Attribute { ref name, ref value, .. } => {
-                if name == "toclevels"
-                    && let Ok(n) = value.parse::<u8>() {
-                        self.toc_levels = n;
-                }
-                if name == "toc-title" {
-                    self.toc_title = value.to_string();
-                }
-                if name == "toc" {
-                    self.toc_position = value.to_string();
-                }
-                if name == "sectnums" {
-                    self.sectnums = true;
-                }
-                if name == "!sectnums" || name == "sectnums!" {
-                    self.sectnums = false;
-                }
-                if name == "sectanchors" {
-                    self.sectanchors = true;
-                }
-                if name == "!sectanchors" || name == "sectanchors!" {
-                    self.sectanchors = false;
-                }
-                if name == "showtitle" {
-                    self.showtitle = true;
-                }
-                if name == "!showtitle" || name == "showtitle!" {
-                    self.showtitle = false;
-                }
-                if name == "nofooter" {
-                    self.nofooter = true;
-                }
-                if name == "!nofooter" || name == "nofooter!" {
-                    self.nofooter = false;
-                }
-                // Store for attribute reference resolution
-                if let Some(stripped) = name.strip_prefix('!') {
-                    self.document_attrs.remove(stripped);
-                } else if let Some(stripped) = name.strip_suffix('!') {
-                    self.document_attrs.remove(stripped);
-                } else {
-                    self.document_attrs.insert(name.to_string(), value.to_string());
-                    if name.as_ref() == "doctype" && value.as_ref() == "manpage" {
-                        // Retroactively insert " Manual Page" into the document title
-                        if let Some(pos) = self.doctitle_close_pos {
-                            output.insert_str(pos, " Manual Page");
-                        }
-                        // Extract mantitle/manvolnum from doctitle "command(N)"
-                        if let Some(doctitle) = self.document_attrs.get("doctitle").cloned()
-                            && let Some((mantitle, manvolnum)) = parse_manpage_title(&doctitle)
-                        {
-                            self.document_attrs.insert("mantitle".to_string(), mantitle);
-                            self.document_attrs.insert("manvolnum".to_string(), manvolnum);
-                        }
+                self.apply_attribute(name, value);
+                // Handle doctype=manpage retroactive title insertion
+                if name.as_ref() == "doctype" && value.as_ref() == "manpage" {
+                    if let Some(pos) = self.doctitle_close_pos {
+                        output.insert_str(pos, " Manual Page");
+                    }
+                    if let Some(doctitle) = self.document_attrs.get("doctitle").cloned()
+                        && let Some((mantitle, manvolnum)) = parse_manpage_title(&doctitle)
+                    {
+                        self.document_attrs.insert("mantitle".to_string(), mantitle);
+                        self.document_attrs.insert("manvolnum".to_string(), manvolnum);
                     }
                 }
             }
