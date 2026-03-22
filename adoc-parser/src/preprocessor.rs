@@ -378,6 +378,10 @@ pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: O
                     output.push_str("]\n");
                 }
             }
+        } else if line.starts_with("\\include::") {
+            // Escaped include directive at start of line — strip the leading backslash
+            output.push_str(&line[1..]);
+            output.push('\n');
         } else {
             output.push_str(line);
             output.push('\n');
@@ -1933,5 +1937,17 @@ Value: {counter:x}";
         let result = preprocess_with_attrs(input, &HashMap::new(), &locked);
         // Locked attribute and its continuation lines are not output
         assert_eq!(result, "Content");
+    }
+
+    #[test]
+    fn test_resolve_includes_escaped_backslash_stripped() {
+        let dir = std::env::temp_dir().join("adoc_test_escaped_include");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let input = "before\n\\include::file.adoc[]\nafter";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, "before\ninclude::file.adoc[]\nafter");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

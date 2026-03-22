@@ -89,7 +89,12 @@ fn resolve_includes(
                 continue;
             }
         }
-        result.push_str(line);
+        if line.starts_with("\\include::") {
+            // Escaped include directive at start of line — strip the leading backslash
+            result.push_str(&line[1..]);
+        } else {
+            result.push_str(line);
+        }
         result.push('\n');
     }
     // Remove trailing newline if original didn't end with one
