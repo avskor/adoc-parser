@@ -91,6 +91,17 @@ struct TocEntry {
     title: String,
 }
 
+struct AuthorData {
+    fullname: String,
+    address: String,
+}
+
+struct RevisionData {
+    version: String,
+    date: String,
+    remark: String,
+}
+
 #[derive(Clone)]
 struct BlockMeta {
     style: Option<String>,
@@ -193,6 +204,8 @@ struct HtmlRenderer {
     header_suppress_start: Option<usize>,
     quote_attribution: Option<String>,
     quote_citetitle: Option<String>,
+    authors: Vec<AuthorData>,
+    revision: Option<RevisionData>,
 }
 
 impl HtmlRenderer {
@@ -274,6 +287,8 @@ impl HtmlRenderer {
             header_suppress_start: None,
             quote_attribution: None,
             quote_citetitle: None,
+            authors: Vec::new(),
+            revision: None,
         }
     }
 
@@ -633,16 +648,22 @@ impl HtmlRenderer {
                 output.push_str("[] -->\n");
             }
             Event::Author { fullname, firstname, middlename, lastname, initials, address } => {
-                self.document_attrs.insert("author".to_string(), fullname.to_string());
-                self.document_attrs.insert("firstname".to_string(), firstname.to_string());
+                let idx = self.authors.len();
+                let suffix = if idx == 0 { String::new() } else { (idx + 1).to_string() };
+                self.document_attrs.insert(format!("author{suffix}"), fullname.to_string());
+                self.document_attrs.insert(format!("firstname{suffix}"), firstname.to_string());
                 if !middlename.is_empty() {
-                    self.document_attrs.insert("middlename".to_string(), middlename.to_string());
+                    self.document_attrs.insert(format!("middlename{suffix}"), middlename.to_string());
                 }
-                self.document_attrs.insert("lastname".to_string(), lastname.to_string());
-                self.document_attrs.insert("authorinitials".to_string(), initials.to_string());
+                self.document_attrs.insert(format!("lastname{suffix}"), lastname.to_string());
+                self.document_attrs.insert(format!("authorinitials{suffix}"), initials.to_string());
                 if !address.is_empty() {
-                    self.document_attrs.insert("email".to_string(), address.to_string());
+                    self.document_attrs.insert(format!("email{suffix}"), address.to_string());
                 }
+                self.authors.push(AuthorData {
+                    fullname: fullname.to_string(),
+                    address: address.to_string(),
+                });
             }
             Event::Revision { version, date, remark } => {
                 if !version.is_empty() {
@@ -654,6 +675,11 @@ impl HtmlRenderer {
                 if !remark.is_empty() {
                     self.document_attrs.insert("revremark".to_string(), remark.to_string());
                 }
+                self.revision = Some(RevisionData {
+                    version: version.to_string(),
+                    date: date.to_string(),
+                    remark: remark.to_string(),
+                });
             }
             Event::BlockMetadata { style, id, roles, options, named, subs } => {
                 if let Some(s) = subs {
@@ -1761,6 +1787,7 @@ impl HtmlRenderer {
             TagEnd::Header => {
                 self.in_header = false;
                 if self.standalone {
+                    self.render_author_details(output);
                     output.push_str("</div>\n");
                     self.content_start = Some(output.len());
                     if self.has_document_title {
@@ -2266,6 +2293,51 @@ impl HtmlRenderer {
             VAlign::Bottom => "valign-bottom",
         };
         format!("tableblock {ha} {va}")
+    }
+
+    fn render_author_details(&self, output: &mut String) {
+        if self.authors.is_empty() && self.revision.is_none() {
+            return;
+        }
+        output.push_str("<div class=\"details\">\n");
+        for (i, author) in self.authors.iter().enumerate() {
+            let suffix = if i == 0 { String::new() } else { (i + 1).to_string() };
+            output.push_str("<span id=\"author");
+            output.push_str(&suffix);
+            output.push_str("\" class=\"author\">");
+            html_escape(output, &author.fullname);
+            output.push_str("</span><br>\n");
+            if !author.address.is_empty() {
+                output.push_str("<span id=\"email");
+                output.push_str(&suffix);
+                output.push_str("\" class=\"email\"><a href=\"mailto:");
+                html_escape(output, &author.address);
+                output.push_str("\">");
+                html_escape(output, &author.address);
+                output.push_str("</a></span><br>\n");
+            }
+        }
+        if let Some(ref rev) = self.revision {
+            if !rev.version.is_empty() {
+                output.push_str("<span id=\"revnumber\">version ");
+                let ver = rev.version.strip_prefix('v')
+                    .or_else(|| rev.version.strip_prefix('V'))
+                    .unwrap_or(&rev.version);
+                html_escape(output, ver);
+                output.push_str(",</span>\n");
+            }
+            if !rev.date.is_empty() {
+                output.push_str("<span id=\"revdate\">");
+                html_escape(output, &rev.date);
+                output.push_str("</span>\n");
+            }
+            if !rev.remark.is_empty() {
+                output.push_str("<br><span id=\"revremark\">");
+                html_escape(output, &rev.remark);
+                output.push_str("</span>\n");
+            }
+        }
+        output.push_str("</div>\n");
     }
 
     /// Write HTML id and class attributes from block metadata into an already-started tag.
