@@ -1100,7 +1100,7 @@ impl<'a> BlockScanner<'a> {
     fn scan_table(&mut self) -> Option<Event<'a>> {
         self.advance(); // skip opening |===
         let title_events = self.take_pending_block_title();
-        let block_attrs = self.pending_block_attrs.take().unwrap_or_default();
+        let mut block_attrs = self.pending_block_attrs.take().unwrap_or_default();
 
         // Collect lines until closing |=== or EOF
         let mut content_lines: Vec<&'a str> = Vec::new();
@@ -1165,6 +1165,12 @@ impl<'a> BlockScanner<'a> {
             }
             if cols == 0 { 1 } else { cols }
         };
+
+        // Synthesize cols attribute for tables without explicit cols=
+        // so the renderer can generate <colgroup> with equal-width columns
+        if block_attrs.table_cols_count().is_none() && num_cols > 0 {
+            block_attrs.named.insert("cols".to_string(), num_cols.to_string());
+        }
 
         // Determine header: %header option OR blank line after first row
         let has_header = block_attrs.has_option("header")

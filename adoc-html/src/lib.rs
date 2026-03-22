@@ -1442,10 +1442,16 @@ impl HtmlRenderer {
                     let col_widths = Self::parse_col_widths(cols_str);
                     if !col_widths.is_empty() {
                         output.push_str("<colgroup>\n");
-                        for w in &col_widths {
-                            output.push_str("<col style=\"width: ");
-                            output.push_str(&w.to_string());
-                            output.push_str("%;\">\n");
+                        if has_autowidth {
+                            for _ in &col_widths {
+                                output.push_str("<col>\n");
+                            }
+                        } else {
+                            for w in &col_widths {
+                                output.push_str("<col style=\"width: ");
+                                output.push_str(&Self::format_col_width(*w));
+                                output.push_str(";\">\n");
+                            }
                         }
                         output.push_str("</colgroup>\n");
                     }
@@ -2178,19 +2184,20 @@ impl HtmlRenderer {
     }
 
     /// Parse a cols spec string (e.g. "1,1" or "3" or "<,^,>") and return percentage widths.
-    fn parse_col_widths(cols_str: &str) -> Vec<u32> {
+    /// Uses f64 with 4-decimal precision to match Asciidoctor output.
+    /// The last column gets the remainder to ensure percentages sum to exactly 100%.
+    fn parse_col_widths(cols_str: &str) -> Vec<f64> {
         let trimmed = cols_str.trim();
 
         // Simple numeric: "3" → 3 equal columns
         if let Ok(n) = trimmed.parse::<usize>() {
             if n == 0 { return Vec::new(); }
-            let pct = 100 / n as u32;
-            return vec![pct; n];
+            return Self::distribute_widths(&vec![1.0; n]);
         }
 
         // Comma-separated: parse each part for weight
         let parts: Vec<&str> = trimmed.split(',').collect();
-        let mut weights: Vec<u32> = Vec::new();
+        let mut weights: Vec<f64> = Vec::new();
         for part in &parts {
             let part = part.trim();
             if part.is_empty() { continue; }
@@ -2200,19 +2207,51 @@ impl HtmlRenderer {
                 .take_while(|c| c.is_ascii_digit())
                 .collect::<String>()
                 .chars().rev().collect::<String>()
-                .parse::<u32>()
-                .unwrap_or(1);
+                .parse::<f64>()
+                .unwrap_or(1.0);
             weights.push(weight);
         }
 
         if weights.is_empty() { return Vec::new(); }
 
-        let total: u32 = weights.iter().sum();
-        if total == 0 { return Vec::new(); }
+        Self::distribute_widths(&weights)
+    }
 
-        weights.iter().map(|w| {
-            (w * 100 + total / 2) / total
-        }).collect()
+    /// Distribute column widths as percentages with 4-decimal precision.
+    /// Last column gets the remainder so the total is exactly 100%.
+    fn distribute_widths(weights: &[f64]) -> Vec<f64> {
+        let total: f64 = weights.iter().sum();
+        if total == 0.0 { return Vec::new(); }
+
+        let n = weights.len();
+        let mut widths: Vec<f64> = Vec::with_capacity(n);
+        let mut sum: f64 = 0.0;
+        for (i, w) in weights.iter().enumerate() {
+            if i == n - 1 {
+                // Last column gets remainder to ensure sum = 100%
+                // Truncate to 4 decimal places
+                let raw = 100.0_f64 - sum;
+                let last = (raw * 10000.0).round() / 10000.0;
+                widths.push(last);
+            } else {
+                // Truncate to 4 decimal places (floor)
+                let raw = w * 100.0 / total;
+                let pct = (raw * 10000.0).floor() / 10000.0;
+                sum += pct;
+                widths.push(pct);
+            }
+        }
+        widths
+    }
+
+    /// Format a column width percentage to match Asciidoctor output.
+    /// Integer values: "50%" (no decimals). Fractional: "33.3333%" (4 decimals).
+    fn format_col_width(w: f64) -> String {
+        if (w - w.round()).abs() < 0.00005 {
+            format!("{}%", w.round() as u32)
+        } else {
+            format!("{:.4}%", w)
+        }
     }
 
     fn tableblock_cell_class(halign: &HAlign, valign: &VAlign) -> String {
