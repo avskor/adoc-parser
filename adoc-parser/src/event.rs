@@ -85,6 +85,7 @@ pub enum Event<'a> {
         id: CowStr<'a>,
     },
     CalloutRef(u32),
+    XmlCalloutRef(u32),
     IndexTerm {
         text: CowStr<'a>,
     },
@@ -153,6 +154,7 @@ impl<'a> Event<'a> {
                 id: cow_owned(id),
             },
             Event::CalloutRef(n) => Event::CalloutRef(n),
+            Event::XmlCalloutRef(n) => Event::XmlCalloutRef(n),
             Event::IndexTerm { text } => Event::IndexTerm {
                 text: cow_owned(text),
             },

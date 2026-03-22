@@ -67,6 +67,33 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.push(event);
     }
 
+    /// Push pre-resolved callout marker events (reversed for FIFO pop) with spacing.
+    /// Autonumbers must already be resolved before calling this.
+    fn push_callout_events_resolved(
+        &mut self,
+        markers: &[scanner::CalloutMarker],
+        stripped: &'a str,
+    ) {
+        // Push in reverse order (last marker first) for FIFO via pop.
+        // Space separators are pushed AFTER the callout ref so they appear
+        // BEFORE it in the pop (FIFO) output stream.
+        for (idx, marker) in markers.iter().enumerate().rev() {
+            match *marker {
+                scanner::CalloutMarker::Standard(n) => {
+                    self.push_event(Event::CalloutRef(n));
+                }
+                scanner::CalloutMarker::XmlComment(n) => {
+                    self.push_event(Event::XmlCalloutRef(n));
+                }
+            }
+            // Space between consecutive callout refs
+            if idx > 0 {
+                self.push_event(Event::Text(Cow::Borrowed(" ")));
+            }
+        }
+        self.push_event(Event::Text(Cow::Borrowed(stripped)));
+    }
+
     fn current_line(&self) -> Option<&'a str> {
         self.lines.get(self.pos).copied()
     }
@@ -1990,23 +2017,35 @@ impl<'a> BlockScanner<'a> {
                 .unwrap_or(SubstitutionSet::VERBATIM);
             let process_callouts = matches!(kind, DelimitedBlockKind::Listing)
                 || resolved_subs.has(SubstitutionSet::CALLOUTS);
+            // Pre-parse callout markers in forward order to resolve autonumbers
+            let parsed_lines: Vec<(&str, Vec<scanner::CalloutMarker>)> = if process_callouts {
+                let mut auto_num: u32 = 0;
+                content_lines.iter().map(|&cline| {
+                    let (stripped, markers) = scanner::strip_callout_markers(cline);
+                    if markers.is_empty() {
+                        (cline, Vec::new())
+                    } else {
+                        let resolved: Vec<_> = markers.into_iter().map(|m| match m {
+                            scanner::CalloutMarker::Standard(0) => { auto_num += 1; scanner::CalloutMarker::Standard(auto_num) }
+                            scanner::CalloutMarker::XmlComment(0) => { auto_num += 1; scanner::CalloutMarker::XmlComment(auto_num) }
+                            other => other,
+                        }).collect();
+                        (stripped, resolved)
+                    }
+                }).collect()
+            } else {
+                content_lines.iter().map(|&cline| (cline, Vec::new())).collect()
+            };
+
             self.push_event(Event::End(TagEnd::DelimitedBlock));
-            for (i, &cline) in content_lines.iter().enumerate().rev() {
-                if i < content_lines.len() - 1 {
+            for (i, (text, markers)) in parsed_lines.iter().enumerate().rev() {
+                if i < parsed_lines.len() - 1 {
                     self.push_event(Event::SoftBreak);
                 }
-                if process_callouts {
-                    let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
-                    if callout_nums.is_empty() {
-                        self.push_event(Event::Text(Cow::Borrowed(cline)));
-                    } else {
-                        for &n in callout_nums.iter().rev() {
-                            self.push_event(Event::CalloutRef(n));
-                        }
-                        self.push_event(Event::Text(Cow::Borrowed(stripped)));
-                    }
+                if markers.is_empty() {
+                    self.push_event(Event::Text(Cow::Borrowed(text)));
                 } else {
-                    self.push_event(Event::Text(Cow::Borrowed(cline)));
+                    self.push_callout_events_resolved(markers, text);
                 }
             }
             // Push Start on top of content
@@ -2063,23 +2102,35 @@ impl<'a> BlockScanner<'a> {
             .unwrap_or(SubstitutionSet::VERBATIM);
         let process_callouts = resolved_subs.has(SubstitutionSet::CALLOUTS);
 
+        // Pre-parse callout markers in forward order to resolve autonumbers
+        let parsed_lines: Vec<(&str, Vec<scanner::CalloutMarker>)> = if process_callouts {
+            let mut auto_num: u32 = 0;
+            content_lines.iter().map(|&cline| {
+                let (stripped, markers) = scanner::strip_callout_markers(cline);
+                if markers.is_empty() {
+                    (cline, Vec::new())
+                } else {
+                    let resolved: Vec<_> = markers.into_iter().map(|m| match m {
+                        scanner::CalloutMarker::Standard(0) => { auto_num += 1; scanner::CalloutMarker::Standard(auto_num) }
+                        scanner::CalloutMarker::XmlComment(0) => { auto_num += 1; scanner::CalloutMarker::XmlComment(auto_num) }
+                        other => other,
+                    }).collect();
+                    (stripped, resolved)
+                }
+            }).collect()
+        } else {
+            content_lines.iter().map(|&cline| (cline, Vec::new())).collect()
+        };
+
         self.push_event(Event::End(TagEnd::SourceBlock));
-        for (i, &cline) in content_lines.iter().enumerate().rev() {
-            if i < content_lines.len() - 1 {
+        for (i, (text, markers)) in parsed_lines.iter().enumerate().rev() {
+            if i < parsed_lines.len() - 1 {
                 self.push_event(Event::SoftBreak);
             }
-            if process_callouts {
-                let (stripped, callout_nums) = scanner::strip_callout_markers(cline);
-                if callout_nums.is_empty() {
-                    self.push_event(Event::Text(Cow::Borrowed(cline)));
-                } else {
-                    for &n in callout_nums.iter().rev() {
-                        self.push_event(Event::CalloutRef(n));
-                    }
-                    self.push_event(Event::Text(Cow::Borrowed(stripped)));
-                }
+            if markers.is_empty() {
+                self.push_event(Event::Text(Cow::Borrowed(text)));
             } else {
-                self.push_event(Event::Text(Cow::Borrowed(cline)));
+                self.push_callout_events_resolved(markers, text);
             }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
@@ -3629,6 +3680,7 @@ mod tests {
             Event::Start(Tag::SourceBlock { language: None }),
             Event::Text(Cow::Borrowed("code ")),
             Event::CalloutRef(1),
+            Event::Text(Cow::Borrowed(" ")),
             Event::CalloutRef(2),
             Event::End(TagEnd::SourceBlock),
         ]);

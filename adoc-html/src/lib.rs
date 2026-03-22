@@ -602,6 +602,18 @@ impl HtmlRenderer {
                 target.push_str(&num.to_string());
                 target.push_str(")</b>");
             }
+            Event::XmlCalloutRef(num) => {
+                let target = if self.in_source_block {
+                    if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
+                } else {
+                    output
+                };
+                target.push_str("&lt;!--");
+                target.push_str("<b class=\"conum\">(");
+                target.push_str(&num.to_string());
+                target.push_str(")</b>");
+                target.push_str("--&gt;");
+            }
             Event::Toc => {
                 if !self.toc_auto_seen {
                     self.toc_auto_seen = true;
@@ -3315,7 +3327,7 @@ mod tests {
     fn test_callout_multiple_per_line_html() {
         let input = "[source]\n----\ncode <1> <2>\n----\n<1> First\n<2> Second";
         let html = to_html(input);
-        assert!(html.contains("<b class=\"conum\">(1)</b><b class=\"conum\">(2)</b>"));
+        assert!(html.contains("<b class=\"conum\">(1)</b> <b class=\"conum\">(2)</b>"));
         assert!(html.contains("<li><p>First</p></li>"));
         assert!(html.contains("<li><p>Second</p></li>"));
     }

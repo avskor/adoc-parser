@@ -351,12 +351,46 @@ pub fn is_include_directive(line: &str) -> Option<(&str, &str)> {
     Some((path, attrs))
 }
 
-pub fn strip_callout_markers(line: &str) -> (&str, Vec<u32>) {
-    let mut numbers = Vec::new();
+/// Type of callout marker found in source code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalloutMarker {
+    /// `<N>` — standard numbered callout; `<.>` → number 0 (autonumber)
+    Standard(u32),
+    /// `<!--N-->` — XML comment callout; `<!--.-->` → number 0 (autonumber)
+    XmlComment(u32),
+}
+
+pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
+    let mut markers = Vec::new();
     let mut end = line.len();
 
     loop {
         let trimmed = line[..end].trim_end();
+        if trimmed.is_empty() {
+            break;
+        }
+
+        // Try XML comment callout: <!--N--> or <!--.-->
+        if let Some(before_close) = trimmed.strip_suffix("-->") {
+            if let Some(open_pos) = before_close.rfind("<!--") {
+                let inner = &before_close[open_pos + 4..];
+                let num = if inner == "." {
+                    Some(0u32)
+                } else if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                    inner.parse::<u32>().ok()
+                } else {
+                    None
+                };
+                if let Some(n) = num {
+                    markers.push(CalloutMarker::XmlComment(n));
+                    end = open_pos;
+                    continue;
+                }
+            }
+            break;
+        }
+
+        // Try standard callout: <N> or <.>
         if !trimmed.ends_with('>') {
             break;
         }
@@ -364,21 +398,25 @@ pub fn strip_callout_markers(line: &str) -> (&str, Vec<u32>) {
             Some(pos) => pos,
             None => break,
         };
-        let digits = &trimmed[open + 1..trimmed.len() - 1];
-        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-            break;
-        }
-        match digits.parse::<u32>() {
-            Ok(n) => {
-                numbers.push(n);
+        let inner = &trimmed[open + 1..trimmed.len() - 1];
+        let num = if inner == "." {
+            Some(0u32)
+        } else if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+            inner.parse::<u32>().ok()
+        } else {
+            None
+        };
+        match num {
+            Some(n) => {
+                markers.push(CalloutMarker::Standard(n));
                 end = open;
             }
-            Err(_) => break,
+            None => break,
         }
     }
 
-    numbers.reverse();
-    (&line[..end], numbers)
+    markers.reverse();
+    (&line[..end], markers)
 }
 
 pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
@@ -1359,13 +1397,15 @@ mod tests {
 
     #[test]
     fn test_strip_callout_markers() {
+        use super::CalloutMarker::*;
+        // Standard numbered
         assert_eq!(
             strip_callout_markers("require 'sinatra' <1>"),
-            ("require 'sinatra' ", vec![1])
+            ("require 'sinatra' ", vec![Standard(1)])
         );
         assert_eq!(
             strip_callout_markers("code <1> <2>"),
-            ("code ", vec![1, 2])
+            ("code ", vec![Standard(1), Standard(2)])
         );
         assert_eq!(
             strip_callout_markers("no callouts"),
@@ -1373,11 +1413,33 @@ mod tests {
         );
         assert_eq!(
             strip_callout_markers("<1>"),
-            ("", vec![1])
+            ("", vec![Standard(1)])
         );
         assert_eq!(
             strip_callout_markers("code <12>"),
-            ("code ", vec![12])
+            ("code ", vec![Standard(12)])
+        );
+        // Autonumbered
+        assert_eq!(
+            strip_callout_markers("code <.>"),
+            ("code ", vec![Standard(0)])
+        );
+        assert_eq!(
+            strip_callout_markers("code <.> <.>"),
+            ("code ", vec![Standard(0), Standard(0)])
+        );
+        // XML comment callouts
+        assert_eq!(
+            strip_callout_markers("code <!--1-->"),
+            ("code ", vec![XmlComment(1)])
+        );
+        assert_eq!(
+            strip_callout_markers("code <!--.-->"),
+            ("code ", vec![XmlComment(0)])
+        );
+        assert_eq!(
+            strip_callout_markers("  <title>Title</title> <!--1-->"),
+            ("  <title>Title</title> ", vec![XmlComment(1)])
         );
     }
 
