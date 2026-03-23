@@ -226,7 +226,7 @@ impl<'a> BlockScanner<'a> {
             .map(|s| Cow::Owned(s.clone()));
         let subs = attrs.substitution_set(default_subs);
         // Pass through named attributes that are not consumed by the parser
-        let named: Vec<(Cow<'_, str>, Cow<'_, str>)> = attrs.named.iter()
+        let mut named: Vec<(Cow<'_, str>, Cow<'_, str>)> = attrs.named.iter()
             .filter(|(k, _)| !matches!(k.as_str(), "format" | "subs"))
             .map(|(k, v)| (Cow::Owned(k.clone()), Cow::Owned(v.clone())))
             // Pass positional[1] as "attribution" and positional[2] as "citetitle" only for quote/verse blocks
@@ -237,6 +237,7 @@ impl<'a> BlockScanner<'a> {
                 .filter(|_| matches!(attrs.positional.first().map(|s| s.as_str()), Some("quote") | Some("verse")))
                 .map(|s| (Cow::Borrowed("citetitle"), Cow::Owned(s.clone()))))
             .collect();
+        named.sort_by(|(a, _), (b, _)| a.cmp(b));
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
             || !attrs.options.is_empty() || !named.is_empty() || subs.is_some()
         {
@@ -3174,6 +3175,7 @@ mod tests {
         let input = "|===\n| A | B\n| C | D\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3202,6 +3204,7 @@ mod tests {
         let input = "|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -3241,6 +3244,7 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         // num_cols = 1 (first line has 1 cell), so 4 rows of 1 cell each
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("1".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3302,7 +3306,7 @@ mod tests {
         let input = "[%header]\n|===\n| H1 | H2\n| C1 | C2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())], named: vec![], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into())], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -3333,7 +3337,7 @@ mod tests {
         let input = "[%footer]\n|===\n| A | B\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())], named: vec![], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("footer".into())], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3364,7 +3368,7 @@ mod tests {
         let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], named: vec![], subs: None },
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableHead),
             Event::Start(Tag::TableRow),
@@ -3405,6 +3409,7 @@ mod tests {
         let input = "|===\n| A 2+| B spans\n| C | D | E\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("3".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3436,6 +3441,7 @@ mod tests {
         let input = "|===\n.2+| A | B\n| C\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3485,6 +3491,7 @@ mod tests {
         let input = "|===\n^| centered >.^| right-middle | normal\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("3".into()))], subs: None },
             Event::Start(Tag::Table),
             Event::Start(Tag::TableBody),
             Event::Start(Tag::TableRow),
@@ -3530,7 +3537,7 @@ mod tests {
         let input = "[%autowidth]\n|===\n| A | B\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events[0], Event::BlockMetadata {
-            style: None, id: None, roles: vec![], options: vec![Cow::Owned("autowidth".into())], named: vec![], subs: None,
+            style: None, id: None, roles: vec![], options: vec![Cow::Owned("autowidth".into())], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None,
         });
         assert_eq!(events[1], Event::Start(Tag::Table));
     }
@@ -3541,7 +3548,7 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events[0], Event::BlockMetadata {
             style: None, id: None, roles: vec![], options: vec![],
-            named: vec![(Cow::Owned("stripes".into()), Cow::Owned("even".into()))],
+            named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into())), (Cow::Owned("stripes".into()), Cow::Owned("even".into()))],
             subs: None,
         });
         assert_eq!(events[1], Event::Start(Tag::Table));
@@ -3553,7 +3560,7 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events[0], Event::BlockMetadata {
             style: None, id: None, roles: vec![], options: vec![],
-            named: vec![(Cow::Owned("caption".into()), Cow::Owned("Listing {counter:table-number}. ".into()))],
+            named: vec![(Cow::Owned("caption".into()), Cow::Owned("Listing {counter:table-number}. ".into())), (Cow::Owned("cols".into()), Cow::Owned("2".into()))],
             subs: None,
         });
     }
@@ -3564,7 +3571,7 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events[0], Event::BlockMetadata {
             style: None, id: None, roles: vec![], options: vec![Cow::Owned("autowidth".into())],
-            named: vec![(Cow::Owned("stripes".into()), Cow::Owned("odd".into()))],
+            named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into())), (Cow::Owned("stripes".into()), Cow::Owned("odd".into()))],
             subs: None,
         });
     }
