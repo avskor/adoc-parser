@@ -16,7 +16,7 @@ CRITICAL: Never make commits directly on `master`. Before starting ANY task, ALW
 1. `git checkout master && git pull`
 2. `git checkout -b <branch-name>` (e.g., `feat/add-auth`, `fix/parse-error`)
 
-Only then begin writing code. Before every commit run `cargo clippy --workspace` (fix all warnings), `cargo test -p adoc-compat-tests -- --nocapture` (all 233 compatibility tests against `vendor/asciidoc-parsing-lab` must pass), and `cargo test -p adoc-html-tests -- --nocapture` (HTML compatibility tests vs Asciidoctor).
+Only then begin writing code. Before every commit run `cargo clippy --workspace` (fix all warnings) and `cargo test --workspace` (ALL tests must pass, including parser, html, compat, and html-compat tests).
 
 ## Build & Test Commands
 
@@ -67,8 +67,22 @@ Both `BlockScanner` and `Parser` use `Vec<Event>` as a reversed stack — events
 
 `adoc-html` converts events to HTML via `HtmlRenderer` with a `tag_stack` for tracking open elements. Public API: `to_html(input) -> String` and `push_html(buf, iter)`.
 
-Переведи на русский
 
+## Task Management
+
+At the start of every session:
+1. Read `TODO.md` (project task list)
+2. Read `.claude/session.md` if it exists (previous session context)
+
+Before ending a session or when asked to save progress:
+1. Update `.claude/session.md` — write current status, last action taken, and what to do next
+2. Update `TODO.md` — mark completed tasks `[x]`, add newly discovered tasks as `[ ]`
+
+When starting a new task:
+1. Add it to `TODO.md` if not already there
+2. Break complex tasks into subtasks with dependencies noted
+
+Do NOT put task tracking information in this file (CLAUDE.md). Use TODO.md and .claude/session.md instead.
 
 ## Compact Instructions
 When compressing, preserve in priority order:
