@@ -4783,6 +4783,15 @@ mod tests {
     }
 
     #[test]
+    fn test_body_doctype_ignored() {
+        let html = to_html_with_options(
+            "= Article Title\n\n== Section\n\n:doctype: book\n\ntext",
+            HtmlOptions { standalone: true, ..Default::default() },
+        );
+        assert!(html.contains("<body class=\"article\">"), "body doctype should be ignored. Got: {html}");
+    }
+
+    #[test]
     fn test_builtin_attr_author() {
         let html = to_html("= Title\nJohn Doe <john@example.com>\n\n{author} {firstname} {lastname} {authorinitials} {email}");
         assert!(html.contains("John Doe"), "author. Got: {html}");

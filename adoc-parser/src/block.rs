@@ -503,6 +503,10 @@ impl<'a> BlockScanner<'a> {
                 });
             }
             self.update_id_settings(name, &value);
+            // doctype is a header-only attribute — ignore in body
+            if name == "doctype" {
+                return self.next();
+            }
             return Some(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value,
