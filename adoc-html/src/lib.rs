@@ -194,6 +194,8 @@ struct HtmlRenderer {
     in_unlabeled_xref: bool,
     xref_placeholder_counter: usize,
     xref_placeholders: Vec<(String, String)>,
+    /// Block id -> rendered title HTML, for resolving empty `<<id>>` to a block title.
+    block_ref_titles: Vec<(String, String)>,
     in_header: bool,
     /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
     li_p_open: Vec<bool>,
@@ -278,6 +280,7 @@ impl HtmlRenderer {
             in_unlabeled_xref: false,
             xref_placeholder_counter: 0,
             xref_placeholders: Vec::new(),
+            block_ref_titles: Vec::new(),
             in_header: false,
             li_p_open: Vec::new(),
             li_para_count: Vec::new(),
@@ -716,18 +719,26 @@ impl HtmlRenderer {
         }
 
         if !self.xref_placeholders.is_empty() {
-            let mut id_to_title: HashMap<String, String> = HashMap::new();
+            // Map each anchor id to the ready-to-insert link text. Section titles
+            // are accumulated as plain text and escaped here; block titles are
+            // already rendered HTML and inserted verbatim.
+            let mut id_to_text: HashMap<String, String> = HashMap::new();
             for entry in &self.toc_entries {
-                id_to_title.insert(entry.id.clone(), entry.title.clone());
+                let mut escaped = String::new();
+                html_escape(&mut escaped, &entry.title);
+                id_to_text.insert(entry.id.clone(), escaped);
             }
-            for (placeholder, target_id) in &self.xref_placeholders {
-                let replacement = if let Some(title) = id_to_title.get(target_id) {
-                    let mut escaped = String::new();
-                    html_escape(&mut escaped, title);
-                    escaped
+            for (id, title_html) in &self.block_ref_titles {
+                id_to_text
+                    .entry(id.clone())
+                    .or_insert_with(|| title_html.clone());
+            }
+            for (placeholder, fallback) in &self.xref_placeholders {
+                let replacement = if let Some(text) = id_to_text.get(fallback) {
+                    text.clone()
                 } else {
                     let mut escaped = String::new();
-                    html_escape(&mut escaped, target_id);
+                    html_escape(&mut escaped, fallback);
                     escaped
                 };
                 *output = output.replace(placeholder, &replacement);
@@ -857,6 +868,17 @@ impl HtmlRenderer {
         let tag_end = tag.to_end();
         self.tag_stack.push(tag_end);
         let meta = self.take_block_meta();
+
+        // Record `id -> title` for a titled block so an empty cross-reference
+        // (`<<id>>`) to it resolves to the block's title, like Asciidoctor.
+        // Captured here because both the metadata id and the buffered title are
+        // available regardless of the source order of `[#id]` and `.Title`.
+        if let Some(m) = &meta
+            && let Some(id) = &m.id
+            && let Some(title) = &self.block_title_inner_html
+        {
+            self.block_ref_titles.push((id.clone(), title.clone()));
+        }
 
         // Push subs stack for blocks that affect substitution context
         let meta_subs = meta.as_ref().and_then(|m| m.subs).or(self.pending_subs.take());
@@ -1711,19 +1733,26 @@ impl HtmlRenderer {
                 output.push('>');
             }
             Tag::CrossReference { target, label } => {
-                if target.contains('.') && !target.starts_with('#') {
-                    // Inter-document xref: rewrite .adoc to .html
-                    output.push_str("<a href=\"");
-                    let rewritten = if let Some(base) = target.strip_suffix(".adoc") {
+                let is_interdoc = target.contains('.') && !target.starts_with('#');
+                // Inter-document target with the .adoc extension rewritten to .html.
+                // Asciidoctor uses this rewritten path both as href and, when the xref
+                // has no explicit text, as the auto-generated link text.
+                let interdoc_href = if is_interdoc {
+                    if let Some(base) = target.strip_suffix(".adoc") {
                         format!("{base}.html")
                     } else if let Some((file_part, anchor)) = target.split_once('#')
                         && file_part.ends_with(".adoc")
                     {
-                        format!("{}.html#{anchor}", &file_part[..file_part.len()-5])
+                        format!("{}.html#{anchor}", &file_part[..file_part.len() - 5])
                     } else {
                         target.to_string()
-                    };
-                    html_escape(output, &rewritten);
+                    }
+                } else {
+                    String::new()
+                };
+                if is_interdoc {
+                    output.push_str("<a href=\"");
+                    html_escape(output, &interdoc_href);
                 } else {
                     // Internal xref (anchor reference)
                     output.push_str("<a href=\"#");
@@ -1734,7 +1763,15 @@ impl HtmlRenderer {
                     self.in_unlabeled_xref = true;
                     self.xref_placeholder_counter += 1;
                     let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
-                    self.xref_placeholders.push((placeholder, target.to_string()));
+                    // For an internal xref the stored value is the target id — used as the
+                    // lookup key (resolved to a section/block title in `finish`) and as the
+                    // fallback. For an inter-document xref it is the rewritten .html path.
+                    let fallback = if is_interdoc {
+                        interdoc_href
+                    } else {
+                        target.to_string()
+                    };
+                    self.xref_placeholders.push((placeholder, fallback));
                 }
             }
             Tag::Keyboard => {
