@@ -129,7 +129,9 @@ impl<'a> Iterator for Parser<'a> {
                         for ev in events.into_iter().rev() {
                             self.inline_buffer.push(ev.into_static());
                         }
-                        self.inline_buffer.pop()
+                        // If inline parsing produced no events, continue to the
+                        // next event rather than ending iteration prematurely (D6).
+                        self.inline_buffer.pop().or_else(|| self.next())
                     }
                 } else {
                     // Single-line: zero-copy path
@@ -141,7 +143,8 @@ impl<'a> Iterator for Parser<'a> {
                         for ev in events.into_iter().rev() {
                             self.inline_buffer.push(ev);
                         }
-                        self.inline_buffer.pop()
+                        // See above (D6): don't end iteration on an empty result.
+                        self.inline_buffer.pop().or_else(|| self.next())
                     }
                 }
             }

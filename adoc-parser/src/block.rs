@@ -31,6 +31,11 @@ pub struct BlockScanner<'a> {
     body_started: bool,
     in_continuation: bool,
     had_blank_line: bool,
+    /// Set by `scan_next_block_once` when it consumed a no-event prefix line
+    /// (block attribute / title / comment) and must be re-invoked. The
+    /// `scan_next_block` wrapper loops on this flag instead of recursing, so a
+    /// long run of metadata lines runs in O(1) stack.
+    rescan_requested: bool,
     leveloffset: i32,
     idprefix: String,
     idseparator: String,
@@ -49,6 +54,7 @@ impl<'a> BlockScanner<'a> {
             body_started: false,
             in_continuation: false,
             had_blank_line: false,
+            rescan_requested: false,
             leveloffset: 0,
             idprefix: "_".to_string(),
             idseparator: "_".to_string(),
@@ -424,6 +430,20 @@ impl<'a> BlockScanner<'a> {
     }
 
     fn scan_next_block(&mut self) -> Option<Event<'a>> {
+        // Iterative trampoline: `scan_next_block_once` sets `rescan_requested`
+        // (instead of tail-recursing) when it consumes a metadata-only line, so
+        // a long run of `[attr]`/`.title`/comment lines can't overflow the stack.
+        loop {
+            self.rescan_requested = false;
+            let event = self.scan_next_block_once();
+            if event.is_none() && self.rescan_requested {
+                continue;
+            }
+            return event;
+        }
+    }
+
+    fn scan_next_block_once(&mut self) -> Option<Event<'a>> {
         self.skip_blank_lines();
 
         // Check if current line closes a delimited block
@@ -478,14 +498,16 @@ impl<'a> BlockScanner<'a> {
             self.advance();
             self.had_blank_line = false;
             self.pending_block_attrs = Some(BlockAttributes::parse(attr_str));
-            return self.scan_next_block();
+            self.rescan_requested = true;
+            return None;
         }
 
         // Block title `.Title` — checked before body_started
         if let Some(title) = scanner::is_block_title(line) {
             self.advance();
             self.pending_block_title = Some(title);
-            return self.scan_next_block();
+            self.rescan_requested = true;
+            return None;
         }
 
         // From here on, we're in the document body
@@ -691,7 +713,8 @@ impl<'a> BlockScanner<'a> {
                     break;
                 }
             }
-            return self.scan_next_block();
+            self.rescan_requested = true;
+            return None;
         }
 
         // Callout list
@@ -1397,7 +1420,9 @@ impl<'a> BlockScanner<'a> {
                 TableFormat::Csv => scanner::parse_csv_fields(line),
                 TableFormat::Dsv => scanner::parse_dsv_fields(line),
                 TableFormat::Tsv => scanner::parse_tsv_fields(line),
-                TableFormat::Native => unreachable!(),
+                // Defensive: native tables are parsed elsewhere and never reach
+                // the delimiter-row parser; skip the line rather than panicking.
+                TableFormat::Native => continue,
             };
             rows.push(fields);
         }
@@ -1673,7 +1698,21 @@ impl<'a> BlockScanner<'a> {
                         self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
                     }
                 }
-                _ => unreachable!(),
+                // Defensive: block_style_kind() only yields the styles handled
+                // above; degrade an unknown style to a normal paragraph.
+                _ => {
+                    self.push_event(Event::End(TagEnd::Paragraph));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::Paragraph));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+                    }
+                }
             }
         } else {
             self.push_event(Event::End(TagEnd::Paragraph));
@@ -2383,7 +2422,9 @@ impl<'a> BlockScanner<'a> {
                         Some(BlockContext::OrderedList { .. }) => events.push(Event::End(TagEnd::OrderedList)),
                         Some(BlockContext::CalloutListItem) => events.push(Event::End(TagEnd::CalloutListItem)),
                         Some(BlockContext::CalloutList) => events.push(Event::End(TagEnd::CalloutList)),
-                        _ => unreachable!(),
+                        // Defensive: the outer guard already confirmed one of the
+                        // list contexts above; ignore anything else instead of panic.
+                        _ => {}
                     }
                 }
                 _ => break,

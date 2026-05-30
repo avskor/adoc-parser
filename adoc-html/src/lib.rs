@@ -3023,6 +3023,10 @@ fn html_escape(output: &mut String, text: &str) {
             '<' => output.push_str("&lt;"),
             '>' => output.push_str("&gt;"),
             '"' => output.push_str("&quot;"),
+            // Drop NUL: invalid in HTML, and reserved for the internal xref
+            // placeholder sentinel (\x00XREF_N\x00). Stripping it from user text
+            // keeps that sentinel collision-proof in finish() (D5).
+            '\0' => {}
             _ => output.push(ch),
         }
     }
@@ -3035,6 +3039,8 @@ fn html_escape_text(output: &mut String, text: &str) {
             '&' => output.push_str("&amp;"),
             '<' => output.push_str("&lt;"),
             '>' => output.push_str("&gt;"),
+            // Drop NUL — see `html_escape` (guards the xref sentinel, D5).
+            '\0' => {}
             _ => output.push(ch),
         }
     }
@@ -3048,6 +3054,15 @@ mod tests {
     fn test_simple_paragraph() {
         let html = to_html("Hello world.");
         assert_eq!(html, "<div class=\"paragraph\">\n<p>Hello world.</p>\n</div>\n");
+    }
+
+    #[test]
+    fn test_nul_byte_stripped_from_text() {
+        // D5: NUL bytes are stripped from escaped text so they can never collide
+        // with the internal xref placeholder sentinel (\x00XREF_N\x00).
+        let html = to_html("a\u{0}b");
+        assert!(!html.contains('\u{0}'), "NUL leaked into output: {html:?}");
+        assert!(html.contains("ab"), "text around NUL not preserved: {html}");
     }
 
     #[test]

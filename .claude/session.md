@@ -1,40 +1,40 @@
 # Session context
 
-## Последняя сессия (2026-05-30) — Архитектурный аудит + P0-фиксы
+## Последняя сессия (2026-05-30) — Аудит + P0 (в master) + P1 (на ветке)
 
-Запрос: ознакомиться с проектом, провести архитектурный анализ, определить ошибки и
-недоработки. Затем по выбору пользователя — исправить **P0** (баги корректности/безопасности).
+Полный отчёт аудита: `~/.claude/plans/sequential-dreaming-zebra.md`.
+P0 (D1 экранирование атрибутов, D2 паника ifeval) закоммичен и **влит в master** (`51a650e`, запушен).
 
-### Аудит (полный отчёт: `~/.claude/plans/sequential-dreaming-zebra.md`)
-Три Explore-агента + ручная верификация каждой находки по коду (LSP/чтение). Важно: автопроход
-дал ~4 ложных «critical-паники» — отсеяны проверкой (edition 2024 валидна на rustc 1.96;
-`parser.rs` unwrap защищён `len==1`; UTF-8-срез в `attributes.rs:136` безопасен из-за `take_while`
-на ASCII; include-лимит `MAX_INCLUDE_DEPTH=64` уже есть; «бесконечный цикл» continuation
-ограничен входом; XSS через имя макроса недостижим — валидатор `[a-z0-9_-]`).
+## P1 — надёжность: ветка `fix/p1-robustness` (от master; НЕ закоммичено)
 
-### Сделано: ветка `fix/attr-escaping-and-ifeval` (от master; НЕ закоммичено)
-- **D1** — единое HTML-экранирование значений атрибутов (`adoc-html/src/lib.rs`):
-  - `render_video_tag` (~2886-2966): `width/height/start/end` → `html_escape` (было `push_str`).
-  - `image_base_class` (2450-2474): `float`/`align`-значения → `html_escape(&mut class, …)`.
-  - Корень: несогласованность (id/roles/style/target/poster/alt экранировались, эти — нет).
-    Достижимо: внутренние `"` в значениях не удаляются парсером → пробой атрибута.
-  - +2 теста: `test_video_width_attr_escaped`, `test_block_image_align_float_class_escaped`.
-- **D2** — `preprocessor.rs:908 extract_operand`: guard `len() >= 2` (одиночная кавычка
-  давала `trimmed[1..0]` → паника на `ifeval::[" < 5]`). +1 тест `test_ifeval_lone_quote_operand_no_panic`.
+- **D3** — устранена неограниченная рекурсия `scan_next_block` (`adoc-parser/src/block.rs`).
+  Приём: трамплин. Тело переименовано в `scan_next_block_once`; добавлено поле
+  `rescan_requested: bool`; 3 внутренних хвостовых `return self.scan_next_block()`
+  (`[attr]`, `.title`, comment) заменены на `self.rescan_requested = true; return None;`.
+  Новый тонкий `scan_next_block` крутит `loop`, перезапуская `_once` пока стоит флаг →
+  O(1) стек. Внешние вызовы остались на обёртке. **НЕ переотступал тело** (файл не fmt-clean).
+  +2 стресс-теста в `tests/integration.rs` (50k `[attr]` / 50k `.title`).
+- **D4** — три `unreachable!()` в `block.rs` → мягкая деградация: `TableFormat::Native` в
+  delimiter-парсере → `continue`; неизвестный block-style → обычный параграф (зеркало ветки
+  `else`); лишний контекст в DL-cleanup → `_ => {}`. (Без `debug_assert!(false)` — иначе clippy
+  `assertions_on_constants`.)
+- **D5** — xref-sentinel `\x00XREF_N\x00` (резолв `String::replace` в `finish`) сделан
+  неподделываемым: `html_escape`/`html_escape_text` отбрасывают `\x00` (`'\0' => {}`), поэтому
+  NUL не попадает в выводимый esc-текст. Лёгкий фикс вместо рискованного переписывания
+  резолвера (xref недавно тщательно чинили). +1 тест `test_nul_byte_stripped_from_text`.
+- **D6** — `adoc-parser/src/parser.rs`: обе ветки `self.inline_buffer.pop()` →
+  `pop().or_else(|| self.next())`, чтобы пустой результат инлайн-парсинга не обрывал итератор.
 
 ### Статус (верифицировано)
 - `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное
-  (parser 428→429, html 297→299, остальные без изменений; 0 failed).
-- CLI end-to-end: `width="1&quot; onmouseover=&quot;alert(1)"`, `class="imageblock a&lt;b&gt;c"`
-  (инъекция нейтрализована); `#t=60,120` / `text-center` — позитив без регрессий.
+  (parser 429, html 300, integration 25, ASG/html_compat OK; 0 failed, 0 паник).
+- CLI-санити: `[.lead]`+`.title`+source → корректный вывод (трамплин без регрессий).
 
 ### Что дальше
-- **Спросить про коммит** ветки `fix/attr-escaping-and-ifeval` (по правилу — коммит только по запросу).
-- Отложенные находки аудита (в TODO.md, раздел «Из аудита 2026-05-30»): **D3** (рекурсия
-  `scan_next_block` 481/488 → loop), **D4** (`unreachable!()`→graceful), **D5** (xref-плейсхолдер
-  через map), **D6** (parser empty-inline), гигиена (FEATURES-сноска, Cargo-метаданные, semver),
-  единая дисциплина экранирования.
-- Совместимость (Фаза 3): кластеры NCR-типографики, bare-links, header-после-комментариев.
+- **Спросить про коммит/мерж/пуш** ветки `fix/p1-robustness` (по правилу — только по запросу).
+- Осталось из аудита (TODO.md): декомпозиция гигантских функций, doc-тесты, дедуп `try_*_macro`,
+  README (238), сноска FEATURES.md, метаданные Cargo, единая дисциплина экранирования (P2);
+  кластеры совместимости (P3).
 
 ### Предостережения
 - НЕ `cargo fmt` на крейт (не fmt-clean). Коммит только по запросу пользователя.

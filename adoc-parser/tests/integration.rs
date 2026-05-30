@@ -307,3 +307,41 @@ fn test_many_comment_lines_no_stack_overflow() {
         "paragraph after a large comment block must still be parsed"
     );
 }
+
+#[test]
+fn test_many_block_attribute_lines_no_stack_overflow() {
+    // Regression (D3): consecutive `[attr]` lines used to tail-recurse once per
+    // line in scan_next_block (overflowing the ~2 MB test-thread stack). They now
+    // loop via the rescan_requested trampoline, so a huge run parses fine.
+    let mut input = String::with_capacity(50_000 * 8);
+    for _ in 0..50_000 {
+        input.push_str("[.role]\n");
+    }
+    input.push_str("Real paragraph.");
+
+    let events = parse(&input);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Text(t) if t.as_ref() == "Real paragraph.")),
+        "paragraph after a large run of block-attribute lines must still parse"
+    );
+}
+
+#[test]
+fn test_many_block_title_lines_no_stack_overflow() {
+    // Regression (D3): consecutive `.Title` lines likewise recursed per line.
+    let mut input = String::with_capacity(50_000 * 8);
+    for _ in 0..50_000 {
+        input.push_str(".Title\n");
+    }
+    input.push_str("Real paragraph.");
+
+    let events = parse(&input);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Text(t) if t.as_ref() == "Real paragraph.")),
+        "paragraph after a large run of block-title lines must still parse"
+    );
+}
