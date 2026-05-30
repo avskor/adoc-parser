@@ -1,3 +1,9 @@
+//! HTML renderer for the `adoc_parser` AsciiDoc event stream.
+//!
+//! The entry point is [`to_html`], which parses AsciiDoc source and renders a
+//! standalone HTML document. Use [`push_html`] to render a parser event stream
+//! into an existing buffer, or the `*_with_options` variants for embedded output.
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
@@ -50,11 +56,25 @@ pub struct HtmlOptions {
     pub attributes: HashMap<String, String>,
 }
 
+/// Render a parser event stream into the `String` buffer `s`.
+///
+/// ```
+/// use adoc_parser::Parser;
+/// let mut buf = String::new();
+/// adoc_html::push_html(&mut buf, Parser::new("Hello"));
+/// assert!(buf.contains("Hello"));
+/// ```
 pub fn push_html<'a>(s: &mut String, iter: impl Iterator<Item = Event<'a>>) {
     let mut renderer = HtmlRenderer::new();
     renderer.run(s, iter);
 }
 
+/// Parse AsciiDoc `input` and render it as a standalone HTML document.
+///
+/// ```
+/// let html = adoc_html::to_html("Hello *world*");
+/// assert!(html.contains("<strong>world</strong>"));
+/// ```
 pub fn to_html(input: &str) -> String {
     let parser = adoc_parser::Parser::new(input);
     let mut output = String::new();

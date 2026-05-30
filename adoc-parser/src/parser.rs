@@ -4,6 +4,16 @@ use crate::block::BlockScanner;
 use crate::event::{DelimitedBlockKind, Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::InlineParser;
 
+/// A pull parser that turns AsciiDoc source into a stream of [`Event`]s.
+///
+/// `Parser` implements [`Iterator`], yielding [`Event::Start`]/[`Event::End`]
+/// pairs for blocks and inline formatting (in the style of `pulldown-cmark`).
+///
+/// ```
+/// use adoc_parser::{Parser, Event, Tag};
+/// let mut parser = Parser::new("Hello *world*");
+/// assert!(parser.any(|ev| matches!(ev, Event::Start(Tag::Strong { .. }))));
+/// ```
 pub struct Parser<'a> {
     block_scanner: BlockScanner<'a>,
     inline_buffer: Vec<Event<'a>>,
