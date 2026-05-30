@@ -13,7 +13,13 @@ block-level scanning followed by inline parsing.
 | **adoc-html** | HTML renderer consuming parser events |
 | **adoc-wasm** | Thin wasm-bindgen wrapper exposing `to_html` |
 | **adoc-cli** | CLI tool (`adoc`) for converting files |
-| **adoc-compat-tests** | Compatibility test suite (233/233 passing) |
+| **adoc-compat-tests** | Structural conformance vs `asciidoc-parsing-lab` ASG fixtures (233/233 passing) |
+| **adoc-html-tests** | HTML-output compatibility vs Asciidoctor (semantic DOM comparison) |
+
+The `adoc-compat-tests` figure measures *structural* conformance — whether the parser produces
+the expected event/AST structure for the `asciidoc-parsing-lab` reference fixtures. Byte-level
+HTML-output compatibility with Asciidoctor is a separate, ongoing concern, exercised by
+`adoc-html-tests`.
 
 ## Build
 
@@ -59,5 +65,6 @@ Run tests for a specific crate:
 ```bash
 cargo test -p adoc-parser        # Core parser
 cargo test -p adoc-html          # HTML backend
-cargo test -p adoc-compat-tests  # Compatibility tests
+cargo test -p adoc-compat-tests  # ASG structural conformance
+cargo test -p adoc-html-tests    # HTML-output compatibility vs Asciidoctor
 ```
