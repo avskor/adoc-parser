@@ -1207,9 +1207,7 @@ impl HtmlRenderer {
                         html_escape(output, lang);
                         output.push('"');
                     }
-                    output.push_str(" data-lang=\"");
-                    html_escape(output, lang);
-                    output.push('"');
+                    write_attr(output, "data-lang", lang);
                 }
 
                 if let Some(hl_spec) = meta.as_ref()
@@ -1300,13 +1298,12 @@ impl HtmlRenderer {
                     Self::write_meta_attrs(output, &wrapper_meta, &wrapper_class);
                     output.push_str(">\n");
                 } else {
-                    output.push_str("<div class=\"");
-                    output.push_str(&wrapper_class);
-                    output.push_str("\">\n");
+                    output.push_str("<div");
+                    write_attr(output, "class", &wrapper_class);
+                    output.push_str(">\n");
                 }
-                output.push_str("<ol class=\"");
-                output.push_str(style_name);
-                output.push('"');
+                output.push_str("<ol");
+                write_attr(output, "class", style_name);
                 let type_attr = match style_name {
                     "loweralpha" => Some("a"),
                     "upperalpha" => Some("A"),
@@ -1571,26 +1568,20 @@ impl HtmlRenderer {
                     html_escape(output, href);
                     output.push_str("\">");
                 }
-                output.push_str("<img src=\"");
-                html_escape(output, &target.as_ref().replace(' ', "%20"));
+                output.push_str("<img");
+                write_attr(output, "src", &target.as_ref().replace(' ', "%20"));
                 // Auto-generate alt from filename if empty
                 let effective_alt = if alt.as_ref().is_empty() {
                     auto_alt_from_target(target)
                 } else {
                     alt.to_string()
                 };
-                output.push_str("\" alt=\"");
-                html_escape(output, &effective_alt);
-                output.push('"');
+                write_attr(output, "alt", &effective_alt);
                 if let Some(w) = width {
-                    output.push_str(" width=\"");
-                    html_escape(output, w);
-                    output.push('"');
+                    write_attr(output, "width", w);
                 }
                 if let Some(h) = height {
-                    output.push_str(" height=\"");
-                    html_escape(output, h);
-                    output.push('"');
+                    write_attr(output, "height", h);
                 }
                 output.push('>');
                 if has_link {
@@ -1635,25 +1626,19 @@ impl HtmlRenderer {
                     html_escape(output, href);
                     output.push_str("\">");
                 }
-                output.push_str("<img src=\"");
-                html_escape(output, &target.as_ref().replace(' ', "%20"));
+                output.push_str("<img");
+                write_attr(output, "src", &target.as_ref().replace(' ', "%20"));
                 let effective_alt = if alt.as_ref().is_empty() {
                     auto_alt_from_target(target)
                 } else {
                     alt.to_string()
                 };
-                output.push_str("\" alt=\"");
-                html_escape(output, &effective_alt);
-                output.push('"');
+                write_attr(output, "alt", &effective_alt);
                 if let Some(w) = width {
-                    output.push_str(" width=\"");
-                    html_escape(output, w);
-                    output.push('"');
+                    write_attr(output, "width", w);
                 }
                 if let Some(h) = height {
-                    output.push_str(" height=\"");
-                    html_escape(output, h);
-                    output.push('"');
+                    write_attr(output, "height", h);
                 }
                 output.push('>');
                 if has_link {
@@ -1705,13 +1690,10 @@ impl HtmlRenderer {
                 output.push_str("<sub>");
             }
             Tag::Link { url, window, nofollow, is_bare } => {
-                output.push_str("<a href=\"");
-                html_escape(output, url);
-                output.push('"');
+                output.push_str("<a");
+                write_attr(output, "href", url);
                 if let Some(w) = window {
-                    output.push_str(" target=\"");
-                    html_escape(output, w);
-                    output.push('"');
+                    write_attr(output, "target", w);
                 }
                 let has_noopener = window.is_some();
                 if has_noopener || *nofollow {
@@ -2425,7 +2407,11 @@ impl HtmlRenderer {
             output.push_str(" class=\"");
             let mut first = true;
             if !default_class.is_empty() {
-                output.push_str(default_class);
+                // Escape at the emission boundary: every value entering an HTML
+                // attribute is escaped exactly once here (D1/D7 systemic rule).
+                // No-op for fixed class literals; protects user-derived default_class
+                // such as the ordered-list `olist {style}` wrapper class.
+                html_escape(output, default_class);
                 first = false;
             }
             if let Some(s) = style {
@@ -2453,8 +2439,10 @@ impl HtmlRenderer {
             for (k, v) in &m.named {
                 match k.as_str() {
                     "float" => {
+                        // Build raw tokens; escaping happens once at the emission
+                        // boundary in write_meta_attrs (D1/D7 rule, avoids double-escape).
                         class.push(' ');
-                        html_escape(&mut class, v);
+                        class.push_str(v);
                     }
                     "align" => {
                         let css = match v.as_str() {
@@ -2464,7 +2452,7 @@ impl HtmlRenderer {
                             other => other,
                         };
                         class.push(' ');
-                        html_escape(&mut class, css);
+                        class.push_str(css);
                     }
                     _ => {}
                 }
@@ -2588,9 +2576,7 @@ impl HtmlRenderer {
         html_escape(output, &classes);
         output.push('"');
         if let Some(ref t) = title {
-            output.push_str(" title=\"");
-            html_escape(output, t);
-            output.push('"');
+            write_attr(output, "title", t);
         }
         output.push_str("></i>");
 
@@ -2884,14 +2870,10 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
         Some("youtube") => {
             output.push_str("<iframe");
             if let Some(w) = media.width {
-                output.push_str(" width=\"");
-                html_escape(output, w);
-                output.push('"');
+                write_attr(output, "width", w);
             }
             if let Some(h) = media.height {
-                output.push_str(" height=\"");
-                html_escape(output, h);
-                output.push('"');
+                write_attr(output, "height", h);
             }
             output.push_str(" src=\"https://www.youtube.com/embed/");
             html_escape(output, target);
@@ -2918,14 +2900,10 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
         Some("vimeo") => {
             output.push_str("<iframe");
             if let Some(w) = media.width {
-                output.push_str(" width=\"");
-                html_escape(output, w);
-                output.push('"');
+                write_attr(output, "width", w);
             }
             if let Some(h) = media.height {
-                output.push_str(" height=\"");
-                html_escape(output, h);
-                output.push('"');
+                write_attr(output, "height", h);
             }
             output.push_str(" src=\"https://player.vimeo.com/video/");
             html_escape(output, target);
@@ -2956,19 +2934,13 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             output.push('"');
 
             if let Some(w) = media.width {
-                output.push_str(" width=\"");
-                html_escape(output, w);
-                output.push('"');
+                write_attr(output, "width", w);
             }
             if let Some(h) = media.height {
-                output.push_str(" height=\"");
-                html_escape(output, h);
-                output.push('"');
+                write_attr(output, "height", h);
             }
             if let Some(p) = media.poster {
-                output.push_str(" poster=\"");
-                html_escape(output, p);
-                output.push('"');
+                write_attr(output, "poster", p);
             }
             if !media.nocontrols {
                 output.push_str(" controls");
@@ -2987,9 +2959,8 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
 fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
     let media = parse_media_attrs(attrs);
 
-    output.push_str("<audio src=\"");
-    html_escape(output, target);
-    output.push('"');
+    output.push_str("<audio");
+    write_attr(output, "src", target);
 
     if !media.nocontrols {
         output.push_str(" controls");
@@ -3046,6 +3017,17 @@ fn html_escape_text(output: &mut String, text: &str) {
     }
 }
 
+/// Emit a single HTML attribute ` name="value"` with the value HTML-escaped.
+/// Canonical path for any attribute carrying a non-constant value — keeps the
+/// "everything written into an attribute goes through html_escape" rule structural (D1 root).
+fn write_attr(output: &mut String, name: &str, value: &str) {
+    output.push(' ');
+    output.push_str(name);
+    output.push_str("=\"");
+    html_escape(output, value);
+    output.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3063,6 +3045,72 @@ mod tests {
         let html = to_html("a\u{0}b");
         assert!(!html.contains('\u{0}'), "NUL leaked into output: {html:?}");
         assert!(html.contains("ab"), "text around NUL not preserved: {html}");
+    }
+
+    #[test]
+    fn test_attribute_escaping_invariant() {
+        // D1/D7 systemic rule: every value entering an HTML attribute is HTML-escaped.
+        // Each case injects a payload through a distinct user-controllable attribute
+        // channel and asserts BOTH:
+        //   (a) the raw breakout substring is ABSENT — no attribute/tag injection;
+        //   (b) the escaped form is PRESENT — proving the payload actually reached the
+        //       attribute, so the case can't pass vacuously by being dropped upstream.
+        //
+        // Angle payload `<XSS>` is used for channels whose tokenizer strips `"`/space
+        // (e.g. ordered-list style); quote payload `XSS"Q` for the rest.
+        const A_RAW: &str = "<XSS>";
+        const A_ESC: &str = "&lt;XSS&gt;";
+        const Q_RAW: &str = "XSS\"Q";
+        const Q_ESC: &str = "XSS&quot;Q";
+
+        // (input, raw_breakout_must_be_absent, escaped_form_must_be_present)
+        let cases: &[(&str, &str, &str)] = &[
+            // D7: ordered-list style flows raw into <ol class>/<div class> — the hole this fixes.
+            ("[<XSS>]\n. item", A_RAW, A_ESC),
+            // image align=other → image_base_class → write_meta_attrs boundary (no double-escape).
+            ("image::a.png[align=<XSS>]", A_RAW, A_ESC),
+            // section id rendered onto the heading element.
+            ("[#s<XSS>]\n== Title\n\nbody", A_RAW, A_ESC),
+            // icon role appended to the <i> class list.
+            ("icon:home[role=<XSS>]", A_RAW, A_ESC),
+            // block id / role via write_meta_attrs.
+            ("[#XSS\"Q]\nHello", Q_RAW, Q_ESC),
+            ("[.XSS\"Q]\nHello", Q_RAW, Q_ESC),
+            // link href with a quote in the URL.
+            ("https://example.test/XSS\"Q[label]", Q_RAW, Q_ESC),
+            // image target (src) and auto alt.
+            ("image::XSS\"Q.png[]", Q_RAW, Q_ESC),
+            // video width — the D1 media channel, now routed through write_attr.
+            ("video::v[width=XSS\"Q]", Q_RAW, Q_ESC),
+            // icon title.
+            ("icon:home[title=XSS\"Q]", Q_RAW, Q_ESC),
+        ];
+
+        for (input, raw, esc) in cases {
+            let html = to_html(input);
+            assert!(
+                !html.contains(raw),
+                "attribute breakout for input {input:?}: raw {raw:?} present:\n{html}"
+            );
+            assert!(
+                html.contains(esc),
+                "vacuous case for input {input:?}: escaped {esc:?} absent — payload never reached an attribute:\n{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_attribute_escaping_no_overescape() {
+        // The boundary-escape rule must be a no-op for legitimate class tokens: escaping
+        // exactly once (never double-escaping) keeps ordinary output byte-for-byte stable.
+        let ol = to_html("[loweralpha]\n. item");
+        assert!(ol.contains("<div class=\"olist loweralpha\">"), "ol wrapper class corrupted: {ol}");
+        assert!(ol.contains("<ol class=\"loweralpha\""), "ol class corrupted: {ol}");
+
+        // image align: float/align tokens are escaped once at the boundary, not in
+        // image_base_class — so a plain value stays clean (no &amp;quot; double-escape).
+        let img = to_html("image::a.png[align=center]");
+        assert!(img.contains("class=\"imageblock text-center\""), "image align class corrupted: {img}");
     }
 
     #[test]
