@@ -962,24 +962,28 @@ impl<'a> InlineState<'a> {
         true
     }
 
+    /// Parse a `<prefix>[content]` bracket macro from the current position.
+    /// Returns `(content, new_pos)` (position just past `]`), or `None` if there
+    /// is no `[...]`. Does not emit events or move `self.pos` — the caller owns
+    /// flush/emit/empty-policy.
+    fn parse_bracket_macro(&self, prefix_len: usize) -> Option<(&'a str, usize)> {
+        let rest = &self.input[self.pos + prefix_len..];
+        if !rest.starts_with('[') {
+            return None;
+        }
+        let bracket_end = rest.find(']')?;
+        Some((&rest[1..bracket_end], self.pos + prefix_len + bracket_end + 1))
+    }
+
     fn try_kbd_macro(
         &mut self,
         events: &mut Vec<Event<'a>>,
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + 4..]; // skip "kbd:"
-
-        if !rest.starts_with('[') {
+        let Some((content, new_pos)) = self.parse_bracket_macro(4) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-
-        let content = &rest[1..bracket_end];
         if content.is_empty() {
             return false;
         }
@@ -989,7 +993,7 @@ impl<'a> InlineState<'a> {
         events.push(Event::Text(Cow::Borrowed(content)));
         events.push(Event::End(TagEnd::Keyboard));
 
-        self.pos = start_pos + 4 + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
     }
@@ -1000,18 +1004,9 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + 4..]; // skip "btn:"
-
-        if !rest.starts_with('[') {
+        let Some((content, new_pos)) = self.parse_bracket_macro(4) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-
-        let content = &rest[1..bracket_end];
         if content.is_empty() {
             return false;
         }
@@ -1021,9 +1016,31 @@ impl<'a> InlineState<'a> {
         events.push(Event::Text(Cow::Borrowed(content)));
         events.push(Event::End(TagEnd::Button));
 
-        self.pos = start_pos + 4 + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
+    }
+
+    /// Parse a `<prefix>target[items]` bracket macro from the current position.
+    /// Returns `(target, items, new_pos)` (position just past `]`), or `None` if
+    /// the target is empty or the `[...]` is missing/malformed. Caller owns
+    /// flush/emit.
+    fn parse_target_bracket_macro(&self, prefix_len: usize) -> Option<(&'a str, &'a str, usize)> {
+        let rest = &self.input[self.pos + prefix_len..];
+        let bracket_start = rest.find('[')?;
+        let target = &rest[..bracket_start];
+        if target.is_empty() {
+            return None;
+        }
+        let bracket_end = rest.find(']')?;
+        if bracket_end <= bracket_start {
+            return None;
+        }
+        Some((
+            target,
+            &rest[bracket_start + 1..bracket_end],
+            self.pos + prefix_len + bracket_end + 1,
+        ))
     }
 
     fn try_menu_macro(
@@ -1032,27 +1049,9 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + 5..]; // skip "menu:"
-
-        let bracket_start = match rest.find('[') {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let target = &rest[..bracket_start];
-        if target.is_empty() {
+        let Some((target, items, new_pos)) = self.parse_target_bracket_macro(5) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-        if bracket_end <= bracket_start {
-            return false;
-        }
-
-        let items = &rest[bracket_start + 1..bracket_end];
 
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Start(Tag::Menu {
@@ -1063,7 +1062,7 @@ impl<'a> InlineState<'a> {
         }
         events.push(Event::End(TagEnd::Menu));
 
-        self.pos = start_pos + 5 + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
     }
@@ -1074,27 +1073,9 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + 5..]; // skip "icon:"
-
-        let bracket_start = match rest.find('[') {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let name = &rest[..bracket_start];
-        if name.is_empty() {
+        let Some((name, attrs, new_pos)) = self.parse_target_bracket_macro(5) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-        if bracket_end <= bracket_start {
-            return false;
-        }
-
-        let attrs = &rest[bracket_start + 1..bracket_end];
 
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Start(Tag::Icon {
@@ -1105,7 +1086,7 @@ impl<'a> InlineState<'a> {
         }
         events.push(Event::End(TagEnd::Icon));
 
-        self.pos = start_pos + 5 + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
     }
@@ -1118,18 +1099,9 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + prefix_len..]; // skip "stem:" / "latexmath:" / "asciimath:"
-
-        if !rest.starts_with('[') {
+        let Some((content, new_pos)) = self.parse_bracket_macro(prefix_len) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-
-        let content = &rest[1..bracket_end];
 
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Start(Tag::Stem {
@@ -1140,7 +1112,7 @@ impl<'a> InlineState<'a> {
         }
         events.push(Event::End(TagEnd::Stem));
 
-        self.pos = start_pos + prefix_len + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
     }
@@ -1151,23 +1123,14 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let rest = &self.input[start_pos + 5..]; // skip "pass:"
-
-        if !rest.starts_with('[') {
+        let Some((inner, new_pos)) = self.parse_bracket_macro(5) else {
             return false;
-        }
-
-        let bracket_end = match rest.find(']') {
-            Some(p) => p,
-            None => return false,
         };
-
-        let inner = &rest[1..bracket_end];
 
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
 
-        self.pos = start_pos + 5 + bracket_end + 1;
+        self.pos = new_pos;
         *text_start = self.pos;
         true
     }
