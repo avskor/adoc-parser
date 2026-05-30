@@ -568,6 +568,13 @@ impl<'a> BlockScanner<'a> {
             if let Some(float) = img_attrs.float {
                 block_attrs.named.entry("float".to_string()).or_insert_with(|| float.to_string());
             }
+            // Merge role from the image macro attrs (`image::x[…,role=screenshot]`)
+            // into the block roles so it lands on the imageblock wrapper class.
+            if let Some(role) = img_attrs.role
+                && !block_attrs.roles.iter().any(|r| r == role)
+            {
+                block_attrs.roles.push(role.to_string());
+            }
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),

@@ -1,40 +1,48 @@
 # Session context
 
-## Последняя сессия (2026-05-30) — Фаза 4: README (уточнение метрик) — ФАЗА 4 ЗАКРЫТА
+## Последняя сессия (2026-05-30) — Фаза 3 (старт): роль из макроса image::
 
-Контекст: последний пункт Фазы 4 аудита «README 233→238». **Премиса оказалась ложной.**
+Первая задача Фазы 3 (совместимость с Asciidoctor). В отличие от Фазы 4 — меняет рендеринг,
+верификация = рост Identical на корпусе без регрессий.
 
-### Ветка `docs/readme-test-counts` (от master; НЕ закоммичено)
+### Методика выбора кластера (важно для продолжения Фазы 3)
+`/tmp/nearmiss.py` (переиспользует нормализацию `compare_full.py`) ранжирует Different-файлы по
+числу позиционных diff'ов и печатает diff'ы файлов с ≤3 расхождениями. Берём фиксы, у которых
+файл «1 diff away» → гарантированный flip (обходит ловушку «0 flips» из [[compat_corpus_methodology]]).
+Запуск: `cd /mnt/c/tmp/adoc-test && python3 /tmp/nearmiss.py`.
 
-- ⚠️ **«238» — ложная находка аудита.** Верифицировано: в `vendor/asciidoc-parsing-lab/test/tests`
-  ровно 233 `*-input.*` + 233 `*-output.json` + 233 пары; тест `parsing_lab` печатает
-  `Total: 233, Passed: 233`; submodule запинен (d46f77d). README «233/233 passing» уже был верен.
-  Менять 233→238 НЕЛЬЗЯ — сделало бы README неверным.
-- По выбору пользователя — вместо ложной правки **уточнён смысл метрики** (`README.md`, только docs):
-  - строка `adoc-compat-tests` → «Structural conformance vs asciidoc-parsing-lab ASG fixtures
-    (233/233 passing)»;
-  - добавлена строка `adoc-html-tests` (HTML-output compatibility vs Asciidoctor, semantic DOM);
-  - пояснение под таблицей: 233/233 = *структурная* конформность; побайтовая HTML-совместимость —
-    отдельно (adoc-html-tests);
-  - в раздел Testing добавлена команда `cargo test -p adoc-html-tests`.
-  - Числа 135/344 НЕ вносил (внешний корпус `/mnt/c/tmp/adoc-test/`, не в репозитории; подвижное).
+### Ветка `fix/block-image-role` (от master; НЕ закоммичено)
+- Корень: `image::x[alt,role=screenshot]` — роль задана именованным атрибутом ВНУТРИ макроса.
+  `ImageAttrs` (attributes.rs) не имел поля `role` (ключ падал в `_ => {}`); обработчик block-image
+  (`scan_block_macros`, block.rs) мёржил из img-attrs только `align`/`float`. → роль терялась.
+- Фикс: (1) `ImageAttrs.role: Option<&str>` + захват `"role" => …` в `parse_image_attrs`;
+  (2) в `scan_block_macros` смёржить `img_attrs.role` в `block_attrs.roles` (если ещё нет).
+  Существующий путь `block_attrs.roles`→emit_block_metadata→`write_meta_attrs` выводит
+  `class="imageblock screenshot"` (default_class → style → roles, порядок уже верный).
+- Затронуты только block-images (inline `image:` имеет свой путь, Tag::InlineImage без roles — не трогал).
 
-### Статус
-- Правка только в `README.md` (не компилируется) — build/test/clippy не требуются и не запускались.
-- TODO.md: пункт отмечен `[x]`. **ВСЯ Фаза 4 закрыта** (декомпозиция ×3, дедуп, doc-тесты,
-  Cargo-метаданные, FEATURES.md сноска, README).
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 429, html 302,
+  html_output 35, adoc_html_tests 6, author_rendering 6, html_compat 1, integration 25,
+  parsing_lab 1, doctests 2+1).
+- Корпус `compare_full.py` (release): **Identical 135→142 (+7), Different 209→202, Errors 0** —
+  ровно 7 файлов Different→Identical, регрессий ноль.
+- TODO.md: baseline обновлён 135→142; фикс отмечен `[x]`.
 
 ### Что дальше
-- **Спросить про коммит/мерж/пуш** ветки `docs/readme-test-counts` (только по запросу).
-- Фаза 4 (качество/архитектура) и все пункты аудита P0-P3/D1-D7 + гигиена — закрыты.
-- Остаётся **Фаза 3 — совместимость с Asciidoctor** (основной объём, P3-кластеры): bare-links
-  class+rel (п.14), backslash-entity (п.15), типографские замены (п.37), link-text (п.38),
-  остаток source-регрессий (п.40-смежное). Доминирующий шум корпуса — NCR-типографика
-  (229 файлов, в одиночку 0 flips — чинить в связке). Baseline: Identical 135/344.
+- **Спросить про коммит/мерж/пуш** ветки `fix/block-image-role` (только по запросу).
+- Следующие чистые flip-кандидаты Фазы 3 (по near-miss, каждый ~2 flip'а):
+  - **backslash перед entity** (`\&#32;`/`\&#8942;`, п.15): link-macro, ui-macros — не съедаем `\`.
+  - **escaped-директива** `\ifdef`/`\endif`: admonitions, inter-document-xref (preprocessor-слой).
+  - **апостроф** `'`→`’` (п.37 REPLACEMENTS): scope, span-cells (NB: это РАЗ замена, не NCR-кодировка).
+  - **xref-id норм.** `#Substitutions`→`#_substitutions` (п.19/24): positional-and-named-attributes.
+  - Крупные тангл-кластеры (link text/bare/target+rel, п.14/38) — много файлов, но по 2-3 diff'а
+    каждый, требуют комплексного фикса link-макроса.
+- Также видна отдельная бага п.18: `<img alt=""…">` (двойная кавычка в alt) — author-attribute-entries,
+  revision-attribute-entries (мешает их flip'у).
 
 ### Предостережения
-- НЕ `cargo fmt` на крейт (не fmt-clean, компактный стиль). Коммит только по запросу.
-- **Верифицировать находки аудита перед действием** — «238» был ложным (как и предупреждала память
-  audit_2026-05-30). Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release `target/release/adoc`,
-  344 файла), baseline Identical 135 / Different 209 / Errors 0.
-- LSP (rust-analyzer) для навигации, context7 MCP для доков библиотек.
+- НЕ `cargo fmt` (не fmt-clean). Коммит только по запросу. Верифицировать находки аудита (см.
+  [[audit_2026-05-30]] — «238» было ложным).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release `target/release/adoc`, 344 файла).
+  near-miss: `/tmp/nearmiss.py`. LSP для навигации, context7 MCP для доков.
