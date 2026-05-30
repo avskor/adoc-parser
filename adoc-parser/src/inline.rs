@@ -616,6 +616,21 @@ impl<'a> InlineState<'a> {
                 true
             }
 
+            // Escape a character reference: \&#174; \&#xA0; \&copy; → drop the backslash and
+            // emit the reference as literal text (the renderer escapes its `&` to `&amp;`),
+            // matching Asciidoctor's CharRefRx escaping. The whole reference is emitted in one
+            // span so an inner `#` (e.g. \&#174;) is never taken for mark/highlight syntax.
+            b'\\' if self.char_ref_len_at(self.pos + 1) > 0 => {
+                self.flush_text(*text_start, self.pos, events);
+                let ref_len = self.char_ref_len_at(self.pos + 1);
+                self.advance_by(1); // skip backslash
+                let ref_start = self.pos;
+                self.advance_by(ref_len);
+                events.push(Event::Text(Cow::Borrowed(&self.input[ref_start..self.pos])));
+                *text_start = self.pos;
+                true
+            }
+
             // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
             b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'\'')) => {
                 self.flush_text(*text_start, self.pos, events);
@@ -671,6 +686,57 @@ impl<'a> InlineState<'a> {
             b'(' if p + 3 < bytes.len() && bytes[p + 1] == b'T' && bytes[p + 2] == b'M' && bytes[p + 3] == b')' => 4,
             _ => 0,
         }
+    }
+
+    /// If a valid HTML character reference begins at byte `start` (where `input[start]` is `&`),
+    /// returns its total byte length (including the leading `&` and trailing `;`); otherwise 0.
+    /// Mirrors Asciidoctor's `CharRefRx`: named `[A-Za-z][A-Za-z]+\d{0,2}`, decimal `#\d\d\d{0,4}`
+    /// (2–6 digits), or hex `#x[0-9A-Fa-f][0-9A-Fa-f]+`, each terminated by `;`. ASCII-only, so
+    /// byte indexing is safe.
+    fn char_ref_len_at(&self, start: usize) -> usize {
+        let bytes = self.input.as_bytes();
+        if bytes.get(start) != Some(&b'&') {
+            return 0;
+        }
+        let mut i = start + 1;
+        if bytes.get(i) == Some(&b'#') {
+            i += 1;
+            if matches!(bytes.get(i), Some(b'x' | b'X')) {
+                // hex: at least 2 hex digits
+                i += 1;
+                let hex_start = i;
+                while bytes.get(i).is_some_and(u8::is_ascii_hexdigit) {
+                    i += 1;
+                }
+                if i - hex_start < 2 {
+                    return 0;
+                }
+            } else {
+                // decimal: 2..=6 digits
+                let dec_start = i;
+                while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+                    i += 1;
+                }
+                if !(2..=6).contains(&(i - dec_start)) {
+                    return 0;
+                }
+            }
+        } else {
+            // named: a letter, then at least one more letter, then 0..=2 trailing digits
+            let name_start = i;
+            while bytes.get(i).is_some_and(u8::is_ascii_alphabetic) {
+                i += 1;
+            }
+            if i - name_start < 2 {
+                return 0;
+            }
+            let mut digits = 0;
+            while digits < 2 && bytes.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+                digits += 1;
+            }
+        }
+        if bytes.get(i) == Some(&b';') { i + 1 - start } else { 0 }
     }
 
     fn check_hard_break(&self) -> bool {
@@ -2541,6 +2607,38 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello \\world")),
         ]);
+    }
+
+    #[test]
+    fn test_escaped_char_reference() {
+        // \&#NNN; / \&#xHH; / \&name; → backslash dropped, reference emitted as literal text
+        // (the `&` is later escaped to &amp; by the renderer). The whole reference is one span,
+        // so the inner `#` is never taken as mark syntax.
+        for (input, want) in [
+            ("a \\&#174; b", "&#174;"),
+            ("a \\&#x1F600; b", "&#x1F600;"),
+            ("a \\&copy; b", "&copy;"),
+        ] {
+            let events = parse(input);
+            assert_eq!(events, vec![
+                Event::Text(Cow::Borrowed("a ")),
+                Event::Text(Cow::Borrowed(want)),
+                Event::Text(Cow::Borrowed(" b")),
+            ], "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_backslash_before_invalid_char_reference_kept() {
+        // Backslash is kept when what follows is NOT a valid character reference, matching
+        // Asciidoctor: bare `&`, missing `;`, too-few/too-many digits, single-letter name.
+        for input in ["a \\& b", "a \\&# b", "a \\&#9; b", "a \\&a; b", "a \\&notanentity b"] {
+            let events = parse(input);
+            assert!(
+                events.iter().any(|e| matches!(e, Event::Text(t) if t.contains('\\'))),
+                "backslash should be preserved for {input:?}, got {events:?}"
+            );
+        }
     }
 
     #[test]
