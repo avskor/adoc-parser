@@ -1,52 +1,42 @@
 # Session context
 
-## Последняя сессия (2026-05-30, вторая за день)
+## Последняя сессия (2026-05-30) — Архитектурный аудит + P0-фиксы
 
-Фаза 3 (совместимость). Две задачи: inline `[.role]` (закоммичено) и **xref авто-текст**
-(на ветке, ожидает коммита).
+Запрос: ознакомиться с проектом, провести архитектурный анализ, определить ошибки и
+недоработки. Затем по выбору пользователя — исправить **P0** (баги корректности/безопасности).
 
-### Ключевое открытие
-`COMPAT-DIFF.md`/`TODO.md` устарели (числа от 2026-03-23). Свежий прогон `compare_full.py`:
-старт Identical 71/273. Проверено: **п.40** (атрибуты) и **п.11** (роли блоков) уже
-решены/неверно описаны. Доминирующий шум — NCR-кодировка типографики (`’` vs `&#8217;`,
-229 файлов; в одиночку 0 flips). Анализ «расстояния до идентичности» дал реальные high-ROI
-кластеры.
+### Аудит (полный отчёт: `~/.claude/plans/sequential-dreaming-zebra.md`)
+Три Explore-агента + ручная верификация каждой находки по коду (LSP/чтение). Важно: автопроход
+дал ~4 ложных «critical-паники» — отсеяны проверкой (edition 2024 валидна на rustc 1.96;
+`parser.rs` unwrap защищён `len==1`; UTF-8-срез в `attributes.rs:136` безопасен из-за `take_while`
+на ASCII; include-лимит `MAX_INCLUDE_DEPTH=64` уже есть; «бесконечный цикл» continuation
+ограничен входом; XSS через имя макроса недостижим — валидатор `[a-z0-9_-]`).
 
-### Сделано 1: inline `[.role]` на форматировании — КОММИТ `f2dd2eb` (ветка `feat/inline-role-formatting`)
-`Tag::Strong/Emphasis/Monospace` → struct `{ id, roles }`; `try_inline_attr_span` обобщён на
-`_`/`*`/`` ` `` после `[…]`; рендерер эмитит id/class (`push_inline_id_class`).
-`[.path]_x_`→`<em class="path">`, `[.term]*x*`→`<strong class="term">`. Корпус 71→79.
+### Сделано: ветка `fix/attr-escaping-and-ifeval` (от master; НЕ закоммичено)
+- **D1** — единое HTML-экранирование значений атрибутов (`adoc-html/src/lib.rs`):
+  - `render_video_tag` (~2886-2966): `width/height/start/end` → `html_escape` (было `push_str`).
+  - `image_base_class` (2450-2474): `float`/`align`-значения → `html_escape(&mut class, …)`.
+  - Корень: несогласованность (id/roles/style/target/poster/alt экранировались, эти — нет).
+    Достижимо: внутренние `"` в значениях не удаляются парсером → пробой атрибута.
+  - +2 теста: `test_video_width_attr_escaped`, `test_block_image_align_float_class_escaped`.
+- **D2** — `preprocessor.rs:908 extract_operand`: guard `len() >= 2` (одиночная кавычка
+  давала `trimmed[1..0]` → паника на `ifeval::[" < 5]`). +1 тест `test_ifeval_lone_quote_operand_no_panic`.
 
-### Сделано 2: xref авто-текст — НЕ ЗАКОММИЧЕНО (ветка `feat/xref-auto-text`, поверх inline-role)
-Машинерия была наполовину готова (placeholder `\x00XREF_N\x00` + резолв в `finish()` по
-`toc_entries`; весь документ буферизуется → forward-refs работают). Пробелы закрыты в
-`adoc-html/src/lib.rs`:
-- **inter-doc** `xref:f.adoc[]`: вынес `interdoc_href` (.adoc→.html) из `if`; пустой xref
-  теперь fallback-ит на этот путь (был сырой `.adoc`). Арка `Tag::CrossReference` ~1713.
-- **intra-doc на блок** `<<id>>`: новое поле `block_ref_titles: Vec<(String,String)>`
-  (id→title HTML); захват в `start_tag` сразу после `let meta = self.take_block_meta()`
-  (~860) — там доступны и `meta.id`, и `block_title_inner_html` независимо от порядка
-  `.Title`/`[#id]`. `finish()` (~718) сливает секции (экранируются) + блоки (уже HTML).
-- 2-tuple `xref_placeholders` НЕ менялся (2-й элемент = ключ-и-fallback для intra / .html для inter).
-
-### Текущий статус (верифицировано)
-- `cargo build --workspace` + `--release -p adoc-cli`: OK.
-- `cargo test --workspace`: ЗЕЛЁНОЕ (428 parser, 297+35 html, 6+6 html-tests, 23 integration,
-  ASG, html_compat). `cargo clippy --workspace`: 0 warnings.
-- Точечно байт-идентично Asciidoctor: `<a href="#ex-title">Document with a title</a>`,
-  nav `xref:f.adoc[]`→текст `f.html`.
-- **Корпус: Identical 71→79 (inline-role) →135 (xref). Different 209, Errors 0.**
-- Регрессий нет: фиксы меняют вывод только для пустых xref / разметки с `[.role]`.
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное
+  (parser 428→429, html 297→299, остальные без изменений; 0 failed).
+- CLI end-to-end: `width="1&quot; onmouseover=&quot;alert(1)"`, `class="imageblock a&lt;b&gt;c"`
+  (инъекция нейтрализована); `#t=60,120` / `text-center` — позитив без регрессий.
 
 ### Что дальше
-- **Спросить про коммит** ветки `feat/xref-auto-text` (стекнута поверх `feat/inline-role-formatting`;
-  обе НЕ в master).
-- Следующие кластеры: **NCR-кодировка типографики** (`’`→`&#8217;` и т.д.; фон 229 файлов,
-  нужно для байт-совместимости), **backslash перед entity** (п.15, ~10 файлов).
-- Логи: `/tmp/compat_xref.log` (135), `/tmp/compat_after.log` (79), `/tmp/compat_fresh.log` (71).
-  Скрипты анализа: `/tmp/disthist.py`, `/tmp/diffdump.py`.
+- **Спросить про коммит** ветки `fix/attr-escaping-and-ifeval` (по правилу — коммит только по запросу).
+- Отложенные находки аудита (в TODO.md, раздел «Из аудита 2026-05-30»): **D3** (рекурсия
+  `scan_next_block` 481/488 → loop), **D4** (`unreachable!()`→graceful), **D5** (xref-плейсхолдер
+  через map), **D6** (parser empty-inline), гигиена (FEATURES-сноска, Cargo-метаданные, semver),
+  единая дисциплина экранирования.
+- Совместимость (Фаза 3): кластеры NCR-типографики, bare-links, header-после-комментариев.
 
 ### Предостережения
 - НЕ `cargo fmt` на крейт (не fmt-clean). Коммит только по запросу пользователя.
-- Верификация: `asciidoctor -e -o - -a nofooter <f>` vs `target/release/adoc --no-standalone <f>`;
-  полный прогон `compare_full.py` (release-бинарь). LSP для навигации, context7 MCP для доков.
+- Верификация совместимости: `compare_full.py` (release-бинарь), корпус `/mnt/c/tmp/adoc-test/`.
+- LSP для навигации, context7 MCP для доков.

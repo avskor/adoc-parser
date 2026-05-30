@@ -2454,7 +2454,7 @@ impl HtmlRenderer {
                 match k.as_str() {
                     "float" => {
                         class.push(' ');
-                        class.push_str(v);
+                        html_escape(&mut class, v);
                     }
                     "align" => {
                         let css = match v.as_str() {
@@ -2464,7 +2464,7 @@ impl HtmlRenderer {
                             other => other,
                         };
                         class.push(' ');
-                        class.push_str(css);
+                        html_escape(&mut class, css);
                     }
                     _ => {}
                 }
@@ -2885,12 +2885,12 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             output.push_str("<iframe");
             if let Some(w) = media.width {
                 output.push_str(" width=\"");
-                output.push_str(w);
+                html_escape(output, w);
                 output.push('"');
             }
             if let Some(h) = media.height {
                 output.push_str(" height=\"");
-                output.push_str(h);
+                html_escape(output, h);
                 output.push('"');
             }
             output.push_str(" src=\"https://www.youtube.com/embed/");
@@ -2907,11 +2907,11 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             }
             if let Some(s) = media.start {
                 output.push_str("&amp;start=");
-                output.push_str(s);
+                html_escape(output, s);
             }
             if let Some(e) = media.end {
                 output.push_str("&amp;end=");
-                output.push_str(e);
+                html_escape(output, e);
             }
             output.push_str("\" frameborder=\"0\" allowfullscreen></iframe>\n</div>\n");
         }
@@ -2919,12 +2919,12 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             output.push_str("<iframe");
             if let Some(w) = media.width {
                 output.push_str(" width=\"");
-                output.push_str(w);
+                html_escape(output, w);
                 output.push('"');
             }
             if let Some(h) = media.height {
                 output.push_str(" height=\"");
-                output.push_str(h);
+                html_escape(output, h);
                 output.push('"');
             }
             output.push_str(" src=\"https://player.vimeo.com/video/");
@@ -2939,17 +2939,17 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             match (media.start, media.end) {
                 (Some(s), Some(e)) => {
                     output.push_str("#t=");
-                    output.push_str(s);
+                    html_escape(output, s);
                     output.push(',');
-                    output.push_str(e);
+                    html_escape(output, e);
                 }
                 (Some(s), None) => {
                     output.push_str("#t=");
-                    output.push_str(s);
+                    html_escape(output, s);
                 }
                 (None, Some(e)) => {
                     output.push_str("#t=,");
-                    output.push_str(e);
+                    html_escape(output, e);
                 }
                 (None, None) => {}
             }
@@ -2957,12 +2957,12 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
 
             if let Some(w) = media.width {
                 output.push_str(" width=\"");
-                output.push_str(w);
+                html_escape(output, w);
                 output.push('"');
             }
             if let Some(h) = media.height {
                 output.push_str(" height=\"");
-                output.push_str(h);
+                html_escape(output, h);
                 output.push('"');
             }
             if let Some(p) = media.poster {
@@ -3841,6 +3841,18 @@ mod tests {
     }
 
     #[test]
+    fn test_video_width_attr_escaped() {
+        // Regression (D1): media attribute values must be HTML-escaped so a quote
+        // inside the value cannot break out of the attribute and inject markup.
+        let html = to_html("video::v.mp4[width=1\" onmouseover=\"alert(1)]");
+        assert!(
+            !html.contains("onmouseover=\"alert"),
+            "attribute breakout not prevented: {html}"
+        );
+        assert!(html.contains("&quot;"), "value was not escaped: {html}");
+    }
+
+    #[test]
     fn test_audio_basic_html() {
         let html = to_html("audio::audio.mp3[]");
         assert_eq!(
@@ -4475,6 +4487,15 @@ mod tests {
     fn test_block_image_float_left() {
         let html = to_html("image::photo.jpg[Alt,float=left]");
         assert!(html.contains("class=\"imageblock left\""));
+    }
+
+    #[test]
+    fn test_block_image_align_float_class_escaped() {
+        // Regression (D1): align/float values flow into the class attribute and
+        // must be HTML-escaped (no raw markup characters leak into the class).
+        let html = to_html("image::photo.jpg[Alt,float=a<b>c]");
+        assert!(html.contains("a&lt;b&gt;c"), "float value not escaped: {html}");
+        assert!(!html.contains("a<b>c"), "raw unescaped value present: {html}");
     }
 
     #[test]

@@ -907,8 +907,11 @@ fn substitute_attributes(input: &str, attributes: &HashMap<String, String>) -> S
 /// Extract an operand from an expression fragment, stripping whitespace and quotes.
 fn extract_operand(s: &str) -> String {
     let trimmed = s.trim();
-    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    // `len() >= 2` guards against a lone quote char (`"` or `'`), where
+    // starts_with and ends_with are both true and `trimmed[1..0]` would panic.
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
     {
         trimmed[1..trimmed.len() - 1].to_string()
     } else {
@@ -1170,6 +1173,22 @@ endif::[]";
         assert_eq!(result, "\
 :backend: html
 html output");
+    }
+
+    #[test]
+    fn test_ifeval_lone_quote_operand_no_panic() {
+        // Regression (D2): a lone quote operand must not panic in extract_operand
+        // (`trimmed[1..0]` slice). The directive is malformed, but the preprocessor
+        // must degrade gracefully rather than crash.
+        let input = "\
+before
+ifeval::[\" < 5]
+inside
+endif::[]
+after";
+        let result = preprocess(input);
+        assert!(result.contains("before"));
+        assert!(result.contains("after"));
     }
 
     #[test]
