@@ -166,7 +166,7 @@ fn test_inline_bold_in_paragraph() {
 
     assert_eq!(events[0], Event::Start(Tag::Paragraph));
     assert_eq!(events[1], Event::Text(Cow::Borrowed("This is ")));
-    assert_eq!(events[2], Event::Start(Tag::Strong));
+    assert_eq!(events[2], Event::Start(Tag::Strong { id: None, roles: Vec::new() }));
     assert_eq!(events[3], Event::Text(Cow::Borrowed("important")));
     assert_eq!(events[4], Event::End(TagEnd::Strong));
     assert_eq!(events[5], Event::Text(Cow::Borrowed(" text.")));
@@ -270,7 +270,7 @@ The end.";
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Admonition { kind: AdmonitionKind::Note }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::ThematicBreak)));
-    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Strong))));
+    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Strong { .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Link { .. }))));
 
     // Verify all Start/End pairs are balanced

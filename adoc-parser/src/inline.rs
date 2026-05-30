@@ -266,13 +266,13 @@ impl<'a> InlineState<'a> {
 
                 // Unconstrained formatting: double markers (QUOTES)
                 b'*' if has_quotes && self.peek_at(1) == Some(b'*') => {
-                    if self.try_unconstrained(b'*', Tag::Strong, TagEnd::Strong, events, &mut text_start) {
+                    if self.try_unconstrained(b'*', Tag::Strong { id: None, roles: Vec::new() }, TagEnd::Strong, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
                 b'_' if has_quotes && self.peek_at(1) == Some(b'_') => {
-                    if self.try_unconstrained(b'_', Tag::Emphasis, TagEnd::Emphasis, events, &mut text_start) {
+                    if self.try_unconstrained(b'_', Tag::Emphasis { id: None, roles: Vec::new() }, TagEnd::Emphasis, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -295,7 +295,7 @@ impl<'a> InlineState<'a> {
                 }
 
                 b'`' if has_quotes && self.peek_at(1) == Some(b'`') => {
-                    if self.try_unconstrained(b'`', Tag::Monospace, TagEnd::Monospace, events, &mut text_start) {
+                    if self.try_unconstrained(b'`', Tag::Monospace { id: None, roles: Vec::new() }, TagEnd::Monospace, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -309,19 +309,19 @@ impl<'a> InlineState<'a> {
 
                 // Constrained formatting: single markers (QUOTES)
                 b'*' if has_quotes => {
-                    if self.try_constrained(b'*', Tag::Strong, TagEnd::Strong, events, &mut text_start) {
+                    if self.try_constrained(b'*', Tag::Strong { id: None, roles: Vec::new() }, TagEnd::Strong, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
                 b'_' if has_quotes => {
-                    if self.try_constrained(b'_', Tag::Emphasis, TagEnd::Emphasis, events, &mut text_start) {
+                    if self.try_constrained(b'_', Tag::Emphasis { id: None, roles: Vec::new() }, TagEnd::Emphasis, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
                 }
                 b'`' if has_quotes => {
-                    if self.try_constrained(b'`', Tag::Monospace, TagEnd::Monospace, events, &mut text_start) {
+                    if self.try_constrained(b'`', Tag::Monospace { id: None, roles: Vec::new() }, TagEnd::Monospace, events, &mut text_start) {
                         continue;
                     }
                     self.pos += 1;
@@ -1938,22 +1938,45 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
-        // Check for ## (unconstrained) or # (constrained)
-        let is_unconstrained = after_close_bracket + 1 < self.input.len()
-            && bytes[after_close_bracket] == b'#'
-            && bytes[after_close_bracket + 1] == b'#';
-
-        if bytes[after_close_bracket] != b'#' {
+        // The attribute list may be followed by `#` (span), or by a formatting
+        // marker `_`/`*`/backtick — in the latter case the id and roles are applied
+        // directly to the emphasis/strong/monospace element (e.g. [.path]_x_ → <em class="path">).
+        let marker = bytes[after_close_bracket];
+        if !matches!(marker, b'#' | b'_' | b'*' | b'`') {
             return false;
         }
 
+        let id_cow = id.map(Cow::Borrowed);
+        let roles_cow = roles.iter().copied().map(Cow::Borrowed).collect::<Vec<_>>();
+        let start_tag = match marker {
+            b'_' => Tag::Emphasis { id: id_cow, roles: roles_cow },
+            b'*' => Tag::Strong { id: id_cow, roles: roles_cow },
+            b'`' => Tag::Monospace { id: id_cow, roles: roles_cow },
+            _ => Tag::InlineSpan { id: id_cow, roles: roles_cow },
+        };
+        let end_tag = match marker {
+            b'_' => TagEnd::Emphasis,
+            b'*' => TagEnd::Strong,
+            b'`' => TagEnd::Monospace,
+            _ => TagEnd::InlineSpan,
+        };
+        // Monospace content is literal — no typographic replacements (mirrors try_constrained).
+        let inner_subs = if marker == b'`' {
+            self.subs.without(SubstitutionSet::REPLACEMENTS)
+        } else {
+            self.subs
+        };
+
+        // Doubled marker → unconstrained: [.class]##text## / [.class]__text__ etc.
+        let is_unconstrained = after_close_bracket + 1 < self.input.len()
+            && bytes[after_close_bracket + 1] == marker;
+
         if is_unconstrained {
-            // Unconstrained: [.class]##text##
             let content_start = after_close_bracket + 2;
             if content_start >= self.input.len() {
                 return false;
             }
-            let close_pos = match self.find_closing_unconstrained(b'#', content_start) {
+            let close_pos = match self.find_closing_unconstrained(marker, content_start) {
                 Some(p) => p,
                 None => return false,
             };
@@ -1963,22 +1986,19 @@ impl<'a> InlineState<'a> {
             }
 
             self.flush_text(*text_start, start_pos, events);
-            events.push(Event::Start(Tag::InlineSpan {
-                id: id.map(Cow::Borrowed),
-                roles: roles.iter().copied().map(Cow::Borrowed).collect(),
-            }));
+            events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, self.subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs);
             inner_parser.parse_inline(events);
 
-            events.push(Event::End(TagEnd::InlineSpan));
+            events.push(Event::End(end_tag));
 
             self.pos = close_pos + 2;
             *text_start = self.pos;
             return true;
         }
 
-        // Constrained: [.class]#text#
+        // Constrained: [.class]#text# / [.class]_text_ etc.
         let content_start = after_close_bracket + 1;
         if content_start >= self.input.len() {
             return false;
@@ -1987,7 +2007,7 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
-        if let Some(close_offset) = self.find_closing_constrained(b'#', content_start) {
+        if let Some(close_offset) = self.find_closing_constrained(marker, content_start) {
             let close_pos = content_start + close_offset;
             let inner = &self.input[content_start..close_pos];
 
@@ -2001,15 +2021,12 @@ impl<'a> InlineState<'a> {
             }
 
             self.flush_text(*text_start, start_pos, events);
-            events.push(Event::Start(Tag::InlineSpan {
-                id: id.map(Cow::Borrowed),
-                roles: roles.iter().copied().map(Cow::Borrowed).collect(),
-            }));
+            events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, self.subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs);
             inner_parser.parse_inline(events);
 
-            events.push(Event::End(TagEnd::InlineSpan));
+            events.push(Event::End(end_tag));
 
             self.pos = after_close;
             *text_start = self.pos;
@@ -2165,7 +2182,7 @@ mod tests {
         let events = parse("hello *bold* world");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello ")),
-            Event::Start(Tag::Strong),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("bold")),
             Event::End(TagEnd::Strong),
             Event::Text(Cow::Borrowed(" world")),
@@ -2177,7 +2194,7 @@ mod tests {
         let events = parse("hello _italic_ world");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello ")),
-            Event::Start(Tag::Emphasis),
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("italic")),
             Event::End(TagEnd::Emphasis),
             Event::Text(Cow::Borrowed(" world")),
@@ -2189,7 +2206,7 @@ mod tests {
         let events = parse("use `code` here");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("use ")),
-            Event::Start(Tag::Monospace),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("code")),
             Event::End(TagEnd::Monospace),
             Event::Text(Cow::Borrowed(" here")),
@@ -2236,7 +2253,7 @@ mod tests {
         let events = parse("hel**lo wo**rld");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hel")),
-            Event::Start(Tag::Strong),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("lo wo")),
             Event::End(TagEnd::Strong),
             Event::Text(Cow::Borrowed("rld")),
@@ -2488,9 +2505,9 @@ mod tests {
     fn test_nested_formatting() {
         let events = parse("*bold _and italic_*");
         assert_eq!(events, vec![
-            Event::Start(Tag::Strong),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("bold ")),
-            Event::Start(Tag::Emphasis),
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("and italic")),
             Event::End(TagEnd::Emphasis),
             Event::End(TagEnd::Strong),
@@ -2741,7 +2758,7 @@ mod tests {
         let events = parse("\"`*bold* text`\"");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("\u{201C}")),
-            Event::Start(Tag::Strong),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("bold")),
             Event::End(TagEnd::Strong),
             Event::Text(Cow::Borrowed(" text")),
@@ -3324,7 +3341,7 @@ mod tests {
                 id: None,
                 roles: vec![Cow::Borrowed("lead")],
             }),
-            Event::Start(Tag::Strong),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("bold")),
             Event::End(TagEnd::Strong),
             Event::Text(Cow::Borrowed(" text")),

@@ -1,5 +1,11 @@
 # Различия adoc-parser vs Asciidoctor
 
+> ⚠️ **ЧИСЛА НИЖЕ УСТАРЕЛИ** (прогон 2026-03-23, до Фаз 1–2 и до фикса inline-ролей).
+> **Свежий baseline 2026-05-30: Identical 79 / Different 265 / Errors 0** (344 файла).
+> Актуальный приоритетный список и заметки — в `TODO.md`. Ключевое: п.11 и п.40 по факту
+> уже решены/неверно описаны; п.13/п.16 закрыты (inline `[.role]`); доминирующий остаточный
+> шум — NCR-кодировка типографики (`’`→`&#8217;`, 229 файлов).
+
 Сравнение на реальных документах из `/mnt/c/tmp/adoc-test/` (344 файла).
 Дата сравнения: 2026-03-23 (третий прогон, уточнены числа и регрессии).
 
@@ -85,8 +91,8 @@
 
 ### Inline-уровень
 
-- [ ] **13. `class="term"` на `<strong>` в description lists** (28 файлов, было 25)
-  Asciidoctor: `<strong class="term">`. Наш: `<strong>`. Число незначительно выросло.
+- [x] **13. `class="term"` на `<strong>`** (СДЕЛАНО 2026-05-30, ветка `feat/inline-role-formatting`)
+  `[.term]*x*` → `<strong class="term">`. Категория `attr_diff on <strong>` 20→1.
 
 - [ ] **14. Ссылки — лишний `class="bare"` / отсутствуют `target`+`rel`** (23 файла, было 35)
   Лишний `class="bare"` на URL-ссылках где Asciidoctor его не ставит. Отсутствуют `target="_blank" rel="noopener"` для `link:` с `window=_blank` или ролями. Число снизилось.
@@ -94,8 +100,8 @@
 - [ ] **15. Entities — ошибочное экранирование backslash** (10 файлов, было 8)
   `&sect;` → `\&sect;`, `&lt;` → `\&lt;`, `&#174;` → `\&#174;`, `&#8942;` → `\&#8942;`. Backslash перед entity references не должен выводиться в HTML. Число незначительно выросло.
 
-- [ ] **16. `class="path"` на `<em>` для путей** (7 файлов, было 8)
-  `` `path` `` → Asciidoctor: `<em class="path">`. Наш: `<em>`.
+- [x] **16. `class="path"` на `<em>`** (СДЕЛАНО 2026-05-30, та же ветка)
+  `[.path]_x_` → `<em class="path">`. Категория `attr_diff on <em>` 7→2.
 
 - [ ] **17. Custom inline macros → `<span>` вместо правильного тега** (5 файлов)
   `irc://` → `<a>`. `anchor:id[]` → `<a id="...">`. `[.line-through]#text#` → `<del>`. `#text#` → `<mark>`. Наш выдаёт `<span class="custom-macro">`.

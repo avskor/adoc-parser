@@ -1639,14 +1639,20 @@ impl HtmlRenderer {
                 }
                 output.push_str("</span>");
             }
-            Tag::Strong => {
-                output.push_str("<strong>");
+            Tag::Strong { id, roles } => {
+                output.push_str("<strong");
+                Self::push_inline_id_class(output, id, roles);
+                output.push('>');
             }
-            Tag::Emphasis => {
-                output.push_str("<em>");
+            Tag::Emphasis { id, roles } => {
+                output.push_str("<em");
+                Self::push_inline_id_class(output, id, roles);
+                output.push('>');
             }
-            Tag::Monospace => {
-                output.push_str("<code>");
+            Tag::Monospace { id, roles } => {
+                output.push_str("<code");
+                Self::push_inline_id_class(output, id, roles);
+                output.push('>');
             }
             Tag::Highlight => {
                 output.push_str("<mark>");
@@ -2342,6 +2348,26 @@ impl HtmlRenderer {
             }
         }
         output.push_str("</div>\n");
+    }
+
+    /// Write ` id="..."` and ` class="..."` for an inline phrase element (em/strong/code)
+    /// carrying an explicit id and/or roles, e.g. `[.path]_x_` → `<em class="path">`.
+    fn push_inline_id_class<S: AsRef<str>>(output: &mut String, id: &Option<S>, roles: &[S]) {
+        if let Some(id) = id {
+            output.push_str(" id=\"");
+            html_escape(output, id.as_ref());
+            output.push('"');
+        }
+        if !roles.is_empty() {
+            output.push_str(" class=\"");
+            for (i, role) in roles.iter().enumerate() {
+                if i > 0 {
+                    output.push(' ');
+                }
+                html_escape(output, role.as_ref());
+            }
+            output.push('"');
+        }
     }
 
     /// Write HTML id and class attributes from block metadata into an already-started tag.

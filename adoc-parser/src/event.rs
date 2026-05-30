@@ -309,9 +309,9 @@ pub enum Tag<'a> {
     InlineImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, align: Option<CowStr<'a>>, float: Option<CowStr<'a>>, link: Option<CowStr<'a>> },
 
     // Inline formatting
-    Strong,
-    Emphasis,
-    Monospace,
+    Strong { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
+    Emphasis { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
+    Monospace { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
     Highlight,
     InlineSpan { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
     Superscript,
@@ -461,9 +461,18 @@ impl<'a> Tag<'a> {
                 float: float.map(cow_owned),
                 link: link.map(cow_owned),
             },
-            Tag::Strong => Tag::Strong,
-            Tag::Emphasis => Tag::Emphasis,
-            Tag::Monospace => Tag::Monospace,
+            Tag::Strong { id, roles } => Tag::Strong {
+                id: id.map(cow_owned),
+                roles: roles.into_iter().map(cow_owned).collect(),
+            },
+            Tag::Emphasis { id, roles } => Tag::Emphasis {
+                id: id.map(cow_owned),
+                roles: roles.into_iter().map(cow_owned).collect(),
+            },
+            Tag::Monospace { id, roles } => Tag::Monospace {
+                id: id.map(cow_owned),
+                roles: roles.into_iter().map(cow_owned).collect(),
+            },
             Tag::Highlight => Tag::Highlight,
             Tag::InlineSpan { id, roles } => Tag::InlineSpan {
                 id: id.map(cow_owned),
@@ -541,9 +550,9 @@ impl<'a> Tag<'a> {
             Tag::BlockVideo { .. } => TagEnd::BlockVideo,
             Tag::BlockAudio { .. } => TagEnd::BlockAudio,
             Tag::InlineImage { .. } => TagEnd::InlineImage,
-            Tag::Strong => TagEnd::Strong,
-            Tag::Emphasis => TagEnd::Emphasis,
-            Tag::Monospace => TagEnd::Monospace,
+            Tag::Strong { .. } => TagEnd::Strong,
+            Tag::Emphasis { .. } => TagEnd::Emphasis,
+            Tag::Monospace { .. } => TagEnd::Monospace,
             Tag::Highlight => TagEnd::Highlight,
             Tag::InlineSpan { .. } => TagEnd::InlineSpan,
             Tag::Superscript => TagEnd::Superscript,
