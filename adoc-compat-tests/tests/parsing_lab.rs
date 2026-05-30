@@ -15,6 +15,7 @@ fn should_skip(test_path: &str) -> bool {
         .any(|pattern| test_path.contains(pattern))
 }
 
+#[derive(Default)]
 struct TestConfig {
     ensure_trailing_newline: bool,
     external_attributes: HashMap<String, Option<String>>,
@@ -91,16 +92,6 @@ impl TestConfig {
             ensure_trailing_newline,
             external_attributes,
             locked_attributes,
-        }
-    }
-}
-
-impl Default for TestConfig {
-    fn default() -> Self {
-        Self {
-            ensure_trailing_newline: false,
-            external_attributes: HashMap::new(),
-            locked_attributes: HashSet::new(),
         }
     }
 }
@@ -294,10 +285,10 @@ fn asciidoc_parsing_lab_block_tests() {
 }
 
 fn extract_first_paragraph_inlines(doc: &AsgNode) -> Option<Vec<AsgNode>> {
-    if let AsgNode::Document { blocks, .. } = doc {
-        if let Some(AsgNode::Paragraph { inlines }) = blocks.first() {
-            return Some(inlines.clone());
-        }
+    if let AsgNode::Document { blocks, .. } = doc
+        && let Some(AsgNode::Paragraph { inlines }) = blocks.first()
+    {
+        return Some(inlines.clone());
     }
     None
 }

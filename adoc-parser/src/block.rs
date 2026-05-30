@@ -110,10 +110,7 @@ impl<'a> BlockScanner<'a> {
             return Cow::Borrowed(initial_value);
         };
         let mut result = String::from(prefix);
-        loop {
-            let Some(next_line) = self.current_line() else {
-                break;
-            };
+        while let Some(next_line) = self.current_line() {
             let trimmed = next_line.trim();
             if is_hard {
                 result.push('\n');
@@ -223,6 +220,9 @@ impl<'a> BlockScanner<'a> {
                 | "listing" | "literal" | "quote" | "example" | "sidebar" | "pass"
                 | "csv" | "dsv" | "tsv"
             ))
+            // For implied source shorthand (`[,ruby]`) positional[0] is the
+            // language, not a block style — don't leak it onto the wrapper class.
+            .filter(|_| attrs.implied_source_lang.is_none())
             .map(|s| Cow::Owned(s.clone()));
         let subs = attrs.substitution_set(default_subs);
         // Pass through named attributes that are not consumed by the parser
@@ -679,9 +679,18 @@ impl<'a> BlockScanner<'a> {
             return self.scan_markdown_code_fence(backtick_count, language);
         }
 
-        // Single-line comment `// ...`
+        // Single-line comment `// ...` — consume consecutive comment lines
+        // iteratively rather than recursing, so large comment blocks can't
+        // overflow the stack.
         if scanner::is_line_comment(line) {
             self.advance();
+            while let Some(next) = self.current_line() {
+                if scanner::is_line_comment(next) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
             return self.scan_next_block();
         }
 

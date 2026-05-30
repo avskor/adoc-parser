@@ -285,3 +285,25 @@ The end.";
     }
     assert_eq!(depth, 0, "Unmatched Start events");
 }
+
+#[test]
+fn test_many_comment_lines_no_stack_overflow() {
+    // Regression: consecutive comment lines used to recurse once per line,
+    // overflowing the stack on large comment blocks. They are now consumed
+    // iteratively, so even a huge run parses without crashing.
+    let mut input = String::with_capacity(50_000 * 10);
+    for i in 0..50_000 {
+        input.push_str("// comment ");
+        input.push_str(&i.to_string());
+        input.push('\n');
+    }
+    input.push_str("Real paragraph.");
+
+    let events = parse(&input);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Text(t) if t.as_ref() == "Real paragraph.")),
+        "paragraph after a large comment block must still be parsed"
+    );
+}

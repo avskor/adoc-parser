@@ -11,6 +11,14 @@ pub enum TableFormat {
     Tsv,
 }
 
+/// A bare positional token: non-empty, not a `key=value` pair, and not pure
+/// shorthand (`#id`/`.role`/`%opt`). Used to detect implied source shorthand
+/// like `[,ruby]`, where slot 1 has no style but slot 2 is a language.
+fn is_bare_positional(seg: &str) -> bool {
+    let seg = seg.trim();
+    !seg.is_empty() && !seg.contains('=') && !seg.starts_with(['#', '.', '%'])
+}
+
 fn split_respecting_quotes(s: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -64,6 +72,11 @@ pub struct BlockAttributes {
     pub named: HashMap<String, String>,
     #[allow(dead_code)]
     pub title: Option<String>,
+    /// Language for an *implied* source block written with shorthand
+    /// (`[,ruby]`, `[#id,ruby]`, `[.role,ruby]`), where slot 1 carries no
+    /// explicit block style but slot 2 is a bare language token. `None` for
+    /// explicit `[source,...]` blocks (their language comes from `positional`).
+    pub implied_source_lang: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -213,6 +226,18 @@ impl BlockAttributes {
             }
         }
 
+        // Implied source shorthand: slot 1 carries no explicit block style
+        // (it is empty or pure shorthand like #id/.role/%opt) while slot 2 is a
+        // bare language token. AsciiDoc renders such verbatim blocks as `source`
+        // (e.g. `[,ruby]`, `[#hello,ruby]`, `[.role,ruby]`).
+        if attrs.positional.first().map(|s| s.as_str()) != Some("source")
+            && !parts.first().is_some_and(|s| is_bare_positional(s))
+            && let Some(lang) = parts.get(1)
+            && is_bare_positional(lang)
+        {
+            attrs.implied_source_lang = Some(lang.trim().to_string());
+        }
+
         attrs
     }
 
@@ -261,12 +286,13 @@ impl BlockAttributes {
         if self.positional.first().map(|s| s.as_str()) == Some("source") {
             self.positional.get(1).map(|s| s.as_str())
         } else {
-            None
+            self.implied_source_lang.as_deref()
         }
     }
 
     pub fn is_source_block(&self) -> bool {
         self.positional.first().map(|s| s.as_str()) == Some("source")
+            || self.implied_source_lang.is_some()
     }
 
     pub fn is_verse_style(&self) -> bool {
@@ -563,6 +589,34 @@ mod tests {
         assert_eq!(attrs.positional, vec!["source", "rust"]);
         assert!(attrs.is_source_block());
         assert_eq!(attrs.source_language(), Some("rust"));
+    }
+
+    #[test]
+    fn test_implied_source_shorthand() {
+        // `[,ruby]` — empty style + language ⇒ implied source block.
+        let attrs = BlockAttributes::parse(",ruby");
+        assert!(attrs.is_source_block(), "[,ruby] should be a source block");
+        assert_eq!(attrs.source_language(), Some("ruby"));
+
+        // `[#hello,ruby]` — id shorthand + language ⇒ implied source.
+        let attrs = BlockAttributes::parse("#hello,ruby");
+        assert_eq!(attrs.id.as_deref(), Some("hello"));
+        assert!(attrs.is_source_block());
+        assert_eq!(attrs.source_language(), Some("ruby"));
+
+        // `[.role,ruby]` — role shorthand + language ⇒ implied source.
+        let attrs = BlockAttributes::parse(".role,ruby");
+        assert_eq!(attrs.roles, vec!["role"]);
+        assert!(attrs.is_source_block());
+        assert_eq!(attrs.source_language(), Some("ruby"));
+    }
+
+    #[test]
+    fn test_single_positional_is_not_implied_source() {
+        // `[ruby]` — a lone positional is a block style, NOT a source language.
+        let attrs = BlockAttributes::parse("ruby");
+        assert!(!attrs.is_source_block(), "[ruby] must not become a source block");
+        assert_eq!(attrs.implied_source_lang, None);
     }
 
     #[test]

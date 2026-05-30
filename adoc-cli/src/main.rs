@@ -26,88 +26,6 @@ struct Cli {
     attributes: Vec<String>,
 }
 
-const MAX_INCLUDE_DEPTH: usize = 10;
-
-fn parse_level_offset(attrs: &str) -> i8 {
-    for part in attrs.split(',') {
-        let part = part.trim();
-        if let Some(value) = part.strip_prefix("leveloffset=") {
-            let value = value.trim();
-            if let Ok(n) = value.parse::<i8>() {
-                return n;
-            }
-        }
-    }
-    0
-}
-
-fn resolve_includes(
-    content: &str,
-    base_dir: &Path,
-    source_file: &str,
-    depth: usize,
-    seen: &mut HashSet<PathBuf>,
-) -> Result<String, String> {
-    if depth > MAX_INCLUDE_DEPTH {
-        return Err(format!("include depth exceeds maximum of {MAX_INCLUDE_DEPTH}"));
-    }
-
-    let mut result = String::with_capacity(content.len());
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("include::")
-            && let Some(bracket_start) = rest.find('[')
-            && let Some(bracket_end) = rest.rfind(']')
-            && bracket_end > bracket_start
-        {
-            let path_str = &rest[..bracket_start];
-            let attrs = &rest[bracket_start + 1..bracket_end];
-
-            if !path_str.is_empty() {
-                let file_path = base_dir.join(path_str);
-                match fs::read_to_string(&file_path) {
-                    Ok(file_content) => {
-                        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-                        if seen.contains(&canonical) {
-                            result.push_str(&format!("Unresolved directive in {source_file} - include::{path_str}[{attrs}]\n"));
-                            continue;
-                        }
-                        seen.insert(canonical.clone());
-                        let child_dir = canonical.parent().unwrap_or(base_dir);
-                        let child_name = canonical.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| source_file.to_string());
-                        let resolved =
-                            resolve_includes(&file_content, child_dir, &child_name, depth + 1, seen)?;
-                        seen.remove(&canonical);
-
-                        let offset = parse_level_offset(attrs);
-                        let adjusted = adoc_parser::apply_level_offset(&resolved, offset);
-                        result.push_str(&adjusted);
-                        result.push('\n');
-                    }
-                    Err(_) => {
-                        result.push_str(&format!("Unresolved directive in {source_file} - include::{path_str}[{attrs}]\n"));
-                    }
-                }
-                continue;
-            }
-        }
-        if line.starts_with("\\include::") {
-            // Escaped include directive at start of line — strip the leading backslash
-            result.push_str(&line[1..]);
-        } else {
-            result.push_str(line);
-        }
-        result.push('\n');
-    }
-    // Remove trailing newline if original didn't end with one
-    if !content.ends_with('\n') && result.ends_with('\n') {
-        result.pop();
-    }
-    Ok(result)
-}
-
 fn run(cli: Cli) -> Result<(), String> {
     let input = match &cli.input {
         Some(path) => fs::read_to_string(path)
@@ -126,17 +44,13 @@ fn run(cli: Cli) -> Result<(), String> {
         .as_ref()
         .and_then(|p| p.parent())
         .unwrap_or_else(|| Path::new("."));
-    let mut seen = HashSet::new();
-    if let Some(ref path) = cli.input
-        && let Ok(canonical) = path.canonicalize()
-    {
-        seen.insert(canonical);
-    }
-    let source_name = cli.input.as_ref()
+    let source_name = cli
+        .input
+        .as_ref()
         .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<stdin>".to_string());
-    let resolved = resolve_includes(&input, base_dir, &source_name, 0, &mut seen)?;
+        .map(|n| n.to_string_lossy().into_owned());
+    let resolved =
+        adoc_parser::resolve_includes_with_source(&input, base_dir, source_name.as_deref());
 
     let mut initial_attrs: HashMap<String, Option<String>> = HashMap::new();
     let mut locked_attrs: HashSet<String> = HashSet::new();

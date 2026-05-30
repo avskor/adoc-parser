@@ -441,8 +441,9 @@ impl HtmlRenderer {
                     self.manpage_name_buf.push_str(&text);
                 }
                 if self.in_unlabeled_xref {
-                    let (ref placeholder, _) = *self.xref_placeholders.last().unwrap();
-                    output.push_str(placeholder);
+                    if let Some((placeholder, _)) = self.xref_placeholders.last() {
+                        output.push_str(placeholder);
+                    }
                     self.in_unlabeled_xref = false;
                 } else if self.kbd_mode {
                     self.render_kbd_keys(output, &text);
@@ -844,11 +845,11 @@ impl HtmlRenderer {
         match tag {
             Tag::Paragraph | Tag::UnorderedList { .. } | Tag::OrderedList { .. }
             | Tag::DescriptionList | Tag::DelimitedBlock { .. } | Tag::SourceBlock { .. }
-            | Tag::BlockImage { .. } | Tag::Table => {
-                if self.li_p_open.last() == Some(&true) {
-                    output.push_str("</p>\n");
-                    *self.li_p_open.last_mut().unwrap() = false;
-                }
+            | Tag::BlockImage { .. } | Tag::Table
+                if self.li_p_open.last() == Some(&true) =>
+            {
+                output.push_str("</p>\n");
+                *self.li_p_open.last_mut().unwrap() = false;
             }
             _ => {}
         }
@@ -1958,24 +1959,27 @@ impl HtmlRenderer {
             TagEnd::SourceBlock => {
                 if self.linenums_active {
                     if self.source_line_highlighted {
-                        self.source_code_buffer.as_mut().unwrap().push_str("</span>");
+                        if let Some(buf) = self.source_code_buffer.as_mut() {
+                            buf.push_str("</span>");
+                        }
                         self.source_line_highlighted = false;
                     }
-                    let code = self.source_code_buffer.take().unwrap();
-                    let code_trimmed = code.strip_suffix('\n').unwrap_or(&code);
-                    let line_count = code_trimmed.split('\n').count();
-                    let start = self.linenums_start;
+                    if let Some(code) = self.source_code_buffer.take() {
+                        let code_trimmed = code.strip_suffix('\n').unwrap_or(&code);
+                        let line_count = code_trimmed.split('\n').count();
+                        let start = self.linenums_start;
 
-                    output.push_str("<table class=\"linenotable\"><tbody><tr>\n<td class=\"linenos\"><pre class=\"linenos\">");
-                    for i in 0..line_count {
-                        if i > 0 {
-                            output.push('\n');
+                        output.push_str("<table class=\"linenotable\"><tbody><tr>\n<td class=\"linenos\"><pre class=\"linenos\">");
+                        for i in 0..line_count {
+                            if i > 0 {
+                                output.push('\n');
+                            }
+                            let _ = write!(output, "{}", start + i);
                         }
-                        let _ = write!(output, "{}", start + i);
+                        output.push_str("</pre></td>\n<td class=\"code\"><pre>");
+                        output.push_str(code_trimmed);
+                        output.push_str("</pre></td>\n</tr></tbody></table>");
                     }
-                    output.push_str("</pre></td>\n<td class=\"code\"><pre>");
-                    output.push_str(code_trimmed);
-                    output.push_str("</pre></td>\n</tr></tbody></table>");
 
                     self.linenums_active = false;
                     self.linenums_start = 1;

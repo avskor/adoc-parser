@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::scanner;
 
@@ -341,12 +341,42 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
 /// Like [`resolve_includes`], but includes the source filename in unresolved
 /// directive placeholders (matching Asciidoctor output format).
 pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: Option<&str>) -> String {
+    let mut seen = HashSet::new();
+    resolve_includes_rec(input, base_dir, source_file, 0, &mut seen)
+}
+
+/// Maximum include nesting depth before bailing out. Together with the `seen`
+/// set this prevents unbounded recursion and include cycles (A→B→A).
+const MAX_INCLUDE_DEPTH: usize = 64;
+
+/// Recursive worker: resolves `include::` directives, descending into included
+/// files relative to their own directory while guarding against cycles/depth.
+fn resolve_includes_rec(
+    input: &str,
+    base_dir: &Path,
+    source_file: Option<&str>,
+    depth: usize,
+    seen: &mut HashSet<PathBuf>,
+) -> String {
     let mut output = String::with_capacity(input.len());
 
     for line in input.lines() {
         if let Some((path, attrs_str)) = crate::scanner::is_include_directive(line) {
             let attrs = parse_include_attrs(attrs_str);
             let file_path = base_dir.join(path);
+            let canonical = file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.clone());
+
+            // Depth / cycle guard: emit the unresolved placeholder rather than
+            // recursing forever.
+            if depth >= MAX_INCLUDE_DEPTH || seen.contains(&canonical) {
+                if !attrs.optional {
+                    write_unresolved_include(&mut output, source_file, path, attrs_str);
+                }
+                continue;
+            }
+
             match std::fs::read_to_string(&file_path) {
                 Ok(content) => {
                     let filtered = if let Some(ref ranges) = attrs.lines {
@@ -357,7 +387,22 @@ pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: O
                         let trimmed = content.trim_end_matches(['\n', '\r']);
                         trimmed.to_string()
                     };
-                    let adjusted = apply_level_offset(&filtered, attrs.leveloffset);
+
+                    // Resolve nested includes inside the included file, relative
+                    // to its own directory.
+                    let child_dir = canonical.parent().unwrap_or(base_dir).to_path_buf();
+                    let child_name = canonical.file_name().map(|n| n.to_string_lossy().into_owned());
+                    seen.insert(canonical.clone());
+                    let resolved = resolve_includes_rec(
+                        &filtered,
+                        &child_dir,
+                        child_name.as_deref().or(source_file),
+                        depth + 1,
+                        seen,
+                    );
+                    seen.remove(&canonical);
+
+                    let adjusted = apply_level_offset(&resolved, attrs.leveloffset);
                     let adjusted = match attrs.indent {
                         Some(n) => apply_indent(&adjusted, n),
                         None => adjusted,
@@ -369,13 +414,7 @@ pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: O
                 }
                 Err(_) if attrs.optional => { /* skip silently */ }
                 Err(_) => {
-                    output.push_str("Unresolved directive in ");
-                    output.push_str(source_file.unwrap_or("<stdin>"));
-                    output.push_str(" - include::");
-                    output.push_str(path);
-                    output.push('[');
-                    output.push_str(attrs_str);
-                    output.push_str("]\n");
+                    write_unresolved_include(&mut output, source_file, path, attrs_str);
                 }
             }
         } else if line.starts_with("\\include::") {
@@ -394,6 +433,18 @@ pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: O
     }
 
     output
+}
+
+/// Emit the Asciidoctor-style `Unresolved directive in <file> - include::path[attrs]`
+/// placeholder for an include that could not be read or was cut off by the guard.
+fn write_unresolved_include(output: &mut String, source_file: Option<&str>, path: &str, attrs_str: &str) {
+    output.push_str("Unresolved directive in ");
+    output.push_str(source_file.unwrap_or("<stdin>"));
+    output.push_str(" - include::");
+    output.push_str(path);
+    output.push('[');
+    output.push_str(attrs_str);
+    output.push_str("]\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -519,23 +570,23 @@ fn expand_counters(line: &str, attributes: &mut HashMap<String, String>) -> Opti
         return None;
     }
 
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut result = String::with_capacity(len);
-    let mut i = 0;
+    let mut result = String::with_capacity(line.len());
+    let mut rest = line;
     let mut any_expanded = false;
 
-    while i < len {
-        if bytes[i] == b'{' && line[i..].starts_with("{counter")
-            && let Some((replacement, consumed)) = try_parse_counter(&line[i..], attributes)
+    while !rest.is_empty() {
+        if rest.starts_with("{counter")
+            && let Some((replacement, consumed)) = try_parse_counter(rest, attributes)
         {
             result.push_str(&replacement);
-            i += consumed;
+            rest = &rest[consumed..];
             any_expanded = true;
             continue;
         }
-        result.push(bytes[i] as char);
-        i += 1;
+        // Copy one full UTF-8 char (byte-indexing here would corrupt multibyte text).
+        let ch = rest.chars().next().expect("rest is non-empty");
+        result.push(ch);
+        rest = &rest[ch.len_utf8()..];
     }
 
     if any_expanded { Some(result) } else { None }
@@ -927,11 +978,9 @@ fn parse_attribute_entry(line: &str) -> Option<(&str, Option<&str>)> {
     let after_colon = &rest[end + 1..];
     let value = if after_colon.is_empty() {
         ""
-    } else if let Some(v) = after_colon.strip_prefix(' ') {
-        v
     } else {
-        // Not a valid attribute entry (no space after second colon)
-        return None;
+        // Not a valid attribute entry without a space after the second colon.
+        after_colon.strip_prefix(' ')?
     };
 
     Some((name, Some(value)))
@@ -1784,6 +1833,17 @@ end::foo[]";
     fn test_expand_counter_unclosed() {
         let mut attrs = HashMap::new();
         assert_eq!(expand_counters("{counter:name", &mut attrs), None);
+    }
+
+    #[test]
+    fn test_expand_counter_preserves_non_ascii() {
+        // Regression: byte-indexed copying used to corrupt multibyte text
+        // around the counter (e.g. `bytes[i] as char` on UTF-8 continuation bytes).
+        let mut attrs = HashMap::new();
+        assert_eq!(
+            expand_counters("Пункт {counter:n} — раздел 日本語", &mut attrs),
+            Some("Пункт 1 — раздел 日本語".to_string())
+        );
     }
 
     // -----------------------------------------------------------------------
