@@ -443,30 +443,10 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
-    fn scan_next_block_once(&mut self) -> Option<Event<'a>> {
-        self.skip_blank_lines();
-
-        // Check if current line closes a delimited block
-        if self.check_close_delimited_block() {
-            // Discard pending block attributes — they have no target block
-            self.pending_block_attrs = None;
-            return self.event_buffer.pop();
-        }
-
-        let line = match self.current_line() {
-            Some(l) => l,
-            None => {
-                let events = self.close_all_open_contexts();
-                if !events.is_empty() {
-                    for ev in events.iter().skip(1).rev() {
-                        self.event_buffer.push(ev.clone());
-                    }
-                    return Some(events[0].clone());
-                }
-                return None;
-            }
-        };
-
+    /// Pre-`body_started` constructs: document header, attribute-only header,
+    /// block attribute `[...]`, block title `.Title`.
+    /// `Some(r)` → handled (caller returns `r`); `None` → fall through.
+    fn scan_header_constructs(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Document header detection: `= Title` or `# Title` before any body content
         // Skip if [discrete] attribute is pending — treat as discrete heading instead
         if !self.header_emitted && !self.body_started
@@ -475,14 +455,14 @@ impl<'a> BlockScanner<'a> {
                 a.positional.first().is_some_and(|s| s == "discrete")
             })
         {
-                return self.scan_document_header(title);
+                return Some(self.scan_document_header(title));
         }
 
         // Attribute-only document header: starts with attribute entries but no `= Title` yet
         if !self.header_emitted && !self.body_started
             && scanner::is_attribute_entry(line).is_some()
         {
-            return self.scan_attribute_only_header();
+            return Some(self.scan_attribute_only_header());
         }
 
         // Block attribute `[...]` — checked before body_started to allow metadata before header
@@ -493,13 +473,13 @@ impl<'a> BlockScanner<'a> {
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
                 }
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
             self.advance();
             self.had_blank_line = false;
             self.pending_block_attrs = Some(BlockAttributes::parse(attr_str));
             self.rescan_requested = true;
-            return None;
+            return Some(None);
         }
 
         // Block title `.Title` — checked before body_started
@@ -507,66 +487,74 @@ impl<'a> BlockScanner<'a> {
             self.advance();
             self.pending_block_title = Some(title);
             self.rescan_requested = true;
-            return None;
+            return Some(None);
         }
 
-        // From here on, we're in the document body
-        self.body_started = true;
+        None
+    }
 
+    /// Leaf body constructs: attribute entry, thematic/page break, section
+    /// heading, toc macro, include directive.
+    fn scan_leaf_blocks(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Attribute entry `:name: value`
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
             self.advance();
             let value = self.read_multiline_attribute_value(value);
             if name == "leveloffset" {
                 self.update_leveloffset(&value);
-                return Some(Event::Attribute {
+                return Some(Some(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value: Cow::Owned(self.leveloffset.to_string()),
-                });
+                }));
             }
             self.update_id_settings(name, &value);
             // doctype is a header-only attribute — ignore in body
             if name == "doctype" {
-                return self.next();
+                return Some(self.next());
             }
-            return Some(Event::Attribute {
+            return Some(Some(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value,
-            });
+            }));
         }
 
         // Thematic break `'''`
         if scanner::is_thematic_break(line) {
             self.advance();
-            return Some(Event::ThematicBreak);
+            return Some(Some(Event::ThematicBreak));
         }
 
         // Page break `<<<`
         if scanner::is_page_break(line) {
             self.advance();
-            return Some(Event::PageBreak);
+            return Some(Some(Event::PageBreak));
         }
 
         // Section heading `== Title` or `## Title`
         if let Some((level, title)) = scanner::strip_any_section_marker(line) {
-            return self.scan_section(level, title);
+            return Some(self.scan_section(level, title));
         }
 
         // TOC macro `toc::[]`
         if scanner::is_toc_macro(line) {
             self.advance();
-            return Some(Event::Toc);
+            return Some(Some(Event::Toc));
         }
 
         // Include directive `include::path[attrs]`
         if let Some((path, attrs)) = scanner::is_include_directive(line) {
             self.advance();
-            return Some(Event::Include {
+            return Some(Some(Event::Include {
                 path: Cow::Borrowed(path),
                 attrs: Cow::Borrowed(attrs),
-            });
+            }));
         }
 
+        None
+    }
+
+    /// Block macros with `::` syntax: image, video, audio, custom block macro.
+    fn scan_block_macros(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Block image `image::path[alt]`
         if let Some((target, alt)) = scanner::is_block_image(line) {
             self.advance();
@@ -590,7 +578,7 @@ impl<'a> BlockScanner<'a> {
             }));
             self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
             self.push_title_then_events(title_events);
-            return self.event_buffer.pop();
+            return Some(self.event_buffer.pop());
         }
 
         // Block video `video::path[attrs]`
@@ -607,7 +595,7 @@ impl<'a> BlockScanner<'a> {
                 self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
-            return self.event_buffer.pop();
+            return Some(self.event_buffer.pop());
         }
 
         // Block audio `audio::path[attrs]`
@@ -624,7 +612,7 @@ impl<'a> BlockScanner<'a> {
                 self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
-            return self.event_buffer.pop();
+            return Some(self.event_buffer.pop());
         }
 
         // Custom block macro `name::target[attrs]`
@@ -644,9 +632,15 @@ impl<'a> BlockScanner<'a> {
                 self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
             self.push_title_then_events(title_events);
-            return self.event_buffer.pop();
+            return Some(self.event_buffer.pop());
         }
 
+        None
+    }
+
+    /// Block containers and the line comment: admonition, table, delimited
+    /// block, markdown code fence, single-line comment.
+    fn scan_block_containers(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Admonition `NOTE: text`
         if let Some((label, text)) = scanner::is_admonition(line) {
             // If in list context with blank line (not continuation), close list first
@@ -655,9 +649,9 @@ impl<'a> BlockScanner<'a> {
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
                 }
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
-            return self.scan_admonition(label, text);
+            return Some(self.scan_admonition(label, text));
         }
 
         // Table `|===`
@@ -668,9 +662,9 @@ impl<'a> BlockScanner<'a> {
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
                 }
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
-            return self.scan_table();
+            return Some(self.scan_table());
         }
 
         // Delimited block
@@ -681,10 +675,10 @@ impl<'a> BlockScanner<'a> {
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
                 }
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
             self.in_continuation = false;
-            return self.scan_delimited_block(delim_type, delim_len);
+            return Some(self.scan_delimited_block(delim_type, delim_len));
         }
 
         // Markdown code fence ``` or ```lang
@@ -695,10 +689,10 @@ impl<'a> BlockScanner<'a> {
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
                 }
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
             self.in_continuation = false;
-            return self.scan_markdown_code_fence(backtick_count, language);
+            return Some(self.scan_markdown_code_fence(backtick_count, language));
         }
 
         // Single-line comment `// ...` — consume consecutive comment lines
@@ -714,27 +708,33 @@ impl<'a> BlockScanner<'a> {
                 }
             }
             self.rescan_requested = true;
-            return None;
+            return Some(None);
         }
 
+        None
+    }
+
+    /// List constructs: callout, unordered, ordered, description list, and the
+    /// list continuation `+`.
+    fn scan_list_constructs(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Callout list
         if let Some((number, text)) = scanner::is_callout_list_item(line) {
-            return self.scan_callout_list_item(number, text);
+            return Some(self.scan_callout_list_item(number, text));
         }
 
         // Unordered list
         if let Some((depth, text)) = scanner::is_list_marker_unordered(line) {
-            return self.scan_unordered_list_item(depth, text);
+            return Some(self.scan_unordered_list_item(depth, text));
         }
 
         // Ordered list
         if let Some((depth, text)) = scanner::is_list_marker_ordered(line) {
-            return self.scan_ordered_list_item(depth, text);
+            return Some(self.scan_ordered_list_item(depth, text));
         }
 
         // Description list
         if let Some((depth, term, desc)) = scanner::is_description_list_marker(line) {
-            return self.scan_description_list_item(depth, term, desc);
+            return Some(self.scan_description_list_item(depth, term, desc));
         }
 
         // List continuation `+`
@@ -759,7 +759,7 @@ impl<'a> BlockScanner<'a> {
                     self.push_event(Event::Text(Cow::Borrowed(pline)));
                 }
                 self.push_event(Event::Start(Tag::Paragraph));
-                return self.event_buffer.pop();
+                return Some(self.event_buffer.pop());
             }
             // When `+` appears after blank lines, close nested lists so
             // continuation attaches to the outermost ancestor list item
@@ -771,7 +771,7 @@ impl<'a> BlockScanner<'a> {
                     }
                     // Don't consume `+` yet — after nested lists are closed,
                     // next iteration will re-encounter `+` and handle it normally
-                    return self.event_buffer.pop();
+                    return Some(self.event_buffer.pop());
                 }
             }
             self.advance();
@@ -787,7 +787,7 @@ impl<'a> BlockScanner<'a> {
                         other => {
                             self.in_continuation = false;
                             if attr_events.is_empty() {
-                                return other;
+                                return Some(other);
                             }
                             // Buffer: block event + remaining attrs (reverse for FIFO)
                             if let Some(evt) = other {
@@ -796,7 +796,7 @@ impl<'a> BlockScanner<'a> {
                             for attr in attr_events.drain(1..).rev() {
                                 self.event_buffer.push(attr);
                             }
-                            return attr_events.into_iter().next();
+                            return Some(attr_events.into_iter().next());
                         }
                     }
                 }
@@ -805,9 +805,65 @@ impl<'a> BlockScanner<'a> {
             self.push_event(Event::End(TagEnd::Paragraph));
             self.push_event(Event::Text(Cow::Borrowed("+")));
             self.push_event(Event::Start(Tag::Paragraph));
+            return Some(self.event_buffer.pop());
+        }
+
+        None
+    }
+
+    fn scan_next_block_once(&mut self) -> Option<Event<'a>> {
+        self.skip_blank_lines();
+
+        // Check if current line closes a delimited block
+        if self.check_close_delimited_block() {
+            // Discard pending block attributes — they have no target block
+            self.pending_block_attrs = None;
             return self.event_buffer.pop();
         }
 
+        let line = match self.current_line() {
+            Some(l) => l,
+            None => {
+                let events = self.close_all_open_contexts();
+                if !events.is_empty() {
+                    for ev in events.iter().skip(1).rev() {
+                        self.event_buffer.push(ev.clone());
+                    }
+                    return Some(events[0].clone());
+                }
+                return None;
+            }
+        };
+
+        if let Some(r) = self.scan_header_constructs(line) {
+            return r;
+        }
+
+        // From here on, we're in the document body
+        self.body_started = true;
+
+        if let Some(r) = self.scan_leaf_blocks(line) {
+            return r;
+        }
+
+        if let Some(r) = self.scan_block_macros(line) {
+            return r;
+        }
+
+        if let Some(r) = self.scan_block_containers(line) {
+            return r;
+        }
+
+        if let Some(r) = self.scan_list_constructs(line) {
+            return r;
+        }
+
+        self.scan_paragraph_fallback(line)
+    }
+
+    /// Universal paragraph fallback (always handles): literal/normal indented
+    /// paragraph, list-closing before a regular paragraph, regular paragraph.
+    fn scan_paragraph_fallback(&mut self, line: &'a str) -> Option<Event<'a>> {
         // Literal paragraph (leading space), unless [normal] style overrides
         if line.starts_with(' ') || line.starts_with('\t') {
             let is_normal_style = self
