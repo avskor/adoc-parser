@@ -2,6 +2,9 @@
 name = "adoc-cli"
 version = "0.1.0"
 edition = "2024"
+description = "Command-line AsciiDoc-to-HTML converter built on adoc-parser."
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "adoc"
@@ -11,4 +14,4 @@ path = "src/main.rs"
 adoc-html = { path = "../adoc-html" }
 adoc-parser = { path = "../adoc-parser" }
 chrono = "0.4"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }

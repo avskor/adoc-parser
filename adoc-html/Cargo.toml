@@ -2,6 +2,9 @@
 name = "adoc-html"
 version = "0.1.0"
 edition = "2024"
+description = "HTML renderer for the adoc-parser AsciiDoc event stream."
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 adoc-parser = { path = "../adoc-parser" }

@@ -8,3 +8,7 @@ members = [
     "adoc-compat-tests",
     "adoc-html-tests",
 ]
+
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/avskor/adoc-parser"

@@ -1,51 +1,52 @@
 # Session context
 
-## Последняя сессия (2026-05-30) — P2: единая дисциплина экранирования + D7
+## Последняя сессия (2026-05-30) — P2/Гигиена: Cargo-метаданные + сноска FEATURES.md
 
-Полный отчёт аудита: `~/.claude/plans/sequential-dreaming-zebra.md`. План этой сессии:
-`~/.claude/plans/polished-purring-bubble.md`.
+Контекст: все дефекты аудита D1-D7 закрыты и в master (`51a650e` P0, `bc7c1b2` P1,
+`1024813` единое экранирование + D7). Взят следующий невыполненный пункт аудита из раздела
+«Из аудита 2026-05-30» — **Гигиена** (метаданные Cargo + сноска FEATURES.md). Это был
+единственный оставшийся `[ ]` в audit-секции.
 
-**Контекст:** все дефекты аудита D1-D6 закрыты и в master (`51a650e` P0, `bc7c1b2` P1).
-Взят следующий пункт аудита — P2 «единая дисциплина экранирования» (системный корень D1).
+### Ветка `chore/cargo-metadata-and-features-note` (от master; НЕ закоммичено)
 
-### Ветка `fix/attr-escaping-discipline` (от master; НЕ закоммичено)
-
-Всё в `adoc-html/src/lib.rs`:
-- **Хелпер `write_attr(output, name, value)`** (рядом с `html_escape`) — эмитит ` name="value"`
-  c `html_escape` значения. Канонический путь для любого single-value атрибута.
-- **D7 (новая XSS, найдена и закрыта):** `style_name` упорядоченного списка (`meta.style`) писался
-  сырым в `<ol class>`/`<div class="olist …">` (`[<b>x]` → инъекция тега; `<`/`>`/`&` проходят).
-  D1 чинил только media/image. Закрыто.
-- **Экранирование на границе эмиссии:** `write_meta_attrs` теперь экранирует `default_class`
-  (защищает ВСЕ типы блоков, включая `wrapper_class` ol); из `image_base_class` убран локальный
-  `html_escape` float/align (теперь экранируется один раз на границе → нет двойного экранирования).
-- **Миграция single-value атрибутов на `write_attr`:** id/href/target/src/alt/width/height/
-  poster/data-lang/title (link, image ×2, video width/height/poster, audio src, icon title,
-  source data-lang). Class-циклы по ролям и URL-фрагменты (`#t=`/`start`/`end`) НЕ трогал.
-- **Тесты:** `test_attribute_escaping_invariant` (10 каналов: ol-style D7, img-align, section-id,
-  icon-role/title, block-id/role, link-url, image-target, video-width) + `_no_overescape`.
+8 файлов, только манифесты + документация (кода не трогал):
+- **root `Cargo.toml`**: добавлен `[workspace.package]` с общими `license = "MIT"` и
+  `repository = "https://github.com/avskor/adoc-parser"` (источник правды — файл `LICENSE`,
+  MIT © 2026 Alexey Skorobogatov; remote `git@github.com:avskor/adoc-parser.git`).
+- **6 крейтов**: `description` (inline, уникальный на крейт) + `license.workspace = true` +
+  `repository.workspace = true`. Наследование выбрано т.к. license/repository общие (6→1);
+  description уникален → inline.
+- **Пиннинг semver** (по Cargo.lock, до минора): `adoc-cli` clap `4`→`4.5`;
+  `adoc-compat-tests` serde `1`→`1.0`; `adoc-html-tests` similar `2`→`2.7`. chrono оставлен
+  `0.4` (для 0.x минор = единица semver-совместимости; тоньше пинить = patch, не нужно).
+  Каждая из 4 внешних зависимостей живёт ровно в одном крейте → `[workspace.dependencies]`
+  не нужен (нет дублирования).
+- **FEATURES.md**: «**Покрытие: 100% полное (202/202)**» → «**Покрытие синтаксиса: 100%
+  (202/202)**[^coverage]» + сноска: это покрытие *синтаксических конструкций*, а не
+  побайтовая HTML-совместимость; совместимость рендеринга = корпус 135/344 (Identical 135 /
+  Different 209 на 2026-05-30).
 
 ### Статус (верифицировано)
-- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное
-  (parser 429, html lib **300→302**, html_output 35, html_compat 1, adoc_html_tests 6+6,
-  integration 25; 0 failed).
-- CLI: `[<b>x]\n. one` → `<ol class="&lt;b&gt;x">` (было сырое); `[loweralpha]`/`image align=center`
-  неизменно; D1 video-инъекция → `&quot;` без пробоя; img/link байт-в-байт с Asciidoctor.
-- Корпус `compare_full.py` (release): **Identical 135 / Different 209 / Errors 0** — baseline без
-  изменений (фикс корпус-нейтрален).
+- `cargo metadata --no-deps`: OK (манифесты парсятся).
+- `cargo clippy --workspace`: 0 warnings.
+- `cargo test --workspace`: зелёное, 0 failed (parser 429, html lib 302, html_output 35,
+  adoc_html_tests 6, author_rendering 6, html_compat 1, integration 25, parsing_lab 1).
+- `Cargo.lock` НЕ изменился (пиннинги удовлетворяются уже зафиксированными версиями:
+  clap 4.5.58, serde 1.0.228, similar 2.7.0, chrono 0.4.44).
+- TODO.md: пункт «Гигиена» отмечен `[x]` с деталями.
 
 ### Что дальше
-- **Спросить про коммит/мерж/пуш** ветки `fix/attr-escaping-discipline` (по правилу — только по
-  запросу).
-- Осталось из P2: декомпозиция гигантских функций (`start_tag` ~960 стр., `parse_inline`,
-  `scan_next_block`), дедуп `try_*_macro`, doc-тесты публичного API (0), README `233`→`238`,
-  сноска FEATURES.md (синтаксис vs HTML-совместимость), метаданные Cargo (license/description/
-  repository) + пиннинг semver.
-- P3: кластеры совместимости (bare-links class+rel п.14, backslash-entity п.15, типографские
-  замены п.37, link-text п.38).
+- **Спросить про коммит/мерж/пуш** ветки `chore/cargo-metadata-and-features-note`
+  (по правилу CLAUDE.md — коммит только по запросу пользователя).
+- Осталось из аудита/P2: декомпозиция гигантских функций (`start_tag` ~960 стр.,
+  `parse_inline`, `scan_next_block`), дедуп `try_*_macro` в inline.rs, doc-тесты публичного
+  API (0), README `233`→`238`.
+- P3 кластеры совместимости: bare-links class+rel (п.14), backslash-entity (п.15),
+  типографские замены (п.37), link-text (п.38). Доминирующий шум корпуса — NCR-типографика
+  (229 файлов, в одиночку 0 flips — чинить в связке).
 
 ### Предостережения
-- НЕ `cargo fmt` на крейт (не fmt-clean). Коммит только по запросу пользователя.
-- Верификация совместимости: `compare_full.py` в `/mnt/c/tmp/adoc-test/` (release-бинарь по пути
-  `target/release/adoc`), корпус 344 `.adoc`.
-- LSP для навигации, context7 MCP для доков.
+- НЕ `cargo fmt` на крейт (не fmt-clean, компактный стиль). Коммит только по запросу.
+- Верификация совместимости: `compare_full.py` в `/mnt/c/tmp/adoc-test/` (release-бинарь
+  `target/release/adoc`), корпус 344 `.adoc`. Baseline: Identical 135 / Different 209 / Errors 0.
+- LSP (rust-analyzer) для навигации, context7 MCP для доков библиотек.

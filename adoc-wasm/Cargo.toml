@@ -2,6 +2,9 @@
 name = "adoc-wasm"
 version = "0.1.0"
 edition = "2024"
+description = "WebAssembly bindings exposing AsciiDoc-to-HTML conversion (adoc-parser + adoc-html)."
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]

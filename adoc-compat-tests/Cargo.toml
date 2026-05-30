@@ -3,8 +3,11 @@ name = "adoc-compat-tests"
 version = "0.1.0"
 edition = "2024"
 publish = false
+description = "Compatibility test suite for adoc-parser against the asciidoc-parsing-lab corpus."
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 adoc-parser = { path = "../adoc-parser" }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
