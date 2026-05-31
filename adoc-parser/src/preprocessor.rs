@@ -622,6 +622,21 @@ pub fn preprocess_with_attrs(
     while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
 
+        // 0. Escaped conditional directive at column 0: \ifdef:: \ifndef:: \ifeval:: \endif::
+        //    → strip the leading backslash and emit the rest literally WITHOUT evaluating it.
+        //    Asciidoctor only recognizes directives at the very start of a line, so an INDENTED
+        //    `\ifdef` is left untouched (the backslash is plain text). A skipped region still
+        //    drops the line.
+        if let Some(rest) = line.strip_prefix('\\')
+            && starts_with_conditional_directive(rest)
+        {
+            if !is_skipping(&skip_stack) {
+                output.push_str(rest);
+                output.push('\n');
+            }
+            continue;
+        }
+
         // 1. endif::[] — always processed regardless of skip state
         if trimmed == "endif::[]" {
             skip_stack.pop();
@@ -770,6 +785,17 @@ struct Conditional<'a> {
     kind: ConditionalKind,
     attrs: &'a str,
     inline_content: Option<&'a str>,
+}
+
+/// True if `s` begins with a preprocessor conditional directive keyword
+/// (`ifdef::`, `ifndef::`, `ifeval::`, `endif::`). Used to detect an escaped
+/// directive (`\ifdef::…`) whose leading backslash must be stripped. The `::`
+/// guards against matching ordinary words like `ifdefinitely`.
+fn starts_with_conditional_directive(s: &str) -> bool {
+    s.starts_with("ifdef::")
+        || s.starts_with("ifndef::")
+        || s.starts_with("ifeval::")
+        || s.starts_with("endif::")
 }
 
 /// Parse a conditional directive line.
@@ -1019,6 +1045,50 @@ mod tests {
         let input = "ifndef::backend[No backend.]";
         let result = preprocess(input);
         assert_eq!(result, "No backend.");
+    }
+
+    #[test]
+    fn test_escaped_conditional_directive_strips_backslash() {
+        // \ifdef:: \ifndef:: \ifeval:: \endif:: → drop the backslash, emit literally,
+        // do NOT evaluate (matches Asciidoctor). `:flag:` is defined but the escaped
+        // block must not be skipped, and the directive text must survive verbatim.
+        let input = "\
+:flag:
+\\ifdef::flag[]
+:tip-caption: :bulb:
+\\endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, "\
+:flag:
+ifdef::flag[]
+:tip-caption: :bulb:
+endif::[]");
+    }
+
+    #[test]
+    fn test_escaped_inline_conditional_directive() {
+        // Escaped inline form keeps its bracketed content as literal text.
+        let input = "\\ifdef::env-name[:relfilesuffix: .adoc]";
+        let result = preprocess(input);
+        assert_eq!(result, "ifdef::env-name[:relfilesuffix: .adoc]");
+    }
+
+    #[test]
+    fn test_backslash_before_non_directive_kept() {
+        // A backslash before a word that merely starts like a directive (no `::`) is kept.
+        let input = "\\ifdefinitely not a directive";
+        let result = preprocess(input);
+        assert_eq!(result, "\\ifdefinitely not a directive");
+    }
+
+    #[test]
+    fn test_indented_escaped_directive_kept() {
+        // Asciidoctor only recognizes directives at column 0; an INDENTED `\ifdef` is left
+        // verbatim (backslash preserved, not processed). This is exactly how the AsciiDoc docs
+        // demonstrate escaping inside a `[source,indent=0]` listing.
+        let input = " \\ifdef::just-an-example[]";
+        let result = preprocess(input);
+        assert_eq!(result, " \\ifdef::just-an-example[]");
     }
 
     #[test]
