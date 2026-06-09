@@ -39,6 +39,11 @@ pub struct BlockScanner<'a> {
     leveloffset: i32,
     idprefix: String,
     idseparator: String,
+    /// Registry of section/discrete-heading ids assigned so far (in document
+    /// order). Auto-generated ids that collide with a registered id get a
+    /// numeric suffix (`_2`, `_3`, …), matching Asciidoctor's de-duplication.
+    /// Explicit ids are registered as-is and never renamed.
+    used_ids: std::collections::HashSet<String>,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -58,6 +63,31 @@ impl<'a> BlockScanner<'a> {
             leveloffset: 0,
             idprefix: "_".to_string(),
             idseparator: "_".to_string(),
+            used_ids: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Register an explicit id (from `[#id]`/`[[id]]`) so later auto-generated
+    /// ids de-duplicate against it. Explicit ids are kept verbatim even on
+    /// collision (Asciidoctor only warns).
+    fn register_explicit_id(&mut self, id: &str) {
+        self.used_ids.insert(id.to_string());
+    }
+
+    /// Return a unique id for an auto-generated section/heading id, appending
+    /// `<sep>2`, `<sep>3`, … on collision with an already-registered id, then
+    /// register and return it.
+    fn unique_auto_id(&mut self, base: String) -> String {
+        if self.used_ids.insert(base.clone()) {
+            return base;
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{}{}{}", base, self.idseparator, n);
+            if self.used_ids.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
         }
     }
 
@@ -1131,10 +1161,16 @@ impl<'a> BlockScanner<'a> {
         let list_close_events = self.close_list_contexts();
         let close_events = self.close_sections_for_level(effective_level);
 
-        let id = self.pending_block_attrs
-            .as_ref()
-            .and_then(|a| a.id.clone())
-            .unwrap_or_else(|| scanner::generate_id(title, &self.idprefix, &self.idseparator));
+        let id = match self.pending_block_attrs.as_ref().and_then(|a| a.id.clone()) {
+            Some(explicit) => {
+                self.register_explicit_id(&explicit);
+                explicit
+            }
+            None => {
+                let base = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+                self.unique_auto_id(base)
+            }
+        };
 
         let block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
@@ -1177,12 +1213,18 @@ impl<'a> BlockScanner<'a> {
         // Apply leveloffset to heading level
         let effective_level = (level as i32 + self.leveloffset).max(1) as u8;
 
-        // Auto-generate id for discrete headings if not explicitly set
+        // Auto-generate id for discrete headings if not explicitly set;
+        // register/de-duplicate against the shared section-id registry.
         if let Some(ref mut attrs) = block_attrs
             && attrs.positional.first().is_some_and(|s| s == "discrete")
-            && attrs.id.is_none()
         {
-            attrs.id = Some(scanner::generate_id(title, &self.idprefix, &self.idseparator));
+            match attrs.id.clone() {
+                Some(explicit) => self.register_explicit_id(&explicit),
+                None => {
+                    let base = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+                    attrs.id = Some(self.unique_auto_id(base));
+                }
+            }
         }
 
         // Emit: Start(Heading) Text(title) End(Heading) — no context push
@@ -4208,6 +4250,43 @@ mod tests {
         assert!(events.contains(&Event::Start(Tag::SectionTitle {
             level: 2,
             id: Cow::Owned("second".into()),
+        })));
+    }
+
+    #[test]
+    fn test_duplicate_section_ids_deduplicated() {
+        // Repeated section titles get a numeric suffix (Asciidoctor parity).
+        let input = "== Added\n\nx\n\n== Added\n\ny\n\n== Added\n\nz";
+        let ids: Vec<String> = BlockScanner::new(input)
+            .filter_map(|ev| match ev {
+                Event::Start(Tag::SectionTitle { id, .. }) => Some(id.into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["_added", "_added_2", "_added_3"]);
+    }
+
+    #[test]
+    fn test_auto_id_dedups_against_explicit_id() {
+        // An explicit id is kept verbatim; a later auto id that would collide
+        // with it skips to the next free suffix.
+        let input = "[#_added]\n== First\n\nx\n\n== Added\n\ny";
+        let ids: Vec<String> = BlockScanner::new(input)
+            .filter_map(|ev| match ev {
+                Event::Start(Tag::SectionTitle { id, .. }) => Some(id.into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["_added", "_added_2"]);
+    }
+
+    #[test]
+    fn test_section_id_dots_become_separators() {
+        let input = "== 0.3.0 Milestone Build";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SectionTitle {
+            level: 2,
+            id: Cow::Owned("_0_3_0_milestone_build".into()),
         })));
     }
 }
