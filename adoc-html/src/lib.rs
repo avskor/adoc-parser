@@ -41,46 +41,6 @@ MathJax.Hub.Register.StartupHook("AsciiMath Jax Ready", function () {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-MML-AM_HTMLorMML"></script>
 "#;
 
-const INTRINSIC_ATTRIBUTES: &[(&str, &str)] = &[
-    ("amp", "&amp;"),
-    ("apos", "&#39;"),
-    ("asterisk", "*"),
-    ("backslash", "\\"),
-    ("backtick", "`"),
-    ("blank", ""),
-    ("brvbar", "&#166;"),
-    ("caret", "^"),
-    ("cpp", "C++"),
-    ("deg", "&#176;"),
-    ("empty", ""),
-    ("endsb", "]"),
-    ("gt", "&gt;"),
-    ("ldquo", "&#8220;"),
-    ("lsquo", "&#8216;"),
-    ("lt", "&lt;"),
-    ("nbsp", "&#160;"),
-    ("plus", "&#43;"),
-    ("pp", "&#43;&#43;"),
-    ("quot", "&#34;"),
-    ("rdquo", "&#8221;"),
-    ("rsquo", "&#8217;"),
-    ("sp", " "),
-    ("startsb", "["),
-    ("tilde", "~"),
-    ("two-colons", "::"),
-    ("two-semicolons", ";;"),
-    ("vbar", "|"),
-    ("wj", "&#8288;"),
-    ("zwsp", "&#8203;"),
-];
-
-fn intrinsic_attribute(name: &str) -> Option<&'static str> {
-    INTRINSIC_ATTRIBUTES
-        .iter()
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| *v)
-}
-
 #[derive(Default, Clone)]
 pub struct HtmlOptions {
     pub docinfo_head: Option<String>,
@@ -634,60 +594,58 @@ impl HtmlRenderer {
                 }
             }
             Event::AttributeReference { name, fallback, trailing_brackets } => {
-                let lower_name = name.to_ascii_lowercase();
-                if let Some(value) = self.document_attrs.get(lower_name.as_str()) {
-                    let value = value.clone();
-                    // Attributes substitute before macros: if a trailing `[...]`
-                    // was captured, re-parse `value[...]` together so a URL-valued
-                    // attribute forms a link macro. For non-URL values the bracket
-                    // stays literal — same result as rendering them separately.
-                    match trailing_brackets {
-                        Some(br) => {
-                            let combined = format!("{value}{br}");
-                            self.render_inline_value(output, &combined);
+                let outcome = adoc_render_core::resolve_attribute_reference(
+                    &name,
+                    |n| self.document_attrs.get(n).map(|s| s.as_str()),
+                    |env_name| std::env::var(env_name).ok(),
+                    fallback.as_deref(),
+                    self.document_attrs.get("attribute-missing").map(|s| s.as_str()),
+                );
+                use adoc_render_core::AttrRefOutcome;
+                match outcome {
+                    AttrRefOutcome::Document(value) => {
+                        let value = value.to_string();
+                        // Attributes substitute before macros: if a trailing `[...]`
+                        // was captured, re-parse `value[...]` together so a URL-valued
+                        // attribute forms a link macro. For non-URL values the bracket
+                        // stays literal — same result as rendering them separately.
+                        match trailing_brackets {
+                            Some(br) => {
+                                let combined = format!("{value}{br}");
+                                self.render_inline_value(output, &combined);
+                            }
+                            None => self.render_inline_value(output, &value),
                         }
-                        None => self.render_inline_value(output, &value),
                     }
-                } else if let Some(value) = intrinsic_attribute(&lower_name) {
-                    // Intrinsic values are pre-encoded HTML — push raw
-                    output.push_str(value);
-                    if let Some(br) = trailing_brackets {
-                        html_escape_text(output, &br);
+                    AttrRefOutcome::Intrinsic(attr) => {
+                        // The `html` column is pre-encoded — push raw
+                        output.push_str(attr.html);
+                        if let Some(br) = trailing_brackets {
+                            html_escape_text(output, &br);
+                        }
                     }
-                } else if let Some(env_name) = name.strip_prefix("env-") {
-                    if let Ok(value) = std::env::var(env_name) {
+                    AttrRefOutcome::Env(value) => {
                         html_escape(output, &value);
-                    } else if let Some(fb) = fallback {
+                        if let Some(br) = trailing_brackets {
+                            html_escape_text(output, &br);
+                        }
+                    }
+                    AttrRefOutcome::Fallback(fb) => {
+                        let fb = fb.to_string();
                         html_escape(output, &fb);
-                    } else {
+                        if let Some(br) = trailing_brackets {
+                            html_escape_text(output, &br);
+                        }
+                    }
+                    AttrRefOutcome::MissingSkip => {
                         output.push('{');
                         output.push_str(&name);
                         output.push('}');
-                    }
-                    if let Some(br) = trailing_brackets {
-                        html_escape_text(output, &br);
-                    }
-                } else if let Some(fb) = fallback {
-                    html_escape(output, &fb);
-                    if let Some(br) = trailing_brackets {
-                        html_escape_text(output, &br);
-                    }
-                } else {
-                    let mode = self.document_attrs.get("attribute-missing").map(|s| s.as_str());
-                    match mode {
-                        Some("drop") | Some("drop-line") => {
-                            // Output nothing
-                        }
-                        _ => {
-                            // "skip" (default) / "warn"
-                            output.push('{');
-                            output.push_str(&name);
-                            output.push('}');
-                            if let Some(br) = trailing_brackets {
-                                html_escape_text(output, &br);
-                            }
+                        if let Some(br) = trailing_brackets {
+                            html_escape_text(output, &br);
                         }
                     }
+                    AttrRefOutcome::MissingDrop => {}
                 }
             }
             Event::Footnote { id, text } => {

@@ -1,0 +1,9 @@
+[package]
+name = "adoc-render-core"
+version = "0.1.0"
+edition = "2024"
+description = "Renderer-agnostic AsciiDoc semantics shared by adoc-parser event consumers."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
