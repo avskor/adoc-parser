@@ -1,6 +1,55 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-5) — Фаза 3: custom caption на админишене
+## Последняя сессия (2026-06-09, поздняя-6) — Фаза 3: неизвестный verbatim-style → class
+
+admonition-custom-caption уже смержена в master (`cc390a0`, origin == master). Выбран самый
+чистый 1-diff по near-miss на 169: неизвестный verbatim-стиль на delimited-блоке (monitoring).
+При эмпирической пробе оказалось ШИРЕ заявленного в session.md: баг есть и на literal (`....`),
+и на listing (`----`).
+
+### Ветка `fix/literal-unknown-style-class` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами): verbatim delimited-блок (literal/listing)
+  берёт CSS-класс ТОЛЬКО из контекста; неизвестный блок-стиль (`[plantuml]`, `[ditaa]`,
+  `[src,yaml]`) ОТБРАСЫВАЕТСЯ из class. `[plantuml]....`→`literalblock` (мы: `literalblock
+  plantuml`), `[plantuml]----`/`[src,yaml]----`→`listingblock` (мы: `listingblock plantuml`/`src`).
+  Роли (`[plantuml.diagram]`) и id СОХРАНЯЮТСЯ (`literalblock diagram`). `[literal]`/`[listing]`
+  на `....`/`----` → контекст-конверсия в парсере (уже верно). `[source,lang]` идёт ОТДЕЛЬНЫМ
+  путём `Tag::SourceBlock` (style→language/data-lang) — НЕ задет.
+- **Корень**: `write_meta_attrs` (adoc-html/lib.rs:~2543) дописывает `meta.style` в class после
+  default_class. Для verbatim-блоков это неверно.
+- **Фикс** (`adoc-html/lib.rs`): хелпер `strip_block_style(meta)` (клон с `style=None`), применён
+  в arm'ах `Literal`+`Listing` в `start_delimited_block` (стр ~1750). Узко: только эти 2 arm'а.
+  +1 тест `test_verbatim_block_unknown_style_dropped_from_class` (literal+listing drop, role survives).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 307→308, parser 440).
+- Корпус `compare_full.py` (release): **Identical 169→170 (+1), Different 174, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` из master): **5 файлов** изменили вывод —
+  **1 FLIP→IDENTICAL** (monitoring), **0 регрессий**. 4 остались Different по др. причинам
+  (architecture/index, java/index, software-development-cookbook — include-родители monitoring;
+  db-migration — admonition `div vs table`), НО их verbatim-стиль теперь верен (`[src,yaml]`/
+  `[plantuml]` стиль отброшен). TODO.md: baseline 169→170, п.40-смежное под-пункт `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/literal-unknown-style-class` (только по запросу).
+- Следующие чистые flip-кандидаты (по near-miss на 170):
+  - **inline-anchor reftext из dt-терма** `[[id]]term:: ...` → `<<id>>` = текст терма (lexicon,
+    ~14 ссылок; родственно bibliography, но захват текста терма в парсере — БОЛЬШЕ по объёму).
+  - **kbd `+`-разделитель** `kbd:[key(+key)*]` → `+...+` инлайн-пасстру ест `+` (keyboard-macro).
+  - **`§`/bare char-ref** сохранять как сущность (title-links — остаток п.15).
+  - **`// end::para[]` утечка** тег-региона (verse, literal).
+- Архитектурные (отложены): nested-форматирование/`{attr}` в тексте макроса, `{attr-ref}[text]`
+  (порядок subs), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (нужен base-бинарь в `/tmp/adoc_base` — копировать ДО изменений). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM). LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-5) — Фаза 3: custom caption на админишене
 
 macro-text-replacements уже смержена в master (`e2c0b96`, origin == master). Выбран следующий
 чистый flip по near-miss на 168 — самый чистый 1-diff: `[caption="…"]` на админишене (glossary).
