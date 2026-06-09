@@ -676,6 +676,19 @@ impl<'a> InlineState<'a> {
         }
     }
 
+    /// Emit the explicit display text of an inline macro (link/xref/mailto label),
+    /// applying REPLACEMENTS when active. Asciidoctor runs the replacements
+    /// substitution before the macros substitution, so apostrophes, dashes, arrows,
+    /// etc. inside an explicit `[label]` are already transformed by the time the
+    /// macro is rendered. Targets/URLs used as fallback display are emitted raw.
+    fn push_macro_label(&self, text: &'a str, events: &mut Vec<Event<'a>>) {
+        if self.subs.has(SubstitutionSet::REPLACEMENTS) {
+            events.push(Event::Text(apply_typographic_replacements(text)));
+        } else {
+            events.push(Event::Text(Cow::Borrowed(text)));
+        }
+    }
+
     /// Returns the length of a typographic pattern following a backslash, or 0 if none.
     fn typographic_escape_len(&self) -> usize {
         let bytes = self.input.as_bytes();
@@ -1303,8 +1316,11 @@ impl<'a> InlineState<'a> {
             target: Cow::Borrowed(target),
             label: label.clone(),
         }));
-        let display = label.unwrap_or(Cow::Borrowed(target));
-        events.push(Event::Text(display));
+        match label {
+            Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
+            Some(l) => events.push(Event::Text(l)),
+            None => events.push(Event::Text(Cow::Borrowed(target))),
+        }
         events.push(Event::End(TagEnd::CrossReference));
 
         self.pos = after_open + close + 2;
@@ -1349,8 +1365,11 @@ impl<'a> InlineState<'a> {
                 nofollow: link_attrs.nofollow,
                 is_bare: false,
             }));
-            let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
-            events.push(Event::Text(Cow::Borrowed(display)));
+            if link_attrs.text.is_empty() {
+                events.push(Event::Text(Cow::Borrowed(url)));
+            } else {
+                self.push_macro_label(link_attrs.text, events);
+            }
             events.push(Event::End(TagEnd::Link));
 
             self.pos = start_pos + 5 + 2 + close_pp + 2 + bracket_end + 1;
@@ -1386,8 +1405,11 @@ impl<'a> InlineState<'a> {
             nofollow: link_attrs.nofollow,
             is_bare: false,
         }));
-        let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
-        events.push(Event::Text(Cow::Borrowed(display)));
+        if link_attrs.text.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(url)));
+        } else {
+            self.push_macro_label(link_attrs.text, events);
+        }
         events.push(Event::End(TagEnd::Link));
 
         self.pos = start_pos + 5 + bracket_end + 1;
@@ -1433,8 +1455,11 @@ impl<'a> InlineState<'a> {
             nofollow: link_attrs.nofollow,
             is_bare: false,
         }));
-        let display = if link_attrs.text.is_empty() { email } else { link_attrs.text };
-        events.push(Event::Text(Cow::Borrowed(display)));
+        if link_attrs.text.is_empty() {
+            events.push(Event::Text(Cow::Borrowed(email)));
+        } else {
+            self.push_macro_label(link_attrs.text, events);
+        }
         events.push(Event::End(TagEnd::Link));
 
         self.pos = start_pos + 7 + bracket_end + 1;
@@ -1481,8 +1506,11 @@ impl<'a> InlineState<'a> {
             target: Cow::Borrowed(target),
             label: label.clone(),
         }));
-        let display = label.unwrap_or(Cow::Borrowed(target));
-        events.push(Event::Text(display));
+        match label {
+            Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
+            Some(l) => events.push(Event::Text(l)),
+            None => events.push(Event::Text(Cow::Borrowed(target))),
+        }
         events.push(Event::End(TagEnd::CrossReference));
 
         self.pos = start_pos + 5 + bracket_end + 1;
@@ -1678,8 +1706,11 @@ impl<'a> InlineState<'a> {
                 nofollow: link_attrs.nofollow,
                 is_bare: false,
             }));
-            let display = if link_attrs.text.is_empty() { url } else { link_attrs.text };
-            events.push(Event::Text(Cow::Borrowed(display)));
+            if link_attrs.text.is_empty() {
+                events.push(Event::Text(Cow::Borrowed(url)));
+            } else {
+                self.push_macro_label(link_attrs.text, events);
+            }
             events.push(Event::End(TagEnd::Link));
             self.pos = start_pos + url_end + close + 1;
             *text_start = self.pos;
@@ -2445,6 +2476,53 @@ mod tests {
                 is_bare: false,
             }),
             Event::Text(Cow::Borrowed("here")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_macro_label_replacements() {
+        // Asciidoctor runs REPLACEMENTS before macros, so an apostrophe inside an
+        // explicit link/xref/mailto label is curled in the visible text.
+        // link: macro
+        assert_eq!(parse("link:u.html[cell's separator]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("u.html"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+            }),
+            Event::Text(Cow::Borrowed("cell\u{2019}s separator")),
+            Event::End(TagEnd::Link),
+        ]);
+        // xref:target[label]
+        assert_eq!(parse("xref:t.adoc[attribute's value]"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("t.adoc"),
+                label: Some(Cow::Borrowed("attribute's value")),
+            }),
+            Event::Text(Cow::Borrowed("attribute\u{2019}s value")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+        // <<id,label>> form
+        assert_eq!(parse("<<sec,group's charter>>"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("sec"),
+                label: Some(Cow::Borrowed("group's charter")),
+            }),
+            Event::Text(Cow::Borrowed("group\u{2019}s charter")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+        // Bare URL display (no explicit text) is emitted raw — apostrophes in the
+        // URL itself are not curled.
+        assert_eq!(parse("link:a'b.html[]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("a'b.html"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+            }),
+            Event::Text(Cow::Borrowed("a'b.html")),
             Event::End(TagEnd::Link),
         ]);
     }
