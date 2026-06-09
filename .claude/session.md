@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-27) — Фаза 3: rowspan-размещение ячеек в спанированных строках
+
+`fix/callout-item-block-and-shifted-source-lang` УЖЕ смержена+запушена в master (`7fe4190`, origin ==
+master, дерево чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base`
+пересобран из ТЕКУЩЕГО чистого master `7fe4190` ПЕРЕД правкой. Baseline подтверждён: Identical 202,
+Different 142, Errors 0. Взят **docinfo/index** (14-diff, неразведанный, span-cell row-placement) —
+точечным `fdiff.py`. Корень оказался чистым (не архитектура) — узкий баг в `build_table_rows`.
+
+### Ветка `fix/rowspan-row-placement` (от master `7fe4190`; СТАТУС: НЕ закоммичено)
+- **Корень — двойной декремент occupancy в `build_table_rows`** (`adoc-parser/src/block.rs`, ПАРСЕР).
+  Ячейка с rowspan `.N+` занимает свою колонку в N строках → следующая строка держит на 1 ячейку меньше.
+  Проба (2-кол. таблица, `.2+|X`/`|1` / `|2` / `|Y|Z`): asciidoctor даёт строки `[X,1]`,`[2]`,`[Y,Z]`
+  (`2` в КОЛОНКЕ 1, т.к. X спанит кол.0); мы давали `[X,1]`,`[2,Y]`,`[Z]` (`2` ошибочно в кол.0).
+  **Механизм бага**: при старте новой строки (`col >= num_cols`) код СНАЧАЛА «decrement all»
+  (`for r in &mut col_remaining { if *r>0 {*r-=1} }`) уменьшал `col_remaining[0]` 1→0, ПОТОМ skip-цикл
+  проверял `>0` (уже 0 → не пропускал) → ячейка `2` падала в спанированную кол.0. Двойной счёт: и
+  «decrement all», и skip-цикл декрементят. **Фикс (1 точка)**: убран «decrement all» цикл — skip-циклы
+  (top-of-loop для mid-row occupied + row-start для leading occupied) САМИ декрементят каждую
+  occupied-колонку ровно раз за строку (трассировано: каждая occupied-кол. либо leading-skip на старте
+  строки, либо walked-past mid-row через top-of-loop — оба декрементят 1 раз).
+- **Тесты**: +1 html `test_table_rowspan_shifts_following_row_cells_html` (флип-кейс + regression:
+  continuation-ячейка `2` закрывает свою `<tr>`, `Y` начинает новую, 4 `<tr>` всего). Сущест.
+  `test_table_rowspan_html` (`.2+|A|B`/`|C` → 2 строки) и `test_table_colspan_rowspan_html`
+  (`2.3+|cell` colspan2 rowspan3) целы — трассированы вручную перед правкой.
+- **Остаток (НЕ нужен для флипа, латентен)**: пасс `emit_row_cells` (макрос, ~стр.1389) считает col_idx
+  суммой colspan БЕЗ учёта rowspan-сдвига из предыдущих строк → выравнивание/стиль ячейки в спанированной
+  строке берётся от неверной колонки. В docinfo все колонки `[cols="<10,<20,<30,<30"]` left → нюанс не
+  виден. Если флипнуть файл с rowspan + разным halign по колонкам — чинить ЭТОТ пасс (нужна grid-aware
+  col_idx, зеркало `build_table_rows`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 460, html 324→325,
+  parsing-lab **233/233** verified `--nocapture` — rowspan-таблиц с continuation-сдвигом в фикстурах нет;
+  правка в grid-логике парсера, ASG читает события напрямую). html-compat 6/6.
+- Корпус `compare_full.py` (release): **Identical 202→203 (+1), Different 141, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `7fe4190`): **4 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (docinfo/index, verified 0 diffs len 982==982), **0 регрессий**.
+  3 changed-still-different: table-ref 887→**871** (−16, улучшение — rowspan-строки теперь верны),
+  cell 960→960 и toc-ref 205→205 (нейтрально по числу — вывод сдвинулся, но файлы во власти
+  доминирующего несвязанного каскада: `2*` дублирование по колонкам [diff #21] + наследование `m`/`e`
+  стиля колонки + halign; rowspan-часть в них теперь корректна, погребена под каскадом).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/rowspan-row-placement` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 203: **pass/index** (6-diff — случай A, single-plus pass-extraction-
+  ordering, риск/рабит-хол), **stem/index** (6-diff, MathJax standalone — архитектурный),
+  **special-section-numbers** (10-diff, monospace в ТЕКСТЕ xref — архитектурный QUOTES в `[label]`).
+- **Высокоценный архитектурный кластер** (много flip'ов, риск): наследование `m`/`e`/`s` стиля колонки
+  таблицы → ячейки `<code>`/`<em>`/`<strong>` (сделано только `h`); `2*`/`3*` дублирование контента по
+  колонкам (cell.adoc diff #21 — НЕ поддержано, оператор повтора в спецификаторе ячейки);
+  author-header `<div class="details">` (standalone).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ; `asciidoctor -e -o -` для embedded). Дамп событий парсера: throwaway
+  `adoc-parser/examples/dump_events.rs`. **`target/debug/adoc` НЕ пересобирается от `cargo test`** — для
+  CLI-проб `cargo build -p adoc-cli` (debug) / `--release` (для корпуса).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `7fe4190`). near-miss `/tmp/nearmiss.py` (МЕДЛЕННО). Точечный
+  diff: `/tmp/fdiff.py <relpath> [base-бинарь]` (2-й арг — бинарь для сравнения до/после). Сравнение
+  семантическое (DOM, `convert_charrefs=True`; `style` игнорится; атрибуты сортируются). LSP, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-26) — Фаза 3: callout-элемент с continuation-блоком + сдвиг source-языка
 
 `fix/audio-start-opts-and-title` УЖЕ смержена+запушена в master (`54cf378`, origin == master, дерево

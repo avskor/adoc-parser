@@ -1486,17 +1486,15 @@ impl<'a> BlockScanner<'a> {
                 col += 1;
             }
 
-            // If we've filled the row, start a new one
+            // If we've filled the row, start a new one. The skip loop below
+            // consumes one row of occupancy for each leading column held by a
+            // rowspan from a prior row (the top-of-loop skip handles mid-row
+            // occupied columns) — so each occupied column is decremented exactly
+            // once per row. A separate "decrement all" pass would double-count.
             if col >= num_cols {
                 rows.push(std::mem::take(&mut current_row));
                 col = 0;
-                // Decrement remaining rowspans for the new row
-                for r in &mut col_remaining {
-                    if *r > 0 {
-                        *r -= 1;
-                    }
-                }
-                // Skip columns occupied by rowspan
+                // Skip columns occupied by rowspan from previous rows
                 while col < num_cols && col_remaining[col] > 0 {
                     col_remaining[col] -= 1;
                     col += 1;
