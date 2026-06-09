@@ -168,6 +168,7 @@ struct HtmlRenderer {
     in_section_title: bool,
     current_toc_entry: Option<TocEntry>,
     pending_block_meta: Option<BlockMeta>,
+    para_hardbreaks: bool,
     kbd_mode: bool,
     menu_target: Option<String>,
     menu_items: Option<String>,
@@ -267,6 +268,7 @@ impl HtmlRenderer {
             in_section_title: false,
             current_toc_entry: None,
             pending_block_meta: None,
+            para_hardbreaks: false,
             kbd_mode: false,
             menu_target: None,
             menu_items: None,
@@ -511,9 +513,19 @@ impl HtmlRenderer {
                         target.push_str("<span class=\"hll\">");
                         self.source_line_highlighted = true;
                     }
-                    html_escape_text(target, &rstrip_line_trailing_ws(&text));
+                    let stripped = rstrip_line_trailing_ws(&text);
+                    if self.para_hardbreaks {
+                        push_hardbreaks_text(target, &stripped, true);
+                    } else {
+                        html_escape_text(target, &stripped);
+                    }
                 } else {
-                    output.push_str(&rstrip_line_trailing_ws(&text));
+                    let stripped = rstrip_line_trailing_ws(&text);
+                    if self.para_hardbreaks {
+                        push_hardbreaks_text(output, &stripped, false);
+                    } else {
+                        output.push_str(&stripped);
+                    }
                 }
             }
             Event::InlinePassthrough(text) => {
@@ -1764,6 +1776,11 @@ impl HtmlRenderer {
     }
 
     fn start_paragraph(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        // The `hardbreaks` option (`[%hardbreaks]`) — or the document-wide
+        // `hardbreaks-option` attribute — turns every soft line break in the
+        // paragraph into a hard break (`<br>`).
+        self.para_hardbreaks = self.document_attrs.contains_key("hardbreaks-option")
+            || meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "hardbreaks"));
         // Track paragraph count in list items
         if let Some(count) = self.li_para_count.last_mut() {
             *count += 1;
@@ -2085,6 +2102,7 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::Paragraph => {
+                self.para_hardbreaks = false;
                 // Trim trailing whitespace before closing <p>
                 let trimmed = output.trim_end_matches([' ', '\t']);
                 output.truncate(trimmed.len());
@@ -3222,6 +3240,25 @@ fn html_escape_text(output: &mut String, text: &str) {
 /// break must not survive. Whitespace at the very end (no trailing `\n`) is
 /// left intact — it may sit mid-line before an inline element, not at a break.
 /// Borrows when there is nothing to strip (no allocation in the common case).
+/// Emit `text` with every embedded newline turned into a hard break
+/// (`<br>\n`), used for paragraphs carrying the `hardbreaks` option. The final
+/// line gets no trailing `<br>`. When `escape` is set, each line is HTML-escaped
+/// (the `<br>` markers are inserted afterwards so they survive escaping).
+fn push_hardbreaks_text(output: &mut String, text: &str, escape: bool) {
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            output.push_str("<br>\n");
+        }
+        first = false;
+        if escape {
+            html_escape_text(output, line);
+        } else {
+            output.push_str(line);
+        }
+    }
+}
+
 fn rstrip_line_trailing_ws(text: &str) -> CowStr<'_> {
     let has_ws_before_nl = text
         .as_bytes()
@@ -5409,9 +5446,28 @@ mod tests {
     #[test]
     fn test_builtin_attr_revision() {
         let html = to_html("= Title\nAuthor Name\nv1.0, 2024-01-01: Initial\n\n{revnumber} {revdate} {revremark}");
-        assert!(html.contains("v1.0"), "revnumber. Got: {html}");
+        // Asciidoctor strips the leading `v` from the revision number, so
+        // `{revnumber}` resolves to `1.0` (not `v1.0`).
+        assert!(html.contains("1.0"), "revnumber. Got: {html}");
+        assert!(!html.contains("v1.0"), "v-prefix should be stripped. Got: {html}");
         assert!(html.contains("2024-01-01"), "revdate. Got: {html}");
         assert!(html.contains("Initial"), "revremark. Got: {html}");
+    }
+
+    #[test]
+    fn test_paragraph_hardbreaks_option() {
+        // `[%hardbreaks]` turns every soft line break into a hard break.
+        let html = to_html("[%hardbreaks]\nLine one\nLine two\nLine three");
+        assert!(
+            html.contains("Line one<br>\nLine two<br>\nLine three"),
+            "hardbreaks. Got: {html}"
+        );
+        // A plain paragraph still joins lines with a bare newline (regression guard).
+        let plain = to_html("Line one\nLine two");
+        assert!(!plain.contains("<br>"), "no hardbreaks. Got: {plain}");
+        // The `hardbreaks-option` document attribute applies to every paragraph.
+        let doc = to_html(":hardbreaks-option:\n\nLine one\nLine two");
+        assert!(doc.contains("Line one<br>\nLine two"), "doc-attr hardbreaks. Got: {doc}");
     }
 
     #[test]

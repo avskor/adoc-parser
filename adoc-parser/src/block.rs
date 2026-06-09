@@ -4118,13 +4118,13 @@ mod tests {
             address: Cow::Borrowed(""),
         }));
         assert!(events.contains(&Event::Revision {
-            version: Cow::Borrowed("v1.0"),
+            version: Cow::Borrowed("1.0"),
             date: Cow::Borrowed("2024-01-01"),
             remark: Cow::Borrowed("Initial release"),
         }));
         assert!(events.contains(&Event::Attribute {
             name: Cow::Borrowed("revnumber"),
-            value: Cow::Borrowed("v1.0"),
+            value: Cow::Borrowed("1.0"),
         }));
         assert!(events.contains(&Event::Attribute {
             name: Cow::Borrowed("revdate"),
@@ -4141,13 +4141,13 @@ mod tests {
         let input = "= Title\nAuthor Name\nv2.0\n\nContent";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert!(events.contains(&Event::Revision {
-            version: Cow::Borrowed("v2.0"),
+            version: Cow::Borrowed("2.0"),
             date: Cow::Borrowed(""),
             remark: Cow::Borrowed(""),
         }));
         assert!(events.contains(&Event::Attribute {
             name: Cow::Borrowed("revnumber"),
-            value: Cow::Borrowed("v2.0"),
+            value: Cow::Borrowed("2.0"),
         }));
         // No revdate or revremark attributes
         assert!(!events.contains(&Event::Attribute {

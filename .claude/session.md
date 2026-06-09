@@ -1,5 +1,88 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-22) — Фаза 3: revnumber prefix-strip + `[%hardbreaks]`
+
+`fix/literal-paragraph-block-title` УЖЕ смержена+запушена в master (`5255036`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `5255036` ПЕРЕД правкой. Baseline подтверждён: Identical 193, Different 151,
+Errors 0. near-miss: pass/index (6-diff, фидли nested-passthrough `` `+pass:[]+` ``→пустой `<code>`,
+верифицировано: `pass:[x]`→`x` ВНУТРИ monospace-passthrough — многократно отложен), stem/index
+(6-diff, MathJax — архитектурный). Разведан кластер **revision-line** (reference-revision-line 11-diff,
+revision-line-with-version-prefix 13-diff, reference-revision-attributes 31-diff): эмпирические пробы
+asciidoctor через ФАЙЛ дали точное правило. Взят reference-revision-line — флипается двумя чистыми корнями.
+
+### Ветка `fix/revision-prefix-and-hardbreaks` (от master `5255036`; СТАТУС: НЕ закоммичено)
+- **Два корня** (оба нужны для флипа reference-revision-line.adoc — каждый по отдельности НЕ флипает):
+  (1) **Revnumber prefix-strip** и (2) **`[%hardbreaks]`** (новая фича).
+- **Правило revision-строки** (верифицировано пробами, зеркалит Asciidoctor `RevisionInfoLineRx`
+  `^(?:\D*(.*?),)?...`): версия = часть до ПЕРВОЙ запятой со снятым ведущим нецифровым прогоном (`\D*`):
+  `v8.3`→`8.3`, `LPR55`→`55`, `Version 2.5 RC1`→`2.5 RC1` (внутр. буквы/пробелы сохраняются). Дата =
+  между первой `,` и первым `:` (внутр. запятые даты переживают: `July 29, 2025`). No-comma: head —
+  версия ТОЛЬКО при префиксе `v`/`V`, иначе дата; `:` вводит remark. Разделители голые (без требования
+  пробела). **Strip — ТОЛЬКО в парсинге revision-СТРОКИ**; явный `:revnumber: v8.3` (attribute-entry)
+  НЕ стрипается (верифицировано: asciidoctor → `version v8.3,`; reference-revision-attributes это
+  подтверждает). Рендерер header уже стрипал `v` для отображения (`strip_prefix('v')` line ~2539) →
+  теперь no-op (идемпотентно), а для `LPR`-префикса даже чинится (был `version LPR55,`).
+- **Правило hardbreaks** (новая фича — раньше НЕ поддерживалась, 6 файлов корпуса используют, но в
+  hard-line-breaks.adoc все примеры внутри `[source]`-листингов → он уже Identical): `[%hardbreaks]`
+  опция параграфа (или doc-attr `hardbreaks-option`) → каждый soft-break → `<br>` (asciidoctor:
+  `Line one<br>\nLine two`).
+- **Фикс**: (a) `scanner.rs::parse_revision_line` переписан (хелпер `strip_nondigit_prefix`, голые
+  `,`/`:`-split, v-детекция для no-comma); (b) `adoc-html/lib.rs` — поле `para_hardbreaks` (set в
+  `start_paragraph` из `meta.options.contains("hardbreaks")` ИЛИ `document_attrs["hardbreaks-option"]`,
+  clear в `TagEnd::Paragraph`), хелпер `push_hardbreaks_text(out, text, escape)` (split `\n`, join
+  `<br>\n`, последняя строка без `<br>`, escape опц.), применён в обеих ветках Text-arm (SPECIALCHARS +
+  else). Обновлены 8 тестов, кодировавших `v`-префикс (5 scanner + 2 block + 1 html `test_builtin_attr_revision`),
+  +2 теста (`test_parse_revision_line_nondigit_prefix`, `test_paragraph_hardbreaks_option`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 457, html ↑,
+  parsing_lab **233/233** verified `--nocapture` — revision-строк с `v`-префиксом и `[%hardbreaks]`-
+  параграфов в фикстурах либо нет, либо ASG-значения не сдвинулись; правка scanner+renderer).
+- Корпус `compare_full.py` (release, **standalone**): **Identical 193→194 (+1), Different 150, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `5255036`): **5 файлов** изменили
+  вывод — **1 FLIP→IDENTICAL** (reference-revision-line.adoc, verified 0 diffs), **0 регрессий**.
+  4 changed-still-different, все корректны на моих измерениях: paragraph 60→38 (6 `<br>` идентичны
+  asciidoctor, отличие — line-offset от pre-existing), **revision-line-with-version-prefix 13→1**
+  (единственный остаток `{docdate}`→`2026-03-15` — reference заморожен на дату генерации, наш рендер
+  дал бы mtime/сегодня, всё равно ≠ → дата-зависим, НЕ флипается), reference-revision-attributes 31→31
+  (явный `:revnumber: v8.3` верно НЕ стрипнут; pre-existing header-span gap — explicit revnumber не
+  рендерится в header), text 633→650 (позиц. каскад от pre-existing sect0 level-0 heading `<h1 class="sect0">`
+  vs `<div class="sect0">`; hardbreaks-контент байт-в-байт совпал с asciidoctor).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/revision-prefix-and-hardbreaks` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 194: **pass/index** (6-diff, nested-passthrough `pass:[]` внутри
+  `` `+...+` `` monospace — фидли, многократно отложен; правило: `pass:[x]`→`x` обрабатывается ВНУТРИ
+  monospace-passthrough), **stem/index** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone).
+  Неразведанные/сложные: special-section-numbers (10-diff, monospace в ТЕКСТЕ xref-ссылки — архитектурный
+  QUOTES в `[label]`), audio (12-diff, 2 корня: `audio::x[start=,opts=autoplay]` атрибуты + `.title` на
+  audio-блоке), docinfo/index (14-diff, len_delta=0), db-migration (16-diff, таблица).
+- **Обнажённый pre-existing gap** (НЕ регрессия, обнаружен этой сессией): явный `:revnumber: v8.3`
+  attribute-entry НЕ рендерится в header `<span id="revnumber">` (только revision-СТРОКА создаёт
+  `Event::Revision`→header-span; explicit attr идёт только в `document_attrs`). Asciidoctor рендерит
+  header-span и из explicit attr (`version v8.3,`, БЕЗ strip). Узкий отдельный фикс (reference-revision-
+  attributes).
+- Архитектурные/отложенные (без изменений): `{docdate}`/`{localdate}` резолюция (дата-зависима, флип
+  невозможен на замороженном reference), counters.adoc (счётчики в verbatim), наследование `m`/`e`/`s`
+  стиля колонки таблицы, nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace
+  passthrough char-ref (`` `&#167;` ``→`Event::Code`), inline-anchor reftext из dt-терма (lexicon),
+  link-role `class="external"`, trailing ` +` в reparsed monospace → спурьезный `<br>`, level-0 sect0
+  heading рендер (`<h1 class="sect0">` vs `<div class="sect0"><h1>` — text.adoc и др.).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ; revision-строка идёт ТОЛЬКО сразу после author-строки в header). Дамп событий парсера: throwaway
+  `adoc-parser/examples/dump_events.rs`. **`compare_full.py` сравнивает STANDALONE** (полный документ с
+  header/footer, виден `<span id="revnumber">`, `<div id="header">`) — не embedded.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `5255036`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath>`. Сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится).
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-21) — Фаза 3: `.Title` на отступном literal-параграфе
 
 `fix/counter-bare-reference` УЖЕ смержена+запушена в master (`f9324ea`, origin == master, дерево
