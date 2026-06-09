@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-28) — Фаза 3: инъекция MathJax-loader при `:stem:`
+
+`fix/rowspan-row-placement` УЖЕ смержена в master (`a312a0e`, origin == master, дерево чистое;
+session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из ТЕКУЩЕГО
+чистого master `a312a0e` ПЕРЕД правкой (скопирован свежий release-бинарь). Baseline подтверждён:
+Identical 203, Different 141, Errors 0. near-miss: топ — revision-line-with-version-prefix (1-diff,
+`{docdate}` — дата-зависим, НЕ флипается). Из трёх «сложных» 6-10-diff кандидатов (pass/index случай A —
+рабит-хол; stem/index — «архитектурный»; special-section-numbers — QUOTES в `[label]`) переоценил
+**stem/index**: ярлык «архитектурный» преувеличен — фактически ДЕТЕРМИНИРОВАННАЯ строковая вставка.
+
+### Ветка `fix/stem-mathjax-docinfo` (от master `a312a0e`; СТАТУС: НЕ закоммичено)
+- **Правило** (верифицировано пробами через ФАЙЛ): при установленном атрибуте `stem` (ЛЮБОЕ значение,
+  даже без stem-контента — P1) asciidoctor вставляет ФИКСИРОВАННЫЙ блок перед `</body>` (после футера):
+  `<script type="text/x-mathjax-config">` c `MathJax.Hub.Config({...})` + CDN-loader
+  `https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-MML-AM_HTMLorMML`. Блок
+  ИДЕНТИЧЕН для asciimath и latexmath (P1==P2). Без `:stem:` — НЕТ блока, даже если в тексте есть inline
+  `stem:[x]` (P3 → литерал `\$x\$`). `:!stem:` удаляет ключ → нет вставки.
+- **Корень (слой!)**: чистая standalone-обёртка РЕНДЕРЕРА. `get_body_content` (compare_full) берёт всё от
+  `<body>` до `</body>` включительно → MathJax входит в сравнение; текст `<script>` (JS-конфиг) сравнивается
+  как отдельный токен (`.strip()` внешних пробелов, внутренние `\n` сохранены) → нужно совпадение JS
+  байт-в-байт. `document_attrs` хранит `stem` (через `apply_attribute` стр.376, вызывается из
+  `Event::Attribute` стр.588 ДО `write_document_tail`).
+- **Фикс (1 точка, `adoc-html/lib.rs`)**: const `MATHJAX_DOCINFO` (raw-строка `r#"..."#` — в JS два
+  ЛИТЕРАЛЬНЫХ `\` перед `(`/`[`/`$`, подтверждено `od -c`: байты `\ \ (`); 4-строчная вставка в
+  `write_document_tail` (стр.~2960) под `self.document_attrs.contains_key("stem")` — после `docinfo_footer`,
+  перед `</body>`. Вызывается только из standalone-ветки `run()`. +1 тест `test_stem_mathjax_docinfo`
+  (asciimath инъектит config+loader, mathjax<</body>; latexmath тоже инъектит; без stem — нет).
+- **Остаток (НЕ в корпусе)**: `eqnums` атрибут изменил бы `TeX.equationNumbers.autoNumber` (хардкод
+  `"none"` = дефолт asciidoctor). MathJax-версия `2.7.9` хардкод (совпадает с установленным asciidoctor).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 325→326, parser 460,
+  parsing-lab **233/233**, html-compat 6/6, integration 25 — правка только в standalone-tail, события
+  парсера не задеты).
+- Корпус `compare_full.py` (release): **Identical 203→204 (+1), Different 140, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `a312a0e`): **2 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (stem/index, verified 0 diffs len 720==720), **0 регрессий**.
+  1 changed-still-different: stem/examples/stem.adoc 99→104 (MathJax байт-в-байт верен — exp==got;
+  Different по пре-существующему каскаду level-0 `<h1>My...Opus</h1>` vs `<div class="sect0">` diff #2–#4;
+  +5 = ровно добавленные корректные MathJax-токены под доминирующим sect0-сдвигом).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/stem-mathjax-docinfo` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Near-miss-кандидаты на 204: **pass/index** (6-diff — случай A, single-plus pass-extraction-ordering,
+  риск/рабит-хол ~9 сессий), **special-section-numbers** (10-diff, monospace в ТЕКСТЕ xref — архитектурный
+  QUOTES в `[label]`, полный inline-проход текста ссылки), **callout** (20-diff, verbatim callout —
+  неразведан), **part** (22-diff, len_delta=0 — sections part, неразведан, структура совпадает).
+- **Высокоценный архитектурный кластер**: наследование `m`/`e`/`s` стиля колонки таблицы → `<code>`/`<em>`/
+  `<strong>` в ячейках (сделано только `h`); author-header `<div class="details">` (standalone); level-0
+  sect0 heading `<h1 class="sect0">` vs `<div class="sect0"><h1>` (доминирует в stem.adoc и др.).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ; `od -c` для точных байтов при копировании литералов). Дамп событий парсера: throwaway
+  `adoc-parser/examples/dump_events.rs`. **`target/debug/adoc` НЕ пересобирается от `cargo test`** — для
+  CLI/корпуса `cargo build --release -p adoc-cli`.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `a312a0e`). near-miss `/tmp/nearmiss.py` (МЕДЛЕННО). Точечный
+  diff: `/tmp/fdiff.py <relpath> [base-бинарь]`. `get_body_content` = всё от `<body>` до `</body>`;
+  сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится; атрибуты сортируются;
+  текст `.strip()`). LSP, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-27) — Фаза 3: rowspan-размещение ячеек в спанированных строках
 
 `fix/callout-item-block-and-shifted-source-lang` УЖЕ смержена+запушена в master (`7fe4190`, origin ==
