@@ -1,5 +1,83 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-25) — Фаза 3: audio `start`/`end` + `opts=` alias + `.Title`
+
+`fix/intrinsic-quot-apos-and-pass-constrained` УЖЕ смержена+запушена в master (`a691601`, origin ==
+master, дерево чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base`
+пересобран из ТЕКУЩЕГО чистого master `a691601` ПЕРЕД правкой. Baseline подтверждён: Identical 199,
+Different 145, Errors 0. near-miss: топ — revision-line-with-version-prefix (1-diff, `{docdate}` —
+дата-зависим, НЕ флипается). Разведаны 6-12-diff кандидаты: pass/index (случай A, риск), stem/index
+(MathJax архитектурный), special-section-numbers (QUOTES в `[label]` архитектурный) — все отложены.
+Взят **audio** (12-diff) — два КОНКРЕТНЫХ корня (не архитектура).
+
+### Ветка `fix/audio-start-opts-and-title` (от master `a691601`; СТАТУС: НЕ закоммичено)
+- **Три бага в audio-макросе** (audio.adoc, 3 блока: базовый уже был Identical; флип дают блоки 2+3):
+  - **Корень 1 — `opts=` НЕ парсился** (`adoc-html/lib.rs::parse_media_attrs`): match-arm ловил только
+    ключ `"options"`, а `audio::x[opts=autoplay]` использует shorthand `opts` → `autoplay`/`loop`/
+    `nocontrols` терялись. Проба asciidoctor через файл: `opts=autoplay` ≡ `options=autoplay`. Фикс:
+    `"options"` → `"opts" | "options"`. **Затрагивает и video** (общий парсер) — video.adoc `opts=autoplay`
+    теперь тоже парсится (48→47 diff, улучшение, не регрессия).
+  - **Корень 1b — `start`/`end` НЕ применялись к audio src** (`render_audio_tag`): писал `src=target`
+    голым через `write_attr`, в отличие от `render_video_tag` (который строит `#t=start,end` фрагмент).
+    Проба: `start=60`→`src="...#t=60"`, `start=10,end=20`→`#t=10,20`. Фикс: переписан src-билд audio
+    дословно зеркалит video (html_escape target + match (start,end) → `#t=` фрагмент). Заодно порядок
+    boolean-атрибутов подогнан под asciidoctor: **autoplay, loop, controls** (был controls,autoplay,loop;
+    нормализатор корпуса сортирует, но raw-вывод теперь байт-в-байт — `controls` on по умолчанию кроме
+    `nocontrols`).
+  - **Корень 2 — `.Title` терялся** (arm `Tag::BlockAudio`, ~стр.1175): пушил
+    `<div class="audioblock">\n<div class="content">\n` одной строкой, НЕ зовя `emit_pending_block_title`.
+    Парсер эмитит BlockTitle ВЕРНО (через `push_title_then_events`, block.rs:643) — баг чисто в рендерере
+    (тот же класс, что toc/literal-paragraph фикс). Фикс: разбит push, вставлен
+    `self.emit_pending_block_title(output)` между wrapper-div и content-div (audio/video кладут title
+    ДО content, в отличие от image — `<div class="title">` ПОСЛЕ content с «Figure N.»). Title-less
+    не затронут (`emit_*` no-op при None).
+- **Тесты**: обновлён `test_audio_options_html` (новый порядок autoplay/loop/controls), +1 тест
+  `test_audio_start_opts_and_title` (start-фрагмент + opts-alias + title в одном). `test_audio_basic_html`/
+  `test_audio_nocontrols_html` целы (только controls / без controls).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 321→322, parser 459,
+  parsing-lab **233/233** verified `--nocapture` — audio-макросов с start/opts/title в фикстурах нет;
+  правка в рендерере + media-парсере). html-compat 6/6.
+- Корпус `compare_full.py` (release): **Identical 199→200 (+1), Different 144, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `a691601`): **2 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (audio.adoc, verified 0 diffs len 30==30), **0 регрессий**.
+  1 changed-still-different: video.adoc 48→47 (улучшение — `opts=autoplay` теперь даёт `<video autoplay
+  controls src="...#t=60" width="640">`, точно как asciidoctor; остаток 47 diff — youtube/vimeo iframe
+  и пр., вне рамок).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/audio-start-opts-and-title` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 200: **pass/index** (6-diff — ТОЛЬКО случай A: `` `+pass:[]+` ``→пустой
+  `<code>` через single-plus, асимметричный pass-extraction-ordering, риск/рабит-хол ~8 сессий),
+  **stem/index** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone), **special-section-numbers**
+  (10-diff, monospace в ТЕКСТЕ xref-ссылки — архитектурный QUOTES в `[label]`). Неразведанные:
+  **docinfo/index** (14-diff — rowspan-ячейка размещается в КОНЦЕ предыдущей строки вместо НАЧАЛА новой:
+  span-cell row-placement, структурный таблицы), **db-migration** (16-diff, 2 корня: `language-source` vs
+  `language-yaml` на `[source]` + пропущенный `</p>` перед NOTE-админишеном).
+- **Известный родственный баг** (НЕ трогал, video далеко от флипа): arm `Tag::BlockVideo` ИМЕЕТ тот же
+  title-баг (не зовёт `emit_pending_block_title`) — но video.adoc Different по 47 причинам, флипа не даст;
+  фикс тривиален (зеркало audio), если понадобится.
+- Высокоценный архитектурный кластер (много flip'ов, риск): наследование `m`/`e`/`s` стиля колонки
+  таблицы → ячейки `<code>`/`<em>`/`<strong>` (сделано только `h`); author-header `<div class="details">`.
+- Архитектурные/отложенные (без изменений): `{docdate}`/`{localdate}` (дата-зависим), counters в verbatim,
+  case A (single-plus pass-extraction-ordering), nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`),
+  inline-monospace passthrough char-ref, inline-anchor reftext из dt-терма, link-role `class="external"`,
+  trailing ` +` в reparsed monospace → `<br>`, level-0 sect0 heading, doctype=book.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ — `-e` embedded или standalone; heredoc `<<'EOF'` ок). Дамп событий парсера: throwaway
+  `adoc-parser/examples/dump_events.rs`.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `a691601`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath> [binary]` (2-й арг — base-бинарь для сравнения до/после). Сравнение
+  семантическое (DOM, `convert_charrefs=True`; `style` игнорится; атрибуты сортируются — порядок
+  невидим). LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-24) — Фаза 3: intrinsic `{quot}`/`{apos}`/`{pp}` + `pass:[…]` в monospace (случай G)
 
 `fix/gate-experimental-ui-macros` УЖЕ смержена+запушена в master (`968e913`, origin == master, дерево
