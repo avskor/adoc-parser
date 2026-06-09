@@ -1,5 +1,62 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-15) — Фаза 3: путь между `}` и `[` в attr-ref (`{url}/issues[text]`)
+
+`fix/attr-ref-respect-block-subs` УЖЕ смержена в master (`107b7e2`/`18f7ca2`, дерево чистое, master ==
+origin — предыдущие мержи запушены; session.md прошлой сессии писалась ДО мержа — как всегда).
+`/tmp/adoc_base` пересобран из ТЕКУЩЕГО master `107b7e2` ПЕРЕД правкой (был stale от `9069890`).
+Baseline подтверждён: Identical 185, Different 159, Errors 0. near-miss дал 1-diff keyboard-macro
+(passthrough `+...+`, фидли — отложен) и 2-diff counter (архитектурный — отложен); выбран 3-diff
+**reference-attributes** — принципиальное продолжение attr-ref-link-macro, чистый и понятный.
+
+### Ветка `fix/attr-ref-path-before-brackets` (от master; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано): attributes-sub ДО macros-sub. `{url-repo}/issues[text]`
+  где `:url-repo: https://…` → атрибут раскрывается, затем `value/issues[text]` переразбирается как
+  URL-макрос → `<a href="…/issues">text</a>`. Мы захватывали `[...]` ТОЛЬКО вплотную за `}` (фикс
+  attr-ref-link-macro), а путь `/issues` между `}` и `[` утекал → голый URL автолинковался bare +
+  leftover `/issues[text]` литералом.
+- **Корень**: `inline.rs::try_attribute_reference` (~1635) — захват `trailing_brackets` требовал
+  `tail.starts_with('[')` сразу после `}`.
+- **Фикс** (1 точка, ТОЛЬКО `inline.rs`): перед проверкой `[` считается `path_len` = run байтов
+  без пробела/`[`/`]` (все стоп-символы ASCII → `path_len` всегда валидная char-граница, даже с UTF-8
+  в пути); если `after_path` начинается на `[` (не `[[`) и есть `]` → захват `tail[..path_len+rb+1]`
+  (путь+скобки). Рендерер (`lib.rs` arm AttributeReference) и ASG-builder работают с `trailing_brackets`
+  обобщённо (`format!("{value}{br}")` + reparse / `resolved.push_str(&br)`) — путь едет ВНУТРИ `br`,
+  БЕЗ их изменений. Не-URL значение → склейка остаётся литералом (как раньше). +2 теста
+  `test_attribute_reference_captures_path_before_brackets` (parser: capture/space-stops/no-bracket),
+  `test_attribute_reference_path_before_brackets_link` (html: ссылка, без leftover/bare).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 445→446,
+  html 316→317, parsing_lab **233/233** — инлайн-`{attr}path[...]` в фикстурах нет, ASG читает события
+  парсера, но `br` теперь длиннее только когда есть путь+скобки → кейсы не задеты).
+- Корпус `compare_full.py` (release): **Identical 185→186 (+1), Different 158, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `107b7e2`): **3 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (reference-attributes.adoc), **0 регрессий**. CHANGELOG.adoc улучшен
+  (10→7 diff: `{url-repo}/-/commits/main[commit history]` → ссылка, verified байт-в-байт vs asciidoctor),
+  outline.adoc нейтрально (8840→8840 — `{url-issues}/25[#25]` ссылки совпали с asciidoctor, но файл
+  позиционно рассинхронен на 8840/9363, число diff не сдвинулось).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/attr-ref-path-before-brackets` (только по запросу).
+  master == origin сейчас, так что после мержа потребуется пуш (по запросу).
+- Чистые flip-кандидаты (near-miss на 186): **keyboard-macro** `` `+kbd:[key(+key)*]+` `` (1-diff,
+  passthrough `+...+` ест внутренний `+`; фидли, многократно отложен), **counter.adoc** (2-diff,
+  `{counter:index}`→`{index}` не резолвится; АРХИТЕКТУРНЫЙ — счётчик в локальной мапе препроцессора).
+  Далее НЕ разведанные 4-diff: role.adoc, user-index.adoc, text/index.adoc — стоит посмотреть, нет ли
+  среди них чистого корня. Архитектурные (отложены): наследование `m`/`e`/`s` стиля колонки таблицы,
+  nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref
+  (`Event::Code`), inline-anchor reftext из dt-терма (lexicon), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `107b7e2`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM); нормализатор стрипает leading ws.
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-14) — Фаза 3: значение `{attr-ref}` уважает subs блока
 
 `fix/verbatim-paragraph-comment` УЖЕ смержена в master (`9069890`/`47ecc17`, дерево чистое; session.md

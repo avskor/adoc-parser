@@ -1626,16 +1626,27 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
-        // Capture a `[...]` immediately following the reference (no space) so the
-        // renderer can re-parse `value[...]` together: an attribute holding a URL
-        // then forms a link macro, matching Asciidoctor's attributes-before-macros
-        // order. Skip `[[` (inline anchor) and a bracket with no closing `]`.
+        // Capture a `[...]` following the reference (no space) so the renderer can
+        // re-parse `value<path>[...]` together: an attribute holding a URL then
+        // forms a link macro, matching Asciidoctor's attributes-before-macros
+        // order. An optional path segment between `}` and `[` is captured too
+        // (`{url}/issues[text]` → `value/issues[text]` → URL macro). Skip `[[`
+        // (inline anchor) and a bracket with no closing `]`.
         let input = self.input; // &'a str (Copy) — decouple slice lifetime from &self
         let after_brace = start_pos + 1 + close + 1;
         let trailing_brackets = {
             let tail = &input[after_brace..];
-            if tail.starts_with('[') && !tail.starts_with("[[") {
-                tail.find(']').map(|rb| Cow::Borrowed(&tail[..=rb]))
+            // Path = run of non-space, non-bracket bytes (all stop chars are ASCII,
+            // so the count is a valid char boundary even with UTF-8 in between).
+            let path_len = tail
+                .bytes()
+                .take_while(|&b| b != b'[' && b != b']' && !b.is_ascii_whitespace())
+                .count();
+            let after_path = &tail[path_len..];
+            if after_path.starts_with('[') && !after_path.starts_with("[[") {
+                after_path
+                    .find(']')
+                    .map(|rb| Cow::Borrowed(&tail[..path_len + rb + 1]))
             } else {
                 None
             }
@@ -2696,6 +2707,37 @@ mod tests {
 
         // No closing bracket → not captured.
         let events = parse("{url}[no close");
+        assert!(matches!(
+            events[0],
+            Event::AttributeReference { trailing_brackets: None, .. }
+        ), "{events:?}");
+    }
+
+    #[test]
+    fn test_attribute_reference_captures_path_before_brackets() {
+        // `{url}/issues[text]` — Asciidoctor expands the attribute, then re-parses
+        // `value/issues[text]` as a URL macro. The path between `}` and `[` is
+        // captured together with the brackets.
+        let events = parse("see {url}/issues[the tracker] end");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("see ")),
+            Event::AttributeReference {
+                name: Cow::Borrowed("url"),
+                fallback: None,
+                trailing_brackets: Some(Cow::Borrowed("/issues[the tracker]")),
+            },
+            Event::Text(Cow::Borrowed(" end")),
+        ]);
+
+        // A space inside the path stops capture before the bracket → not captured.
+        let events = parse("{url}/a b[text]");
+        assert!(matches!(
+            events[0],
+            Event::AttributeReference { trailing_brackets: None, .. }
+        ), "{events:?}");
+
+        // A path with no following bracket → not captured (path stays literal).
+        let events = parse("{url}/issues done");
         assert!(matches!(
             events[0],
             Event::AttributeReference { trailing_brackets: None, .. }
