@@ -3521,6 +3521,25 @@ mod tests {
     }
 
     #[test]
+    fn test_attribute_reference_path_before_brackets_link() {
+        // `{url}/issues[text]` — a path between `}` and `[` is part of the URL once
+        // the attribute resolves, so the whole thing forms a link macro (matches
+        // Asciidoctor's attributes-before-macros order). No leftover literal text.
+        let html = to_html(
+            ":url-repo: https://github.com/asciidoctor/asciidoctor\n\n\
+             File a ticket in the {url-repo}/issues[Asciidoctor issue tracker].",
+        );
+        assert!(
+            html.contains(
+                "<a href=\"https://github.com/asciidoctor/asciidoctor/issues\">Asciidoctor issue tracker</a>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("/issues["), "leftover path/bracket not consumed: {html}");
+        assert!(!html.contains("class=\"bare\""), "{html}");
+    }
+
+    #[test]
     fn test_link_passthrough_url_empty_text() {
         // Empty link text → the link is "bare" (matches Asciidoctor).
         let html = to_html("link:++https://example.com/my page++[]");
