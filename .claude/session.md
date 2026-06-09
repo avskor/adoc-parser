@@ -1,5 +1,58 @@
 # Session context
 
+## Сессия (2026-06-10, вторая) — R5 завершён: ResolutionContext + однопроходный резолв сентинелей
+
+`fix/block-image-figure-caption` УЖЕ смержена в master (`eab7a20`, дерево чистое; session.md
+прошлой сессии писалась ДО мержа — как всегда). Новая ветка
+**`refactor/finish-single-pass-resolution`** (от master `eab7a20`; СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `eab7a20` ПЕРЕД правкой.
+
+### Что сделано (R5-остаток из аудита рендерера, `adoc-html/src/lib.rs`)
+- **`ResolutionContext<'a>`** (module-level, перед `html_escape`): единые lookup'ы `finish()`,
+  строятся ОДИН раз из toc_entries/block_ref_titles/bibliography_reftexts. Поля: `id_to_text:
+  HashMap<&str, CowStr>` (секции html_escape'ятся в Owned, block/biblio-HTML — Borrowed;
+  precedence сохранён: секции plain insert — last wins, block/biblio `or_insert`; членство
+  ключей = бывший `known_ids` href-пасса) и `title_to_id` (natural xref, first wins). Методы
+  `link_text(target)` (id → текст, иначе title→id→текст) и `href_id(target)` (known id —
+  литерал, иначе title→id, иначе литерал).
+- **Однопроходный резолв**: вместо `*output = output.replace(placeholder, …)` на КАЖДЫЙ
+  плейсхолдер (полное сканирование + реаллокация, O(n²)) — обе группы (XREF_/XREFHREF_)
+  собираются в `HashMap<&str плейсхолдер, String замена>`, затем `resolve_sentinels_into`
+  (module-level fn) один раз сканирует output по `find('\0')`: кандидат = `\x00…\x00`,
+  lookup в map; не-сентинельный NUL остаётся как есть. **Вложенные сентинели в заменах**
+  (xref внутри `.Title` блока, на который ссылаются `<<id>>`) резолвятся рекурсивно
+  (depth cap 8 — self-referential title не зациклится).
+- **Попутный багфикс**: на master кейс «блок с id + `.See <<Later>>` + `<<blk>>`» ТЁК сырым
+  сентинелем (`Ref: …` со встроенным ` XREF_2 `, 2 NUL-байта в выводе — верифицировано пробой
+  /tmp/p_nested.adoc против /tmp/adoc_base): старый порядок replace'ов уже обработал XREF_2 к
+  моменту вставки заголовка блока. Новый код резолвит (0 NUL). +1 тест
+  `test_xref_to_block_whose_title_contains_xref` (adoc-html/tests/html_output.rs).
+- **Перф**: стресс /tmp/p_stress.adoc (2000 секций + 4000 xref): base 807ms → new 33ms (~24×).
+  Вывод на стрессе IDENTICAL base vs new (cmp).
+
+### Статус (верифицировано)
+- clippy 0 warnings; `cargo test --workspace` ВСЁ зелёное (867 passed суммарно: parser 461,
+  html 328+36+2, parsing-lab **233/233** `--nocapture`, html-compat **70/70**, integration 25).
+- **Рефакторинг-нейтральность: raw-вывод нового release-бинаря байт-в-байт (cmp) совпадает
+  с `/tmp/adoc_base` на ВСЕХ 344 файлах корпуса (0 diffs)**.
+- Корпус `compare_full.py` (release): **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `refactor/finish-single-pass-resolution` (только
+  по запросу). В diff: adoc-html/src/lib.rs, adoc-html/tests/html_output.rs, TODO.md, session.md.
+- Из аудита остались: **R7** (adoc-render-core — перед вторым рендерером), **R8** (распил
+  lib.rs ~6300 строк на модули), **R9** (Parser.experimental ad-hoc канал). R3 — частично
+  (новые block-arm'ы писать через `open_block_with_title`).
+- video.adoc 4-diff — near-miss кандидат (youtube/vimeo iframe нюансы, разведать fdiff.py).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `eab7a20`). fdiff: /tmp/fdiff.py <relpath> [base-бинарь]. Пробы /tmp/p_nested.adoc,
+  /tmp/p_stress.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10) — Реализация R1/R2/R4/R6 + частично R3/R5 (ветка `fix/block-image-figure-caption`)
 
 Продолжение аудита поздней-29: по «приступай» реализованы находки. master `532c10a`,

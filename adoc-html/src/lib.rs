@@ -848,46 +848,20 @@ impl HtmlRenderer {
             }
         }
 
-        // Natural cross reference support: a target matching a section title
-        // (case-sensitive) resolves to that section's id. Shared by the text
-        // and href resolution passes below.
-        let mut title_to_id: HashMap<&str, &str> = HashMap::new();
+        // Resolve xref placeholders (link text and internal hrefs) against the
+        // unified id/title registries in a single pass over the output.
         if !self.xref_placeholders.is_empty() || !self.xref_href_placeholders.is_empty() {
-            for entry in &self.toc_entries {
-                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
-            }
-        }
-
-        if !self.xref_placeholders.is_empty() {
-            // Map each anchor id to the ready-to-insert link text. Section titles
-            // are accumulated as plain text and escaped here; block titles are
-            // already rendered HTML and inserted verbatim.
-            let mut id_to_text: HashMap<String, String> = HashMap::new();
-            for entry in &self.toc_entries {
-                let mut escaped = String::new();
-                html_escape(&mut escaped, &entry.title);
-                id_to_text.insert(entry.id.clone(), escaped);
-            }
-            for (id, title_html) in &self.block_ref_titles {
-                id_to_text
-                    .entry(id.clone())
-                    .or_insert_with(|| title_html.clone());
-            }
-            // Bibliography entries carry their bracketed reftext (already HTML).
-            for (id, reftext) in &self.bibliography_reftexts {
-                id_to_text
-                    .entry(id.clone())
-                    .or_insert_with(|| reftext.clone());
-            }
+            let ctx = ResolutionContext::new(
+                &self.toc_entries,
+                &self.block_ref_titles,
+                &self.bibliography_reftexts,
+            );
+            let mut replacements: HashMap<&str, String> = HashMap::with_capacity(
+                self.xref_placeholders.len() + self.xref_href_placeholders.len(),
+            );
             for (placeholder, fallback, is_internal) in &self.xref_placeholders {
-                let replacement = if let Some(text) = id_to_text.get(fallback) {
-                    // Target is a registered id (section/block/bibliography).
-                    text.clone()
-                } else if let Some(text) =
-                    title_to_id.get(fallback.as_str()).and_then(|id| id_to_text.get(*id))
-                {
-                    // Target is a section title (natural cross reference).
-                    text.clone()
+                let replacement = if let Some(text) = ctx.link_text(fallback) {
+                    text.to_string()
                 } else if *is_internal {
                     // Unresolved internal anchor reference: Asciidoctor's default
                     // xreflabel is the target id wrapped in square brackets.
@@ -900,32 +874,16 @@ impl HtmlRenderer {
                     html_escape(&mut escaped, fallback);
                     escaped
                 };
-                *output = output.replace(placeholder, &replacement);
+                replacements.insert(placeholder.as_str(), replacement);
             }
-        }
-
-        if !self.xref_href_placeholders.is_empty() {
-            // Resolve internal xref hrefs. Precedence matches Asciidoctor:
-            // a target that is itself a registered id stays literal; otherwise
-            // a target exactly matching a section title (case-sensitive) becomes
-            // that section's id (natural cross reference); else it stays literal.
-            let known_ids: HashSet<&str> = self
-                .toc_entries
-                .iter()
-                .map(|e| e.id.as_str())
-                .chain(self.block_ref_titles.iter().map(|(id, _)| id.as_str()))
-                .chain(self.bibliography_reftexts.iter().map(|(id, _)| id.as_str()))
-                .collect();
             for (placeholder, target) in &self.xref_href_placeholders {
-                let resolved: &str = if known_ids.contains(target.as_str()) {
-                    target
-                } else {
-                    title_to_id.get(target.as_str()).copied().unwrap_or(target)
-                };
                 let mut escaped = String::new();
-                html_escape(&mut escaped, resolved);
-                *output = output.replace(placeholder, &escaped);
+                html_escape(&mut escaped, ctx.href_id(target));
+                replacements.insert(placeholder.as_str(), escaped);
             }
+            let mut resolved = String::with_capacity(output.len());
+            resolve_sentinels_into(&mut resolved, output, &replacements, 8);
+            *output = resolved;
         }
 
         if !self.footnotes.is_empty() {
@@ -3295,6 +3253,100 @@ fn auto_alt_from_target(target: &str) -> String {
     };
     // Replace hyphens and underscores with spaces
     stem.replace(['-', '_'], " ")
+}
+
+/// Unified lookup context for resolving xref placeholders in `finish()`,
+/// built once from every id/title registry the renderer accumulates:
+/// section TOC entries, titled blocks and bibliography entries.
+struct ResolutionContext<'a> {
+    /// Anchor id -> ready-to-insert link text. Section titles are accumulated
+    /// as plain text and escaped on construction; block titles and bibliography
+    /// reftexts are already rendered HTML and borrowed verbatim. Key membership
+    /// doubles as the "known id" check for href resolution.
+    id_to_text: HashMap<&'a str, CowStr<'a>>,
+    /// Section title -> section id (case-sensitive natural cross reference).
+    title_to_id: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> ResolutionContext<'a> {
+    fn new(
+        toc_entries: &'a [TocEntry],
+        block_ref_titles: &'a [(String, String)],
+        bibliography_reftexts: &'a [(String, String)],
+    ) -> Self {
+        let mut id_to_text: HashMap<&str, CowStr> = HashMap::new();
+        let mut title_to_id: HashMap<&str, &str> = HashMap::new();
+        for entry in toc_entries {
+            let mut escaped = String::new();
+            html_escape(&mut escaped, &entry.title);
+            id_to_text.insert(entry.id.as_str(), CowStr::Owned(escaped));
+            title_to_id.entry(entry.title.as_str()).or_insert(entry.id.as_str());
+        }
+        for (id, title_html) in block_ref_titles {
+            id_to_text.entry(id.as_str()).or_insert(CowStr::Borrowed(title_html));
+        }
+        for (id, reftext) in bibliography_reftexts {
+            id_to_text.entry(id.as_str()).or_insert(CowStr::Borrowed(reftext));
+        }
+        Self { id_to_text, title_to_id }
+    }
+
+    /// Link text for an unlabeled xref: a registered id (section/block/
+    /// bibliography) wins, then a target matching a section title resolves to
+    /// that section's text (natural cross reference).
+    fn link_text(&self, target: &str) -> Option<&str> {
+        if let Some(text) = self.id_to_text.get(target) {
+            return Some(text);
+        }
+        self.title_to_id
+            .get(target)
+            .and_then(|id| self.id_to_text.get(id))
+            .map(|text| text.as_ref())
+    }
+
+    /// Anchor id for an internal xref href. Precedence matches Asciidoctor:
+    /// a target that is itself a registered id stays literal; otherwise a
+    /// target exactly matching a section title (case-sensitive) becomes that
+    /// section's id (natural cross reference); else it stays literal.
+    fn href_id(&self, target: &'a str) -> &'a str {
+        if self.id_to_text.contains_key(target) {
+            target
+        } else {
+            self.title_to_id.get(target).copied().unwrap_or(target)
+        }
+    }
+}
+
+/// Replace every `\x00…\x00` xref sentinel found in `text` in a single pass,
+/// appending the result to `out`. A replacement value may itself contain
+/// sentinels (a block title holding an xref renders them into the registered
+/// title HTML), so matched replacements are resolved recursively; `depth`
+/// bounds that so a self-referential title cannot recurse forever. A NUL that
+/// does not open a known sentinel is kept as-is.
+fn resolve_sentinels_into(
+    out: &mut String,
+    text: &str,
+    replacements: &HashMap<&str, String>,
+    depth: u8,
+) {
+    let mut rest = text;
+    while let Some(start) = rest.find('\0') {
+        out.push_str(&rest[..start]);
+        if let Some(len) = rest[start + 1..].find('\0')
+            && let Some(replacement) = replacements.get(&rest[start..start + len + 2])
+        {
+            if depth > 0 && replacement.contains('\0') {
+                resolve_sentinels_into(out, replacement, replacements, depth - 1);
+            } else {
+                out.push_str(replacement);
+            }
+            rest = &rest[start + len + 2..];
+        } else {
+            out.push('\0');
+            rest = &rest[start + 1..];
+        }
+    }
+    out.push_str(rest);
 }
 
 fn html_escape(output: &mut String, text: &str) {

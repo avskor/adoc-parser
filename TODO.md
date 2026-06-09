@@ -36,10 +36,17 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
 - [x] **R4**: `#t=start,end` → общий `push_media_time_fragment` (audio/video). Boolean-атрибуты
   оставлены раздельно — порядок НАМЕРЕННО разный (video: controls,autoplay,loop;
   audio: autoplay,loop,controls — оба соответствуют asciidoctor).
-- [~] **R5**: `title_to_id` теперь строится один раз (hoisted перед обоими xref-пассами).
-  ОСТАЛОСЬ: единый ResolutionContext для 5 механизмов + перф `output.replace(placeholder,…)`
-  в цикле (полный проход на КАЖДЫЙ плейсхолдер, квадратично на xref-тяжёлых документах) →
-  один проход с поиском `\x00`-сентинелей.
+- [x] **R5**: ЗАВЕРШЕНО (ветка `refactor/finish-single-pass-resolution`, 2026-06-10).
+  (1) `ResolutionContext<'a>` — единые lookup'ы `finish()`, строятся ОДИН раз из всех
+  реестров (toc_entries/block_ref_titles/bibliography_reftexts): `id_to_text`
+  (`CowStr` — секции экранируются, block/biblio-HTML заимствуется; членство ключей =
+  бывший `known_ids`) + `title_to_id` (natural xref); методы `link_text`/`href_id`
+  кодируют precedence asciidoctor. (2) Квадратичный `output.replace(placeholder,…)`
+  на каждый плейсхолдер → map плейсхолдер→замена + ОДИН проход `resolve_sentinels_into`
+  по `\x00`-сентинелям (вложенные сентинели в заменах — xref внутри заголовка блока —
+  резолвятся рекурсивно, depth cap 8; ранее ТАКОЙ кейс ТЁК сырым `\x00XREF_N\x00` в
+  вывод — попутный багфикс, +1 тест). Стресс 2000 xref: 807ms→33ms (~24×).
+  Рефакторинг-нейтральность: raw-вывод байт-в-байт на всех 344 файлах корпуса.
 - [x] **R6**: хелперы `open_li_paragraph`/`close_li_paragraph`; 3 arm'а ListItem схлопнуты
   в один (match по checked), CalloutListItem/TagEnd-обработчики на хелперах.
   DescriptionDescription НЕ тронут (асимметричный rollback-механизм dd_output_start).
