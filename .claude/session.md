@@ -1,6 +1,56 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя) — Фаза 3: п.19 xref-id норм. (natural cross reference)
+## Последняя сессия (2026-06-09, поздняя-2) — Фаза 3: link blank-window `^` (п.14)
+
+п.19 xref-id-normalization уже смержена в master (755b320). Выбран следующий чистый flip
+по near-miss на baseline 158 — крупнейший кластер: суффикс `^` в тексте ссылки.
+
+### Ветка `fix/link-blank-window-caret` (от master; НЕ закоммичено)
+- **Симптом**: `https://u[text^]` / `link:u[text^]` → мы оставляли `^` в видимом тексте
+  (`macro^`) и НЕ добавляли `target="_blank" rel="noopener"`. Asciidoctor: `^` = blank-window
+  shorthand → снять каретку, открыть в новом окне.
+- **Семантика** (верифицирована пробами): trailing `^` на тексте ссылки → `window=_blank`
+  (рендер: `target="_blank" rel="noopener"`), `^` снимается; явный `window=` побеждает каретку;
+  работает для bare-URL, `link:`, mailto, `++url++` (все идут через `parse_link_attrs`).
+- **Корень**: `attributes.rs::parse_link_attrs` пушил `text` (первый positional) сырым.
+- **Фикс** (1 место, централизованно): после `let mut text = positional.first()...` —
+  `if let Some(stripped) = text.strip_suffix('^') { text = stripped; if window.is_none()
+  { window = Some("_blank"); } }`. Инфраструктура (`Tag::Link.window/nofollow`, рендер
+  `target`/`rel` в `adoc-html/lib.rs:1128`) УЖЕ была — фикс минимален. +1 unit-тест
+  `test_link_attrs_blank_window_caret` (4 кейса: caret, caret+role, no-caret, explicit-window).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 438→439).
+- Корпус `compare_full.py` (release): **Identical 158→162 (+4), Different 182, Errors 0**.
+- Blast radius (base-бинарь из master через `git worktree` vs new, `/tmp/check_blast.py`):
+  9 файлов изменили вывод; из них **4 FLIP→IDENTICAL** (description, image-format,
+  xref-text-and-style, key-concepts), 5 остались Different по НЕ-caret причинам
+  (url — link-role `class="external"`; asciidoc-vs-markdown — md-fences; image-svg,
+  ts-url-format, bibliography). **0 регрессий** (0 Identical→Different; net +4 точно объяснён;
+  caret-ссылки в 5 оставшихся теперь совпадают с Asciidoctor по target/rel). worktree удалён.
+- TODO.md: baseline 158→162, п.14 → `[~]` с под-пунктом blank-window `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/link-blank-window-caret` (только по запросу).
+- Следующие чистые flip-кандидаты (near-miss на 162):
+  - **bibliography-anchor `[pp]`** — `[[[pp]]]`/`<<pp>>` → reftext в скобках `[pp]`
+    (1-diff кластер: _crud `[search_and_sort]`, bibliography `[pp]`/`[gang]`, subs/index
+    `[table-subs-groups]`, xref.adoc `[anchors]`/`[paragraphs]`, _responses). `[id]` exp vs `id` got.
+  - **апостроф `'`→’** в plain-тексте под каким-то контекстом (scope, span-cells, README) —
+    остаток п.37; в тексте макроса (xref/link) — отдельно (архитектурно).
+  - **`§`/bare char-ref** сохранять как сущность (title-links — остаток п.15).
+  - **`// end::para[]` утечка** тег-региона (verse, literal — Asciidoctor КЕЕРS comment в verse).
+- Архитектурные (отложены): `{attr-ref}[text]` (порядок subs — icons-font/auto-ids/custom-ids/
+  index), link-role `class="external"` (нет поля role в `Tag::Link` — расширение типа).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM). LSP для навигации, context7 MCP для доков.
+
+---
+
+## Сессия (2026-06-09, поздняя) — Фаза 3: п.19 xref-id норм. (natural cross reference)
 
 Следующий чистый flip после image-alt-quotes (тот уже смержен+запушен, master == origin/master).
 

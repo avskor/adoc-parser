@@ -513,7 +513,18 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
         }
     }
 
-    let text = positional.first().copied().unwrap_or(bracket_content);
+    let mut text = positional.first().copied().unwrap_or(bracket_content);
+
+    // Blank-window shorthand: a trailing `^` on the link text opens the link in a
+    // new window. Asciidoctor strips the caret from the visible text and sets
+    // window=_blank (the renderer then adds target="_blank" rel="noopener"); an
+    // explicit `window=` attribute wins.
+    if let Some(stripped) = text.strip_suffix('^') {
+        text = stripped;
+        if window.is_none() {
+            window = Some("_blank");
+        }
+    }
 
     LinkAttrs { text, window, nofollow }
 }
@@ -593,6 +604,30 @@ mod tests {
         store.set("toc", "left");
         assert_eq!(store.get("toc"), Some("left"));
         assert_eq!(store.get("missing"), None);
+    }
+
+    #[test]
+    fn test_link_attrs_blank_window_caret() {
+        // Trailing `^` on the link text ⇒ window=_blank, caret stripped from text.
+        let a = parse_link_attrs("macro^");
+        assert_eq!(a.text, "macro");
+        assert_eq!(a.window, Some("_blank"));
+        assert!(!a.nofollow);
+
+        // Caret combined with a named role attribute: caret is on the positional text.
+        let a = parse_link_attrs("label^,role=external");
+        assert_eq!(a.text, "label");
+        assert_eq!(a.window, Some("_blank"));
+
+        // No caret ⇒ no implied window.
+        let a = parse_link_attrs("plain");
+        assert_eq!(a.text, "plain");
+        assert_eq!(a.window, None);
+
+        // Explicit window= wins over the caret shorthand (no override).
+        let a = parse_link_attrs("x^,window=_self");
+        assert_eq!(a.text, "x");
+        assert_eq!(a.window, Some("_self"));
     }
 
     #[test]
