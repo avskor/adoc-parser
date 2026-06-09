@@ -433,7 +433,12 @@ impl HtmlRenderer {
     /// Render an attribute value through inline parsing, so that URLs, formatting,
     /// etc. inside attribute values are properly converted to HTML.
     fn render_inline_value(&mut self, output: &mut String, value: &str) {
-        let events = adoc_parser::InlineParser::parse_str_with_subs(value, SubstitutionSet::NORMAL);
+        // Resolved attribute values are substituted as part of the current block's
+        // pipeline: in a verbatim block (`[subs="+attributes"]` listing/literal) only
+        // specialchars run, so an apostrophe in the value stays straight rather than
+        // being curled by replacements. At top level / in normal paragraphs this is
+        // NORMAL, so behavior there is unchanged.
+        let events = adoc_parser::InlineParser::parse_str_with_subs(value, self.current_subs());
         // If inline parsing produced only a single Text event identical to the input,
         // there is no inline markup — just escape and output directly.
         if events.len() == 1
@@ -5108,6 +5113,19 @@ mod tests {
     fn test_listing_block_subs_plus_attributes() {
         let html = to_html(":myattr: hello\n\n[subs=\"+attributes\"]\n----\nValue is {myattr}\n----");
         assert!(html.contains("Value is hello"), "subs=+attributes on listing block should resolve attribute refs. Got: {html}");
+    }
+
+    #[test]
+    fn test_listing_block_attr_ref_no_replacements() {
+        // A resolved attribute value follows the block's substitution set. In a verbatim
+        // listing block (specialchars + attributes, no replacements) an apostrophe stays
+        // straight; in a normal paragraph the same value is curled by replacements.
+        let listing = to_html(":replace-me: I've been replaced!\n\n[subs=\"+attributes\"]\n----\n{replace-me}\n----");
+        assert!(listing.contains("I've been replaced!"), "listing +attributes must keep straight apostrophe. Got: {listing}");
+        assert!(!listing.contains('\u{2019}'), "listing +attributes must not curl apostrophe. Got: {listing}");
+
+        let para = to_html(":replace-me: I've been replaced!\n\n{replace-me}");
+        assert!(para.contains('\u{2019}'), "normal paragraph must curl apostrophe in resolved attr value. Got: {para}");
     }
 
     #[test]
