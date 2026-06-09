@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-14) — Фаза 3: значение `{attr-ref}` уважает subs блока
+
+`fix/verbatim-paragraph-comment` УЖЕ смержена в master (`9069890`/`47ecc17`, дерево чистое; session.md
+прошлой сессии писалась ДО мержа — как всегда; master впереди origin — пуш НЕ делался). `/tmp/adoc_base`
+пересобран из ТЕКУЩЕГО master `9069890` ПЕРЕД правкой (был stale от `e1768d2`). Baseline подтверждён:
+Identical 184, Different 160, Errors 0. near-miss дал два 1-diff: keyboard-macro `kbd:[key(+key)*]`
+(passthrough `` `+...+` `` ест внутренний `+` — известный фидли, отложен) и **listing-blocks.adoc**
+(апостроф в значении атрибута). Выбран listing-blocks — принципиальнее и узче.
+
+### Ветка `fix/attr-ref-respect-block-subs` (от master; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано): резолвнутое значение `{attr}` подставляется в рамках
+  subs-пайплайна ТЕКУЩЕГО блока. В verbatim listing (`[subs="+attributes"]` → SPECIALCHARS|CALLOUTS|
+  ATTRIBUTES, БЕЗ replacements) апостроф в значении остаётся прямым (`I've`); в обычном параграфе
+  (NORMAL) — курлится (`I’ve`). Источник: `listing-blocks.adoc` `:replace-me: I've been replaced!`
+  внутри `[subs="+attributes"]----`.
+- **Корень**: `adoc-html/lib.rs::render_inline_value` (стр ~436) ЖЁСТКО форсил `SubstitutionSet::NORMAL`
+  при разборе значения атрибута → внутри listing-блока (где `current_subs()`=VERBATIM+attributes)
+  всё равно применялись REPLACEMENTS → апостроф курлился. Единственный вызывающий путь — arm
+  `Event::AttributeReference` (588/590), резолв из `document_attrs`.
+- **Фикс** (1 строка + коммент, ТОЛЬКО `adoc-html/lib.rs`): `parse_str_with_subs(value, NORMAL)` →
+  `parse_str_with_subs(value, self.current_subs())`. В NORMAL-контексте поведение НЕ меняется
+  (current_subs()=NORMAL); в verbatim — value идёт одним Text → early-return `html_escape` (прямой
+  апостроф, спецсимволы экранируются — VERBATIM имеет SPECIALCHARS). intrinsic/env/fallback/missing
+  ветки уже шли через `html_escape` (без replacements) — корректны. +1 тест
+  `test_listing_block_attr_ref_no_replacements` (listing+attributes держит прямой апостроф; NORMAL
+  параграф курлит — regression guard NORMAL-пути).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 315→316, parser 445,
+  parsing_lab **233/233** — правка ТОЛЬКО в adoc-html, ASG читает события парсера напрямую, не задет).
+- Корпус `compare_full.py` (release): **Identical 184→185 (+1), Different 159, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `9069890`): **2 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (listing-blocks.adoc), **0 регрессий**. reference-attributes.adoc
+  КРУПНО улучшен (**330→3 diff-строк**: в нём много attr-ref в verbatim-контексте, NORMAL-курлинг давал
+  позиционный каскад) — остаётся Different по ОТДЕЛЬНОМУ багу `{url}/issues[text]` (путь между `}` и
+  `[` не захватывается `trailing_brackets` — расширение attr-ref-link-macro, вне рамок).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/attr-ref-respect-block-subs` (только по запросу).
+  NB: master впереди origin (накопились предыдущие мержи) — пуш тоже не делался.
+- Чистые flip-кандидаты (near-miss на 185): **keyboard-macro** `` `+kbd:[key(+key)*]+` `` (1-diff,
+  passthrough `+...+` ест внутренний `+`; фидли — inline passthrough-парсер), **counter.adoc**
+  (`{counter:index}`→`{index}` не резолвится; архитектурный — счётчик в локальной мапе препроцессора).
+  Смежное (НЕ flip в одиночку): `{url}/path[text]` link-macro с путём между `}` и `[` (расширить
+  захват `trailing_brackets` — задевает reference-attributes 3-diff). Архитектурные (отложены):
+  наследование `m`/`e`/`s` стиля колонки таблицы (`a`/AsciiDoc рискован), nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`Event::Code`),
+  inline-anchor reftext из dt-терма (lexicon, ~14 ссылок), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `9069890`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM); нормализатор стрипает leading ws.
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-13) — Фаза 3: verbatim-параграф сохраняет `//`-комментарий
 
 `fix/table-header-column-style` УЖЕ смержена в master (`e1768d2`/`1280aa6`, дерево чистое; master
