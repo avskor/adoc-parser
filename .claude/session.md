@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-18) — Фаза 3: escaped inline-макрос `\name:target[attrs]`
+
+`fix/single-plus-passthrough-constrained` УЖЕ смержена в master (`3ca24a3`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `3ca24a3` ПЕРЕД правкой (был stale от `1688344`). Baseline подтверждён:
+Identical 189, Different 155, Errors 0. near-miss: 2-diff counter (архитектурный, отложен), 4-diff
+**user-index** (escaped indexterm). Разведка пробами через ФАЙЛ дала ЧИСТЫЙ общий корень — escaped
+inline-макрос. Выбран user-index (4-diff, один корень).
+
+### Ветка `fix/escaped-inline-macro` (от master `3ca24a3`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): `\` перед inline-макросом снимается,
+  макрос выводится ЛИТЕРАЛОМ как текст, макрос НЕ обрабатывается. Действует и в plain, и внутри
+  monospace (`` `\indexterm2:[<primary>]` ``→`<code>indexterm2:[<primary>]</code>`). Снимается ТОЛЬКО
+  перед макросом, который asciidoctor распознаёт ПО УМОЛЧАНИЮ: stem/latexmath/asciimath/link/xref/
+  mailto/icon/image (single `:`)/indexterm/indexterm2/footnote (pass уже был отдельным arm'ом).
+  Перед experimental kbd/btn/menu (выкл по умолчанию) и custom-catch-all (`\notamacro:foo[bar]`,
+  `\unknown:[just]`) `\` СОХРАНЯЕТСЯ — это не макрос, нечего экранировать. Block-форма `image::`
+  (двойное двоеточие) НЕ трогается. Внутреннее содержимое экранированного макроса у asciidoctor
+  форматируется (`\link:u[*b*]`→`link:u[<strong>b</strong>]`, quotes до macros) — я СОЗНАТЕЛЬНО
+  эмитю весь run одним литеральным span (для корпуса форматирования внутри нет; избегаю ре-диспатча
+  на autolink URL-таргета типа `\link:https://x[t]` — патологический случай у asciidoctor).
+- **Корень**: парсер оставлял `\` как обычный текст И обрабатывал макрос. `\indexterm2:[primary]`→
+  `\primary` (indexterm2 — flow-term, видимый контент), `\footnote:[x]`/`\image:p[a]` → `\`+рендер.
+- **Фикс** (1 точка + хелпер, ТОЛЬКО `inline.rs`): новый arm в `handle_inline_escape` ПОСЛЕ `\pass:`-arm
+  (`b'\\' if self.inline_macro_escape_len(self.pos+1) > 0`): flush, снять `\`, эмитить
+  `input[macro_start..pos]` одним `Event::Text(Cow::Borrowed)` (рендерер html_escape'ит `<`/`&`).
+  Хелпер `inline_macro_escape_len(p)->usize` (рядом с `char_ref_len_at`): gated на
+  `subs.has(MACROS)`; матчит распознаваемое имя из NAMES[11]+`:`, отклоняет `name::` (block),
+  target = run не-whitespace до `[`, требует `[`…`]`, возвращает длину run от p до `]` включительно.
+  +2 теста (`test_escaped_inline_macro` 6 позитивных кейсов incl. monospace; `test_backslash_before_
+  unrecognized_macro_kept` — kbd/btn/menu/`image::` сохраняют `\`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 449→451, html 317,
+  parsing_lab **233/233** — escaped-макросов в фикстурах НЕТ → ASG не задет).
+- Корпус `compare_full.py` (release): **Identical 189→190 (+1), Different 154, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `3ca24a3`): **1 файл** изменил
+  вывод — **1 FLIP→IDENTICAL** (user-index.adoc), **0 регрессий**, 0 changed-still-different. Идеально
+  узко: escaped `\image::` block в outline.adoc корректно НЕ тронут (хелпер отклоняет `::`).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/escaped-inline-macro` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые flip-кандидаты (near-miss на 190): **counter.adoc** (2-diff, `{counter:index}`→`{index}` —
+  АРХИТЕКТУРНЫЙ, счётчик в локальной мапе препроцессора, отложен). Новые неразведанные:
+  **pass/index.adoc** (6-diff, len_delta=-1 — один ЛИШНИЙ элемент у нас; НЕ про пустой `pass:[]`
+  (он у нас уже верен — `empty==mark` совпал), нужна разведка корня), **CHANGELOG.adoc** (7-diff).
+  **stem/index.adoc** (6-diff) — инъекция MathJax `<script>` в конец body при `:stem:`; АРХИТЕКТУРНАЯ
+  standalone-фича (docinfo/footer-скрипты), отложена.
+- Отложенный pre-existing баг (НЕ регрессия, обнажён single-plus): trailing ` +` в reparsed
+  monospace-контенте → спурьезный `<br>` (`` `z +` ``→`<code>z<br></code>`; outline.adoc стр 390).
+- Архитектурные (отложены): наследование `m`/`e`/`s` стиля колонки таблицы, nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`` `&#167;` ``→`Event::Code`),
+  inline-anchor reftext из dt-терма (lexicon), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ — shell экранирует `\`/`+`/backtick'и; heredoc `<<'EOF'` или `printf` ок).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `3ca24a3`). near-miss `/tmp/nearmiss.py`. Точечный diff
+  одного файла: `/tmp/fdiff.py <relpath>` (норм. из compare_full). Сравнение семантическое (DOM,
+  `convert_charrefs=True` → `&#8217;`≡`’`; `style`-атрибут игнорится). LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-17) — Фаза 3: single-plus `+…+` как constrained-пара
 
 `fix/passthrough-inside-monospace` УЖЕ смержена в master (`1688344`, origin == master, дерево чистое;

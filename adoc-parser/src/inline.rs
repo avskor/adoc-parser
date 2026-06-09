@@ -625,6 +625,21 @@ impl<'a> InlineState<'a> {
                 true
             }
 
+            // Escape a recognized inline macro: \footnote:[x], \indexterm2:[term], \image:p[alt],
+            // \link:u[t], etc. → drop the backslash and emit the whole macro form as literal text.
+            // Asciidoctor strips the leading backslash and renders the macro form verbatim without
+            // running macro processing; the renderer still escapes special characters in the text.
+            b'\\' if self.inline_macro_escape_len(self.pos + 1) > 0 => {
+                self.flush_text(*text_start, self.pos, events);
+                let macro_len = self.inline_macro_escape_len(self.pos + 1);
+                self.advance_by(1); // skip backslash
+                let macro_start = self.pos;
+                self.advance_by(macro_len);
+                events.push(Event::Text(Cow::Borrowed(&self.input[macro_start..self.pos])));
+                *text_start = self.pos;
+                true
+            }
+
             // Escape plus sequences: \+, \++, \+++
             b'\\' if self.peek_at(1) == Some(b'+') => {
                 self.flush_text(*text_start, self.pos, events);
@@ -782,6 +797,55 @@ impl<'a> InlineState<'a> {
             }
         }
         if bytes.get(i) == Some(&b';') { i + 1 - start } else { 0 }
+    }
+
+    /// If a recognized inline macro form (`name:target[attrs]`) begins at byte `p`, returns its
+    /// total byte length; otherwise 0. Used to strip a leading backslash escape and emit the macro
+    /// text literally, matching Asciidoctor (which drops the backslash and skips macro processing).
+    /// Only macros enabled by default are recognized; the experimental `kbd:`/`btn:`/`menu:` macros
+    /// and the custom catch-all are excluded (Asciidoctor leaves their backslash intact), as is the
+    /// block form `image::` (double colon). Gated on the MACROS substitution being active.
+    fn inline_macro_escape_len(&self, p: usize) -> usize {
+        if !self.subs.has(SubstitutionSet::MACROS) {
+            return 0;
+        }
+        let Some(rest) = self.input.get(p..) else {
+            return 0;
+        };
+        // Longest-first is not required (each name is uniquely delimited by its colon), but keep
+        // indexterm2 before indexterm for clarity.
+        const NAMES: [&str; 11] = [
+            "stem:", "latexmath:", "asciimath:", "link:", "xref:", "mailto:", "icon:",
+            "indexterm2:", "indexterm:", "footnote:", "image:",
+        ];
+        let Some(name_len) = NAMES.iter().find_map(|n| rest.starts_with(n).then_some(n.len())) else {
+            return 0;
+        };
+        let bytes = rest.as_bytes();
+        // Reject the block-macro form `name::` (e.g. image::target[]).
+        if bytes.get(name_len) == Some(&b':') {
+            return 0;
+        }
+        // Target: a run of non-whitespace characters up to the opening bracket.
+        let mut i = name_len;
+        while let Some(&c) = bytes.get(i) {
+            if matches!(c, b'[' | b' ' | b'\t' | b'\n') {
+                break;
+            }
+            i += 1;
+        }
+        // Require an opening bracket immediately, then a closing bracket somewhere after it.
+        if bytes.get(i) != Some(&b'[') {
+            return 0;
+        }
+        i += 1; // past '['
+        while let Some(&c) = bytes.get(i) {
+            if c == b']' {
+                return i + 1; // length from p to the closing ']' inclusive
+            }
+            i += 1;
+        }
+        0
     }
 
     fn check_hard_break(&self) -> bool {
@@ -2923,6 +2987,41 @@ mod tests {
                 Event::Text(Cow::Borrowed(want)),
                 Event::Text(Cow::Borrowed(" b")),
             ], "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_escaped_inline_macro() {
+        // A backslash before a recognized inline macro drops the backslash and emits the macro
+        // form as a single literal Text span (no macro processing), matching Asciidoctor.
+        for (input, want) in [
+            ("a \\indexterm2:[primary] b", "indexterm2:[primary]"),
+            ("a \\indexterm:[x, y] b", "indexterm:[x, y]"),
+            ("a \\footnote:[note] b", "footnote:[note]"),
+            ("a \\image:p.png[alt] b", "image:p.png[alt]"),
+            ("a \\link:u.html[t] b", "link:u.html[t]"),
+            ("a \\xref:tgt[lbl] b", "xref:tgt[lbl]"),
+        ] {
+            let events = parse(input);
+            assert_eq!(events, vec![
+                Event::Text(Cow::Borrowed("a ")),
+                Event::Text(Cow::Borrowed(want)),
+                Event::Text(Cow::Borrowed(" b")),
+            ], "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_backslash_before_unrecognized_macro_kept() {
+        // The backslash is preserved for the experimental kbd/btn/menu macros and the block form
+        // image:: — Asciidoctor does not treat those as escapable inline macros, so the escape
+        // must not fire (the backslash survives in the text run).
+        for input in ["a \\kbd:[Ctrl] b", "a \\btn:[OK] b", "a \\menu:File[New] b", "a \\image::t[] b"] {
+            let events = parse(input);
+            assert!(
+                events.iter().any(|e| matches!(e, Event::Text(t) if t.contains('\\'))),
+                "backslash should be preserved for {input:?}, got {events:?}"
+            );
         }
     }
 
