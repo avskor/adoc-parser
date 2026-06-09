@@ -12,6 +12,7 @@ const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
 
 const INTRINSIC_ATTRIBUTES: &[(&str, &str)] = &[
     ("amp", "&amp;"),
+    ("apos", "&#39;"),
     ("asterisk", "*"),
     ("backslash", "\\"),
     ("backtick", "`"),
@@ -28,6 +29,8 @@ const INTRINSIC_ATTRIBUTES: &[(&str, &str)] = &[
     ("lt", "&lt;"),
     ("nbsp", "&#160;"),
     ("plus", "&#43;"),
+    ("pp", "&#43;&#43;"),
+    ("quot", "&#34;"),
     ("rdquo", "&#8221;"),
     ("rsquo", "&#8217;"),
     ("sp", " "),
@@ -5431,6 +5434,19 @@ mod tests {
     fn test_builtin_attr_backend() {
         let html = to_html("{backend}");
         assert!(html.contains("html5"), "backend should be html5. Got: {html}");
+    }
+
+    #[test]
+    fn test_intrinsic_char_replacement_attrs() {
+        // quot/apos/pp are character-replacement attributes Asciidoctor resolves
+        // (to &#34;/&#39;/&#43;&#43;), including inside monospace spans.
+        let html = to_html("{quot} {apos} {pp} `{quot}` `{apos}`");
+        assert!(html.contains("&#34;"), "quot should resolve to &#34;. Got: {html}");
+        assert!(html.contains("&#39;"), "apos should resolve to &#39;. Got: {html}");
+        assert!(html.contains("&#43;&#43;"), "pp should resolve to ++. Got: {html}");
+        assert!(!html.contains("{quot}") && !html.contains("{apos}") && !html.contains("{pp}"),
+            "no unresolved references should remain. Got: {html}");
+        assert!(html.contains("<code>&#34;</code>"), "quot inside monospace. Got: {html}");
     }
 
     #[test]

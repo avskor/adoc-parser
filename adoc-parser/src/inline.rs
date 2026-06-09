@@ -1009,12 +1009,30 @@ impl<'a> InlineState<'a> {
                 i += skip;
                 continue;
             }
+            // The `pass:[…]` inline macro is also extracted before quote
+            // substitution, so a quote marker living inside its bracket must not
+            // terminate the surrounding span (`` `pass:[`']` `` → `<code>`'</code>`).
+            if b == b'p'
+                && let Some(skip) = Self::pass_macro_span_len(s, i)
+            {
+                i += skip;
+                continue;
+            }
             if b == marker && i > 0 && bytes.get(i + 1).copied() != Some(marker) {
                 return Some(i);
             }
             i += 1;
         }
         None
+    }
+
+    /// If a `pass:[…]` inline macro begins at byte offset `i` in `s`, return its
+    /// total byte length (so quote-delimiter scanning can skip over it). Mirrors
+    /// `try_pass_macro` (content runs to the first `]`). `i` must point at `p`.
+    fn pass_macro_span_len(s: &str, i: usize) -> Option<usize> {
+        let after = s[i..].strip_prefix("pass:[")?;
+        let close = after.find(']')?;
+        Some(6 + close + 1)
     }
 
     /// If a closed `++…++` or `+++…+++` passthrough begins at byte offset `i` in `s`,
@@ -3380,6 +3398,28 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("x ++ y")),
+            Event::End(TagEnd::Monospace),
+        ]);
+    }
+
+    #[test]
+    fn test_pass_macro_inside_monospace() {
+        // `pass:[`']` — the backtick inside the pass macro bracket must not close
+        // the monospace span; the macro yields its raw content. Asciidoctor:
+        // <code>`'</code>.
+        let events = parse("`pass:[`']`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("`'")),
+            Event::End(TagEnd::Monospace),
+        ]);
+
+        // pass:[…] with no inner marker is unaffected: the closing backtick is
+        // found at the end as before.
+        let events = parse("`pass:[++++]`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("++++")),
             Event::End(TagEnd::Monospace),
         ]);
     }

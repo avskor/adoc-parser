@@ -1,5 +1,84 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-24) — Фаза 3: intrinsic `{quot}`/`{apos}`/`{pp}` + `pass:[…]` в monospace (случай G)
+
+`fix/gate-experimental-ui-macros` УЖЕ смержена+запушена в master (`968e913`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `968e913` ПЕРЕД правкой. Baseline подтверждён: Identical 198, Different 146,
+Errors 0. near-miss: топ — revision-line-with-version-prefix (1-diff, `{docdate}` — дата-зависим, НЕ
+флипается). Следующий чистый кандидат — **quotation-marks-and-apostrophes** (4-diff, len_delta=0,
+неразведан): разведка пробами через ФАЙЛ дала ДВА корня в одном файле.
+
+### Ветка `fix/intrinsic-quot-apos-and-pass-constrained` (от master `968e913`; СТАТУС: НЕ закоммичено)
+- **Два корня, оба нужны для флипа quotation-marks-and-apostrophes.adoc** (ровно 4 diff'а: #79/#92
+  intrinsic, #228/#230 case-G).
+- **Корень 1 — intrinsic char-replacement атрибуты** (`adoc-html/lib.rs::INTRINSIC_ATTRIBUTES`):
+  таблица не содержала `quot`/`apos`/`pp`. Asciidoctor резолвит (верифицировано пробой): `{quot}`→
+  `&#34;`, `{apos}`→`&#39;`, `{pp}`→`&#43;&#43;` (= `++`), `{cpp}`→`C&#43;&#43;` (у нас `cpp`→`C++`
+  уже был, семантически совпадает после норм.). Резолв и в plain, и ВНУТРИ `` `…` `` monospace
+  (`` `{quot}` ``→`<code>&#34;</code>`). Добавлены 3 записи (алфавит: apos после amp; pp/quot между
+  plus и rdquo). Резолв-порядок в рендерере: document_attrs → intrinsic → env → fallback (intrinsic
+  пушится как сырой HTML).
+- **Корень 2 — `pass:[…]` в constrained-marker matching, случай G** (`inline.rs::find_closing_constrained`):
+  `pass:[…]` извлекается ДО quote-подстановки → quote-маркер внутри его скобок НЕ должен закрывать
+  внешний span. `` `pass:[`']` `` → Asciidoctor `<code>`'</code>`; мы ломались на внутреннем backtick
+  (`find_closing_constrained` брал его как закрывающий) → `<code>pass:[</code>']` `. Добавлен хелпер
+  `pass_macro_span_len(s,i)` (strip `pass:[`, контент до первого `]`, вернуть длину) — ТОЧНЫЙ аналог
+  уже сделанного `passthrough_span_len` (skip `++…++`); в цикле `find_closing_constrained` новый branch
+  `b'p'` пропускает регион `pass:[…]`. Inner-reparse монospace уже корректно эмитит pass-макрос
+  (`try_pass_macro`→`InlinePassthrough`). Применяется ко ВСЕМ constrained-маркерам (`*`/`_`/`` ` ``/`#`).
+- **Случай A НЕ сделан** (отложен, риск): `` `+pass:[]+` `` через single-plus (pass/index стр.15).
+  Асимметрия Asciidoctor (пробы): `+pass:[x]+`→`x` (pass обработан ДО `+…+`), но `++pass:[y]++`→
+  `pass:[y]` (НЕ обработан внутри `++…++`). Дискриминатор `` `+pass:[]+more+` ``→`<code>+more</code>`
+  (pass→empty placeholder, потом `` `+…+` `` берёт внешние `+`) ломает наивный «pure-pass-macro shortcut»
+  в `try_single_plus_passthrough`. Нужна faithful pass-extraction-ordering (pass приоритетнее single-plus,
+  но не double-plus) — рабит-хол, отложен ~8 сессий.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 457→459, html
+  320→321, parsing-lab **233/233** verified `--nocapture` — pass-в-quote/quot/apos в фикстурах нет;
+  правка в close-finder + intrinsic-таблице, ASG читает события парсера напрямую). html-compat 6/6.
+- Корпус `compare_full.py` (release): **Identical 198→199 (+1), Different 145, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `968e913`): **5 файлов** изменили
+  вывод — **1 FLIP→IDENTICAL** (quotation-marks-and-apostrophes, verified 0 diffs len 381==381),
+  **0 регрессий**. 4 changed-still-different: pass-macro 250→249 (`{pp}` стр.115 резолвится),
+  literal-monospace 61→59, troubleshoot-unconstrained 216→212 (pass-в-monospace лучше),
+  character-replacement-ref 645→645 (нейтрально — `{quot}`/`{apos}`/`{pp}` теперь верны, но погребены в
+  доминирующем несвязанном каскаде len 756 vs 581: table-column-style `m`/`e` + footnote `<sup>`).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/intrinsic-quot-apos-and-pass-constrained` (только по
+  запросу). master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 199: **pass/index** (6-diff — ТОЛЬКО случай A остался, см. выше; риск),
+  **stem/index** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone), **special-section-numbers**
+  (10-diff, monospace в ТЕКСТЕ xref-ссылки — архитектурный QUOTES в `[label]`), **audio** (12-diff,
+  2 корня: `audio::x[start=,opts=autoplay]` атрибуты + `.title`). Неразведанные: docinfo/index (14,
+  len_delta=0), db-migration (16, table `<table>` vs `<tr>`).
+- **Высокоценный архитектурный кластер** (много flip'ов, но риск): наследование `m`/`e`/`s` стиля
+  колонки таблицы → ячейки `<code>`/`<em>`/`<strong>` (сделано только `h` в `block.rs::scan_table::resolve_style`
+  + рендерер). Завязаны character-replacement-ref, pass-macro, subs-group-table, format-column-content,
+  image-position и др. — НО у них co-occurring корни (footnote `<sup>[1]`, `stretch`-класс таблицы,
+  `col`/`colgroup`) → чистого флипа может не быть. `a` (AsciiDoc-стиль) требует nested-парсинга ячейки —
+  НЕ трогать.
+- Архитектурные/отложенные (без изменений): `{docdate}`/`{localdate}` (дата-зависим), counters в verbatim,
+  case A (single-plus pass-extraction-ordering), nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`),
+  inline-monospace passthrough char-ref, inline-anchor reftext из dt-терма (lexicon), link-role
+  `class="external"`, trailing ` +` в reparsed monospace → `<br>`, level-0 sect0 heading, doctype=book,
+  author-header `<div class="details">`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ — shell экранирует backtick'и/`+`/`\`; heredoc `<<'EOF'` ок). Дамп событий парсера: throwaway
+  `adoc-parser/examples/dump_events.rs` (создать → `cargo run -p adoc-parser --example dump_events` →
+  удалить; различает баг парсера vs рендерера).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `968e913`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath> [binary]` (2-й арг — base-бинарь для сравнения до/после). Сравнение
+  семантическое (DOM, `convert_charrefs=True` → `&#34;`≡`"`; `style` игнорится). LSP для навигации,
+  context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-23) — Фаза 3: experimental UI-макросы (`kbd:`/`btn:`/`menu:`) за `:experimental:`
 
 `fix/revision-prefix-and-hardbreaks` УЖЕ смержена+запушена в master (`bddedb5`, origin == master,
