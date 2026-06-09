@@ -4040,6 +4040,30 @@ mod tests {
     }
 
     #[test]
+    fn test_table_rowspan_shifts_following_row_cells_html() {
+        // A rowspan cell occupies its column in the rows it spans, so the next
+        // row holds one FEWER cell. Regression: the spanned column must be
+        // skipped exactly once (no double-decrement that lets the cell slip
+        // back into the spanned column).
+        let html = to_html(
+            "[cols=\"1,1\"]\n|===\n|A |B\n\n.2+|X\n|1\n\n|2\n\n|Y |Z\n|===",
+        );
+        // The row continuing the rowspan ("2") must be a standalone <tr> with a
+        // single cell, NOT merged with the following "Y".
+        assert!(
+            html.contains("<td class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">2</p></td>\n</tr>"),
+            "rowspan continuation cell '2' must close its own row. Got:\n{html}"
+        );
+        // "Y" starts a fresh row (preceded by <tr>, not by cell "2").
+        assert!(
+            html.contains("<tr>\n<td class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">Y</p></td>"),
+            "cell 'Y' must begin a new row. Got:\n{html}"
+        );
+        // Three body rows: [X,1], [2], [Y,Z] → 4 <tr> total incl. header.
+        assert_eq!(html.matches("<tr>").count(), 4, "expected 4 rows. Got:\n{html}");
+    }
+
+    #[test]
     fn test_table_cell_style_emphasis_html() {
         let html = to_html("|===\ne| italic\n|===");
         assert!(html.contains("<p class=\"tableblock\"><em>italic</em></p>"), "expected emphasis in tableblock p. Got:\n{html}");
