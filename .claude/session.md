@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-20) — Фаза 3: голая ссылка `{name}` на счётчик в document-order
+
+`fix/section-id-dots-and-dedup` УЖЕ смержена+запушена в master (`3d8db5c`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `3d8db5c` ПЕРЕД правкой. Baseline подтверждён: Identical 191, Different 153,
+Errors 0. near-miss: ближайший — **counter.adoc** (2-diff), много сессий помечался «архитектурным».
+Разведка показала: «архитектурность» преувеличена — есть узкий корректный фикс. Взят counter.adoc.
+
+### Ветка `fix/counter-bare-reference` (от master `3d8db5c`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor**: счётчик — это спец-документ-атрибут; `{counter:name}` инкрементит И
+  отображает, `{counter2:name}` инкрементит молча, голый `{name}` отдаёт ТЕКУЩЕЕ значение. Всё
+  резолвится в document-order (значение МЕНЯЕТСЯ по документу). В counter.adoc: `.Parts{counter2:index:0}`
+  → index=0; `PX-{counter:index}` → 1, потом 2; `Description of PX-{index}` → 1, потом 2.
+- **Корень**: счётчики живут в препроцессоре (`expand_counters`, построчно в document-order, пишет
+  значение в локальную `attributes`), но голый `{index}` препроцессор НЕ трогал — он доезжал до
+  рендерера, который резолвит из ПЛОСКОГО снимка `document_attrs` (где `index` нет, т.к. задаётся
+  ТОЛЬКО счётчиком, не `:index:` entry) → `Description of PX-{index}` литералом. Рендерер с одним
+  снимком в принципе не может (значение позиционное) — поэтому резолв обязан быть в препроцессоре.
+- **Фикс** (1 файл, `preprocessor.rs`): (a) `preprocess_with_attrs` — поле `counter_names:
+  HashSet<String>`; (b) `try_parse_counter(+counter_names)` регистрирует имя при успехе; (c) новый
+  хелпер `try_expand_counter_reference(input, attributes, counter_names)` — раскрывает голый `{name}`
+  ТОЛЬКО если name ∈ counter_names и attributes.get(name).is_some(); (d) `expand_counters(+counter_names)`
+  — fast-path расширен (`{counter` ИЛИ (counter_names непуст И есть `{`)), в цикле новый arm для голой
+  ссылки ПОСЛЕ counter-arm. Обычные атрибуты НЕ трогаются (только зарегистрированные счётчики). +2 теста
+  (`test_preprocess_bare_counter_reference` — table-сценарий; `test_preprocess_bare_reference_non_counter_untouched`
+  — не-счётчик остаётся `{index}` для рендерера). 14 существующих тест-вызовов `expand_counters`
+  обновлены на 3-й арг `&mut HashSet::new()`.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 454→456, html 317,
+  parsing_lab **233/233** verified `--nocapture` — счётчиков-с-голой-ссылкой в фикстурах нет).
+- Корпус `compare_full.py` (release): **Identical 191→192 (+1), Different 152, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `3d8db5c`): **2 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (counter.adoc, verified 0 diffs), **0 регрессий**. 1 changed-still-
+  different: counters.adoc (271→271 diffs БЕЗ изменений — контент чуть сместился из-за раскрытия
+  голых `{seq1}`/`{pnum}`, но файл и так полностью рассинхронен каскадом author-блока + счётчики
+  внутри verbatim-блоков `[source]`/`----` которые asciidoctor НЕ раскрывает а наш препроцессор
+  раскрывает безусловно — архитектурный pre-existing, вне рамок).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/counter-bare-reference` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 192: **pass/index.adoc** (6-diff, len_delta=-1 — `` `+pass:[]+` `` →
+  asciidoctor пустой `<code></code>`, мы `<code>pass:[]</code>`; фидли pass-в-single-plus-в-monospace,
+  единичный), **stem/index.adoc** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone).
+  Неразведанные: special-section-numbers (10-diff), toc/index (11-diff), reference-revision-line (11-diff),
+  audio (12-diff), revision-line-with-version-prefix (13-diff), docinfo/index (14-diff).
+- Архитектурные/отложенные (без изменений): counters.adoc (счётчики в verbatim-блоках — препроцессор
+  раскрывает безусловно, нет block-context awareness), наследование `m`/`e`/`s` стиля колонки таблицы,
+  nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref
+  (`` `&#167;` ``→`Event::Code`), inline-anchor reftext из dt-терма (lexicon), link-role
+  `class="external"`, trailing ` +` в reparsed monospace → спурьезный `<br>`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ — shell экранирует спецсимволы; heredoc `<<'EOF'` или `printf` ок).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `3d8db5c`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath>`. Сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится).
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-19) — Фаза 3: section-id точки-разделитель + дедуп дубликатов
 
 `fix/escaped-inline-macro` УЖЕ смержена+запушена в master (`41bba68`, origin == master, дерево
