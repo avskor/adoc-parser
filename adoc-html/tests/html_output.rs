@@ -74,7 +74,10 @@ H~2~O and E=mc^2^.";
     assert!(html.contains("<a href=\"https://example.com\">Example Site</a>"));
 
     // Cross reference
-    assert!(html.contains("<a href=\"#introduction\">introduction</a>"));
+    // `<<introduction>>` (lowercase) matches neither the `_introduction` id nor
+    // the "Introduction" title (case-sensitive), so Asciidoctor renders the
+    // bracketed-id fallback as link text.
+    assert!(html.contains("<a href=\"#introduction\">[introduction]</a>"));
 
     // Sub/superscript
     assert!(html.contains("<sub>2</sub>"));
@@ -415,7 +418,7 @@ fn test_xref_unresolvable_falls_back_to_id() {
     let input = "См. <<nonexistent>>";
     let html = to_html(input);
     assert!(
-        html.contains("<a href=\"#nonexistent\">nonexistent</a>"),
-        "unresolvable xref should fall back to target ID. Got: {html}"
+        html.contains("<a href=\"#nonexistent\">[nonexistent]</a>"),
+        "unresolvable xref should fall back to bracketed target id. Got: {html}"
     );
 }
