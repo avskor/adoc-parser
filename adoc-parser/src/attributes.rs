@@ -419,6 +419,8 @@ pub struct ImageAttrs<'a> {
     pub float: Option<&'a str>,
     pub link: Option<&'a str>,
     pub role: Option<&'a str>,
+    pub caption: Option<&'a str>,
+    pub title: Option<&'a str>,
 }
 
 pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
@@ -431,6 +433,8 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
             float: None,
             link: None,
             role: None,
+            caption: None,
+            title: None,
         };
     }
 
@@ -441,6 +445,8 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
     let mut float: Option<&str> = None;
     let mut link: Option<&str> = None;
     let mut role: Option<&str> = None;
+    let mut caption: Option<&str> = None;
+    let mut title: Option<&str> = None;
     let mut positional = Vec::new();
 
     for part in split_respecting_quotes(bracket_content) {
@@ -460,6 +466,8 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
                 "float" => float = Some(value),
                 "link" => link = Some(value),
                 "role" => role = Some(value),
+                "caption" => caption = Some(value),
+                "title" => title = Some(value),
                 _ => {}
             }
         } else {
@@ -470,8 +478,10 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         }
     }
 
-    // alt: named "alt" or positional[0] or entire bracket_content
-    let alt = alt.unwrap_or_else(|| positional.first().copied().unwrap_or(bracket_content));
+    // alt: named "alt" or positional[0]; with only named attrs present the alt
+    // is empty and the renderer auto-generates it from the filename, matching
+    // Asciidoctor (`image::a.png[width=100]` → alt="a").
+    let alt = alt.unwrap_or_else(|| positional.first().copied().unwrap_or(""));
     // width: named "width" or positional[1]
     if width.is_none()
         && let Some(&w) = positional.get(1)
@@ -487,7 +497,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         height = Some(h);
     }
 
-    ImageAttrs { alt, width, height, align, float, link, role }
+    ImageAttrs { alt, width, height, align, float, link, role, caption, title }
 }
 
 pub struct LinkAttrs<'a> {
@@ -1186,5 +1196,24 @@ mod tests {
         assert_eq!(attrs.alt, "Alt");
         assert_eq!(attrs.align, Some("center"));
         assert_eq!(attrs.float, Some("right"));
+    }
+
+    #[test]
+    fn test_parse_image_attrs_caption_title_and_named_only_alt() {
+        let attrs = parse_image_attrs("caption=\"My Caption. \",title=AttrTitle");
+        assert_eq!(attrs.caption, Some("My Caption. "));
+        assert_eq!(attrs.title, Some("AttrTitle"));
+        // Named-only attrs: alt stays empty (the renderer auto-generates it
+        // from the filename), not the raw bracket content.
+        assert_eq!(attrs.alt, "");
+
+        let attrs = parse_image_attrs("width=100");
+        assert_eq!(attrs.alt, "");
+        assert_eq!(attrs.width, Some("100"));
+
+        // A positional alt still wins.
+        let attrs = parse_image_attrs("Alt text,caption=C");
+        assert_eq!(attrs.alt, "Alt text");
+        assert_eq!(attrs.caption, Some("C"));
     }
 }

@@ -1,5 +1,93 @@
 # Session context
 
+## Сессия (2026-06-10) — Реализация R1/R2/R4/R6 + частично R3/R5 (ветка `fix/block-image-figure-caption`)
+
+Продолжение аудита поздней-29: по «приступай» реализованы находки. master `532c10a`,
+ветка `fix/block-image-figure-caption` (СТАТУС: НЕ закоммичено; в diff также TODO.md/session.md
+от сессии-аудита). `/tmp/adoc_base` пересобран из чистого master `532c10a` ПЕРЕД правками,
+baseline подтверждён: Identical 204, Different 140, Errors 0.
+
+### Что сделано (всё верифицировано пробами asciidoctor через ФАЙЛ, p1–p8 в /tmp)
+- **R1 — figure caption на block-image** (2 слоя). РЕНДЕРЕР (`adoc-html/lib.rs`): поле
+  `figure_counter`, дефолтный attr `figure-caption`=«Figure», эмиссия `<div class="title">
+  Figure N. Title</div>` ПОСЛЕ content-div в `start_block_image` (стал `&mut self`-методом);
+  общий хелпер `push_caption_prefix` (table-caption переведён на него, поведение 1:1).
+  Правила (пробы): bump только titled; `caption=` verbatim БЕЗ bump; `:figure-caption!:` →
+  голый title; `:figure-caption: Рисунок` → кастомный label; `title=`-attr ПОБЕЖДАЕТ `.Title`.
+  ПАРСЕР: `attributes.rs::parse_image_attrs` +поля `caption`/`title`; alt-fallback при
+  named-only скобках "" (был сырой bracket_content — `image::a.png[width=100]` давал
+  alt="width=100"); `block.rs::scan_block_macros` мёржит caption в block_attrs.named,
+  title= синтезирует BlockTitle-events (vec![Start,Text,End]), заменяя pending `.Title`.
+- **R2 + бонус stem**: `open_block_with_title` хелпер (wrapper+title+content), применён к
+  video (НОВОЕ: title эмитится, ДО content — зеркало audio), stem (ТОТ ЖЕ баг утечки title —
+  найден этой сессией пробой p8), audio/openblock (чистый дедуп). video.adoc 47→4 diff.
+- **R4**: `push_media_time_fragment` (общий `#t=` для audio/video). Порядок boolean-атрибутов
+  НЕ объединён — намеренно разный.
+- **R6**: `open_li_paragraph`/`close_li_paragraph`; ListItem 3 arm'а → 1 (match checked);
+  DescriptionDescription не тронут (dd_output_start rollback асимметричен).
+- **R5 частично**: `title_to_id` hoisted (строится 1 раз для обоих xref-пассов).
+- Тесты: +4 (html: figure-caption-сценарии, video+stem-title leak-guard; parser:
+  caption/title/alt-fallback в attributes.rs). parser 460→461, html 326→328.
+
+### Статус (верифицировано)
+- clippy 0 warnings; test --workspace ВСЁ зелёное; parsing-lab 233/233, html-compat 6/6.
+- Корпус: **Identical 204, Different 140, Errors 0** (флипов нет — image/video-файлы корпуса
+  Different по другим каскадам). Blast vs `/tmp/adoc_base`: 3 файла изменили вывод,
+  **0 регрессий**, все улучшены: image.adoc 135→128, id.adoc 49→45, video.adoc 47→**4**.
+- Рефакторинг-нейтральность: raw-вывод нового бинаря vs `/tmp/adoc_r1` (пост-R1 эталон) по
+  всем 344 файлам — отличие ТОЛЬКО video.adoc (= ожидаемый эффект R2). p1–p8 IDENTICAL.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки (только по запросу). В diff входят TODO.md/session.md.
+- video.adoc теперь 4-diff — near-miss кандидат (остаток: youtube/vimeo iframe нюансы?
+  разведать `fdiff.py`).
+- R5-остаток (ResolutionContext + один проход вместо output.replace-цикла), R7 (adoc-render-core,
+  перед вторым рендерером), R8 (распил lib.rs на модули), R9.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release). blast: /tmp/blast.py (base /tmp/adoc_base = чистый master `532c10a`).
+  fdiff: /tmp/fdiff.py <relpath> [base-бинарь]. `/tmp/adoc_r1` — пост-R1 бинарь (эталон
+  рефакторинг-нейтральности). Пробы /tmp/p1–p8.adoc.
+
+---
+
+## Сессия (2026-06-09, поздняя-29) — Аудит рендерера: мульти-рендерер + дедупликация (БЕЗ правок кода)
+
+Запрос: изучить архитектуру, найти недочёты; фокус — готовность к НЕ-HTML-рендерерам и
+дублирование в рендерере. Только анализ; код НЕ менялся. master `532c10a` (stem-mathjax уже
+смержена), дерево чистое. Проверено: clippy 0 warnings, test --workspace ВСЁ зелёное
+(parser 460, html 326, parsing-lab 233/233, html-compat 6/6, integration 25).
+
+### Результат — раздел «Аудит рендерера 2026-06-09» в TODO.md (R1–R9), главное:
+- **R1 — НОВЫЙ БАГ (верифицирован CLI-пробой vs asciidoctor)**: `.Title` на block-image
+  теряется из imageblock И УТЕКАЕТ в следующий блок (paragraph получает чужой
+  `<div class="title">`). Asciidoctor: `Figure 1. Title` ПОСЛЕ content + figure-counter
+  (счётчика у нас нет вообще). `start_block_image` (lib.rs:1372) — static fn, title не
+  потребляет; TagEnd::BlockImage (2395) не сбрасывает.
+- R2: BlockVideo title-баг (известный); R3: системный корень — ввести start_block_wrapper
+  с TitlePos; R4: дуп `#t=` audio/video (порядок boolean-атрибутов разный НАМЕРЕННО);
+  R5: finish() — title_to_id дважды + O(n²) output.replace; R6: li_p_open стеки ×3;
+  R7: вынос семантики в adoc-render-core (доказательство — builder.rs УЖЕ дублирует
+  intrinsic-таблицу/resolve_attr_refs/trailing_brackets); R8: распил lib.rs 6291 строк
+  на модули; R9: Parser.experimental ad-hoc канал.
+- Находки Explore-агентов верифицированы чтением кода: ложная — «BlockImage чинить как
+  audio» (у image title ПОСЛЕ content с Figure-caption, НЕ before); порядок boolean-атрибутов
+  audio≠video — намеренный (оба соответствуют asciidoctor).
+
+### Что дальше
+- R1 — лучший кандидат на следующую правку (реальный баг + вероятные флипы корпуса:
+  image-цепочка). Перед правкой пересобрать /tmp/adoc_base от master `532c10a`.
+- R3+R4+R6 — механический дедуп, низкий риск, корпус не должен сдвинуться (verify blast=0).
+- R7 — крупный рефакторинг, делать ПОСЛЕ исчерпания дешёвых флипов Фазы 3 либо перед
+  стартом второго рендерера.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release-бинарь, cargo build --release -p adoc-cli). blast: /tmp/blast.py. fdiff: /tmp/fdiff.py.
+
+---
+
 ## Сессия (2026-06-09, поздняя-28) — Фаза 3: инъекция MathJax-loader при `:stem:`
 
 `fix/rowspan-row-placement` УЖЕ смержена в master (`a312a0e`, origin == master, дерево чистое;

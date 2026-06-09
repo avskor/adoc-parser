@@ -605,6 +605,20 @@ impl<'a> BlockScanner<'a> {
             {
                 block_attrs.roles.push(role.to_string());
             }
+            // `caption=` from the macro attrs overrides the "Figure N. " prefix.
+            if let Some(caption) = img_attrs.caption {
+                block_attrs.named.entry("caption".to_string()).or_insert_with(|| caption.to_string());
+            }
+            // `title=` from the macro attrs wins over a preceding `.Title` line.
+            let title_events = if let Some(title) = img_attrs.title {
+                vec![
+                    Event::Start(Tag::BlockTitle),
+                    Event::Text(Cow::Borrowed(title)),
+                    Event::End(TagEnd::BlockTitle),
+                ]
+            } else {
+                title_events
+            };
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),

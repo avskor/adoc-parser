@@ -215,6 +215,7 @@ struct HtmlRenderer {
     cell_style_stack: Vec<CellStyle>,
     table_counter: usize,
     example_counter: usize,
+    figure_counter: usize,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
     dlist_stack: Vec<DlistStyle>,
@@ -288,6 +289,7 @@ impl HtmlRenderer {
                 ("backend".to_string(), "html5".to_string()),
                 ("doctype".to_string(), "article".to_string()),
                 ("table-caption".to_string(), "Table".to_string()),
+                ("figure-caption".to_string(), "Figure".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
             footnotes: Vec::new(),
@@ -315,6 +317,7 @@ impl HtmlRenderer {
             cell_style_stack: Vec::new(),
             table_counter: 0,
             example_counter: 0,
+            figure_counter: 0,
             block_title_output_start: None,
             block_title_inner_html: None,
             dlist_stack: Vec::new(),
@@ -845,6 +848,16 @@ impl HtmlRenderer {
             }
         }
 
+        // Natural cross reference support: a target matching a section title
+        // (case-sensitive) resolves to that section's id. Shared by the text
+        // and href resolution passes below.
+        let mut title_to_id: HashMap<&str, &str> = HashMap::new();
+        if !self.xref_placeholders.is_empty() || !self.xref_href_placeholders.is_empty() {
+            for entry in &self.toc_entries {
+                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
+            }
+        }
+
         if !self.xref_placeholders.is_empty() {
             // Map each anchor id to the ready-to-insert link text. Section titles
             // are accumulated as plain text and escaped here; block titles are
@@ -865,12 +878,6 @@ impl HtmlRenderer {
                 id_to_text
                     .entry(id.clone())
                     .or_insert_with(|| reftext.clone());
-            }
-            // Natural cross reference text: a target matching a section title
-            // (case-sensitive) resolves to that section's title, not a bracket.
-            let mut title_to_id: HashMap<&str, &str> = HashMap::new();
-            for entry in &self.toc_entries {
-                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
             }
             for (placeholder, fallback, is_internal) in &self.xref_placeholders {
                 let replacement = if let Some(text) = id_to_text.get(fallback) {
@@ -909,10 +916,6 @@ impl HtmlRenderer {
                 .chain(self.block_ref_titles.iter().map(|(id, _)| id.as_str()))
                 .chain(self.bibliography_reftexts.iter().map(|(id, _)| id.as_str()))
                 .collect();
-            let mut title_to_id: HashMap<&str, &str> = HashMap::new();
-            for entry in &self.toc_entries {
-                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
-            }
             for (placeholder, target) in &self.xref_href_placeholders {
                 let resolved: &str = if known_ids.contains(target.as_str()) {
                     target
@@ -1121,20 +1124,13 @@ impl HtmlRenderer {
             }
             Tag::UnorderedList { has_checklist } => self.start_unordered_list(output, has_checklist, &meta),
             Tag::OrderedList { start, reversed } => self.start_ordered_list(output, start, reversed, &meta),
-            Tag::ListItem { checked: Some(true), .. } => {
-                output.push_str("<li>\n<p>&#10003; ");
-                self.li_p_open.push(true);
-                self.li_para_count.push(1); // count the initial <p>
-            }
-            Tag::ListItem { checked: Some(false), .. } => {
-                output.push_str("<li>\n<p>&#10063; ");
-                self.li_p_open.push(true);
-                self.li_para_count.push(1); // count the initial <p>
-            }
-            Tag::ListItem { checked: None, .. } => {
-                output.push_str("<li>\n<p>");
-                self.li_p_open.push(true);
-                self.li_para_count.push(1); // count the initial <p>
+            Tag::ListItem { checked, .. } => {
+                output.push_str(match checked {
+                    Some(true) => "<li>\n<p>&#10003; ",
+                    Some(false) => "<li>\n<p>&#10063; ",
+                    None => "<li>\n<p>",
+                });
+                self.open_li_paragraph();
             }
             Tag::DescriptionList => self.start_description_list(output, &meta),
             Tag::DescriptionTerm => {
@@ -1180,8 +1176,7 @@ impl HtmlRenderer {
                 // continuation block (e.g. a `+`-attached NOTE) closes it
                 // before the block is emitted, instead of nesting the block
                 // inside the still-open `<p>`.
-                self.li_p_open.push(true);
-                self.li_para_count.push(1);
+                self.open_li_paragraph();
             }
             Tag::Admonition { kind } => self.start_admonition(output, kind, &meta),
             Tag::Table => self.start_table(output, &meta),
@@ -1202,19 +1197,13 @@ impl HtmlRenderer {
             Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } =>
                 self.start_table_cell(output, true, colspan, rowspan, style, halign, valign),
             Tag::BlockImage { target, alt, width, height, link } =>
-                Self::start_block_image(output, target, alt, width, height, link, &meta),
+                self.start_block_image(output, target, alt, width, height, link, &meta),
             Tag::BlockVideo { target, attrs } => {
-                output.push_str("<div");
-                Self::write_meta_attrs(output, &meta, "videoblock");
-                output.push_str(">\n<div class=\"content\">\n");
+                self.open_block_with_title(output, &meta, "videoblock");
                 render_video_tag(output, target, attrs);
             }
             Tag::BlockAudio { target, attrs } => {
-                output.push_str("<div");
-                Self::write_meta_attrs(output, &meta, "audioblock");
-                output.push_str(">\n");
-                self.emit_pending_block_title(output);
-                output.push_str("<div class=\"content\">\n");
+                self.open_block_with_title(output, &meta, "audioblock");
                 render_audio_tag(output, target, attrs);
             }
             Tag::InlineImage { target, alt, width, height, align, float, link } =>
@@ -1308,9 +1297,7 @@ impl HtmlRenderer {
             Tag::StemBlock { variant } => {
                 self.stem_block_variant = Some(variant.to_string());
                 self.stem_block_content = None;
-                output.push_str("<div");
-                Self::write_meta_attrs(output, &meta, "stemblock");
-                output.push_str(">\n<div class=\"content\">\n");
+                self.open_block_with_title(output, &meta, "stemblock");
             }
             Tag::Anchor { id } => {
                 output.push_str("<a id=\"");
@@ -1369,7 +1356,8 @@ impl HtmlRenderer {
         self.emit_pending_block_title(output);
     }
 
-    fn start_block_image(output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
+    #[allow(clippy::too_many_arguments)]
+    fn start_block_image(&mut self, output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
         // Build base class with align/float CSS classes from named attrs
         let base_class = Self::image_base_class("imageblock", meta);
         output.push_str("<div");
@@ -1401,6 +1389,15 @@ impl HtmlRenderer {
             output.push_str("</a>");
         }
         output.push_str("\n</div>\n");
+        // Asciidoctor places a titled image's caption AFTER the content div,
+        // prefixed "Figure N. " (figure-caption attribute + shared counter).
+        if let Some(title) = self.block_title_inner_html.take() {
+            output.push_str("<div class=\"title\">");
+            let label = self.document_attrs.get("figure-caption").cloned();
+            Self::push_caption_prefix(output, meta, label.as_deref(), &mut self.figure_counter);
+            output.push_str(&title);
+            output.push_str("</div>\n");
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1529,29 +1526,9 @@ impl HtmlRenderer {
         // Caption must come before colgroup per HTML5 spec
         let title_html = self.block_title_inner_html.take();
         if let Some(title) = title_html {
-            let caption_attr = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
             output.push_str("<caption class=\"title\">");
-            match caption_attr.as_deref() {
-                Some("") => {
-                    // Empty caption= means no prefix, just the title (no number, no counter bump).
-                }
-                Some(prefix) => {
-                    // Block caption= used as a literal label prefix: no number, no counter bump.
-                    html_escape(output, prefix);
-                }
-                None => {
-                    // No block caption: consult the table-caption document attribute.
-                    // Set (default "Table") → "{table-caption} N. " and bump the counter;
-                    // unset (`:table-caption!:`) → no label and the counter is not bumped.
-                    if let Some(label) = self.document_attrs.get("table-caption").cloned() {
-                        self.table_counter += 1;
-                        html_escape(output, &label);
-                        output.push(' ');
-                        output.push_str(&self.table_counter.to_string());
-                        output.push_str(". ");
-                    }
-                }
-            }
+            let label = self.document_attrs.get("table-caption").cloned();
+            Self::push_caption_prefix(output, meta, label.as_deref(), &mut self.table_counter);
             output.push_str(&title);
             output.push_str("</caption>\n");
         }
@@ -1938,11 +1915,7 @@ impl HtmlRenderer {
             }
             DelimitedBlockKind::Open => {
                 self.delimited_block_stack.push((*kind, false));
-                output.push_str("<div");
-                Self::write_meta_attrs(output, meta, "openblock");
-                output.push_str(">\n");
-                self.emit_pending_block_title(output);
-                output.push_str("<div class=\"content\">\n");
+                self.open_block_with_title(output, meta, "openblock");
             }
             DelimitedBlockKind::Comment => {
                 self.delimited_block_stack.push((*kind, false));
@@ -2285,12 +2258,8 @@ impl HtmlRenderer {
                 output.push_str("</ol>\n</div>\n");
             }
             TagEnd::ListItem => {
-                self.li_para_count.pop();
-                if self.li_p_open.pop() == Some(true) {
-                    output.push_str("</p>\n</li>\n");
-                } else {
-                    output.push_str("</li>\n");
-                }
+                let p_open = self.close_li_paragraph();
+                output.push_str(if p_open { "</p>\n</li>\n" } else { "</li>\n" });
             }
             TagEnd::DescriptionList => {
                 let style = self.dlist_stack.pop().unwrap_or(DlistStyle::Normal);
@@ -2343,14 +2312,10 @@ impl HtmlRenderer {
                 output.push_str("</ol>\n</div>\n");
             }
             TagEnd::CalloutListItem => {
-                self.li_para_count.pop();
-                if self.li_p_open.pop() == Some(true) {
-                    output.push_str("</p></li>\n");
-                } else {
-                    // The principal `<p>` was already closed by a continuation
-                    // block (e.g. a NOTE attached with `+`).
-                    output.push_str("</li>\n");
-                }
+                // A closed principal `<p>` means a continuation block (e.g. a
+                // NOTE attached with `+`) already emitted `</p>`.
+                let p_open = self.close_li_paragraph();
+                output.push_str(if p_open { "</p></li>\n" } else { "</li>\n" });
             }
             TagEnd::Admonition => {
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
@@ -2467,6 +2432,62 @@ impl HtmlRenderer {
             output.push_str("<div class=\"title\">");
             output.push_str(&title);
             output.push_str("</div>\n");
+        }
+    }
+
+    /// Open the principal `<p>` of a list item, tracking it so a continuation
+    /// block can close it before being emitted (see the guard in `start_tag`).
+    fn open_li_paragraph(&mut self) {
+        self.li_p_open.push(true);
+        self.li_para_count.push(1); // count the initial <p>
+    }
+
+    /// Pop a list-item scope; returns whether the principal `<p>` is still
+    /// open and needs its closing tag.
+    fn close_li_paragraph(&mut self) -> bool {
+        self.li_para_count.pop();
+        self.li_p_open.pop() == Some(true)
+    }
+
+    /// Open a block wrapper div with meta attrs, emit a pending `.Title`,
+    /// then open the content div — the shared shape of the audio/video/stem
+    /// and open-block arms. Forgetting the title emission in a hand-rolled
+    /// wrapper has caused a string of leak bugs; new block arms should use
+    /// this instead.
+    fn open_block_with_title(&mut self, output: &mut String, meta: &Option<BlockMeta>, default_class: &str) {
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, default_class);
+        output.push_str(">\n");
+        self.emit_pending_block_title(output);
+        output.push_str("<div class=\"content\">\n");
+    }
+
+    /// Emit the numbered caption prefix for a titled block (table/figure).
+    /// A block-level `caption=` overrides verbatim with no counter bump
+    /// (empty value → no prefix); otherwise a set `*-caption` document
+    /// attribute gives "{label} {n}. " and bumps the counter, while an unset
+    /// one (`:table-caption!:` / `:figure-caption!:`) gives no prefix.
+    fn push_caption_prefix(
+        output: &mut String,
+        meta: &Option<BlockMeta>,
+        doc_label: Option<&str>,
+        counter: &mut usize,
+    ) {
+        let caption_attr = meta
+            .as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
+        match caption_attr.as_deref() {
+            Some("") => {}
+            Some(prefix) => html_escape(output, prefix),
+            None => {
+                if let Some(label) = doc_label {
+                    *counter += 1;
+                    html_escape(output, label);
+                    output.push(' ');
+                    output.push_str(&counter.to_string());
+                    output.push_str(". ");
+                }
+            }
         }
     }
 
@@ -3191,24 +3212,7 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             // Regular HTML5 video
             output.push_str("<video src=\"");
             html_escape(output, target);
-            // Append time fragment if start/end present
-            match (media.start, media.end) {
-                (Some(s), Some(e)) => {
-                    output.push_str("#t=");
-                    html_escape(output, s);
-                    output.push(',');
-                    html_escape(output, e);
-                }
-                (Some(s), None) => {
-                    output.push_str("#t=");
-                    html_escape(output, s);
-                }
-                (None, Some(e)) => {
-                    output.push_str("#t=,");
-                    html_escape(output, e);
-                }
-                (None, None) => {}
-            }
+            push_media_time_fragment(output, media.start, media.end);
             output.push('"');
 
             if let Some(w) = media.width {
@@ -3234,14 +3238,10 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
     }
 }
 
-fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
-    let media = parse_media_attrs(attrs);
-
-    // Build src with an optional media time fragment (#t=start,end), mirroring
-    // the HTML5 video tag.
-    output.push_str("<audio src=\"");
-    html_escape(output, target);
-    match (media.start, media.end) {
+/// Append the `#t=start,end` media time fragment shared by the HTML5 video
+/// and audio `src` attributes.
+fn push_media_time_fragment(output: &mut String, start: Option<&str>, end: Option<&str>) {
+    match (start, end) {
         (Some(s), Some(e)) => {
             output.push_str("#t=");
             html_escape(output, s);
@@ -3258,6 +3258,16 @@ fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
         }
         (None, None) => {}
     }
+}
+
+fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
+    let media = parse_media_attrs(attrs);
+
+    // Build src with an optional media time fragment (#t=start,end), mirroring
+    // the HTML5 video tag.
+    output.push_str("<audio src=\"");
+    html_escape(output, target);
+    push_media_time_fragment(output, media.start, media.end);
     output.push('"');
 
     // Asciidoctor emits the boolean attributes in this order: autoplay, loop,
@@ -4397,6 +4407,25 @@ mod tests {
     }
 
     #[test]
+    fn test_video_and_stem_block_title() {
+        // `.Title` before a video renders inside the videoblock, before the
+        // content div (mirrors audio); it must not leak into the next block.
+        let html = to_html(".VideoTitle\nvideo::cast.mp4[]\n\nafter\n");
+        assert!(html.contains(
+            "<div class=\"videoblock\">\n<div class=\"title\">VideoTitle</div>\n<div class=\"content\">"
+        ));
+        assert!(html.contains("<div class=\"paragraph\">\n<p>after</p>"));
+        assert!(!html.contains("<div class=\"paragraph\">\n<div class=\"title\">"));
+
+        // Same rule for a stem block.
+        let html = to_html(":stem:\n\n.StemTitle\n[stem]\n++++\nx^2\n++++\n\nafter\n");
+        assert!(html.contains(
+            "<div class=\"stemblock\">\n<div class=\"title\">StemTitle</div>\n<div class=\"content\">"
+        ));
+        assert!(!html.contains("<div class=\"paragraph\">\n<div class=\"title\">"));
+    }
+
+    #[test]
     fn test_video_attrs_html() {
         let html = to_html("video::video.mp4[width=640,height=480,poster=preview.jpg]");
         assert!(html.contains("<video src=\"video.mp4\" width=\"640\" height=\"480\" poster=\"preview.jpg\" controls>"));
@@ -5144,6 +5173,48 @@ mod tests {
         assert!(html.contains("alt=\"A beautiful sunset\""));
         assert!(!html.contains("width="));
         assert!(!html.contains("height="));
+    }
+
+    #[test]
+    fn test_block_image_figure_caption() {
+        // Titled image: caption AFTER the content div, "Figure N. " prefix,
+        // shared counter bumped only by titled images. The title must NOT
+        // leak into the following block (regression guard).
+        let html = to_html(
+            ".First\nimage::a.png[]\n\nimage::b.png[]\n\n.Second *bold*\nimage::c.png[]\n\nplain\n",
+        );
+        assert!(html.contains(
+            "<img src=\"a.png\" alt=\"a\">\n</div>\n<div class=\"title\">Figure 1. First</div>\n</div>"
+        ));
+        assert!(html.contains(
+            "<div class=\"title\">Figure 2. Second <strong>bold</strong></div>"
+        ));
+        assert!(html.contains("<div class=\"paragraph\">\n<p>plain</p>"));
+        assert!(!html.contains("<div class=\"paragraph\">\n<div class=\"title\">"));
+
+        // Unset figure-caption: bare title, no number, no counter bump.
+        let html = to_html(":figure-caption!:\n\n.Bare\nimage::a.png[]");
+        assert!(html.contains("<div class=\"title\">Bare</div>"));
+        assert!(!html.contains("Figure"));
+
+        // Custom label via :figure-caption:.
+        let html = to_html(":figure-caption: Рисунок\n\n.Custom\nimage::a.png[]");
+        assert!(html.contains("<div class=\"title\">Рисунок 1. Custom</div>"));
+
+        // caption= macro attr: verbatim prefix, no counter bump; the next
+        // titled image is still Figure 1.
+        let html = to_html(
+            ".Titled\nimage::a.png[caption=\"My Caption. \"]\n\n.Counted\nimage::b.png[]",
+        );
+        assert!(html.contains("<div class=\"title\">My Caption. Titled</div>"));
+        assert!(html.contains("<div class=\"title\">Figure 1. Counted</div>"));
+
+        // title= macro attr creates the caption and wins over `.Title`;
+        // named-only attrs leave alt auto-generated from the filename.
+        let html = to_html(".DotTitle\nimage::b.png[title=AttrTitle]");
+        assert!(html.contains("alt=\"b\""));
+        assert!(html.contains("<div class=\"title\">Figure 1. AttrTitle</div>"));
+        assert!(!html.contains("DotTitle"));
     }
 
     #[test]
