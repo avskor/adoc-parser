@@ -20,6 +20,10 @@ pub struct Parser<'a> {
     pending_event: Option<Event<'a>>,
     subs_stack: Vec<SubstitutionSet>,
     pending_subs: Option<SubstitutionSet>,
+    /// Whether `:experimental:` is currently set, enabling the `kbd:`/`btn:`/
+    /// `menu:` UI macros for inline parsing. Tracked from `Event::Attribute`
+    /// so body text reflects the attribute state up to that point.
+    experimental: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -30,6 +34,7 @@ impl<'a> Parser<'a> {
             pending_event: None,
             subs_stack: Vec::new(),
             pending_subs: None,
+            experimental: false,
         }
     }
 
@@ -96,6 +101,15 @@ impl<'a> Iterator for Parser<'a> {
             Event::End(TagEnd::LiteralParagraph) => {
                 self.subs_stack.pop();
             }
+            Event::Attribute { name, .. } => {
+                // Track :experimental: so kbd:/btn:/menu: are recognized only
+                // when it is set (Asciidoctor leaves them literal otherwise).
+                match name.as_ref() {
+                    "experimental" => self.experimental = true,
+                    "!experimental" | "experimental!" => self.experimental = false,
+                    _ => {}
+                }
+            }
             _ => {}
         }
 
@@ -134,7 +148,7 @@ impl<'a> Iterator for Parser<'a> {
                         }
                     }
 
-                    let events = InlineParser::parse_str_with_subs(&combined, subs);
+                    let events = InlineParser::parse_str_with_subs_experimental(&combined, subs, self.experimental);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap().into_static())
                     } else {
@@ -148,7 +162,7 @@ impl<'a> Iterator for Parser<'a> {
                 } else {
                     // Single-line: zero-copy path
                     self.pending_event = next;
-                    let events = InlineParser::parse_str_with_subs(s, subs);
+                    let events = InlineParser::parse_str_with_subs_experimental(s, subs, self.experimental);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap())
                     } else {
