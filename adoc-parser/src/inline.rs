@@ -1382,13 +1382,16 @@ impl<'a> InlineState<'a> {
 
             self.flush_text(*text_start, start_pos, events);
             let link_attrs = parse_link_attrs(bracket_content);
+            // Asciidoctor marks a link macro with no explicit text as "bare"
+            // (the visible text defaults to the target) → class="bare".
+            let is_bare = link_attrs.text.is_empty();
             events.push(Event::Start(Tag::Link {
                 url: Cow::Borrowed(url),
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
-                is_bare: false,
+                is_bare,
             }));
-            if link_attrs.text.is_empty() {
+            if is_bare {
                 events.push(Event::Text(Cow::Borrowed(url)));
             } else {
                 self.push_macro_label(link_attrs.text, events);
@@ -1422,13 +1425,14 @@ impl<'a> InlineState<'a> {
         self.flush_text(*text_start, start_pos, events);
 
         let link_attrs = parse_link_attrs(bracket_content);
+        let is_bare = link_attrs.text.is_empty();
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
             window: link_attrs.window.map(Cow::Borrowed),
             nofollow: link_attrs.nofollow,
-            is_bare: false,
+            is_bare,
         }));
-        if link_attrs.text.is_empty() {
+        if is_bare {
             events.push(Event::Text(Cow::Borrowed(url)));
         } else {
             self.push_macro_label(link_attrs.text, events);
@@ -1723,13 +1727,14 @@ impl<'a> InlineState<'a> {
         {
             let bracket_content = &after_url[1..close];
             let link_attrs = parse_link_attrs(bracket_content);
+            let is_bare = link_attrs.text.is_empty();
             events.push(Event::Start(Tag::Link {
                 url: Cow::Borrowed(url),
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
-                is_bare: false,
+                is_bare,
             }));
-            if link_attrs.text.is_empty() {
+            if is_bare {
                 events.push(Event::Text(Cow::Borrowed(url)));
             } else {
                 self.push_macro_label(link_attrs.text, events);
@@ -2537,15 +2542,52 @@ mod tests {
             Event::End(TagEnd::CrossReference),
         ]);
         // Bare URL display (no explicit text) is emitted raw — apostrophes in the
-        // URL itself are not curled.
+        // URL itself are not curled. Empty text → the link is "bare".
         assert_eq!(parse("link:a'b.html[]"), vec![
             Event::Start(Tag::Link {
                 url: Cow::Borrowed("a'b.html"),
                 window: None,
                 nofollow: false,
-                is_bare: false,
+                is_bare: true,
             }),
             Event::Text(Cow::Borrowed("a'b.html")),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_link_macro_empty_text_is_bare() {
+        // link: macro with no explicit text → bare (class="bare"), text = target.
+        assert_eq!(parse("link:LICENSE[]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("LICENSE"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+            }),
+            Event::Text(Cow::Borrowed("LICENSE")),
+            Event::End(TagEnd::Link),
+        ]);
+        // Explicit text → not bare, even if it equals the target.
+        assert_eq!(parse("link:LICENSE[LICENSE]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("LICENSE"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+            }),
+            Event::Text(Cow::Borrowed("LICENSE")),
+            Event::End(TagEnd::Link),
+        ]);
+        // Bare URL with empty bracket text → bare.
+        assert_eq!(parse("https://example.org[]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://example.org"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+            }),
+            Event::Text(Cow::Borrowed("https://example.org")),
             Event::End(TagEnd::Link),
         ]);
     }

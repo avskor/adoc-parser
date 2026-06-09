@@ -3410,9 +3410,24 @@ mod tests {
     }
 
     #[test]
+    fn test_link_macro_empty_text_bare_class() {
+        // link:target[] with no explicit text → class="bare" (matches Asciidoctor).
+        let html = to_html("See link:LICENSE[] for details.");
+        assert!(html.contains("<a href=\"LICENSE\" class=\"bare\">LICENSE</a>"), "{html}");
+        // Explicit text → no bare class.
+        let html2 = to_html("See link:LICENSE[the license].");
+        assert!(html2.contains("<a href=\"LICENSE\">the license</a>"), "{html2}");
+        // mailto with empty text is NOT bare.
+        let html3 = to_html("mailto:user@example.com[]");
+        assert!(html3.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"), "{html3}");
+        assert!(!html3.contains("class=\"bare\""), "{html3}");
+    }
+
+    #[test]
     fn test_link_passthrough_url_empty_text() {
+        // Empty link text → the link is "bare" (matches Asciidoctor).
         let html = to_html("link:++https://example.com/my page++[]");
-        assert!(html.contains("<a href=\"https://example.com/my page\">https://example.com/my page</a>"));
+        assert!(html.contains("<a href=\"https://example.com/my page\" class=\"bare\">https://example.com/my page</a>"));
     }
 
     #[test]
