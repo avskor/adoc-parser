@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-12) — Фаза 3: header-style колонка таблицы (`h`) → `<th>`
+
+`fix/attr-ref-link-macro` УЖЕ смержена в master (`12065d0`, origin == master, дерево чистое;
+session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из master
+`12065d0` ПЕРЕД правкой (был stale от `e41ad48`). Baseline подтверждён: Identical 180, Different
+164, Errors 0. Выбор по near-miss на 180: 1-diff (verse `// end::para[]`, kbd `+`, listing-blocks
+subs) рискованны/архитектурны. Из 2-diff: counter.adoc (препроцессор раскрывает счётчик в локальную
+мапу, но плоский `{index}` резолвит рендерер из document_attrs — отложен, архитектурный) vs width.adoc
+(`th` vs `td`). Выбран **width.adoc** — инфраструктура (`CellStyle::Header` уже парсится) есть.
+
+### Ветка `fix/table-header-column-style` (от master; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): тег `<th>` ⇔ (thead-строка) ИЛИ
+  (стиль ячейки = Header, т.е. явная `h|` ИЛИ `h`-колонка `[cols="25h,..."]`). Обёртка
+  `<p class="tableblock">` ⇔ НЕ thead. Т.е. header-ROW ячейка = `<th>текст</th>` БЕЗ обёртки;
+  body `h`-ячейка = `<th><p class="tableblock">текст</p></th>` С обёрткой. Стиль ячейки побеждает
+  стиль колонки. footer (`tsec==:foot`) с `h` → тоже `<th>` + обёртка.
+- **Корень**: путь A эмиссии таблиц (`block.rs::scan_table`, 2 пути: A нативный `|===` / B
+  `scan_delimited_format_table` csv/dsv) проверял `cell.style == CellStyle::Header`, но `cell.style`
+  из спеки ЯЧЕЙКИ; `h` в `25h` — стиль КОЛОНКИ. `resolve_align` доносил от колонки только
+  halign/valign, не стиль. Вдобавок маршрутизация `cell.style==Header → TableHeaderCell` латентно
+  неверна для body `h|` (давала `<th>` БЕЗ обёртки).
+- **Фикс** (2 файла):
+  - `block.rs::scan_table` (~стр 1327): новый клоужер `resolve_style` — промоутит Default→Header
+    ТОЛЬКО для `h`-колонки (стили `a/e/m/s/l` НЕ наследуются — отдельный риск, особенно `a`/AsciiDoc
+    меняет обёртку). Маршрутизация в `emit_row_cells!` изменена: `if cell.style==Header ||
+    $is_header_section` → `if $is_header_section` (thead→`TableHeaderCell` с `cell.style`),
+    body/foot → `TableCell` с резолвнутым `style`.
+  - `adoc-html/lib.rs`: `start_table_cell` (~1518) — `use_th = is_header || matches!(style, Header)`;
+    обёртка `<p>` в body-ветке для Header уже шла через `_`-arm (1541). `TagEnd::TableCell` (~2300) —
+    закрытие `</th>` если style==Header, иначе `</td>`.
+  - +1 тест `test_table_header_column_style_html` (`[cols="1h,1"]`: col0→wrapped th, col1→td);
+    ОБНОВЛЁН `test_table_cell_style_header_in_body_html` — кодировал НЕВЕРНОЕ старое (`<th>x</th>`
+    без обёртки), теперь `<th><p class="tableblock">x</p></th>` + `<tbody>` (верифицировано пробой).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 313→315,
+  parser 444, parsing_lab **233/233** — нет `h`-таблиц в фикстурах, маршрутизация body-Header не
+  затронула ASG; html_output 35).
+- Корпус `compare_full.py` (release): **Identical 180→182 (+2), Different 162, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `12065d0`): **7 файлов**
+  изменили вывод — **2 FLIP→IDENTICAL** (width.adoc, spec/ROOT/paragraph.adoc), **0 регрессий**.
+  5 changed-still-different УЛУЧШЕНЫ: число `<th>` теперь точно = asciidoctor (subs-group-table 7→12,
+  image-position 3→6, strong-span 0→10, format-column-content 6→8, pass-macro body `h|`-ячейки
+  верны 3/3). pass-macro позиц. счётчик +3 — АРТЕФАКТ выравнивания (semantically верно: `h|`-ячейки
+  совпали с asciidoctor; файл Different из-за ненаследуемого `m`-стиля колонок, вне рамок фикса).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/table-header-column-style` (только по запросу).
+- Смежный (НЕ flip в одиночку): наследование `m`/`e`/`s`/`a`/`l` стиля колонки на ячейки
+  (`[cols="1m,3m"]`→`<code>`). `m`/`e`/`s` дали бы flip'ы, но `a`/AsciiDoc меняет обёртку (`{}`) и
+  требует nested-парсинга содержимого ячейки → рискованно. Отложено сознательно.
+- Чистые flip-кандидаты (near-miss на 182): counter.adoc (`{counter:index}`→`{index}` не резолвится —
+  препроцессор пишет в локальную мапу, рендерер берёт из document_attrs; архитектурный мостик), 1-diff
+  (рискованные): verse `// end::para[]`, kbd `+`-разделитель, listing-blocks `[subs="+attributes"]`.
+  Архитектурные (отложены): inline-anchor reftext из dt-терма (lexicon), nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`Event::Code`),
+  link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `12065d0`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM); позиц. счётчик может «врать» при сдвиге
+  (см. pass-macro). LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-11) — Фаза 3: `{attr-ref}[text]` как ссылка (subs-order)
 
 `fix/paragraph-trailing-whitespace` УЖЕ смержена+запушена в master (`e41ad48`, origin == master,
