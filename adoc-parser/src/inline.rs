@@ -36,7 +36,16 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                     copied_up_to = i;
                     continue;
                 }
-                Some(("\u{2014}", 2)) // em-dash (bare --)
+                // word--word → em-dash + zero-width space (Asciidoctor `(\w)--(?=\w)`).
+                // Anywhere else (` --flag`, trailing `S.S.T.--`, `--` at line edges)
+                // Asciidoctor does not form an em-dash; leave this `-` literal and advance
+                // one byte so the next `-` is reconsidered on its own (e.g. `-->` → `-→`).
+                let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+                if i > 0 && is_word(bytes[i - 1]) && i + 2 < len && is_word(bytes[i + 2]) {
+                    Some(("\u{2014}\u{200B}", 2)) // em-dash + ZWSP
+                } else {
+                    None
+                }
             }
             // -> right arrow (but not -->)
             b'-' if i + 1 < len && bytes[i + 1] == b'>'
@@ -2666,10 +2675,25 @@ mod tests {
 
     #[test]
     fn test_typographic_bare_em_dash() {
+        // Asciidoctor `(\w)--(?=\w)` → em-dash followed by a zero-width space.
         let events = parse("hello--world");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
+            Event::Text(Cow::Owned("hello\u{2014}\u{200B}world".to_string())),
         ]);
+    }
+
+    #[test]
+    fn test_typographic_dash_not_between_words() {
+        // ` --flag` (space before, letter after) is not `\w--\w`: keep `--`.
+        let events = parse("run --dir=x");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("run --dir=x"))]);
+    }
+
+    #[test]
+    fn test_typographic_trailing_dashes() {
+        // Trailing `--` (no following word char) stays literal.
+        let events = parse("For S.S.T.--");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("For S.S.T.--"))]);
     }
 
     #[test]
@@ -3738,11 +3762,11 @@ mod tests {
 
     #[test]
     fn test_arrow_triple_not_replaced() {
-        // --> should NOT be replaced (triple sequence)
-        // -- becomes em-dash, > stays
+        // `-->` is not an em-dash: the leading `-` stays literal and the trailing
+        // `->` becomes a right arrow, matching Asciidoctor (`A --> B` → `A -→ B`).
         let events = parse("A --> B");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("A \u{2014}> B".to_string())),
+            Event::Text(Cow::Owned("A -\u{2192} B".to_string())),
         ]);
     }
 
@@ -3776,9 +3800,10 @@ mod tests {
 
     #[test]
     fn test_arrow_em_dash_bare_still_works() {
+        // word--word → em-dash + zero-width space (Asciidoctor `(\w)--(?=\w)`).
         let events = parse("hello--world");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
+            Event::Text(Cow::Owned("hello\u{2014}\u{200B}world".to_string())),
         ]);
     }
 

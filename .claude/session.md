@@ -1,6 +1,50 @@
 # Session context
 
-## Последняя сессия (2026-05-31) — Фаза 3: escaped preprocessor-директива
+## Последняя сессия (2026-05-31, поздняя) — Фаза 3: em-dash границы + ZWSP
+
+Кандидат по near-miss на baseline 149. Кластер «типографика» (п.37) — самый безопасный/выгодный
+из чистых flip (link через `{attr-ref}` оказался архитектурным — порядок подстановок, отложен).
+
+### Ветка `fix/em-dash-boundaries` (от master; НЕ закоммичено)
+- **Корень**: `inline.rs::apply_typographic_replacements`, bare-`--` арм (строка ~28). Старое
+  правило: любой `--` (кроме space-space) → `—`. Это (а) слишком агрессивно (` --dir`→`—dir`,
+  `S.S.T.--`→`—`; Asciidoctor оставляет `--`) и (б) без ZWSP (`cases--such`→`—` вместо `—​`).
+- **Фикс**: bare `--` → `—`+ZWSP (`—​`) ТОЛЬКО для `\w--\w` (Asciidoctor `(\w)--(?=\w)`,
+  `\w`=ASCII alnum+`_`). Иначе → **`None`** (не `Some("--",2)`!): первый `-` остаётся литералом,
+  второй переразбирается → `-->` корректно даёт `-→` (asciidoctor: `A --> B`→`A -→ B`, проверено).
+  Space-space правило (` -- `→thin-em-thin) не тронуто.
+- Тесты: обновлены 2 дубля bare-em-dash (2668 и 3801) под ZWSP; `test_arrow_triple_not_replaced`
+  (3763) `A --> B`: было `—>`, стало `-→`. +2 теста (`run --dir`, `For S.S.T.--` остаются).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 435→437).
+- Корпус `compare_full.py` (release): **Identical 149→153 (+4), Different 191, Errors 0**.
+  Flip: asg/README (`--dir`), dedication (`S.S.T.--`), continuation (ZWSP), callouts (бонус).
+  0 регрессий (Different −4 ровно; по регэкспу Asciidoctor наш фикс строго консервативнее).
+- Побочно резолвило em-dash-diff в revision-attribute-entries (2→1) и image-format (3→2) —
+  не флипнули (остался alt-баг / link-баг соответственно).
+- TODO.md: baseline 149→153; п.37 помечен `[~]` с под-пунктом em-dash `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/em-dash-boundaries` (только по запросу).
+- Следующие чистые flip-кандидаты (по near-miss на 153):
+  - **alt двойная кавычка** (п.18): `<img alt=""...">` — author-attribute-entries (1 diff),
+    version-label (2 diff, оба alt), revision-attribute-entries (1 diff, теперь только alt).
+    Корень — значение alt в image-макросе сохраняет кавычки. Флипнет ~3 файла. САМЫЙ ЧИСТЫЙ.
+  - **xref-id норм.** `#Substitutions`→`#_substitutions` (positional-and-named-attributes, 1 diff).
+  - **link `^`+rel/target** (литеральные `link:`/URL): description, xref-text-and-style (по 2 diff).
+    NB: `{attr-ref}[text]` (icons-font/auto-ids/custom-ids/ROOT-index) — архитектурно (порядок subs).
+  - **`// end::para[]` утечка** тег-региона (verse.adoc, 1 diff) + literal.adoc (`// end::indent[]`).
+  - **апостроф в тексте макроса** (остаток п.37): xref/link display-текст не проходит REPLACEMENTS.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). near-miss: `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM). LSP для навигации, context7 MCP для доков.
+
+---
+
+## Сессия (2026-05-31) — Фаза 3: escaped preprocessor-директива
 
 Второй кандидат сессии. Выбор по `/tmp/nearmiss.py`: escaped-директива `\ifdef`/`\endif`
 (admonitions, inter-document-xref — «1 diff away»). Preprocessor-слой (не inline).
