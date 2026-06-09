@@ -1242,16 +1242,30 @@ impl HtmlRenderer {
             AdmonitionKind::Caution => "Caution",
         };
         let adm_class = format!("admonitionblock {}", label.to_lowercase());
+        // A block-level [caption="…"] overrides the displayed label text (but not the
+        // admonitionblock class or icon kind, which always track the admonition type).
+        let caption = meta
+            .as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.as_ref()));
         output.push_str("<div");
         Self::write_meta_attrs(output, meta, &adm_class);
         output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n");
         if self.document_attrs.get("icons").is_some_and(|v| v == "font") {
             let icon_name = label.to_lowercase();
-            writeln!(output, "<i class=\"fa icon-{icon_name}\" title=\"{label}\"></i>")
-                .unwrap();
+            output.push_str("<i class=\"fa icon-");
+            output.push_str(&icon_name);
+            output.push_str("\" title=\"");
+            match caption {
+                Some(c) => html_escape(output, c),
+                None => output.push_str(label),
+            }
+            output.push_str("\"></i>\n");
         } else {
             output.push_str("<div class=\"title\">");
-            output.push_str(label);
+            match caption {
+                Some(c) => html_escape(output, c),
+                None => output.push_str(label),
+            }
             output.push_str("</div>\n");
         }
         output.push_str("</td>\n<td class=\"content\">\n");
@@ -4142,6 +4156,24 @@ mod tests {
         let html = to_html("[#w1.special]\nWARNING: Danger!");
         assert!(html.contains("id=\"w1\""));
         assert!(html.contains("admonitionblock warning special"));
+    }
+
+    #[test]
+    fn test_admonition_custom_caption() {
+        // A block-level caption overrides the label text but not the type class.
+        let html = to_html("[caption=\"Work in Progress\"]\nCAUTION: hi.");
+        assert!(html.contains("admonitionblock caution"), "type class kept. Got:\n{html}");
+        assert!(
+            html.contains("<div class=\"title\">Work in Progress</div>"),
+            "caption overrides label. Got:\n{html}"
+        );
+        assert!(!html.contains(">Caution<"), "default label suppressed. Got:\n{html}");
+        // Empty caption renders an empty title (matches Asciidoctor).
+        let empty = to_html("[caption=]\nNOTE: hi.");
+        assert!(empty.contains("<div class=\"title\"></div>"), "empty caption. Got:\n{empty}");
+        // Caption values are HTML-escaped (escaping discipline; stricter than Asciidoctor).
+        let esc = to_html("[caption=\"A & B\"]\nTIP: hi.");
+        assert!(esc.contains("A &amp; B"), "caption escaped. Got:\n{esc}");
     }
 
     #[test]
