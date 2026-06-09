@@ -1,5 +1,78 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-17) — Фаза 3: single-plus `+…+` как constrained-пара
+
+`fix/passthrough-inside-monospace` УЖЕ смержена в master (`1688344`, origin == master, дерево чистое;
+session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из ТЕКУЩЕГО
+чистого master `1688344` ПЕРЕД правкой. Baseline подтверждён: Identical 188, Different 156, Errors 0.
+near-miss на 188: 1-diff **keyboard-macro** (`` `+kbd:[key(+key)*]+` `` — многократно отложен как
+«фидли»), 2-diff counter (архитектурный), 4-diff user-index (escape-в-monospace). Разведка пробами
+показала, что keyboard-macro — ЧИСТЫЙ корень (constrained-правила single-plus), решён.
+
+### Ветка `fix/single-plus-passthrough-constrained` (от master `1688344`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами через файл, НЕ по памяти): single-plus passthrough
+  `+X+` — **constrained-пара** (как `*`/`_`/`` ` ``/`#`). (1) open `+` не после word-char: `C+a+b+`→
+  литерал, ` +a+`/`(+a+` ок; (2) контент первый символ не пробел: `+ a+`→литерал; (3) контент последний
+  символ не пробел; (4) close `+` не перед word-char и не часть `++`/`+++`: `+a+b+`→`a+b` (внутренний
+  `+` за ним `b` НЕ закрывает — поиск ПРОДОЛЖАЕТСЯ до хвостового `+`), `+a + b+`→`a + b`, `(+a+b+)`→`(a+b)`;
+  (5) нет валидного close → ведущий `+` остаётся литералом: `+a+b`→`+a+b`. Применяется и к
+  `` `+...+` `` (literal-monospace): backtick-constrained находит backtick→backtick, контент `+X+`
+  reparse'ится → single-plus с правильным закрывающим (`` `+kbd:[key(+key)*]+` ``→`<code>kbd:[key(+key)*]</code>`).
+- **Корень**: `inline.rs::try_single_plus_passthrough` брал ПЕРВЫЙ встречный `+` (не часть `++`) как
+  закрывающий, без проверки границ. Для `+kbd:[key(+key)*]+` это давал внутренний `+` на offset 9 →
+  `<code>kbd:[key(</code>...` каскад → `kbd:[key(key)*]+`.
+- **Фикс** (1 точка, ТОЛЬКО `inline.rs::try_single_plus_passthrough`): добавлены guard
+  `is_word_char_before(start_pos)` (open-граница) и `bytes[after_open]==b' '` (контент не с пробела);
+  close-loop теперь требует `!preceded_by_plus && !preceded_by_space && !followed_by_plus &&
+  !followed_by_word` (preceded_by_space = контент не кончается пробелом; followed_by_word = constrained-
+  close), и при невалидном кандидате ПРОДОЛЖАЕТ скан (а не сдаётся). Зеркалит `try_constrained`, но с
+  продолжающимся поиском (у quote-маркеров `find_closing_constrained` сдаётся на первом — отдельный
+  pre-existing баг с БОЛЬШИМ blast radius, НЕ трогал: `*a*b*`→`<strong>a*b</strong>` мы даём `*a*b*`).
+  +2 теста (`test_single_plus_passthrough_constrained` 5 кейсов, `test_monospace_passthrough_inner_plus`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 447→449, html 317,
+  parsing_lab **233/233** verified `--nocapture`). Правка в single-plus close-finder; ASG читает события
+  парсера, но кейсов `+a+b+` (внутренний `+`) в фикстурах нет → не задет.
+- Корпус `compare_full.py` (release): **Identical 188→189 (+1), Different 155, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `1688344`): **3 файла** изменили
+  вывод — **1 FLIP→IDENTICAL** (keyboard-macro.adoc), **0 регрессий**. 2 changed-still-different
+  УЛУЧШЕНЫ (raw-difflines vs asciidoctor): asciidoc-vs-markdown 406→404 (`Markdown + X` теперь верно),
+  outline 325→324 (`signifier + reference`, `section + doctype` теперь верно).
+
+### Обнажённый pre-existing баг (НЕ регрессия, отложен)
+- Trailing ` +` (space-plus) в **reparsed monospace-контенте** трактуется как hard-break → спурьезный
+  `<br>` вместо литерала. Верифицировано: `` `z +` `` даёт `<code>z<br></code>` и на ЧИСТОЙ БАЗЕ
+  (без single-plus) — **независим от моей правки**, она лишь обнажила его в случае `` `` + +`` ``
+  (база раньше поедала `+` через single-plus → `<code>  </code>`, теперь `+` выживает → `<br>`).
+  asciidoctor: `<code>z +</code>`. Виден в outline.adoc строка 390 `` `` + +`` ``. Корень — hard-break
+  детект в inline-reparse подстроки (а не end-of-source-line). Узкий, отдельный фикс.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/single-plus-passthrough-constrained` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые flip-кандидаты (near-miss на 189): **counter.adoc** (2-diff, `{counter:index}`→`{index}` —
+  АРХИТЕКТУРНЫЙ, счётчик в локальной мапе препроцессора, отложен). Неразведанный 4-diff:
+  **user-index.adoc** — escape `\indexterm2:[<primary>]` внутри monospace (asciidoctor: литерал
+  `indexterm2:[<primary>]`, `\` снят; мы парсим макрос). Корень — `\` перед макросом внутри `` ` ``
+  не подавляет макрос (handle_inline_escape / indexterm-парсинг).
+- Возможные расширения (НЕ нужны для флипов): (a) hard-break-в-reparsed-monospace (см. выше, обнажён
+  этой правкой — узкий); (b) quote-маркеры тоже должны продолжать поиск закрывающего
+  (`find_closing_constrained` — `*a*b*`→`<strong>a*b</strong>`; БОЛЬШОЙ blast radius, рискован).
+- Архитектурные (отложены): наследование `m`/`e`/`s` стиля колонки таблицы, nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`` `&#167;` ``→`Event::Code`),
+  inline-anchor reftext из dt-терма (lexicon), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ — shell экранирует `+`/backtick'и; heredoc `<<'EOF'` ок).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `1688344`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM, `convert_charrefs=True` → `&#8217;`≡`’`;
+  `style`-атрибут игнорится). LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-16) — Фаза 3: passthrough внутри monospace/quote (`` `++`++` ``)
 
 `fix/attr-ref-path-before-brackets` УЖЕ смержена в master (`a57aeda`, origin == master, дерево чистое;
