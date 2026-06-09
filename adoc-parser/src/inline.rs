@@ -138,12 +138,24 @@ impl InlineParser {
     }
 
     pub fn parse_str_with_subs<'a>(text: &'a str, subs: SubstitutionSet) -> Vec<Event<'a>> {
+        Self::parse_str_with_subs_experimental(text, subs, false)
+    }
+
+    /// Like [`parse_str_with_subs`], but enables the experimental UI macros
+    /// (`kbd:`/`btn:`/`menu:`) when `experimental` is true (the `:experimental:`
+    /// document attribute). When false they are left as literal text, matching
+    /// Asciidoctor's default.
+    pub fn parse_str_with_subs_experimental<'a>(
+        text: &'a str,
+        subs: SubstitutionSet,
+        experimental: bool,
+    ) -> Vec<Event<'a>> {
         if text.is_empty() {
             return vec![Event::Text(Cow::Borrowed(""))];
         }
 
         let mut events = Vec::new();
-        let mut parser = InlineState::new(text, subs);
+        let mut parser = InlineState::new(text, subs, experimental);
         parser.parse_inline(&mut events);
 
         if events.is_empty() {
@@ -158,11 +170,15 @@ struct InlineState<'a> {
     input: &'a str,
     pos: usize,
     subs: SubstitutionSet,
+    /// Whether the `:experimental:` document attribute is set, enabling the
+    /// `kbd:`/`btn:`/`menu:` UI macros. When false they are left as literal
+    /// text, matching Asciidoctor's default.
+    experimental: bool,
 }
 
 impl<'a> InlineState<'a> {
-    fn new(input: &'a str, subs: SubstitutionSet) -> Self {
-        Self { input, pos: 0, subs }
+    fn new(input: &'a str, subs: SubstitutionSet, experimental: bool) -> Self {
+        Self { input, pos: 0, subs, experimental }
     }
 
     fn remaining(&self) -> &'a str {
@@ -314,21 +330,29 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Keyboard macro: kbd:[keys] (MACROS)
+            // Keyboard macro: kbd:[keys] — experimental only; otherwise literal text.
             b'k' if has_macros && self.remaining().starts_with("kbd:") => {
-                if self.try_kbd_macro(events, text_start) {
-                    return true;
+                if self.experimental {
+                    if self.try_kbd_macro(events, text_start) {
+                        return true;
+                    }
+                    self.pos += 1;
+                } else {
+                    self.skip_disabled_ui_macro(4);
                 }
-                self.pos += 1;
                 true
             }
 
-            // Button macro: btn:[label] (MACROS)
+            // Button macro: btn:[label] — experimental only; otherwise literal text.
             b'b' if has_macros && self.remaining().starts_with("btn:") => {
-                if self.try_btn_macro(events, text_start) {
-                    return true;
+                if self.experimental {
+                    if self.try_btn_macro(events, text_start) {
+                        return true;
+                    }
+                    self.pos += 1;
+                } else {
+                    self.skip_disabled_ui_macro(4);
                 }
-                self.pos += 1;
                 true
             }
 
@@ -341,12 +365,16 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Menu macro (MACROS)
+            // Menu macro — experimental only; otherwise literal text.
             b'm' if has_macros && self.remaining().starts_with("menu:") => {
-                if self.try_menu_macro(events, text_start) {
-                    return true;
+                if self.experimental {
+                    if self.try_menu_macro(events, text_start) {
+                        return true;
+                    }
+                    self.pos += 1;
+                } else {
+                    self.skip_disabled_ui_macro(5);
                 }
-                self.pos += 1;
                 true
             }
 
@@ -916,7 +944,7 @@ impl<'a> InlineState<'a> {
             } else {
                 self.subs
             };
-            let mut inner_parser = InlineState::new(inner, inner_subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1036,7 +1064,7 @@ impl<'a> InlineState<'a> {
             } else {
                 self.subs
             };
-            let mut inner_parser = InlineState::new(inner, inner_subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1240,6 +1268,23 @@ impl<'a> InlineState<'a> {
         self.pos = new_pos;
         *text_start = self.pos;
         true
+    }
+
+    /// With the experimental UI macros disabled, advance past a `kbd:`/`btn:`/
+    /// `menu:` token so it stays in the surrounding text run as literal text
+    /// (matching Asciidoctor's default). Skipping past the `[...]` keeps the
+    /// custom-macro catch-all from re-scanning the token's interior and
+    /// misreading a fragment like `bd:[…]` as a custom macro. `prefix_len` is
+    /// the byte length of `kbd:`/`btn:`/`menu:` (colon included).
+    fn skip_disabled_ui_macro(&mut self, prefix_len: usize) {
+        let rest = &self.input[self.pos + prefix_len..];
+        if let Some(open) = rest.find('[')
+            && let Some(close) = rest[open + 1..].find(']')
+        {
+            self.pos += prefix_len + open + 1 + close + 1;
+        } else {
+            self.pos += prefix_len;
+        }
     }
 
     /// Parse a `<prefix>target[items]` bracket macro from the current position.
@@ -2302,7 +2347,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, inner_subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(end_tag));
@@ -2337,7 +2382,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, inner_subs);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(end_tag));
@@ -2382,7 +2427,7 @@ impl<'a> InlineState<'a> {
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Text(Cow::Borrowed(open_q)));
 
-        let mut inner_parser = InlineState::new(inner, self.subs);
+        let mut inner_parser = InlineState::new(inner, self.subs, self.experimental);
         inner_parser.parse_inline(events);
 
         events.push(Event::Text(Cow::Borrowed(close_q)));
@@ -2483,6 +2528,12 @@ mod tests {
 
     fn parse(text: &str) -> Vec<Event<'_>> {
         InlineParser::parse_str(text)
+    }
+
+    /// Parse with the experimental UI macros (`kbd:`/`btn:`/`menu:`) enabled,
+    /// as if `:experimental:` were set.
+    fn parse_experimental(text: &str) -> Vec<Event<'_>> {
+        InlineParser::parse_str_with_subs_experimental(text, SubstitutionSet::NORMAL, true)
     }
 
     #[test]
@@ -3450,7 +3501,7 @@ mod tests {
 
     #[test]
     fn test_kbd_macro() {
-        let events = parse("kbd:[Ctrl+C]");
+        let events = parse_experimental("kbd:[Ctrl+C]");
         assert_eq!(events, vec![
             Event::Start(Tag::Keyboard),
             Event::Text(Cow::Borrowed("Ctrl+C")),
@@ -3460,7 +3511,7 @@ mod tests {
 
     #[test]
     fn test_kbd_single_key() {
-        let events = parse("kbd:[F11]");
+        let events = parse_experimental("kbd:[F11]");
         assert_eq!(events, vec![
             Event::Start(Tag::Keyboard),
             Event::Text(Cow::Borrowed("F11")),
@@ -3470,7 +3521,7 @@ mod tests {
 
     #[test]
     fn test_kbd_in_sentence() {
-        let events = parse("Press kbd:[Ctrl+C] to copy");
+        let events = parse_experimental("Press kbd:[Ctrl+C] to copy");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("Press ")),
             Event::Start(Tag::Keyboard),
@@ -3482,7 +3533,7 @@ mod tests {
 
     #[test]
     fn test_btn_macro() {
-        let events = parse("btn:[OK]");
+        let events = parse_experimental("btn:[OK]");
         assert_eq!(events, vec![
             Event::Start(Tag::Button),
             Event::Text(Cow::Borrowed("OK")),
@@ -3492,7 +3543,7 @@ mod tests {
 
     #[test]
     fn test_menu_macro() {
-        let events = parse("menu:File[Save As]");
+        let events = parse_experimental("menu:File[Save As]");
         assert_eq!(events, vec![
             Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
             Event::Text(Cow::Borrowed("Save As")),
@@ -3502,7 +3553,7 @@ mod tests {
 
     #[test]
     fn test_menu_no_items() {
-        let events = parse("menu:File[]");
+        let events = parse_experimental("menu:File[]");
         assert_eq!(events, vec![
             Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
             Event::End(TagEnd::Menu),
@@ -3511,12 +3562,36 @@ mod tests {
 
     #[test]
     fn test_menu_with_submenus() {
-        let events = parse("menu:File[New > Document]");
+        let events = parse_experimental("menu:File[New > Document]");
         assert_eq!(events, vec![
             Event::Start(Tag::Menu { target: Cow::Borrowed("File") }),
             Event::Text(Cow::Borrowed("New > Document")),
             Event::End(TagEnd::Menu),
         ]);
+    }
+
+    #[test]
+    fn test_experimental_macros_literal_without_experimental() {
+        // Without :experimental:, kbd:/btn:/menu: are left as literal text
+        // (Asciidoctor's default). The whole token must survive verbatim — in
+        // particular it must not be misread as a custom inline macro.
+        assert_eq!(
+            parse("Press kbd:[Ctrl+C] now"),
+            vec![Event::Text(Cow::Borrowed("Press kbd:[Ctrl+C] now"))]
+        );
+        assert_eq!(
+            parse("Click btn:[OK]."),
+            vec![Event::Text(Cow::Borrowed("Click btn:[OK]."))]
+        );
+        assert_eq!(
+            parse("Select menu:File[Save]!"),
+            vec![Event::Text(Cow::Borrowed("Select menu:File[Save]!"))]
+        );
+        // Lowercase target/content must not slip into the custom-macro catch-all.
+        assert_eq!(
+            parse("menu:file[save]"),
+            vec![Event::Text(Cow::Borrowed("menu:file[save]"))]
+        );
     }
 
     // Icon macro tests

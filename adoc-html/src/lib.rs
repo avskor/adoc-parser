@@ -440,7 +440,12 @@ impl HtmlRenderer {
         // specialchars run, so an apostrophe in the value stays straight rather than
         // being curled by replacements. At top level / in normal paragraphs this is
         // NORMAL, so behavior there is unchanged.
-        let events = adoc_parser::InlineParser::parse_str_with_subs(value, self.current_subs());
+        let experimental = self.document_attrs.contains_key("experimental");
+        let events = adoc_parser::InlineParser::parse_str_with_subs_experimental(
+            value,
+            self.current_subs(),
+            experimental,
+        );
         // If inline parsing produced only a single Text event identical to the input,
         // there is no inline markup — just escape and output directly.
         if events.len() == 1
@@ -4071,25 +4076,42 @@ mod tests {
 
     #[test]
     fn test_kbd_single_key_html() {
-        let html = to_html("kbd:[F11]");
+        let html = to_html(":experimental:\n\nkbd:[F11]");
         assert_eq!(html, "<div class=\"paragraph\">\n<p><kbd>F11</kbd></p>\n</div>\n");
     }
 
     #[test]
+    fn test_ui_macros_literal_without_experimental_html() {
+        // Without :experimental:, kbd:/btn:/menu: render as literal text.
+        assert_eq!(
+            to_html("kbd:[F11]"),
+            "<div class=\"paragraph\">\n<p>kbd:[F11]</p>\n</div>\n"
+        );
+        assert_eq!(
+            to_html("btn:[OK]"),
+            "<div class=\"paragraph\">\n<p>btn:[OK]</p>\n</div>\n"
+        );
+        assert_eq!(
+            to_html("menu:File[Save]"),
+            "<div class=\"paragraph\">\n<p>menu:File[Save]</p>\n</div>\n"
+        );
+    }
+
+    #[test]
     fn test_kbd_combo_html() {
-        let html = to_html("kbd:[Ctrl+C]");
+        let html = to_html(":experimental:\n\nkbd:[Ctrl+C]");
         assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>C</kbd></span></p>\n</div>\n");
     }
 
     #[test]
     fn test_btn_html() {
-        let html = to_html("btn:[OK]");
+        let html = to_html(":experimental:\n\nbtn:[OK]");
         assert_eq!(html, "<div class=\"paragraph\">\n<p><b class=\"button\">OK</b></p>\n</div>\n");
     }
 
     #[test]
     fn test_menu_html() {
-        let html = to_html("menu:File[Save As]");
+        let html = to_html(":experimental:\n\nmenu:File[Save As]");
         assert_eq!(
             html,
             "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Save As</b></span></p>\n</div>\n"
@@ -4098,7 +4120,7 @@ mod tests {
 
     #[test]
     fn test_menu_no_items_html() {
-        let html = to_html("menu:File[]");
+        let html = to_html(":experimental:\n\nmenu:File[]");
         assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"menu\">File</span></p>\n</div>\n");
     }
 
@@ -4152,7 +4174,7 @@ mod tests {
 
     #[test]
     fn test_menu_submenus_html() {
-        let html = to_html("menu:File[New > Doc]");
+        let html = to_html(":experimental:\n\nmenu:File[New > Doc]");
         assert_eq!(
             html,
             "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"submenu\">New</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Doc</b></span></p>\n</div>\n"
@@ -5849,11 +5871,18 @@ mod tests {
 
     #[test]
     fn test_kbd_not_captured_as_custom() {
-        let html = to_html("kbd:[Ctrl+S]");
+        // With :experimental:, kbd: is a built-in macro — never a custom inline macro.
+        let html = to_html(":experimental:\n\nkbd:[Ctrl+S]");
         assert!(html.contains("<kbd>"),
             "kbd should remain a built-in macro, not custom. Got: {html}");
         assert!(!html.contains("custom-macro"),
             "kbd should not be treated as custom macro. Got: {html}");
+        // Without :experimental:, kbd: is literal text — still never a custom macro.
+        let literal = to_html("kbd:[Ctrl+S]");
+        assert!(literal.contains("kbd:[Ctrl+S]"),
+            "disabled kbd should remain literal. Got: {literal}");
+        assert!(!literal.contains("custom-macro"),
+            "disabled kbd should not be treated as custom macro. Got: {literal}");
     }
 
     #[test]

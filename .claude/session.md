@@ -1,5 +1,84 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-23) — Фаза 3: experimental UI-макросы (`kbd:`/`btn:`/`menu:`) за `:experimental:`
+
+`fix/revision-prefix-and-hardbreaks` УЖЕ смержена+запушена в master (`bddedb5`, origin == master,
+дерево чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран
+из ТЕКУЩЕГО чистого master `bddedb5` ПЕРЕД правкой. Baseline подтверждён: Identical 194, Different 150,
+Errors 0. near-miss: топ — revision-line-with-version-prefix (1-diff, `{docdate}` — дата-зависим, НЕ
+флипается). Остальные одиночные near-miss архитектурны/fiddly (pass/index nested-passthrough, stem/index
+MathJax, audio 2 корня, db-migration 2 корня). Сменил методику: **агрегировал ПЕРВЫЙ diff по каждому
+Different-файлу** (корень до позиционного каскада) → нашёл крупный чистый корень: text-truncation в
+subs/attributes-страницах = **experimental-макросы парсятся без `:experimental:`**.
+
+### Ветка `fix/gate-experimental-ui-macros` (от master `bddedb5`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами через ФАЙЛ): `kbd:`/`btn:`/`menu:` — experimental-
+  макросы, распознаются ТОЛЬКО при `:experimental:`. Без него — оставляются ЛИТЕРАЛОМ (`press kbd:[Enter]`
+  → `press kbd:[Enter]`). Мы парсили безусловно (вывод с/без `:experimental:` идентичен). Из 10 файлов
+  корпуса с этими макросами НИ ОДИН не имеет `:experimental:` (standalone-asciidoctor → все литералом;
+  keyboard-macro уже Identical — его kbd внутри `` `+...+` `` passthrough, asciidoctor даёт 0 `<kbd>`).
+- **Корень (слой!)**: распознавание макроса идёт в ПАРСЕРЕ (`inline.rs::handle_inline_macro`), который
+  НЕ знал document-атрибутов. Рендерер знает `document_attrs`, но макрос уже распознан раньше.
+- **Фикс** (3 файла): (1) `inline.rs` — поле `InlineState.experimental`; новый pub
+  `parse_str_with_subs_experimental(text,subs,experimental)` (`parse_str_with_subs` = обёртка `…,false`);
+  5 внутренних reparse `InlineState::new` наследуют `self.experimental`; 3 arm'а kbd/btn/menu гейтятся:
+  при ВКЛ — try_*_macro как раньше, при ВЫКЛ — хелпер `skip_disabled_ui_macro(prefix_len)` поглощает
+  весь токен `name:target[…]` как литерал. **КРИТИЧНО**: наивный гейтинг (`&& self.experimental` в guard)
+  ввёл бы баг — после `self.pos+=1` остаток (`bd:[…]`/`enu:File[…]`/lowercase `file[x]`) мисспарсится
+  catch-all'ом `try_custom_inline_macro` в `CustomInlineMacro`. Хелпер скипает через первую пару `[...]`.
+  (2) `parser.rs` — поле `Parser.experimental`, наблюдается из `Event::Attribute{name}` в `match &event`
+  (`experimental`→true, `!experimental`/`experimental!`→false; mid-document семантика сохранена — флаг
+  меняется по ходу), протянуто в обе точки inline-парсинга (multiline 137 + single 151). (3)
+  `adoc-html/lib.rs::render_inline_value` — передаёт `document_attrs.contains_key("experimental")`.
+- **Тесты**: обновлено 12 (7 inline kbd/btn/menu → хелпер `parse_experimental`; 5 html → `:experimental:`-
+  префикс, expected БЕЗ изменений — attribute-entry в embedded невидим), +2 guard (parser
+  `test_experimental_macros_literal_without_experimental` incl. lowercase-target catch-all; html
+  literal+not-custom; обновлён `test_kbd_not_captured_as_custom` под обе ветки). html-compat
+  `kbd-btn-menu.adoc` (УЖЕ содержит `:experimental:`!) валидирует рендеринг end-to-end.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 458, html 320,
+  parsing-lab **233/233** `--nocapture` — kbd/btn/menu в фикстурах нет; html-compat **70/70** incl.
+  `PASS: inline/kbd-btn-menu.adoc`).
+- Корпус `compare_full.py` (release): **Identical 194→198 (+4), Different 146, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `bddedb5`): **8 файлов** изменили
+  вывод — **4 FLIP→IDENTICAL** (unset-attributes, build-basic-block, paragraphs, ui), **0 регрессий**.
+  4 changed-still-different (attribute-entries, boolean-attributes, build-a-basic-table,
+  quotation-marks-and-apostrophes) — их kbd/btn/menu теперь литералом верно, Different по ДР. причинам
+  (author-header `<div class="details">`, контент таблиц/абзацев).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/gate-experimental-ui-macros` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- **Методика выбора кластера обновлена**: при исчерпании одиночных near-miss — агрегировать ПЕРВЫЙ diff
+  по Different-файлам (категория корня до каскада) inline-скриптом, переиспользующим `compare_full`
+  (`categorize_diff`/`normalize_html`/`get_body_content`). Топ-категории на 198: `attr_diff on <div>`
+  (≈29, в осн. author-header `<div class="details">` — pre-existing standalone, + реальный баг
+  `[quote, Имя]` утечка attribution в class у assign-id), `text_content_diff` (≈26), `tag_mismatch
+  (div vs p)` (14), `tag_mismatch (h1 vs div)` (14 — level-0 sect0 heading `<h1 class="sect0">` vs наш
+  `<div class="sect0"><h1>`, завязан на header/doctype=book), `col vs colgroup` (7 — структура `<colgroup>`).
+- Чистые near-miss на 198 (дата-зависимый revision-line-with-version-prefix `{docdate}` НЕ в счёт):
+  pass/index (6-diff, nested-passthrough), stem/index (6-diff, MathJax — архитектурный standalone),
+  special-section-numbers (10-diff, monospace в xref-тексте). Кандидат на разведку: **col/colgroup**
+  (7 файлов один корень — таблицы) или **assign-id** `[quote, attribution]` (реальный баг утечки в class).
+- Архитектурные/отложенные (без изменений): `{docdate}`/`{localdate}` (дата-зависим), counters в verbatim,
+  наследование `m`/`e`/`s` стиля колонки, nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`),
+  inline-monospace passthrough char-ref (`Event::Code`), inline-anchor reftext из dt-терма (lexicon),
+  link-role `class="external"`, trailing ` +` в reparsed monospace → `<br>`, level-0 sect0 heading,
+  doctype=book (`<body class="book">`, part/preface), author-header `<div class="details">`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ). Дамп событий парсера: throwaway `adoc-parser/examples/dump_events.rs` (создать → `cargo run
+  -p adoc-parser --example dump_events` → удалить; БЫСТРО различает баг парсера vs рендерера) — в этой
+  сессии так подтвердил, что `:experimental:` эмитится как `Event::Attribute` до body.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `bddedb5`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath>`. Сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится).
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-22) — Фаза 3: revnumber prefix-strip + `[%hardbreaks]`
 
 `fix/literal-paragraph-block-title` УЖЕ смержена+запушена в master (`5255036`, origin == master, дерево
