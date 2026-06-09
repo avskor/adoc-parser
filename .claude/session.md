@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-13) — Фаза 3: verbatim-параграф сохраняет `//`-комментарий
+
+`fix/table-header-column-style` УЖЕ смержена в master (`e1768d2`/`1280aa6`, дерево чистое; master
+впереди origin на 2 коммита — пуш НЕ делался, только по запросу; session.md прошлой сессии писалась
+ДО мержа — как всегда). `/tmp/adoc_base` пересобран из ТЕКУЩЕГО master `e1768d2` ПЕРЕД правкой (был
+stale от `12065d0`). Baseline подтверждён near-miss: Identical 182, 162 Different-файлов. Выбор
+кандидата: counter.adoc (2-diff) при разведке подтверждён АРХИТЕКТУРНЫМ (счётчик пишет в attrs
+препроцессора, рендерер берёт `{index}` из document_attrs, значение МЕНЯЕТСЯ по документу — чистого
+моста нет; отложен). Выбран **verse `// end::para[]`** (1-diff) — при пробах оказался ШИРЕ и ЧИЩЕ:
+общее правило verbatim-комментариев, корень общий с literal.adoc.
+
+### Ветка `fix/verbatim-paragraph-comment` (от master; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): строки verbatim-параграфов
+  читаются СЫРЫМИ → `//`-комментарии внутри СОХРАНЯЮТСЯ как контент. keep-set = **verse, literal,
+  listing, source** (рендерятся в `<pre>`). STRIP-set (комментарий вырезается): нормальный, quote,
+  example, sidebar, admonition, **pass** (pass — raw, но комментарий стрипает!). Delimited verbatim-
+  блоки (`....`/`----`/`____`) у нас УЖЕ работали верно (пробы подтвердили) — баг ТОЛЬКО в verbatim-
+  ПАРАГРАФАХ (стиль без делимитеров). Отступной literal-параграф тоже сохраняет col-0 комментарий
+  (asciidoctor вообще продолжает literal-параграф на flush-тексте до пустой строки — НЕ реализовывал,
+  только комментарий, узко).
+- **Корень**: `block.rs::scan_paragraph` (цикл чтения `para_lines`, ~1645) безусловно ломался на
+  `is_line_comment` → verbatim-стиль доходил до match'а уже без комментарной строки; `scan_literal_
+  paragraph` (~1880) ломался на любой неотступной строке, включая col-0 комментарий.
+- **Фикс** (2 точки, ТОЛЬКО `block.rs`):
+  - `scan_paragraph`: перед циклом флаг `verbatim_paragraph` = `pending_block_attrs.is_some_and(|a|
+    matches!(a.block_style_kind(), Some("verse"|"literal"|"listing")) || a.is_source_block())`;
+    условие в цикле `scanner::is_line_comment(line)` → `(!verbatim_paragraph && is_line_comment(line))`.
+    (Первая строка scan_paragraph НИКОГДА не комментарий — block-level comment-handling в
+    `scan_block_containers` идёт раньше; комментарий только как continuation.)
+  - `scan_literal_paragraph`: разбит break — `if is_blank break;` затем `if !starts_with(' '/'\t')
+    && !is_line_comment(line) break;`. Включение col-0 комментария делает min_indent=0 → лидирующий
+    пробел контента сохраняется (совпадает с asciidoctor; нормализатор всё равно стрипает leading ws).
+  - +1 тест `test_verbatim_paragraph_keeps_line_comment` (verse+отступной literal СОХРАНЯЮТ
+    `// end::...`; нормальный параграф СТРИПАЕТ — regression guard; через `events.contains`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 444→445,
+  html 315, parsing_lab **233/233** — правка только в paragraph-сканере, ASG-кейсы не задеты).
+- Корпус `compare_full.py` (release): **Identical 182→184 (+2), Different 160, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `e1768d2`): **4 файла**
+  изменили вывод — **2 FLIP→IDENTICAL** (verse.adoc, literal.adoc), **0 регрессий**. 2 changed-still-
+  different УЛУЧШЕНЫ: block.adoc 8→7, listing.adoc 25→24 diff-строк (verbatim-комментарий теперь
+  верен, Different по др. причинам).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/verbatim-paragraph-comment` (только по запросу).
+  NB: master впереди origin на 2 коммита (table-header-column-style) — пуш тоже не делался.
+- Чистые flip-кандидаты (near-miss на 184): **kbd `+`-разделитель** `kbd:[key(+key)*]` (1-diff,
+  passthrough `+...+` ест внутренний `+` — фидли), **listing-blocks.adoc** (1-diff в демонстрационном
+  `------` listing с `[subs="+attributes"]` — verbatim-нюанс, надо смотреть полный diff),
+  **inline-anchor reftext из dt-терма** (`[[id]]term::` → `<<id>>`=текст терма; lexicon, ~14 ссылок,
+  БОЛЬШЕ по объёму). Отложены архитектурные: counter.adoc (`{counter:index}`→`{index}`, значение
+  меняется по документу), nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace
+  passthrough char-ref (`Event::Code`), link-role `class="external"`.
+- Возможный остаток ЭТОГО фикса (НЕ нужен для флипов): literal-параграф продолжается на flush-тексте
+  до пустой строки (asciidoctor); я реализовал только продолжение на комментарии (узко, без риска).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `e1768d2`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM); нормализатор стрипает leading ws у
+  text-узлов. LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-12) — Фаза 3: header-style колонка таблицы (`h`) → `<th>`
 
 `fix/attr-ref-link-macro` УЖЕ смержена в master (`12065d0`, origin == master, дерево чистое;

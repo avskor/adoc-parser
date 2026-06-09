@@ -1642,6 +1642,17 @@ impl<'a> BlockScanner<'a> {
         let title_events = self.take_pending_block_title();
         let mut para_lines: Vec<&'a str> = Vec::new();
 
+        // Verbatim paragraph styles (verse/literal/listing/source) preserve line
+        // comments as content (Asciidoctor reads their lines raw), unlike normal/
+        // quote/example/sidebar/pass paragraphs which strip them.
+        let verbatim_paragraph = self
+            .pending_block_attrs
+            .as_ref()
+            .is_some_and(|a| {
+                matches!(a.block_style_kind(), Some("verse" | "literal" | "listing"))
+                    || a.is_source_block()
+            });
+
         while let Some(line) = self.current_line() {
             if scanner::is_blank(line)
                 || scanner::strip_any_section_marker(line).is_some()
@@ -1660,7 +1671,7 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_attribute_entry(line).is_some()
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_block_title(line).is_some()
-                || scanner::is_line_comment(line)
+                || (!verbatim_paragraph && scanner::is_line_comment(line))
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_callout_list_item(line).is_some()
                 || scanner::is_list_continuation(line)
@@ -1867,7 +1878,16 @@ impl<'a> BlockScanner<'a> {
         let mut lines: Vec<&'a str> = Vec::new();
 
         while let Some(line) = self.current_line() {
-            if scanner::is_blank(line) || (!line.starts_with(' ') && !line.starts_with('\t')) {
+            if scanner::is_blank(line) {
+                break;
+            }
+            // A line comment continuing an indented literal paragraph is kept as
+            // content (verbatim), matching Asciidoctor; any other non-indented
+            // line terminates the paragraph.
+            if !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !scanner::is_line_comment(line)
+            {
                 break;
             }
             lines.push(line);
@@ -3085,6 +3105,33 @@ mod tests {
             Event::Text(Cow::Borrowed("Hello.")),
             Event::End(TagEnd::Paragraph),
         ]);
+    }
+
+    #[test]
+    fn test_verbatim_paragraph_keeps_line_comment() {
+        // Verse paragraph: a trailing comment line is kept as content
+        // (Asciidoctor reads verbatim paragraph lines raw).
+        let events: Vec<_> = BlockScanner::new("[verse]\nThe fog comes\n// end::para[]").collect();
+        assert!(
+            events.contains(&Event::Text(Cow::Borrowed("// end::para[]"))),
+            "verse paragraph should keep comment as content: {events:?}"
+        );
+
+        // Indented literal paragraph: a col-0 comment continuation is kept.
+        let events: Vec<_> = BlockScanner::new(" ~/secure/vault/defops\n// end::indent[]").collect();
+        assert!(
+            events.contains(&Event::Text(Cow::Borrowed("// end::indent[]"))),
+            "literal paragraph should keep comment as content: {events:?}"
+        );
+
+        // Regression guard: a normal paragraph still strips comments.
+        let events: Vec<_> = BlockScanner::new("Just text.\n// a comment").collect();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::Text(t) if t.contains("comment"))),
+            "normal paragraph must strip comment: {events:?}"
+        );
     }
 
     #[test]
