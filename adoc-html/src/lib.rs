@@ -1740,7 +1740,7 @@ impl HtmlRenderer {
             DelimitedBlockKind::Listing => {
                 self.delimited_block_stack.push((*kind, false));
                 output.push_str("<div");
-                Self::write_meta_attrs(output, meta, "listingblock");
+                Self::write_meta_attrs(output, &Self::strip_block_style(meta), "listingblock");
                 output.push_str(">\n");
                 self.emit_pending_block_title(output);
                 output.push_str("<div class=\"content\">\n<pre>");
@@ -1748,7 +1748,7 @@ impl HtmlRenderer {
             DelimitedBlockKind::Literal => {
                 self.delimited_block_stack.push((*kind, false));
                 output.push_str("<div");
-                Self::write_meta_attrs(output, meta, "literalblock");
+                Self::write_meta_attrs(output, &Self::strip_block_style(meta), "literalblock");
                 output.push_str(">\n");
                 self.emit_pending_block_title(output);
                 output.push_str("<div class=\"content\">\n<pre>");
@@ -2532,6 +2532,18 @@ impl HtmlRenderer {
     /// `default_class` is the base class (e.g. "sect", "listingblock").
     /// If no metadata and default_class is non-empty, writes ` class="default_class"`.
     /// Roles from metadata are appended to the class list.
+    /// Verbatim blocks (literal/listing) derive their CSS class from the block
+    /// context alone. An unrecognized block style (e.g. `[plantuml]`, `[ditaa]`)
+    /// is dropped from the class, matching Asciidoctor — only id and roles
+    /// survive. Styles that carry meaning (`source` → SourceBlock path,
+    /// `listing`/`literal` → context) are resolved before reaching this arm.
+    fn strip_block_style(meta: &Option<BlockMeta>) -> Option<BlockMeta> {
+        meta.clone().map(|mut m| {
+            m.style = None;
+            m
+        })
+    }
+
     fn write_meta_attrs(output: &mut String, meta: &Option<BlockMeta>, default_class: &str) {
         if let Some(m) = meta
             && let Some(ref id) = m.id
@@ -4903,6 +4915,24 @@ mod tests {
     fn test_literal_paragraph_subs_normal() {
         let html = to_html("[subs=normal]\n  literal *bold*");
         assert!(html.contains("<strong>bold</strong>"), "subs=normal on literal paragraph should enable inline parsing. Got: {html}");
+    }
+
+    #[test]
+    fn test_verbatim_block_unknown_style_dropped_from_class() {
+        // An unrecognized block style (e.g. [plantuml] with no diagram extension)
+        // is dropped from the verbatim block class, matching Asciidoctor: a literal
+        // block stays `literalblock`, a listing block stays `listingblock`. Roles
+        // applied alongside the style must still survive.
+        let lit = to_html("[plantuml]\n....\n@startuml\n....");
+        assert!(lit.contains("class=\"literalblock\""), "unknown style must not leak into literal class. Got: {lit}");
+        assert!(!lit.contains("plantuml"), "plantuml style must be dropped. Got: {lit}");
+
+        let listing = to_html("[plantuml]\n----\ncode\n----");
+        assert!(listing.contains("class=\"listingblock\""), "unknown style must not leak into listing class. Got: {listing}");
+        assert!(!listing.contains("plantuml"), "plantuml style must be dropped. Got: {listing}");
+
+        let with_role = to_html("[plantuml.diagram]\n....\nx\n....");
+        assert!(with_role.contains("class=\"literalblock diagram\""), "role must survive while style is dropped. Got: {with_role}");
     }
 
     #[test]
