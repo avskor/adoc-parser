@@ -1,6 +1,60 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-3) — Фаза 3: xref fallback `[id]` + bibliography reftext
+## Последняя сессия (2026-06-09, поздняя-4) — Фаза 3: REPLACEMENTS в тексте макроса (остаток п.37)
+
+xref-fallback-bracketed-id уже смержена в master (`8db12ea`, origin == master). Выбран следующий
+чистый flip по near-miss на 165 — кластер «апостроф в тексте макроса» (scope, subs/index — по
+1-diff; span-cells — 2-diff, оба апострофа в `xref:[label]`).
+
+### Ветка `fix/macro-text-replacements` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано чтением subs-порядка, НЕ по памяти): подстановки идут
+  specialchars→quotes→attributes→**replacements**→**macros**→post_replacements. Replacements
+  выполняется ДО macros, на ВСЕЙ строке (включая текст внутри `[...]`), поэтому к моменту обработки
+  link/xref-макроса апостроф/дефис/стрелки в `[label]` уже сконвертированы. URL/target (фолбэк,
+  когда `[...]` пуст) НЕ курлится — бэйр-URL защищён как macro-вывод.
+- **Корень**: `inline.rs` — display-текст макроса эмитился сырым `Event::Text(Cow::Borrowed(display))`,
+  минуя REPLACEMENTS (которые `flush_text` применяет к обычному тексту через `apply_typographic_replacements`).
+- **Фикс**: новый хелпер `push_macro_label(&self, text: &'a str, events)` (зеркалит REPLACEMENTS-
+  ветку `flush_text`). Применён к **явному** label в 6 точках: `try_link_macro` (++url++ и link:),
+  `try_mailto_macro`, autolink-с-текстом (`https://u[text]`), `try_xref_macro` (`xref:t[label]`),
+  `try_cross_reference` (`<<id,label>>`). Паттерн: `if text.is_empty() { push raw url } else
+  { push_macro_label }`; для xref — `match label { Some(Borrowed)=>push_macro_label, Some(o)=>raw,
+  None=>raw target }`. +1 тест `test_macro_label_replacements` (link/xref/`<<>>` курлят апостроф;
+  бэйр-URL `link:a'b.html[]` остаётся сырым).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 439→440, html 306).
+- Корпус `compare_full.py` (release): **Identical 165→168 (+3), Different 176, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` из master vs new): **11 файлов** изменили
+  вывод; **3 FLIP→IDENTICAL** (subs/index, span-cells, scope), **0 регрессий** (0 Identical→Different),
+  8 остались Different по НЕ-апостроф причинам (CONTRIBUTING, README, add-cells-and-rows, align-by-
+  cell/column, build-a-basic-table, duplicate-cells, format-cell-content — все table-доки с
+  `xref:[cell's...]` + `class="bare"`/др.; апостроф в них стал верным). TODO.md: baseline 165→168.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/macro-text-replacements` (только по запросу).
+- Следующие чистые flip-кандидаты (по near-miss на 168):
+  - **inline-anchor reftext из dt-терма** `[[id]]term:: ...` → `<<id>>` = текст терма (lexicon.adoc,
+    ~14 ссылок; родственно bibliography, но захват текста терма в парсере — БОЛЬШЕ по объёму).
+  - **custom caption на админишене** `[caption="Work in Progress"]` → caption вместо дефолтного
+    «Caution» (glossary.adoc, 1-diff).
+  - **неизвестный verbatim-style → class** `[plantuml]` на literal-блоке (`literalblock plantuml`
+    вместо `literalblock`; monitoring.adoc, 1-diff — остаток п.40-смежное).
+  - **kbd `+`-разделитель** `kbd:[key(+key)*]` → мы даём `kbd:[key(key)*]+` (keyboard-macro, 1-diff).
+  - **`§`/bare char-ref** сохранять как сущность (title-links — остаток п.15).
+  - **`// end::para[]` утечка** тег-региона (verse, literal).
+- Архитектурные (отложены): nested-форматирование/`{attr}` в тексте макроса (полный inline-проход),
+  `{attr-ref}[text]` (порядок subs), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (нужен base-бинарь в `/tmp/adoc_base` — копировать ДО изменений). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM) — `’`/`&#8217;` нормализуются. LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-3) — Фаза 3: xref fallback `[id]` + bibliography reftext
 
 link-blank-window-caret УЖЕ смержена+запушена в master (`2e53399`, origin == master). Удалены
 устаревшие локальные ветки image-alt-quotes / xref-id-normalization. Выбран следующий чистый
