@@ -506,9 +506,9 @@ impl HtmlRenderer {
                         target.push_str("<span class=\"hll\">");
                         self.source_line_highlighted = true;
                     }
-                    html_escape_text(target, &text);
+                    html_escape_text(target, &rstrip_line_trailing_ws(&text));
                 } else {
-                    output.push_str(&text);
+                    output.push_str(&rstrip_line_trailing_ws(&text));
                 }
             }
             Event::InlinePassthrough(text) => {
@@ -532,6 +532,14 @@ impl HtmlRenderer {
                     } else {
                         output
                     };
+                    // Asciidoctor rstrips every source line: trailing spaces/tabs
+                    // on the line just rendered are dropped before the line break.
+                    // This path covers verbatim blocks (source/listing), where each
+                    // line arrives as a separate Text + SoftBreak. Normal paragraphs
+                    // are combined into one multi-line Text by the parser and handled
+                    // in the Text arm via `rstrip_line_trailing_ws`.
+                    let keep = target.trim_end_matches([' ', '\t']).len();
+                    target.truncate(keep);
                     if self.source_line_highlighted {
                         target.push_str("</span>");
                         self.source_line_highlighted = false;
@@ -3173,6 +3181,33 @@ fn html_escape_text(output: &mut String, text: &str) {
             _ => output.push(ch),
         }
     }
+}
+
+/// Drop spaces/tabs that immediately precede a newline. The parser combines a
+/// multi-line paragraph into one Text event with embedded `\n` line breaks;
+/// Asciidoctor rstrips every source line, so trailing whitespace before each
+/// break must not survive. Whitespace at the very end (no trailing `\n`) is
+/// left intact — it may sit mid-line before an inline element, not at a break.
+/// Borrows when there is nothing to strip (no allocation in the common case).
+fn rstrip_line_trailing_ws(text: &str) -> CowStr<'_> {
+    let has_ws_before_nl = text
+        .as_bytes()
+        .windows(2)
+        .any(|w| matches!(w[0], b' ' | b'\t') && w[1] == b'\n');
+    if !has_ws_before_nl {
+        return CowStr::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for segment in text.split_inclusive('\n') {
+        match segment.strip_suffix('\n') {
+            Some(line) => {
+                out.push_str(line.trim_end_matches([' ', '\t']));
+                out.push('\n');
+            }
+            None => out.push_str(segment),
+        }
+    }
+    CowStr::Owned(out)
 }
 
 /// Emit a single HTML attribute ` name="value"` with the value HTML-escaped.
@@ -5831,6 +5866,30 @@ mod tests {
         let input = "= Book Title\n:doctype: book\n\ntype={doctype}";
         let html = to_html(input);
         assert!(html.contains("type=book"), "doctype should be 'book'. Got: {html}");
+    }
+
+    #[test]
+    fn test_paragraph_trailing_whitespace_stripped_before_softbreak() {
+        // Asciidoctor rstrips every source line: trailing spaces/tabs before a
+        // soft line break are dropped. A leading-space line is preserved, and a
+        // trailing ` +` hard break still renders <br>.
+        let html = to_html("First line.  \nSecond\twith tab\t\nThird.");
+        assert!(html.contains("First line.\nSecond\twith tab\nThird."),
+            "trailing ws before \\n must be stripped. Got: {html:?}");
+        assert!(!html.contains("First line.  \n") && !html.contains("tab\t\n"),
+            "no trailing ws should survive before \\n. Got: {html:?}");
+
+        let hb = to_html("alpha +\nbeta.");
+        assert!(hb.contains("alpha<br>\nbeta."), "hard break preserved. Got: {hb:?}");
+    }
+
+    #[test]
+    fn test_listing_block_trailing_whitespace_stripped() {
+        // Verbatim blocks arrive as separate Text + SoftBreak events; trailing
+        // whitespace before each interior line break is stripped too.
+        let html = to_html("----\nfirst.  \nsecond.\n----");
+        assert!(html.contains("first.\nsecond."),
+            "listing interior line ws must be stripped. Got: {html:?}");
     }
 
 }

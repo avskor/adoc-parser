@@ -1,6 +1,79 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-9) — Фаза 3: `table-caption` document-атрибут
+## Последняя сессия (2026-06-09, поздняя-10) — Фаза 3: trailing whitespace строк параграфа
+
+`fix/table-caption-doc-attr` УЖЕ смержена в master (`759771c`, origin == master, дерево чистое;
+session.md прошлой сессии писалась ДО мержа). `/tmp/adoc_base` пересобран из master `759771c`
+ПЕРЕД правкой (был stale c37bcf6). Baseline подтверждён: Identical 173, Different 171, Errors 0.
+
+Кандидат из плана (merge attr-блоков) при разведке распался на ДВА независимых бага, ни один не
+даёт чистый флип: (1) `cols="N*"` repeat-синтаксис не парсится в colgroup рендерера
+(`parse_col_widths`, adoc-html:2391 — trailing-digits от `"3*"` пусто → 1 col); НО compare_full.py
+ИГНОРИРУЕТ `style`-атрибут (строки 15/29-31) → ширины невидимы, важно только КОЛИЧЕСТВО `<col>`;
+файлы с `N*` (align-by-column и др.) Different по куче др. причин (`pass:q` макрос, softbreak) —
+0 флипов. (2) merge attr-блоков (block.rs:480 безусловное присваивание `pending_block_attrs`) —
+тоже не флипает customize-title-label (Antora-include не резолвится). ОБА отложены.
+
+Вместо них выбран чистый кластер по near-miss: trailing-whitespace перед softbreak (_responses +
+http-api-design, по 2 diff, ОДИН корень → 2 флипа).
+
+### Ветка `fix/paragraph-trailing-whitespace` (от master; НЕ закоммичено)
+- **Правило** (верифицировано пробами): Asciidoctor rstrip'ит КАЖДУЮ исходную строку — trailing
+  spaces/tabs не доходят до HTML (и перед softbreak в многострочном параграфе, и в listing/verse,
+  и на однострочном `==  `→`==`). Hard-break ` +` сохраняется.
+- **Слой КРИТИЧЕН**: ASG (parsing-lab, 233 кейса) СОХРАНЯЕТ trailing-ws в Text-узле (`Text("==  ")`,
+  `Text("*  ")` — block/section + block/list isolated-marker). compat-тест (parsing_lab.rs:217)
+  читает события `Parser` НАПРЯМУЮ → правка в block.rs/parser.rs ломает 2 ASG-кейса (проверено:
+  первая попытка `para_lines.push(line.trim_end())` в block.rs дала 231/233). Обрезка — концерн
+  ТОЛЬКО HTML-рендеринга (adoc-html ASG-тест не использует).
+- **Корень потока**: parser.rs (104-161) при многострочном параграфе склеивает Text+SoftBreak+Text
+  в ОДНУ строку с встроенными `\n` и кормит InlineParser → `\n` остаётся ВНУТРИ `Event::Text`,
+  SoftBreak-arm рендерера НЕ вызывается. Verbatim (source/listing, без inline-парсинга) — раздельные
+  Text+SoftBreak.
+- **Фикс** (`adoc-html/lib.rs`, только этот файл, +61/-2): (1) хелпер `rstrip_line_trailing_ws`
+  (рядом с `html_escape_text`, ~3186): CowStr, borrow без аллокации если нет ws-перед-`\n`; через
+  `split_inclusive('\n')` дропает spaces/tabs перед каждым `\n`, последний сегмент без `\n` НЕ
+  трогает (mid-line перед inline-элементом). Применён в Text-arm (496-512) к обеим веткам
+  (`html_escape_text` + `push_str`). (2) В SoftBreak-arm (526) перед `</span>`/`\n` —
+  `trim_end_matches([' ','\t'])` (для verbatim). +2 html-теста.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 311→313,
+  parser 443, parsing_lab 233/233 — ASG сохранён!, html_output 35).
+- Корпус `compare_full.py` (release): **Identical 173→175 (+2), Different 169, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `759771c`): **6 файлов**
+  изменили вывод — **2 FLIP→IDENTICAL** (_responses, http-api-design), **0 регрессий**. 4 (sdr-004,
+  db-migration, cookbook java/index + root) улучшены (−2 diff каждый), Different по др. причинам.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/paragraph-trailing-whitespace` (только по запросу).
+- Остаток ЭТОГО фикса (мелкий, НЕ нужен для флипов): trailing-ws на ПОСЛЕДНЕЙ строке verbatim-блока
+  (перед `</pre>`, без `\n`) не обрезается — требует lookahead на End(DelimitedBlock).
+- Отложенные в этой сессии (реальные баги, но не чистые флипы в одиночку):
+  - **`cols="N*"` в colgroup рендерера** (`adoc-html parse_col_widths`): repeat-multiplier не
+    раскрывается → 1 col вместо N. Парсер (`parse_col_spec`/`table_col_specs`) `N*` УМЕЕТ — баг
+    только в рендерере. Затрагивает align-by-column, striping, data-format и др. (все Different по
+    др. причинам тоже). NB: compare_full игнорит `style`, важно КОЛИЧЕСТВО `<col>`.
+  - **merge attr-блоков** (`block.rs:480`): `[caption=]`+`.title`+`[cols=]` → второй `[...]` затирает
+    первый (`pending_block_attrs = Some(...)` безусловно). Asciidoctor мёржит. Затрагивает
+    customize-title-label (но там ещё Antora-include не резолвится → не флипнет).
+- Прочие near-miss на 175 (1-diff, рискованные): verse `// end::para[]` (comment-handling
+  блок-сканера в verbatim), keyboard-macro kbd `+`-разделитель (passthrough `+...+`),
+  listing-blocks `[subs="+attributes"]`. 2-diff: counter.adoc (`{counter:index}` не пишет в attrs),
+  width.adoc (`th` vs `td` header-row в include + autowidth `~`).
+- Архитектурные (отложены): inline-anchor reftext из dt-терма (lexicon), `{attr-ref}[text]` (subs-
+  порядок), link-role `class="external"`, inline-monospace passthrough char-ref (`Event::Code`).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `759771c`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`; capped по числу diff). Сравнение семантическое (DOM), `style`-атрибут
+  ИГНОРИТСЯ. LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-9) — Фаза 3: `table-caption` document-атрибут
 
 link-macro-empty-bare смержена в master (`c37bcf6`, origin == master, дерево чистое). `/tmp/adoc_base`
 пересобран из master `c37bcf6` ПЕРЕД правкой. Baseline корпуса подтверждён: Identical 172, Different
