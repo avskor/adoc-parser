@@ -1058,7 +1058,9 @@ impl HtmlRenderer {
             Tag::LiteralParagraph => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "literalblock");
-                output.push_str(">\n<div class=\"content\">\n<pre>");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<div class=\"content\">\n<pre>");
             }
             Tag::DelimitedBlock { kind } => self.start_delimited_block(output, kind, &meta),
             Tag::SourceBlock { language } => self.start_source_block(output, language, &meta),
@@ -5087,6 +5089,26 @@ mod tests {
     fn test_literal_paragraph_subs_normal() {
         let html = to_html("[subs=normal]\n  literal *bold*");
         assert!(html.contains("<strong>bold</strong>"), "subs=normal on literal paragraph should enable inline parsing. Got: {html}");
+    }
+
+    #[test]
+    fn test_literal_paragraph_block_title() {
+        // A `.Title` preceding an indented literal paragraph must render a
+        // `<div class="title">` inside the literalblock, exactly like a
+        // delimited literal block (`....`) does. Previously the inline
+        // LiteralParagraph arm forgot to flush the pending block title.
+        let html = to_html(".TOC enabled via the CLI\n $ asciidoctor -a toc my-document.adoc");
+        assert!(
+            html.contains("<div class=\"literalblock\">\n<div class=\"title\">TOC enabled via the CLI</div>\n<div class=\"content\">"),
+            "indented literal paragraph must emit its block title. Got: {html}"
+        );
+        // Regression guard: a literal paragraph without a title must not gain a
+        // spurious empty title div.
+        let no_title = to_html(" $ plain literal");
+        assert!(
+            !no_title.contains("class=\"title\""),
+            "title-less literal paragraph must not emit a title div. Got: {no_title}"
+        );
     }
 
     #[test]

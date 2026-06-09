@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-21) — Фаза 3: `.Title` на отступном literal-параграфе
+
+`fix/counter-bare-reference` УЖЕ смержена+запушена в master (`f9324ea`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `f9324ea` ПЕРЕД правкой. Baseline подтверждён: Identical 192, Different 152,
+Errors 0. near-miss: два 6-diff (pass/index — фидли `` `+pass:[]+` ``; stem/index — MathJax,
+архитектурный), special-section-numbers (10-diff, monospace в тексте xref — архитектурный),
+toc/index (11-diff), revision-line-кандидаты (11-13 diff). Разведка пробами: toc/index дал ЧИСТЫЙ
+узкий корень. Взят toc/index.
+
+### Ветка `fix/literal-paragraph-block-title` (от master `f9324ea`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробой через файл): `.Title` перед ОТСТУПНЫМ
+  literal-параграфом (` $ ...`) рендерится как `<div class="literalblock"><div class="title">Title</div>
+  <div class="content"><pre>...</pre></div></div>` — ровно как у delimited literal (`....`).
+- **Корень** (важно — слой!): ПАРСЕР эмитит `BlockTitle` ВЕРНО (проверено дампом событий через
+  throwaway `examples/dump_events.rs`: `Start(BlockTitle)`/`Text`/`End(BlockTitle)` идут перед
+  `Start(LiteralParagraph)`). Баг в РЕНДЕРЕРЕ: inline-arm `Tag::LiteralParagraph` (`adoc-html/lib.rs`
+  ~1058) пушил `<div class="literalblock">\n<div class="content">\n<pre>` ОДНОЙ строкой, НЕ вызывая
+  `emit_pending_block_title` → захваченный в `block_title_inner_html` заголовок терялся. Delimited
+  `DelimitedBlockKind::Literal` (~1793) его зовёт — отсюда расхождение delimited vs indented.
+- **Фикс** (1 точка, ТОЛЬКО `adoc-html/lib.rs`): разбит push на `">\n"` + `self.emit_pending_block_title(output)`
+  + `"<div class=\"content\">\n<pre>"` — дословно зеркалит delimited-literal-arm. Title-less параграф
+  не затронут (`emit_pending_block_title` — no-op при `block_title_inner_html=None`). +1 тест
+  `test_literal_paragraph_block_title` (флип toc-кейс + regression guard: title-less не даёт `class="title"`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 317→318, parser 456,
+  parsing_lab **233/233** — правка только в рендерере, ASG читает события парсера напрямую, не задет).
+- Корпус `compare_full.py` (release): **Identical 192→193 (+1), Different 151, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `f9324ea`): **1 файл** изменил
+  вывод — **1 FLIP→IDENTICAL** (toc/index.adoc, verified 0 diffs len 140==140), **0 регрессий**,
+  **0 changed-still-different**. Идеально узко.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/literal-paragraph-block-title` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 193: **pass/index** (6-diff, `` `+pass:[]+` ``→пустой `<code></code>`,
+  asciidoctor; мы `<code>pass:[]</code>` — фидли pass-в-single-plus-в-monospace, единичный),
+  **stem/index** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone). Неразведанные/сложные:
+  **special-section-numbers** (10-diff — `<code>` внутри текста xref-ссылки `<a>`: архитектурный
+  «nested-форматирование в тексте ссылки», QUOTES в `[label]`), **reference-revision-line** (11-diff —
+  `{revnumber}` даёт `v8.3` вместо `8.3` (не снят префикс `v`) + `[%hardbreaks]` блок склеивает строки
+  через `\n` вместо `<br>`; 2 корня), **revision-line-with-version-prefix** (13-diff — revision-строка
+  `LPR55, {docdate}:...` не парсится в revnumber/revdate/revremark: мы кладём всё в revdate; нужен
+  парсер revision-строки с обдиркой non-digit префикса до `\d+`, version-label localization).
+- Архитектурные/отложенные (без изменений): counters.adoc (счётчики в verbatim-блоках), наследование
+  `m`/`e`/`s` стиля колонки таблицы, nested-форматирование в ТЕКСТЕ ссылки (QUOTES в `[label]`),
+  inline-monospace passthrough char-ref (`` `&#167;` ``→`Event::Code`), inline-anchor reftext из
+  dt-терма (lexicon), link-role `class="external"`, trailing ` +` в reparsed monospace → спурьезный `<br>`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ). Дамп событий парсера: throwaway `adoc-parser/examples/dump_events.rs`
+  (`Parser::new(input)` + цикл `println!("{:?}", ev)`, `cargo run -p adoc-parser --example dump_events`,
+  удалить после) — БЫСТРО различает баг парсера vs рендерера.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `f9324ea`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath>`. Сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится).
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-20) — Фаза 3: голая ссылка `{name}` на счётчик в document-order
 
 `fix/section-id-dots-and-dedup` УЖЕ смержена+запушена в master (`3d8db5c`, origin == master, дерево
