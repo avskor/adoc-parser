@@ -511,6 +511,7 @@ fn increment_counter_value(current: &str) -> String {
 fn try_parse_counter(
     input: &str,
     attributes: &mut HashMap<String, String>,
+    counter_names: &mut HashSet<String>,
 ) -> Option<(String, usize)> {
     if !input.starts_with('{') {
         return None;
@@ -552,6 +553,9 @@ fn try_parse_counter(
     };
 
     attributes.insert(name.to_string(), new_value.clone());
+    // Remember this name is a counter so later bare `{name}` references can be
+    // expanded in document order (see `try_expand_counter_reference`).
+    counter_names.insert(name.to_string());
 
     let replacement = if silent {
         String::new()
@@ -562,11 +566,43 @@ fn try_parse_counter(
     Some((replacement, close + 1)) // +1 for the closing '}'
 }
 
-/// Expand all `{counter:…}` / `{counter2:…}` macros in a single line.
+/// Try to expand a bare `{name}` reference when `name` is a counter that has
+/// already been defined earlier in the document.
 ///
-/// Returns `None` when the line contains no counters (zero-allocation fast path).
-fn expand_counters(line: &str, attributes: &mut HashMap<String, String>) -> Option<String> {
-    if !line.contains("{counter") {
+/// A counter is a document attribute whose value changes in document order, so
+/// a bare reference must be resolved here (in the line-based preprocessor, which
+/// walks the source top-to-bottom) rather than later from the flat attribute
+/// snapshot the renderer uses — by render time only the counter's final value
+/// would survive. Only names registered in `counter_names` are touched, so
+/// ordinary attribute references are left for the normal substitution pipeline.
+///
+/// `input[0]` must be `'{'`. Returns `(value, bytes_consumed)` on success.
+fn try_expand_counter_reference(
+    input: &str,
+    attributes: &HashMap<String, String>,
+    counter_names: &HashSet<String>,
+) -> Option<(String, usize)> {
+    let close = input.find('}')?;
+    let name = &input[1..close];
+    if !counter_names.contains(name) {
+        return None;
+    }
+    let value = attributes.get(name)?;
+    Some((value.clone(), close + 1)) // +1 for the closing '}'
+}
+
+/// Expand all `{counter:…}` / `{counter2:…}` macros — and bare `{name}`
+/// references to counters defined earlier — in a single line.
+///
+/// Returns `None` when there is nothing to expand (zero-allocation fast path).
+fn expand_counters(
+    line: &str,
+    attributes: &mut HashMap<String, String>,
+    counter_names: &mut HashSet<String>,
+) -> Option<String> {
+    // Fast path: a counter macro can appear anywhere, but a bare reference only
+    // matters once at least one counter has been registered.
+    if !line.contains("{counter") && (counter_names.is_empty() || !line.contains('{')) {
         return None;
     }
 
@@ -576,9 +612,19 @@ fn expand_counters(line: &str, attributes: &mut HashMap<String, String>) -> Opti
 
     while !rest.is_empty() {
         if rest.starts_with("{counter")
-            && let Some((replacement, consumed)) = try_parse_counter(rest, attributes)
+            && let Some((replacement, consumed)) =
+                try_parse_counter(rest, attributes, counter_names)
         {
             result.push_str(&replacement);
+            rest = &rest[consumed..];
+            any_expanded = true;
+            continue;
+        }
+        if rest.starts_with('{')
+            && let Some((value, consumed)) =
+                try_expand_counter_reference(rest, attributes, counter_names)
+        {
+            result.push_str(&value);
             rest = &rest[consumed..];
             any_expanded = true;
             continue;
@@ -615,6 +661,7 @@ pub fn preprocess_with_attrs(
             attributes.insert(k.clone(), val.clone());
         }
     }
+    let mut counter_names: HashSet<String> = HashSet::new();
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut output = String::with_capacity(input.len());
     let mut lines_iter = input.lines();
@@ -675,7 +722,7 @@ pub fn preprocess_with_attrs(
         }
 
         // 5a. Expand counters
-        let effective_line: Cow<'_, str> = match expand_counters(line, &mut attributes) {
+        let effective_line: Cow<'_, str> = match expand_counters(line, &mut attributes, &mut counter_names) {
             Some(expanded) => Cow::Owned(expanded),
             None => Cow::Borrowed(line),
         };
@@ -1838,13 +1885,13 @@ end::foo[]";
     fn test_expand_counter_basic() {
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("Item {counter:item}", &mut attrs),
+            expand_counters("Item {counter:item}", &mut attrs, &mut HashSet::new()),
             Some("Item 1".to_string())
         );
         assert_eq!(attrs.get("item").unwrap(), "1");
 
         assert_eq!(
-            expand_counters("Item {counter:item}", &mut attrs),
+            expand_counters("Item {counter:item}", &mut attrs, &mut HashSet::new()),
             Some("Item 2".to_string())
         );
         assert_eq!(attrs.get("item").unwrap(), "2");
@@ -1854,11 +1901,11 @@ end::foo[]";
     fn test_expand_counter_with_seed() {
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("{counter:n:5}", &mut attrs),
+            expand_counters("{counter:n:5}", &mut attrs, &mut HashSet::new()),
             Some("5".to_string())
         );
         assert_eq!(
-            expand_counters("{counter:n}", &mut attrs),
+            expand_counters("{counter:n}", &mut attrs, &mut HashSet::new()),
             Some("6".to_string())
         );
     }
@@ -1867,15 +1914,15 @@ end::foo[]";
     fn test_expand_counter_alpha_seed() {
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("{counter:a:A}", &mut attrs),
+            expand_counters("{counter:a:A}", &mut attrs, &mut HashSet::new()),
             Some("A".to_string())
         );
         assert_eq!(
-            expand_counters("{counter:a}", &mut attrs),
+            expand_counters("{counter:a}", &mut attrs, &mut HashSet::new()),
             Some("B".to_string())
         );
         assert_eq!(
-            expand_counters("{counter:a}", &mut attrs),
+            expand_counters("{counter:a}", &mut attrs, &mut HashSet::new()),
             Some("C".to_string())
         );
     }
@@ -1884,13 +1931,13 @@ end::foo[]";
     fn test_expand_counter2_silent() {
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("{counter2:x}", &mut attrs),
+            expand_counters("{counter2:x}", &mut attrs, &mut HashSet::new()),
             Some(String::new())
         );
         assert_eq!(attrs.get("x").unwrap(), "1");
 
         assert_eq!(
-            expand_counters("{counter2:x}", &mut attrs),
+            expand_counters("{counter2:x}", &mut attrs, &mut HashSet::new()),
             Some(String::new())
         );
         assert_eq!(attrs.get("x").unwrap(), "2");
@@ -1900,7 +1947,7 @@ end::foo[]";
     fn test_expand_multiple_counters() {
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("{counter:a} and {counter:b}", &mut attrs),
+            expand_counters("{counter:a} and {counter:b}", &mut attrs, &mut HashSet::new()),
             Some("1 and 1".to_string())
         );
     }
@@ -1908,20 +1955,20 @@ end::foo[]";
     #[test]
     fn test_expand_no_counters() {
         let mut attrs = HashMap::new();
-        assert_eq!(expand_counters("plain line", &mut attrs), None);
+        assert_eq!(expand_counters("plain line", &mut attrs, &mut HashSet::new()), None);
     }
 
     #[test]
     fn test_expand_counter_empty_name() {
         let mut attrs = HashMap::new();
         // Empty name → not a valid counter, returned as-is
-        assert_eq!(expand_counters("{counter:}", &mut attrs), None);
+        assert_eq!(expand_counters("{counter:}", &mut attrs, &mut HashSet::new()), None);
     }
 
     #[test]
     fn test_expand_counter_unclosed() {
         let mut attrs = HashMap::new();
-        assert_eq!(expand_counters("{counter:name", &mut attrs), None);
+        assert_eq!(expand_counters("{counter:name", &mut attrs, &mut HashSet::new()), None);
     }
 
     #[test]
@@ -1930,7 +1977,7 @@ end::foo[]";
         // around the counter (e.g. `bytes[i] as char` on UTF-8 continuation bytes).
         let mut attrs = HashMap::new();
         assert_eq!(
-            expand_counters("Пункт {counter:n} — раздел 日本語", &mut attrs),
+            expand_counters("Пункт {counter:n} — раздел 日本語", &mut attrs, &mut HashSet::new()),
             Some("Пункт 1 — раздел 日本語".to_string())
         );
     }
@@ -1951,6 +1998,36 @@ end::foo[]";
         let input = "{counter2:n}\nValue is not shown";
         let result = preprocess(input);
         assert_eq!(result, "\nValue is not shown");
+    }
+
+    #[test]
+    fn test_preprocess_bare_counter_reference() {
+        // A bare `{name}` reference to a counter resolves to the counter's
+        // current value in document order (counter.adoc's `Description of PX-{index}`).
+        let input = "\
+{counter2:index:0}
+PX-{counter:index}
+Description of PX-{index}
+PX-{counter:index}
+Description of PX-{index}";
+        let result = preprocess(input);
+        assert_eq!(
+            result,
+            "\
+\nPX-1
+Description of PX-1
+PX-2
+Description of PX-2"
+        );
+    }
+
+    #[test]
+    fn test_preprocess_bare_reference_non_counter_untouched() {
+        // A bare reference whose name was never defined by a counter is left
+        // for the normal substitution pipeline (the renderer), not expanded here.
+        let input = "Value is {index}\n{counter:index}\nValue is {index}";
+        let result = preprocess(input);
+        assert_eq!(result, "Value is {index}\n1\nValue is 1");
     }
 
     #[test]
