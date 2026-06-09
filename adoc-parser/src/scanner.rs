@@ -810,7 +810,7 @@ pub fn generate_id(title: &str, prefix: &str, separator: &str) -> String {
                 id.push(lc);
             }
             prev_was_separator = false;
-        } else if (ch == ' ' || ch == '-' || ch == '_')
+        } else if (ch == ' ' || ch == '-' || ch == '_' || ch == '.')
             && !prev_was_separator {
                 id.push(sep_char);
                 prev_was_separator = true;
@@ -1209,6 +1209,15 @@ mod tests {
             generate_id("See link:file.html[the docs]", "_", "_"),
             "_see_the_docs"
         );
+
+        // Dots act as word separators (like spaces/hyphens), not dropped.
+        // Asciidoctor: "0.3.0 Milestone Build" -> _0_3_0_milestone_build
+        assert_eq!(
+            generate_id("0.3.0 Milestone Build", "_", "_"),
+            "_0_3_0_milestone_build"
+        );
+        // A run of separators (dot + space) collapses to a single separator.
+        assert_eq!(generate_id("Foo. Bar", "_", "_"), "_foo_bar");
     }
 
     #[test]

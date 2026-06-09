@@ -1,5 +1,73 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-19) — Фаза 3: section-id точки-разделитель + дедуп дубликатов
+
+`fix/escaped-inline-macro` УЖЕ смержена+запушена в master (`41bba68`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `41bba68` ПЕРЕД правкой. Baseline подтверждён: Identical 190, Different 154,
+Errors 0. near-miss: 2-diff counter (архитектурный, отложен), 6-diff stem/index (архитектурный
+MathJax, отложен). Разведаны два неразведанных near-miss: **pass/index** (6-diff: `` `+pass:[]+` `` →
+asciidoctor даёт ПУСТОЙ `<code></code>`, мы — `<code>pass:[]</code>`; фидли pass-макрос-внутри-single-
+plus-внутри-monospace, единичный — ОТЛОЖЕН) и **CHANGELOG** (7-diff, section-id). Выбран CHANGELOG —
+принципиальнее, затрагивает много файлов.
+
+### Ветка `fix/section-id-dots-and-dedup` (от master `41bba68`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами через файл, НЕ по памяти): автогенерация section-id —
+  (1) `.` → разделитель (как ` `/`-`/`_`): `0.3.0 Milestone Build`→`_0_3_0_milestone_build`. Прочий
+  пунктуатор (`@`/`#`/`:`/`!`/`(`/`)`) ОТБРАСЫВАЕТСЯ (`Hello@World#Tag`→`_helloworldtag`,
+  `Foo: Bar! (baz)`→`_foo_bar_baz`); прогон разделителей схлопывается; `...`→ellipsis→дроп (в корпусе
+  таких заголовков нет, не реализовывал). (2) Дубликаты автогенерируемых заголовков → суффикс
+  `_2`/`_3` (`Added`×3 → `_added`/`_added_2`/`_added_3`). Явные id (`[#id]`) НЕ переименовываются
+  (asciidoctor только warning), но регистрируются → авто-id дедупится и против них. **Doctitle
+  (level 0) НЕ регистрируется** (проба `= Intro` + `== Intro` → `_intro`, НЕ `_intro_2`). Discrete-
+  заголовки участвуют в ОБЩЕМ реестре (проба `== Real` + 2×`[discrete] == Real` → `_real`/`_real_2`/
+  `_real_3`).
+- **Корень**: (1) `scanner.rs::generate_id` (~813) в else-ветке принимал разделителями только
+  ` `/`-`/`_`, `.` падал в «дроп» (нет else) → `0.3.0`→`030`. (2) Дедупа не было — каждый
+  `generate_id` независим, дубликаты давали одинаковый id.
+- **Фикс** (2 файла): (a) `scanner.rs::generate_id` — `.` добавлен в условие разделителя (1 символ);
+  (b) `block.rs` — поле `used_ids: std::collections::HashSet<String>` (+init), хелперы
+  `register_explicit_id(&str)` (insert как есть) и `unique_auto_id(String)->String` (при коллизии
+  `format!("{base}{sep}{n}")`, n от 2, `HashSet::insert` возвращает was-new). Маршрутизированы
+  `scan_section` (явный→register+verbatim, авто→unique_auto_id) и `scan_discrete_heading` (то же).
+  **scan_document_header/_with_pre_attrs (doctitle, 905/1062) НЕ тронуты** (doctitle не в реестре).
+  +4 теста (scanner: dot/collapse; block: dedup/auto-vs-explicit/dots).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 451→454, html 317,
+  parsing_lab **233/233** verified `--nocapture` — правка в section-сканере, ASG читает события парсера;
+  дублей-заголовков/точек в фикстурах нет, id-события не сдвинулись).
+- Корпус `compare_full.py` (release): **Identical 190→191 (+1), Different 153, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `41bba68`): **15 файлов**
+  изменили вывод — **1 FLIP→IDENTICAL** (CHANGELOG.adoc), **0 регрессий**. 14 changed-still-different:
+  спот-проверка (counters/section/outline/title) — секционные id теперь СОВПАДАЮТ с asciidoctor;
+  остаток Different по др. причинам (class `sect0` на level-0, toc-расположение, author-id-дедуп,
+  `{counter:seq}` не резолвится). counters.adoc: моя дедупликация корректно работает на пре-
+  существующем неверном базисе (`_section_seq1`/`_section_seq1_2` вместо двух одинаковых).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/section-id-dots-and-dedup` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые flip-кандидаты (near-miss на 191): **counter.adoc** (2-diff, `{counter:index}`→`{index}` —
+  АРХИТЕКТУРНЫЙ, счётчик в локальной мапе препроцессора, отложен), **pass/index.adoc** (6-diff,
+  `` `+pass:[]+` ``→пустой `<code>`; фидли pass-макрос-в-single-plus-в-monospace, единичный),
+  **stem/index.adoc** (6-diff, MathJax `<script>`-инъекция — архитектурный standalone). Неразведанные:
+  special-section-numbers (10-diff), toc/index (11-diff), reference-revision-line (11-diff).
+- Архитектурные (отложены): наследование `m`/`e`/`s` стиля колонки таблицы, nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`` `&#167;` ``→`Event::Code`),
+  inline-anchor reftext из dt-терма (lexicon), link-role `class="external"`, trailing ` +` в reparsed
+  monospace → спурьезный `<br>` (обнажён single-plus, см. поздняя-17).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ — shell экранирует спецсимволы; heredoc `<<'EOF'` или `printf` ок).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `41bba68`). near-miss `/tmp/nearmiss.py`. Точечный diff:
+  `/tmp/fdiff.py <relpath>`. Сравнение семантическое (DOM, `convert_charrefs=True`; `style` игнорится).
+  LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-18) — Фаза 3: escaped inline-макрос `\name:target[attrs]`
 
 `fix/single-plus-passthrough-constrained` УЖЕ смержена в master (`3ca24a3`, origin == master, дерево
