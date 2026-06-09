@@ -88,7 +88,9 @@ impl<'a> Iterator for Parser<'a> {
                 self.subs_stack.pop();
             }
             Event::Start(Tag::LiteralParagraph) => {
-                let subs = self.pending_subs.take().unwrap_or_else(|| self.current_subs());
+                // A literal paragraph is verbatim by definition; without an explicit `[subs=…]`
+                // (carried via pending_subs) it must not inherit the parent's richer subs.
+                let subs = self.pending_subs.take().unwrap_or(SubstitutionSet::VERBATIM);
                 self.subs_stack.push(subs);
             }
             Event::End(TagEnd::LiteralParagraph) => {

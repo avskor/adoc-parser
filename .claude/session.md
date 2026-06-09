@@ -1,13 +1,78 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-6) — Фаза 3: неизвестный verbatim-style → class
+## Последняя сессия (2026-06-09, поздняя-7) — Фаза 3: preserve bare char-ref (остаток п.15)
+
+literal-unknown-style-class смержена в master (`a4547fd`, origin == master). Выбран следующий
+чистый flip по near-miss на 170 — `§`/bare char-ref (title-links, 2-diff один корень). Кандидаты
+verse `// end::para[]` (1-diff, но трогает comment-handling блок-сканера — рискованнее) и
+keyboard-macro `kbd:[key(+key)*]` (1-diff, passthrough `+...+` — фидли) отложены.
+
+### Ветка `fix/bare-char-reference-preserved` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами `[subs=…]`, НЕ по памяти): валидный char-ref
+  (`&#167;`/`&copy;`/`&amp;`) в тексте сохраняется как сущность ТОЛЬКО при `specialchars`+
+  `replacements` ВМЕСТЕ (specialchars экранирует `&`→`&amp;`, replacements разэкранирует валидный
+  ref обратно); `[subs=specialchars]`-only → экранирует (`&amp;#167;`); `replacements`/`quotes`/
+  `none` (без specialchars) → `&` и так не экранируется. Невалидный (`&#1;` 1 цифра, bare `&`,
+  без `;`) → экранируется. Verbatim (specialchars БЕЗ replacements) → экранирует (совпадает).
+- **Фикс 1 (`inline.rs::parse_inline`)**: в главном цикле новый arm перед fallthrough — bare `&`,
+  начинающий валидный char-ref (переиспользует `char_ref_len_at` из backslash-ветки п.15), при
+  `preserve_char_refs = specialchars && replacements` эмитится как `Event::InlinePassthrough`
+  (raw; рендерер не экранирует, в отличие от `Event::Text`). +2 теста (`test_bare_char_reference_
+  preserved`: 167/copy/amp/x1F600 → passthrough; `test_bare_invalid_char_reference_not_preserved`).
+- **Фикс 2 (`parser.rs`, СОПУТСТВУЮЩИЙ — обязателен)**: литеральный параграф без `[attr]` НЕ
+  эмитит `BlockMetadata(VERBATIM)` (block.rs:1877 — только при наличии attrs) → в parser.rs:90
+  `Tag::LiteralParagraph` падал на `current_subs()`=NORMAL вместо VERBATIM. Латентный баг (был
+  безвреден: рендерер всё равно экранировал `&` под specialchars NORMAL), но фикс 1 его обнажил —
+  preserve_char_refs срабатывал в literal-параграфе → регрессия attribute-entry-substitutions
+  (`&amp;` → `&amp;` вместо `&amp;amp;`). Дефолт изменён на `unwrap_or(VERBATIM)` (как у
+  SourceBlock/DelimitedBlock Literal/Listing). Это и корректнее (literal-параграф verbatim по
+  определению), и закрывает регрессию. ПОБОЧНО улучшило outline.adoc literal-пример `*\*foo**`
+  (теперь verbatim, совпал с asciidoctor) и pass-macro.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 440→442, html 308).
+- Корпус `compare_full.py` (release): **Identical 170→171 (+1), Different 173, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master a4547fd через
+  worktree `/tmp/master-wt` — старый base был устаревший!): **12 файлов** изменили вывод —
+  **1 FLIP→IDENTICAL** (title-links), **0 регрессий**. 11 остались Different по др. причинам, но
+  их char-ref/литеральные параграфы стали верны (проверены поштучно: число diff'ов better/same,
+  кроме outline.adoc — там +24 ложно от позиц. рассинхрона в файле с 8800+ diff; контент verified
+  совпал с asciidoctor). Остаток: inline-monospace passthrough char-ref `` `&#167;` `` в `<code>`
+  (`Event::Code`, не задет) — replacements.adoc остаётся Different по этой причине.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/bare-char-reference-preserved` (только по запросу).
+  NB: создан git worktree `/tmp/master-wt` (для чистого base-бинаря) — удалить после
+  (`git worktree remove /tmp/master-wt`). `/tmp/adoc_base` теперь = чистый master a4547fd.
+- Следующие чистые flip-кандидаты (по near-miss на 171, 1-diff):
+  - **`// end::para[]` утечка** тег-региона: verse-параграф (verse.adoc) и literal-параграф
+    (literal.adoc `// end::indent[]`) КЕЕРS comment-строку в выводе, мы дропаем как комментарий.
+    Трогает comment-handling блок-сканера в verbatim/paragraph-контексте — осторожно (риск шире).
+  - **kbd `+`-разделитель** `` `+kbd:[key(+key)*]+` `` (keyboard-macro): mono-literal passthrough
+    `` `+...+` `` ест внутренний `+` → даём `kbd:[key(key)*]+`. Passthrough-парсинг, риск выше.
+  - **inline-anchor reftext из dt-терма** `[[id]]term:: ...` → `<<id>>` = текст терма (lexicon,
+    ~14 ссылок; родственно bibliography, но захват текста терма в парсере — БОЛЬШЕ по объёму).
+- Архитектурные (отложены): inline-monospace passthrough char-ref (`Event::Code`), nested-
+  форматирование/`{attr}` в тексте макроса, `{attr-ref}[text]` (порядок subs), link-role
+  `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base в `/tmp/adoc_base` — ПЕРЕСОБРАН из чистого master). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM): `&#167;`/`§` декодируются HTMLParser'ом одинаково → diff виден
+  через escaped `&amp;#167;` vs raw `&#167;`. LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-6) — Фаза 3: неизвестный verbatim-style → class
 
 admonition-custom-caption уже смержена в master (`cc390a0`, origin == master). Выбран самый
 чистый 1-diff по near-miss на 169: неизвестный verbatim-стиль на delimited-блоке (monitoring).
 При эмпирической пробе оказалось ШИРЕ заявленного в session.md: баг есть и на literal (`....`),
 и на listing (`----`).
 
-### Ветка `fix/literal-unknown-style-class` (от master; НЕ закоммичено)
+### Ветка `fix/literal-unknown-style-class` (СМЕРЖЕНА+ЗАПУШЕНА в master, `a4547fd`)
 - **Правило Asciidoctor** (верифицировано пробами): verbatim delimited-блок (literal/listing)
   берёт CSS-класс ТОЛЬКО из контекста; неизвестный блок-стиль (`[plantuml]`, `[ditaa]`,
   `[src,yaml]`) ОТБРАСЫВАЕТСЯ из class. `[plantuml]....`→`literalblock` (мы: `literalblock
@@ -31,7 +96,7 @@ admonition-custom-caption уже смержена в master (`cc390a0`, origin =
   `[plantuml]` стиль отброшен). TODO.md: baseline 169→170, п.40-смежное под-пункт `[x]`.
 
 ### Что дальше
-- **Спросить про коммит/мерж/пуш** ветки `fix/literal-unknown-style-class` (только по запросу).
+- Ветка смержена+запушена (`a4547fd`, origin == master). Локальная ветка удалена.
 - Следующие чистые flip-кандидаты (по near-miss на 170):
   - **inline-anchor reftext из dt-терма** `[[id]]term:: ...` → `<<id>>` = текст терма (lexicon,
     ~14 ссылок; родственно bibliography, но захват текста терма в парсере — БОЛЬШЕ по объёму).
