@@ -1324,6 +1324,21 @@ impl<'a> BlockScanner<'a> {
             (halign, valign)
         };
 
+        // Resolve a cell's effective style. An explicit cell style is kept as-is.
+        // A cell with no style sitting in a header (`h`) column inherits Header so
+        // its body cells render as <th> (e.g. `[cols="25h,~,~"]`). Other column
+        // styles (a/e/m/s/l) involve cell-content handling and are out of scope here.
+        let resolve_style = |cell: &scanner::CellSpec<'_>, col_idx: usize| -> CellStyle {
+            if cell.style == CellStyle::Default
+                && let Some(ref specs) = col_specs
+                && col_idx < specs.len()
+                && specs[col_idx].style == CellStyle::Header
+            {
+                return CellStyle::Header;
+            }
+            cell.style
+        };
+
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
 
@@ -1341,7 +1356,9 @@ impl<'a> BlockScanner<'a> {
                 // Emit in reverse order (buffer is a stack)
                 for (ci, cell) in $row.iter().enumerate().rev() {
                     let (halign, valign) = resolve_align(cell, col_indices[ci]);
-                    if cell.style == CellStyle::Header || $is_header_section {
+                    let style = resolve_style(cell, col_indices[ci]);
+                    if $is_header_section {
+                        // Header-row cell (thead): <th> without a paragraph wrapper.
                         self.push_event(Event::End(TagEnd::TableHeaderCell));
                         self.push_event(Event::Text(Cow::Borrowed(cell.content)));
                         self.push_event(Event::Start(Tag::TableHeaderCell {
@@ -1352,12 +1369,15 @@ impl<'a> BlockScanner<'a> {
                             valign,
                         }));
                     } else {
+                        // Body/footer cell. A header-style cell (explicit `h|` or an
+                        // `h` column) renders as <th> but keeps the <p> wrapper; the
+                        // renderer picks the tag from the resolved style.
                         self.push_event(Event::End(TagEnd::TableCell));
                         self.push_event(Event::Text(Cow::Borrowed(cell.content)));
                         self.push_event(Event::Start(Tag::TableCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
-                            style: cell.style,
+                            style,
                             halign,
                             valign,
                         }));

@@ -1515,7 +1515,10 @@ impl HtmlRenderer {
     fn start_table_cell(&mut self, output: &mut String, is_header: bool, colspan: &u8, rowspan: &u8, style: &CellStyle, halign: &HAlign, valign: &VAlign) {
         self.cell_style_stack.push(*style);
         let cell_class = Self::tableblock_cell_class(halign, valign);
-        output.push_str(if is_header { "<th class=\"" } else { "<td class=\"" });
+        // A header-row cell, or a body cell in a header (`h`) column, uses <th>.
+        // The body header cell still gets the <p class="tableblock"> wrapper below.
+        let use_th = is_header || matches!(style, CellStyle::Header);
+        output.push_str(if use_th { "<th class=\"" } else { "<td class=\"" });
         output.push_str(&cell_class);
         output.push('"');
         if *colspan > 1 {
@@ -2297,7 +2300,8 @@ impl HtmlRenderer {
                     CellStyle::AsciiDoc => {}
                     _ => output.push_str("</p>"),
                 }
-                output.push_str("</td>\n");
+                // A body cell in a header (`h`) column closes with </th>.
+                output.push_str(if matches!(style, CellStyle::Header) { "</th>\n" } else { "</td>\n" });
             }
             TagEnd::TableHeaderCell => {
                 let style = self.cell_style_stack.pop().unwrap_or_default();
@@ -3923,8 +3927,20 @@ mod tests {
 
     #[test]
     fn test_table_cell_style_header_in_body_html() {
+        // A header-style cell (`h|`) in a body row renders as <th> but, unlike a
+        // header-ROW cell, KEEPS the <p class="tableblock"> wrapper (Asciidoctor parity).
         let html = to_html("|===\nh| header cell\n|===");
-        assert!(html.contains("<th class=\"tableblock halign-left valign-top\">header cell</th>"), "expected th with tableblock class. Got:\n{html}");
+        assert!(html.contains("<tbody>"), "h-cell stays in body, not thead. Got:\n{html}");
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">header cell</p></th>"), "expected th with wrapped tableblock p. Got:\n{html}");
+    }
+
+    #[test]
+    fn test_table_header_column_style_html() {
+        // The `h` column style (`[cols="1h,1"]`) makes that column's body cells
+        // render as <th> (with the <p> wrapper); other columns stay <td>.
+        let html = to_html("[cols=\"1h,1\"]\n|===\n|key |value\n|===");
+        assert!(html.contains("<th class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">key</p></th>"), "expected h-column cell as wrapped th. Got:\n{html}");
+        assert!(html.contains("<td class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">value</p></td>"), "expected non-h column cell as td. Got:\n{html}");
     }
 
     #[test]
