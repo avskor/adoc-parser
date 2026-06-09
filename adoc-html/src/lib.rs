@@ -214,6 +214,11 @@ struct HtmlRenderer {
     in_unlabeled_xref: bool,
     xref_placeholder_counter: usize,
     xref_placeholders: Vec<(String, String)>,
+    /// Internal xref href ids, resolved in `finish()`: a placeholder paired with
+    /// the raw target. A target matching a section title (natural cross
+    /// reference) resolves to that section's id (`<<Substitutions>>` →
+    /// `#_substitutions`); unmatched targets stay literal.
+    xref_href_placeholders: Vec<(String, String)>,
     /// Block id -> rendered title HTML, for resolving empty `<<id>>` to a block title.
     block_ref_titles: Vec<(String, String)>,
     in_header: bool,
@@ -300,6 +305,7 @@ impl HtmlRenderer {
             in_unlabeled_xref: false,
             xref_placeholder_counter: 0,
             xref_placeholders: Vec::new(),
+            xref_href_placeholders: Vec::new(),
             block_ref_titles: Vec::new(),
             in_header: false,
             li_p_open: Vec::new(),
@@ -762,6 +768,33 @@ impl HtmlRenderer {
                     escaped
                 };
                 *output = output.replace(placeholder, &replacement);
+            }
+        }
+
+        if !self.xref_href_placeholders.is_empty() {
+            // Resolve internal xref hrefs. Precedence matches Asciidoctor:
+            // a target that is itself a registered id stays literal; otherwise
+            // a target exactly matching a section title (case-sensitive) becomes
+            // that section's id (natural cross reference); else it stays literal.
+            let known_ids: HashSet<&str> = self
+                .toc_entries
+                .iter()
+                .map(|e| e.id.as_str())
+                .chain(self.block_ref_titles.iter().map(|(id, _)| id.as_str()))
+                .collect();
+            let mut title_to_id: HashMap<&str, &str> = HashMap::new();
+            for entry in &self.toc_entries {
+                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
+            }
+            for (placeholder, target) in &self.xref_href_placeholders {
+                let resolved: &str = if known_ids.contains(target.as_str()) {
+                    target
+                } else {
+                    title_to_id.get(target.as_str()).copied().unwrap_or(target)
+                };
+                let mut escaped = String::new();
+                html_escape(&mut escaped, resolved);
+                *output = output.replace(placeholder, &escaped);
             }
         }
 
@@ -1288,9 +1321,16 @@ impl HtmlRenderer {
             output.push_str("<a href=\"");
             html_escape(output, &interdoc_href);
         } else {
-            // Internal xref (anchor reference)
+            // Internal xref (anchor reference). The id is resolved lazily in
+            // `finish()` via a placeholder so a forward natural cross reference
+            // (`<<Substitutions>>` before its `== Substitutions` section) can be
+            // rewritten to the section id (`#_substitutions`).
             output.push_str("<a href=\"#");
-            html_escape(output, target);
+            self.xref_placeholder_counter += 1;
+            let href_placeholder = format!("\x00XREFHREF_{}\x00", self.xref_placeholder_counter);
+            output.push_str(&href_placeholder);
+            self.xref_href_placeholders
+                .push((href_placeholder, target.to_string()));
         }
         output.push_str("\">");
         if label.is_none() {
@@ -4956,6 +4996,30 @@ mod tests {
         // Custom prefix
         let html = to_html(":idprefix: sec-\n\n== My Section\n\nContent.");
         assert!(html.contains("id=\"sec-my_section\""), "custom prefix. Got: {html}");
+    }
+
+    #[test]
+    fn test_natural_cross_reference() {
+        // `<<Title>>` matching a section title (even a forward reference)
+        // resolves to that section's auto-generated id, like Asciidoctor.
+        let html = to_html("See <<Substitutions>>.\n\n== Substitutions\n\nx");
+        assert!(html.contains("href=\"#_substitutions\""), "natural ref. Got: {html}");
+
+        // A target that matches no section title stays literal.
+        let html = to_html("See <<Foo Bar>>.\n\n== Other\n\nx");
+        assert!(html.contains("href=\"#Foo Bar\""), "unmatched ref literal. Got: {html}");
+
+        // Title match resolves to the section's explicit id when present.
+        let html = to_html("See <<Substitutions>>.\n\n[#myid]\n== Substitutions\n\nx");
+        assert!(html.contains("href=\"#myid\""), "explicit id. Got: {html}");
+
+        // Matching is case-sensitive: lowercase target does not match the title.
+        let html = to_html("See <<substitutions>>.\n\n== Substitutions\n\nx");
+        assert!(html.contains("href=\"#substitutions\""), "case-sensitive. Got: {html}");
+
+        // An explicit-text xref still resolves its href via the title.
+        let html = to_html("See <<Substitutions,go here>>.\n\n== Substitutions\n\nx");
+        assert!(html.contains("href=\"#_substitutions\""), "labeled href. Got: {html}");
     }
 
     #[test]
