@@ -1,5 +1,89 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-26) — Фаза 3: callout-элемент с continuation-блоком + сдвиг source-языка
+
+`fix/audio-start-opts-and-title` УЖЕ смержена+запушена в master (`54cf378`, origin == master, дерево
+чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран из
+ТЕКУЩЕГО чистого master `54cf378` ПЕРЕД правкой. Baseline подтверждён: Identical 200, Different 144,
+Errors 0. Взят **db-migration** (16-diff, неразведанный, 2 корня) — точечным `fdiff.py` (не гонял
+nearmiss целиком — медленно). Оба корня оказались чистыми (не архитектура).
+
+### Ветка `fix/callout-item-block-and-shifted-source-lang` (от master `54cf378`; СТАТУС: НЕ закоммичено)
+- **Корень 1 — NOTE/continuation-блок внутри callout-элемента** (`adoc-html/lib.rs`, РЕНДЕРЕР; 15 из 16
+  diff'ов db-migration, #516–530 — один сдвиг). `+`-continuation-блок (`NOTE:` стр.215–216), присоединённый
+  к callout-элементу `<2>`, не закрывал принципиальный `<p>` → `<li><p>text<div admonition>…</div></p></li>`
+  (блок ВНУТРИ незакрытого `<p>`, `</p>` уехал в конец после `</div>`). asciidoctor: `<li><p>text</p><div
+  admonition>…</div></li>`. **Корень (слой!)**: парсер эмитит верно (дамп событий: `CalloutListItem`→`Text`
+  →`Admonition`); баг в рендерере: `CalloutListItem` (стр.1146) пушил `<li><p>` БЕЗ стека `li_p_open`/
+  `li_para_count` (в отличие от `ListItem`), И `Tag::Admonition` отсутствовал в guard-списке закрытия `<p>`
+  (стр.1006–1013). Фикс: (a) `CalloutListItem` зеркалит `ListItem` — push `li_p_open=true`+`li_para_count=1`;
+  (b) `TagEnd::CalloutListItem` (стр.2308) условный — `</p></li>` если p открыт, иначе `</li>`; (c)
+  `Tag::Admonition { .. }` добавлен в guard. Заодно чинит continuation-ПАРАГРАФ в callout (теперь
+  оборачивается в `<div class="paragraph">` через is_continuation_para). Простой callout-элемент не
+  затронут (`<li><p>x</p></li>`).
+- **Корень 2 — сдвиг позиционных слотов ведущим named/shorthand** (`adoc-parser/attributes.rs`, ПАРСЕР;
+  diff #38 db-migration). `[id=app, source, yaml]` (стр.27): asciidoctor даёт `language-source`, мы
+  `language-yaml`. **Правило (верифицировано пробами через ФАЙЛ)**: AsciiDoc инкрементит позиционный индекс
+  для КАЖДОГО атрибута (named `id=`/`role=`, shorthand `#id`/`.role`/`%opt` — каждая shorthand-ГРУППА = 1
+  слот); стиль=слот1, язык=слот2. `[id=app, source, yaml]`→id слот1, source слот2(язык), yaml слот3(игнор),
+  стиль пуст→source-блок lang=`source`. Подтверждено: `[role=x,…]`/`[#id,…]`/`[.r,…]`/`[%o,…]` так же;
+  `[#id.role,…]`/`[.r1.r2,…]` (одна группа) → source/source; ДВА ведущих named `[id, role, source, yaml]`
+  → НЕ source (слот2 занят role); `[src, yaml]` (src≠source, слот1) → НЕ source; `[foo, source, yaml]` →
+  стиль foo, НЕ source. Наш `positional` Vec СХЛОПЫВАЛ named/shorthand → `[id=app, source, yaml]` выглядел
+  как explicit `[source, yaml]` (positional=["source","yaml"]), и `source_language()` брал explicit-путь
+  (positional[0]=="source" → язык=positional[1]="yaml"). Фикс: поле `first_positional_is_style` (=первый
+  comma-часть bare-позиционал); убран ложно-срабатывающий guard `positional.first() != Some("source")`
+  в `implied_source_lang` (он редундантен с `!first_positional_is_style` и блокировал верный кейс);
+  `source_language()`/`is_source_block()` стали слот-осознанными (explicit-путь только при
+  `first_positional_is_style && positional[0]=="source"`). `[id=app, foo, yaml]` УЖЕ работал (через
+  implied); ломался ТОЛЬКО когда слот-2 буквально `source`. block_style_kind/admonition_kind/is_verse_style
+  НЕ тронуты (source-блок возвращается раньше, leading-named edge-кейсы для них не в корпусе).
+- **Тесты**: +1 parser `test_leading_named_attr_shifts_positionals` (id/`#`-сдвиг, два-named→не-source,
+  explicit неизменен, `src`≠source); +2 html `test_callout_item_with_continuation_note_html` (флип + простой
+  callout regression guard) и `test_source_lang_shifted_by_leading_named_attr_html`.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 459→460, html 322→324,
+  parsing-lab **233/233** verified `--nocapture` — callout+continuation и `[id=…,source,…]` в фикстурах нет;
+  правка в рендерере + слот-логике). html-compat 6/6.
+- Корпус `compare_full.py` (release): **Identical 200→202 (+2), Different 142, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `54cf378`): **4 файла** изменили
+  вывод — **2 FLIP→IDENTICAL** (db-migration verified 0 diffs 577==577 [оба корня]; localization verified
+  0 diffs 263==263 [корень 1 — callout `<1>`+`+`-continuation стр.85–86; все его source-блоки явные
+  `[source,lang]`]), **0 регрессий**. 2 changed-still-different улучшены: java/index 2290→2265,
+  software-development-cookbook 2595→2463 (гигантские Antora-include-агрегаты флипнутых файлов, Different
+  по доминирующему несвязанному каскаду).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/callout-item-block-and-shifted-source-lang` (только по
+  запросу). master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые near-miss-кандидаты на 202: **pass/index** (6-diff — ТОЛЬКО случай A, single-plus
+  pass-extraction-ordering, риск/рабит-хол), **stem/index** (6-diff, MathJax standalone — архитектурный),
+  **special-section-numbers** (10-diff, monospace в ТЕКСТЕ xref — архитектурный QUOTES в `[label]`).
+  Неразведанные: **docinfo/index** (14-diff, span-cell row-placement — структурный таблицы).
+- **Известные родственные edge-кейсы (НЕ трогал, не в корпусе)**: (a) `block_style_kind`/`admonition_kind`/
+  `is_verse_style` НЕ слот-осознаны — `[id=x, verse]`/`[id=x, NOTE]` дали бы неверный стиль (стиль на
+  слоте2), но таких в корпусе нет; (b) `LiteralParagraph`/`BlockVideo`/`BlockAudio` отсутствуют в
+  guard-списке закрытия `<p>` в list-item (как continuation-блоки) — тривиальное зеркало Admonition, если
+  понадобится; (c) arm `Tag::BlockVideo` имеет title-баг (не зовёт `emit_pending_block_title`), video далеко
+  от флипа.
+- Высокоценный архитектурный кластер (много flip'ов, риск): наследование `m`/`e`/`s` стиля колонки таблицы
+  → ячейки `<code>`/`<em>`/`<strong>` (сделано только `h`); author-header `<div class="details">`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor через
+  ФАЙЛ; heredoc `<<'EOF'` ок). Дамп событий парсера: throwaway `adoc-parser/examples/dump_events.rs`
+  (создать Write → `cargo run -p adoc-parser --example dump_events` → удалить; различает баг парсера vs
+  рендерера — в этой сессии подтвердил, что callout-NOTE парсится верно). **`target/debug/adoc` НЕ
+  пересобирается от `cargo test -p adoc-html`** — для CLI-проб пересобрать `cargo build -p adoc-cli` (в этой
+  сессии словил stale debug-бинарь).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `54cf378`). near-miss `/tmp/nearmiss.py` (МЕДЛЕННО — гонит
+  asciidoctor по 344 файлам; для точечного — `/tmp/fdiff.py <relpath> [base-бинарь]`). Сравнение
+  семантическое (DOM, `convert_charrefs=True`; `style` игнорится; атрибуты сортируются). LSP, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-25) — Фаза 3: audio `start`/`end` + `opts=` alias + `.Title`
 
 `fix/intrinsic-quot-apos-and-pass-constrained` УЖЕ смержена+запушена в master (`a691601`, origin ==

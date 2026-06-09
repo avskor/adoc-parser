@@ -86,6 +86,14 @@ pub struct BlockAttributes {
     /// explicit block style but slot 2 is a bare language token. `None` for
     /// explicit `[source,...]` blocks (their language comes from `positional`).
     pub implied_source_lang: Option<String>,
+    /// `true` when the first comma-separated attribute is a bare positional —
+    /// i.e. an explicit block style sits at slot 1. `false` when slot 1 is
+    /// consumed by a named (`id=`/`role=`/`key=`) or shorthand
+    /// (`#id`/`.role`/`%opt`) attribute. AsciiDoc counts *every* attribute
+    /// toward the positional index, so a leading named/shorthand attribute
+    /// shifts the bare positionals: `[id=app, source, yaml]` puts `source` at
+    /// slot 2 (the language) — not slot 1 (the style).
+    pub first_positional_is_style: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -235,12 +243,19 @@ impl BlockAttributes {
             }
         }
 
+        // Does slot 1 hold an explicit block style? Only when the first
+        // comma-separated part is a bare positional. A leading named/shorthand
+        // attribute (`id=`/`#id`/`.role`/`%opt`) occupies slot 1 and shifts the
+        // bare positionals down by one (AsciiDoc increments the positional index
+        // for every attribute).
+        attrs.first_positional_is_style = parts.first().is_some_and(|s| is_bare_positional(s));
+
         // Implied source shorthand: slot 1 carries no explicit block style
-        // (it is empty or pure shorthand like #id/.role/%opt) while slot 2 is a
-        // bare language token. AsciiDoc renders such verbatim blocks as `source`
-        // (e.g. `[,ruby]`, `[#hello,ruby]`, `[.role,ruby]`).
-        if attrs.positional.first().map(|s| s.as_str()) != Some("source")
-            && !parts.first().is_some_and(|s| is_bare_positional(s))
+        // (it is empty or pure shorthand like #id/.role/%opt, or a named attr
+        // like id=) while slot 2 is a bare language token. AsciiDoc renders such
+        // verbatim blocks as `source` (e.g. `[,ruby]`, `[#hello,ruby]`,
+        // `[.role,ruby]`, `[id=app, source, yaml]` → language `source`).
+        if !attrs.first_positional_is_style
             && let Some(lang) = parts.get(1)
             && is_bare_positional(lang)
         {
@@ -292,7 +307,10 @@ impl BlockAttributes {
     }
 
     pub fn source_language(&self) -> Option<&str> {
-        if self.positional.first().map(|s| s.as_str()) == Some("source") {
+        // Explicit `[source, lang]` only when `source` actually sits at slot 1.
+        // When a leading named/shorthand attribute shifts the positionals,
+        // the language is captured by `implied_source_lang` instead.
+        if self.first_positional_is_style && self.positional.first().map(|s| s.as_str()) == Some("source") {
             self.positional.get(1).map(|s| s.as_str())
         } else {
             self.implied_source_lang.as_deref()
@@ -300,7 +318,8 @@ impl BlockAttributes {
     }
 
     pub fn is_source_block(&self) -> bool {
-        self.positional.first().map(|s| s.as_str()) == Some("source")
+        (self.first_positional_is_style
+            && self.positional.first().map(|s| s.as_str()) == Some("source"))
             || self.implied_source_lang.is_some()
     }
 
@@ -664,6 +683,36 @@ mod tests {
         let attrs = BlockAttributes::parse("ruby");
         assert!(!attrs.is_source_block(), "[ruby] must not become a source block");
         assert_eq!(attrs.implied_source_lang, None);
+    }
+
+    #[test]
+    fn test_leading_named_attr_shifts_positionals() {
+        // A leading named attribute occupies slot 1, so `source` lands at slot 2
+        // (the language) and `yaml` at slot 3 (ignored): AsciiDoc renders this as
+        // a source block with language `source`, not `yaml`.
+        let attrs = BlockAttributes::parse("id=app, source, yaml");
+        assert_eq!(attrs.id.as_deref(), Some("app"));
+        assert!(!attrs.first_positional_is_style);
+        assert!(attrs.is_source_block());
+        assert_eq!(attrs.source_language(), Some("source"));
+
+        // Same shift via a leading shorthand id.
+        let attrs = BlockAttributes::parse("#app, source, yaml");
+        assert_eq!(attrs.source_language(), Some("source"));
+
+        // Two leading named attributes consume slots 1 and 2, so the language
+        // slot is taken by `role=x` (not bare) — NOT a source block.
+        let attrs = BlockAttributes::parse("id=app, role=x, source, yaml");
+        assert!(!attrs.is_source_block());
+
+        // Explicit `[source, lang]` (style at slot 1) is unchanged.
+        let attrs = BlockAttributes::parse("source, yaml");
+        assert!(attrs.first_positional_is_style);
+        assert_eq!(attrs.source_language(), Some("yaml"));
+
+        // `[src, yaml]` — `src` is an unknown style at slot 1, not `source`.
+        let attrs = BlockAttributes::parse("src, yaml");
+        assert!(!attrs.is_source_block());
     }
 
     #[test]
