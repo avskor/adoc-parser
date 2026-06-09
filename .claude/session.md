@@ -1,6 +1,56 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-4) — Фаза 3: REPLACEMENTS в тексте макроса (остаток п.37)
+## Последняя сессия (2026-06-09, поздняя-5) — Фаза 3: custom caption на админишене
+
+macro-text-replacements уже смержена в master (`e2c0b96`, origin == master). Выбран следующий
+чистый flip по near-miss на 168 — самый чистый 1-diff: `[caption="…"]` на админишене (glossary).
+
+### Ветка `fix/admonition-custom-caption` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами): блочный `[caption="Work in Progress"]` перед
+  `CAUTION:` → отображаемый label = caption (вместо дефолтного «Caution»), но класс
+  `admonitionblock caution` и `icon-caution` остаются по ТИПУ. text-режим →
+  `<div class="title">caption</div>`; `icons=font` → `title="caption"` у `<i class="fa icon-caution">`;
+  пустой `[caption=]` → пустой title (`<div class="title"></div>`). Asciidoctor caption НЕ
+  экранирует (`A & B` сырьём) — я экранирую (дисциплина D1/D7, строже; glossary без спецсимволов).
+- **Корень**: `adoc-html/lib.rs::start_admonition` эмитил жёсткий `label` в обеих ветках.
+- **Фикс**: извлечь `caption` из `meta.named` (парсер УЖЕ его захватывает — `BlockAttributes.named`,
+  как для table-caption на 1422 и figure на 1769); в обеих ветками рендера (text-title и
+  `icons=font` title-attr) `match caption { Some(c)=>html_escape, None=>label }`. icons=font
+  ветка переписана с `writeln!` на push_str-цепочку (нужен условный html_escape). +1 тест
+  `test_admonition_custom_caption` (caption-override + класс по типу + пустой + экранирование).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 306→307, parser 440).
+- Корпус `compare_full.py` (release): **Identical 168→169 (+1), Different 176→175, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` из master): **ровно 1 файл** изменил вывод —
+  **1 FLIP→IDENTICAL** (glossary), **0 регрессий**. Остальные 4 файла с `[caption=` (add-title,
+  syntax-quick-reference, customize-title-label, turn-off-title-label) — caption на ТАБЛИЦАХ
+  (отдельный путь 1422), не затронуты. TODO.md: baseline 168→169.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/admonition-custom-caption` (только по запросу).
+- Следующие чистые flip-кандидаты (по near-miss на 169, все 1-diff):
+  - **неизвестный verbatim-style → class** `[plantuml]` на literal-блоке (`....`) → Asciidoctor
+    даёт `class="literalblock"` (style ОТБРАСЫВАЕТСЯ); мы — `literalblock plantuml`
+    (monitoring.adoc). NB: осторожно — НЕ регрессировать listing (там style→language верно);
+    475 файлов матчат `^[word]$`, нужна узкая правка только для literal + неизвестный style.
+  - **kbd `+`-разделитель** `` `+kbd:[key(+key)*]+` `` (keyboard-macro): `+...+` инлайн-пасстру
+    ест внутренний `+` → даём `kbd:[key(key)*]+` вместо `kbd:[key(+key)*]`. Пасстру-парсинг, риск выше.
+  - **`§`/bare char-ref** сохранять как сущность (title-links — остаток п.15; `&#167;` vs `§`).
+  - **`// end::para[]` утечка** тег-региона (verse: Asciidoctor КЕЕРS comment в verse-блоке).
+  - **inline-anchor reftext из dt-терма** `[[id]]term::` (lexicon, ~14 ссылок; БОЛЬШЕ по объёму).
+- Архитектурные (отложены): nested-форматирование/`{attr}` в тексте макроса, `{attr-ref}[text]`
+  (порядок subs), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (нужен base-бинарь в `/tmp/adoc_base` — копировать ДО изменений). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM). LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-4) — Фаза 3: REPLACEMENTS в тексте макроса (остаток п.37)
 
 xref-fallback-bracketed-id уже смержена в master (`8db12ea`, origin == master). Выбран следующий
 чистый flip по near-miss на 165 — кластер «апостроф в тексте макроса» (scope, subs/index — по
