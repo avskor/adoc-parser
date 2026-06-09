@@ -1,6 +1,58 @@
 # Session context
 
-## Последняя сессия (2026-06-09) — Фаза 3: п.18 image alt двойные кавычки
+## Последняя сессия (2026-06-09, поздняя) — Фаза 3: п.19 xref-id норм. (natural cross reference)
+
+Следующий чистый flip после image-alt-quotes (тот уже смержен+запушен, master == origin/master).
+
+### Ветка `fix/xref-id-normalization` (от master; НЕ закоммичено)
+- **Симптом**: `<<Substitutions>>` + секция `== Substitutions` (forward-ссылка) → мы давали
+  `href="#Substitutions"`, Asciidoctor — `href="#_substitutions"` (id секции).
+- **Семантика Asciidoctor** (верифицирована пробами, НЕ по памяти):
+  - target == **заголовок секции** (case-sensitive) → id этой секции (auto `_substitutions`
+    ИЛИ явный `[#myid]` → `#myid`);
+  - target — зарегистрированный id → остаётся как есть;
+  - иначе сырой target (`<<Foo Bar>>`→`#Foo Bar`, `<<substitutions>>` (lower) → не матчит);
+  - резолюция href НЕ зависит от наличия текста (`<<T,текст>>` тоже резолвит href).
+- **Корень**: `adoc-html/src/lib.rs::start_cross_reference` писал href сразу из сырого target.
+  Но это forward-ссылка → нужна ленивая резолюция в `finish()` (как уже для текста xref).
+- **Фикс**:
+  - новое поле `xref_href_placeholders: Vec<(String,String)>` (placeholder, raw target);
+  - в `start_cross_reference` (internal-ветка) вместо `html_escape(target)` пишу
+    плейсхолдер `\x00XREFHREF_N\x00` (счётчик `xref_placeholder_counter` переиспользован;
+    префикс XREFHREF ≠ XREF → подстроки не пересекаются при `replace`);
+  - в `finish()` отдельный блок: `known_ids` (из toc_entries + block_ref_titles),
+    `title_to_id` (из toc_entries, first-wins). Резолв: known id → как есть; иначе title→id;
+    иначе сырой. `html_escape` + `output.replace`.
+- +1 html-тест `test_natural_cross_reference` (5 кейсов: forward, no-match, explicit-id,
+  case-sensitive, labeled).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 302→303).
+- Корпус `compare_full.py` (release): **Identical 157→158 (+1), Different 186, Errors 0**.
+- Blast radius — РОВНО 3 файла изменили вывод (проверены поштучно base vs new бинари):
+  1 FLIP (positional-and-named-attributes); 2 остались DIFFERENT по НЕ-xref причинам
+  (audio-and-video — av-attrs; link-macro-attribute-parsing — link-парсинг), но их href стал
+  ВЕРНЫМ (`#_vimeo_and_youtube_videos`, `#_noopener_and_nofollow`, `#_blank_window_shorthand`).
+  0 регрессий.
+- TODO.md: baseline 157→158, п.19 помечен `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/xref-id-normalization` (только по запросу).
+- Следующие чистые flip-кандидаты Фазы 3 (по near-miss на 158):
+  - **link `^`+rel/target** для литеральных `link:`/URL (description, xref-text-and-style — по 2 diff);
+    NB: `{attr-ref}[text]` — архитектурно (порядок subs).
+  - **`// end::para[]` утечка** тег-региона (verse.adoc, literal.adoc).
+  - **остаток п.37**: апостроф `'`→’ в display-тексте макроса (xref/link) не проходит REPLACEMENTS.
+  - **п.24** (точки в id секций) — родственно п.19, но отдельная нормализация.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). Сравнение семантическое (DOM).
+  LSP для навигации, context7 MCP для доков.
+
+---
+
+## Сессия (2026-06-09) — Фаза 3: п.18 image alt двойные кавычки
 
 Самый чистый near-miss-кандидат на baseline 153 (предсказан в прошлой session.md).
 em-dash и escaped-preprocessor уже смержены в master (dfa0819).
