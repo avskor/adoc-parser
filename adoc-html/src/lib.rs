@@ -213,7 +213,11 @@ struct HtmlRenderer {
     content_start: Option<usize>,
     in_unlabeled_xref: bool,
     xref_placeholder_counter: usize,
-    xref_placeholders: Vec<(String, String)>,
+    /// Internal/inter-document xref link text, resolved in `finish()`. Each entry
+    /// is `(placeholder, fallback, is_internal)`. `is_internal` selects the
+    /// unresolved-fallback shape: bracketed `[id]` for internal anchor refs
+    /// (Asciidoctor's default xreflabel), raw path for inter-document refs.
+    xref_placeholders: Vec<(String, String, bool)>,
     /// Internal xref href ids, resolved in `finish()`: a placeholder paired with
     /// the raw target. A target matching a section title (natural cross
     /// reference) resolves to that section's id (`<<Substitutions>>` →
@@ -221,6 +225,9 @@ struct HtmlRenderer {
     xref_href_placeholders: Vec<(String, String)>,
     /// Block id -> rendered title HTML, for resolving empty `<<id>>` to a block title.
     block_ref_titles: Vec<(String, String)>,
+    /// Bibliography anchor id -> rendered reftext (`[pp]` / `[gang]`), for
+    /// resolving `<<id>>` to a bibliography entry to its bracketed label.
+    bibliography_reftexts: Vec<(String, String)>,
     in_header: bool,
     /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
     li_p_open: Vec<bool>,
@@ -307,6 +314,7 @@ impl HtmlRenderer {
             xref_placeholders: Vec::new(),
             xref_href_placeholders: Vec::new(),
             block_ref_titles: Vec::new(),
+            bibliography_reftexts: Vec::new(),
             in_header: false,
             li_p_open: Vec::new(),
             li_para_count: Vec::new(),
@@ -470,7 +478,7 @@ impl HtmlRenderer {
                     self.manpage_name_buf.push_str(&text);
                 }
                 if self.in_unlabeled_xref {
-                    if let Some((placeholder, _)) = self.xref_placeholders.last() {
+                    if let Some((placeholder, _, _)) = self.xref_placeholders.last() {
                         output.push_str(placeholder);
                     }
                     self.in_unlabeled_xref = false;
@@ -633,9 +641,15 @@ impl HtmlRenderer {
             Event::BibliographyAnchor { id, label } => {
                 output.push_str("<a id=\"");
                 html_escape(output, &id);
-                output.push_str("\"></a>[");
-                html_escape(output, label.as_ref().unwrap_or(&id));
-                output.push(']');
+                output.push_str("\"></a>");
+                // Reftext is the bracketed label (or id). Register it so a
+                // `<<id>>` cross reference to this entry resolves to the same
+                // `[label]` text in `finish()`.
+                let mut reftext = String::from("[");
+                html_escape(&mut reftext, label.as_ref().unwrap_or(&id));
+                reftext.push(']');
+                output.push_str(&reftext);
+                self.bibliography_reftexts.push((id.to_string(), reftext));
             }
             Event::CalloutRef(num) => {
                 let target = if self.in_source_block {
@@ -759,9 +773,34 @@ impl HtmlRenderer {
                     .entry(id.clone())
                     .or_insert_with(|| title_html.clone());
             }
-            for (placeholder, fallback) in &self.xref_placeholders {
+            // Bibliography entries carry their bracketed reftext (already HTML).
+            for (id, reftext) in &self.bibliography_reftexts {
+                id_to_text
+                    .entry(id.clone())
+                    .or_insert_with(|| reftext.clone());
+            }
+            // Natural cross reference text: a target matching a section title
+            // (case-sensitive) resolves to that section's title, not a bracket.
+            let mut title_to_id: HashMap<&str, &str> = HashMap::new();
+            for entry in &self.toc_entries {
+                title_to_id.entry(entry.title.as_str()).or_insert(&entry.id);
+            }
+            for (placeholder, fallback, is_internal) in &self.xref_placeholders {
                 let replacement = if let Some(text) = id_to_text.get(fallback) {
+                    // Target is a registered id (section/block/bibliography).
                     text.clone()
+                } else if let Some(text) =
+                    title_to_id.get(fallback.as_str()).and_then(|id| id_to_text.get(*id))
+                {
+                    // Target is a section title (natural cross reference).
+                    text.clone()
+                } else if *is_internal {
+                    // Unresolved internal anchor reference: Asciidoctor's default
+                    // xreflabel is the target id wrapped in square brackets.
+                    let mut escaped = String::from("[");
+                    html_escape(&mut escaped, fallback);
+                    escaped.push(']');
+                    escaped
                 } else {
                     let mut escaped = String::new();
                     html_escape(&mut escaped, fallback);
@@ -781,6 +820,7 @@ impl HtmlRenderer {
                 .iter()
                 .map(|e| e.id.as_str())
                 .chain(self.block_ref_titles.iter().map(|(id, _)| id.as_str()))
+                .chain(self.bibliography_reftexts.iter().map(|(id, _)| id.as_str()))
                 .collect();
             let mut title_to_id: HashMap<&str, &str> = HashMap::new();
             for entry in &self.toc_entries {
@@ -1345,7 +1385,8 @@ impl HtmlRenderer {
             } else {
                 target.to_string()
             };
-            self.xref_placeholders.push((placeholder, fallback));
+            self.xref_placeholders
+                .push((placeholder, fallback, !is_interdoc));
         }
     }
 
@@ -4434,6 +4475,42 @@ mod tests {
         assert!(html.contains("class=\"sect1\""));
         assert!(html.contains("class=\"ulist bibliography\""));
         assert!(html.contains("class=\"bibliography\""));
+    }
+
+    #[test]
+    fn test_bibliography_xref_uses_bracketed_reftext() {
+        // `<<pp>>` to `[[[pp]]]` -> link text `[pp]`; labeled `[[[gof,gang]]]`
+        // resolves `<<gof>>` to the bracketed label `[gang]` (not `[gof]`).
+        let html = to_html(
+            "See <<pp>> and <<gof>>.\n\n\
+             [bibliography]\n== Refs\n\n\
+             * [[[pp]]] Pragmatic Programmer.\n\
+             * [[[gof,gang]]] Gang of Four.",
+        );
+        assert!(html.contains("<a href=\"#pp\">[pp]</a>"), "{html}");
+        assert!(html.contains("<a href=\"#gof\">[gang]</a>"), "{html}");
+    }
+
+    #[test]
+    fn test_unresolved_internal_xref_falls_back_to_bracketed_id() {
+        // An internal `<<id>>` with no matching section/block/bibliography and no
+        // explicit text falls back to `[id]`, matching Asciidoctor's xreflabel.
+        let html = to_html("See <<anchors>> and <<missing,custom text>>.");
+        assert!(html.contains("<a href=\"#anchors\">[anchors]</a>"), "{html}");
+        // Explicit text still wins over the bracketed fallback.
+        assert!(html.contains(">custom text</a>"), "{html}");
+        // Inter-document refs keep their raw rewritten path (no brackets).
+        let interdoc = to_html("See <<other.adoc#sec>>.");
+        assert!(!interdoc.contains("[other"), "{interdoc}");
+    }
+
+    #[test]
+    fn test_resolved_internal_xref_not_bracketed() {
+        // A natural cross reference that resolves to a section title is rendered
+        // with the raw title, not bracketed.
+        let html = to_html("See <<Target Section>>.\n\n== Target Section\n\nBody.");
+        assert!(html.contains(">Target Section</a>"), "{html}");
+        assert!(!html.contains("[Target Section]"), "{html}");
     }
 
     #[test]

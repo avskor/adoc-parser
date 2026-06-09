@@ -1,6 +1,66 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-2) — Фаза 3: link blank-window `^` (п.14)
+## Последняя сессия (2026-06-09, поздняя-3) — Фаза 3: xref fallback `[id]` + bibliography reftext
+
+link-blank-window-caret УЖЕ смержена+запушена в master (`2e53399`, origin == master). Удалены
+устаревшие локальные ветки image-alt-quotes / xref-id-normalization. Выбран следующий чистый
+flip по near-miss на 162 — крупнейший 1-diff кластер: bibliography `[pp]`. При эмпирической
+пробе оказалось ШИРЕ: общее правило fallback-текста внутреннего xref.
+
+### Ветка `fix/xref-fallback-bracketed-id` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): внутренний `<<id>>` без
+  явного текста, чей id НЕ резолвится (нет секции/блока/bibliography) → текст = `[id]`
+  (в скобках, default xreflabel), НЕ сырой `id`. Bibliography — частный случай: `[[[pp]]]`→
+  `<<pp>>`=`[pp]`; `[[[gof,gang]]]`→`<<gof>>`=`[gang]` (reftext=label в скобках, НЕ `[gof]`).
+  Явный текст (`<<id,текст>>`) и natural xref (target==заголовок секции, БЕЗ скобок) побеждают.
+  Inter-document (`<<f.adoc#s>>`) НЕ бракетится (путь `.html` сырой).
+- **Фикс** (`adoc-html/src/lib.rs`, ленивая резолюция в `finish()`, как для текста xref):
+  - новое поле `bibliography_reftexts: Vec<(String,String)>` (id → `[label|id]`), заполняется
+    в `push_event` на `Event::BibliographyAnchor` (рендер тот же `[label]`, плюс push в реестр);
+  - `xref_placeholders` расширен с 2- до 3-кортежа: `(placeholder, fallback, is_internal)`;
+    `is_internal = !is_interdoc` в `start_cross_reference`; обновлены `.last()` (стр ~474),
+    push (~1348);
+  - текстовая резолюция в `finish()` теперь зеркалит href-резолюцию: `id_to_text.get` (id) →
+    `title_to_id`→`id_to_text` (natural xref, БЕЗ скобок) → `[fallback]` если internal → raw;
+    `bibliography_reftexts` влиты в `id_to_text`; biblio-id добавлены в `known_ids` (href).
+- +4 теста (lib: bibliography-xref bracketed, unresolved→bracket+interdoc-raw+explicit-wins,
+  resolved-natural-not-bracketed). 2 старых теста (`test_full_document`,
+  `test_xref_unresolvable_falls_back_to_id` в `tests/html_output.rs`) кодировали НЕВЕРНОЕ старое
+  поведение (сырой id) → обновлены под `[id]` (проверено пробой asciidoctor: `[introduction]`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html lib 302→306,
+  html_output 35, parser 439).
+- Корпус `compare_full.py` (release): **Identical 162→165 (+3), Different 179, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base-бинарь `/tmp/adoc_base` из master vs new): **7 файлов**
+  изменили вывод; **3 FLIP→IDENTICAL** (xref.adoc, bibliography, _crud), **0 регрессий**
+  (0 Identical→Different), 4 остались Different по НЕ-xref причинам, НО их xref-ссылки теперь
+  верны (data-format, _responses, subs/index — xref IDENTICAL; lexicon — остаток ниже).
+- TODO.md: baseline 162→165, новый пункт `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/xref-fallback-bracketed-id` (только по запросу).
+- Следующие чистые flip-кандидаты (по near-miss на 165):
+  - **inline-anchor reftext из dt-терма** `[[id]]term:: ...` → `<<id>>` = текст терма
+    (lexicon.adoc: ~14 ссылок `boxed-attrlist`→`boxed attribute list`, `attribute`→`attribute`).
+    ВЕРИФИЦИРОВАНО пробой: якорь в НАЧАЛЕ dt-терма берёт reftext из текста терма; якорь в
+    параграфе (`[[plain]]...`) reftext НЕ имеет → `[plain]` (наш bracket ВЕРЕН). Родственно
+    bibliography, но требует захвата текста терма в парсере (БОЛЬШЕ по объёму). НЕ регрессия
+    моей правки (lexicon был Different и до неё; 0 файловых регрессий по blast radius).
+  - **апостроф `'`→’ в тексте/макросе** (scope, span-cells, README — остаток п.37).
+  - **`§`/bare char-ref** сохранять как сущность (title-links — остаток п.15).
+  - **`// end::para[]` утечка** тег-региона (verse, literal).
+- Архитектурные (отложены): `{attr-ref}[text]` (порядок subs), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (нужен base-бинарь в `/tmp/adoc_base` — копировать ДО изменений). near-miss `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM). LSP для навигации, context7 MCP для доков.
+
+---
+
+## Сессия (2026-06-09, поздняя-2) — Фаза 3: link blank-window `^` (п.14)
 
 п.19 xref-id-normalization уже смержена в master (755b320). Выбран следующий чистый flip
 по near-miss на baseline 158 — крупнейший кластер: суффикс `^` в тексте ссылки.
