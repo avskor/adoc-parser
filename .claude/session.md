@@ -1,6 +1,63 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-8) — Фаза 3: `link:url[]` пустой текст → `class="bare"` (п.14)
+## Последняя сессия (2026-06-09, поздняя-9) — Фаза 3: `table-caption` document-атрибут
+
+link-macro-empty-bare смержена в master (`c37bcf6`, origin == master, дерево чистое). `/tmp/adoc_base`
+пересобран из master `c37bcf6` ПЕРЕД правкой. Baseline корпуса подтверждён: Identical 172, Different
+172, Errors 0. Выбор кандидата по near-miss на 172: 1-diff кандидаты (verse `// end::para[]`, kbd
+`+`-разделитель, listing-blocks subs) рискованны/архитектурны; среди 2-diff `turn-off-title-label`
+(оба diff — один корень: подавление лейбла «Table N.») оказался самым чистым.
+
+### Ветка `fix/table-caption-doc-attr` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): лейбл таблицы = `{table-caption} N. `
+  где `table-caption` — built-in document-атрибут, дефолт «Table». `:table-caption!:` (unset) →
+  лейбл подавлён у ВСЕХ таблиц; `:table-caption: Data Set` → «Data Set N. ». Блочный `[caption=…]`
+  (любое значение, в т.ч. пустое) ПОБЕЖДАЕТ document-атрибут: литеральный префикс БЕЗ номера
+  (`[caption="X "]`→«X Title», `[caption=]`→«Title»). **Счётчик инкрементируется ТОЛЬКО когда
+  показан номер** — подавлённый caption (блочный `caption=` ИЛИ unset `table-caption`) НЕ увеличивает
+  счётчик (T1=«Table 1.», подавлённая T2, T3=«Table 2.»). `{table-caption}` резолвится в «Table».
+- **Корень**: `adoc-html/lib.rs::start_table` caption-рендер хардкодил «Table N.» в `None`-arm и
+  инкрементировал `table_counter` БЕЗУСЛОВНО (перед match) — игнорировал document-атрибут.
+- **Фикс** (2 точки): (1) `document_attrs` инициализируется `table-caption`=«Table» (стр ~255) —
+  так `:table-caption!:` удаляет ключ (existing `apply_attribute` strip_suffix('!')→remove), а
+  `{table-caption}` корректно резолвится; (2) `None`-arm (нет блочного `caption=`) консультирует
+  `document_attrs.get("table-caption").cloned()`: `Some(label)`→инкремент+«{label} N. »(html_escape),
+  `None`→без лейбла. Безусловный инкремент убран, перенесён внутрь `Some(label)`-ветки. Блочные
+  `Some("")`/`Some(prefix)` arm'ы НЕ инкрементируют (correct). +2 теста (`test_table_caption_doc_attr_html`:
+  unset/custom-numbered/{table-caption}-ref; `test_table_caption_suppressed_not_counted_html`).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (html 309→311, parser 443).
+- Корпус `compare_full.py` (release): **Identical 172→173 (+1), Different 171, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `c37bcf6`): **2 файла**
+  изменили вывод — **1 FLIP→IDENTICAL** (turn-off-title-label), **0 регрессий**. customize-title-label
+  улучшён (2/3 caption'а верны: «Data Set 1./2.»), но остаётся Different по др. причинам (Antora-
+  include `example$table.adoc` не резолвится; colgroup; + отдельный merge-баг ниже).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/table-caption-doc-attr` (только по запросу).
+- **СЛЕДУЮЩИЙ чистый кандидат — merge attr-блоков** (обнаружен в этой сессии): `[caption="Table A. "]`
+  + `.title` + `[cols="3*"]` → второй attr-блок (`[cols]`) ЗАТИРАЕТ `caption=` из первого. Asciidoctor
+  МЁРЖИТ несколько `[...]` строк вокруг заголовка. Корень — в block.rs (накопление block-attrs).
+  Затрагивает customize-title-label (caption 3/3) и turn-off-title-label table B (уже флипнул через
+  `:table-caption!:`, но caption= там тоже теряется). Проверить blast radius (merge может задеть много).
+- Прочие near-miss на 173 (1-diff, рискованные): verse `// end::para[]` (comment-handling блок-сканера),
+  kbd `+`-разделитель (passthrough `+...+`), listing-blocks subs (`[subs="+attributes"]`).
+- Другие 2-diff: width.adoc (`th` vs `td` — header-row в include `row.adoc[tag=base-h]`),
+  counter.adoc (`{index}` ref после `{counter:index}` не резолвится — counter не пишет в attrs, п.36),
+  _responses/http-api-design (trailing-space перед softbreak).
+- Архитектурные (отложены): `{attr-ref}[text]` (порядок subs), link-role `class="external"`,
+  nested-форматирование в тексте ссылки, inline-monospace passthrough char-ref (`Event::Code`).
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `c37bcf6`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM). LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-8) — Фаза 3: `link:url[]` пустой текст → `class="bare"` (п.14)
 
 bare-char-reference-preserved УЖЕ смержена в master (`8b7ee64`, origin == master; worktree
 `/tmp/master-wt` убран, `/tmp/adoc_base` пересобран из master перед правкой). session.md прошлой

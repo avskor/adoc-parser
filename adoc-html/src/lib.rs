@@ -252,6 +252,7 @@ impl HtmlRenderer {
             document_attrs: HashMap::from([
                 ("backend".to_string(), "html5".to_string()),
                 ("doctype".to_string(), "article".to_string()),
+                ("table-caption".to_string(), "Table".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
             footnotes: Vec::new(),
@@ -1432,21 +1433,27 @@ impl HtmlRenderer {
         // Caption must come before colgroup per HTML5 spec
         let title_html = self.block_title_inner_html.take();
         if let Some(title) = title_html {
-            self.table_counter += 1;
             let caption_attr = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
             output.push_str("<caption class=\"title\">");
             match caption_attr.as_deref() {
                 Some("") => {
-                    // Empty caption= means no prefix, just the title
+                    // Empty caption= means no prefix, just the title (no number, no counter bump).
                 }
                 Some(prefix) => {
+                    // Block caption= used as a literal label prefix: no number, no counter bump.
                     html_escape(output, prefix);
                 }
                 None => {
-                    // Default: "Table N. "
-                    output.push_str("Table ");
-                    output.push_str(&self.table_counter.to_string());
-                    output.push_str(". ");
+                    // No block caption: consult the table-caption document attribute.
+                    // Set (default "Table") → "{table-caption} N. " and bump the counter;
+                    // unset (`:table-caption!:`) → no label and the counter is not bumped.
+                    if let Some(label) = self.document_attrs.get("table-caption").cloned() {
+                        self.table_counter += 1;
+                        html_escape(output, &label);
+                        output.push(' ');
+                        output.push_str(&self.table_counter.to_string());
+                        output.push_str(". ");
+                    }
                 }
             }
             output.push_str(&title);
@@ -4274,6 +4281,35 @@ mod tests {
     fn test_table_no_title_no_caption_html() {
         let html = to_html("|===\n| A | B\n|===");
         assert!(!html.contains("<caption"));
+    }
+
+    #[test]
+    fn test_table_caption_doc_attr_html() {
+        // `:table-caption!:` unsets the label for every table in the document.
+        let off = to_html(":table-caption!:\n\n.My Table\n|===\n| A | B\n|===");
+        assert!(
+            off.contains("<caption class=\"title\">My Table</caption>"),
+            "unset table-caption drops the label. Got:\n{off}"
+        );
+
+        // A custom `:table-caption: Data Set` replaces the label word but keeps numbering.
+        let custom = to_html(":table-caption: Data Set\n\n.First\n|===\n| A\n|===\n\n.Second\n|===\n| B\n|===");
+        assert!(custom.contains("<caption class=\"title\">Data Set 1. First</caption>"), "Got:\n{custom}");
+        assert!(custom.contains("<caption class=\"title\">Data Set 2. Second</caption>"), "Got:\n{custom}");
+
+        // {table-caption} resolves to the default "Table" like Asciidoctor.
+        let reference = to_html("{table-caption}");
+        assert!(reference.contains("<p>Table</p>"), "Got:\n{reference}");
+    }
+
+    #[test]
+    fn test_table_caption_suppressed_not_counted_html() {
+        // A table whose label is suppressed (empty caption= or unset table-caption) must not
+        // advance the counter, so the next default table keeps the right number.
+        let html = to_html(".T1\n|===\n| A\n|===\n\n[caption=]\n.T2\n|===\n| B\n|===\n\n.T3\n|===\n| C\n|===");
+        assert!(html.contains("<caption class=\"title\">Table 1. T1</caption>"), "Got:\n{html}");
+        assert!(html.contains("<caption class=\"title\">T2</caption>"), "Got:\n{html}");
+        assert!(html.contains("<caption class=\"title\">Table 2. T3</caption>"), "Got:\n{html}");
     }
 
     #[test]
