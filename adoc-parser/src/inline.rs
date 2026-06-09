@@ -902,16 +902,44 @@ impl<'a> InlineState<'a> {
     }
 
     fn find_closing_constrained(&self, marker: u8, search_start: usize) -> Option<usize> {
-        let bytes = &self.input.as_bytes()[search_start..];
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == marker && i > 0 {
-                let next = bytes.get(i + 1).copied();
-                if next != Some(marker) {
-                    return Some(i);
-                }
+        let s = &self.input[search_start..];
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            // Passthroughs are extracted before quote substitution in AsciiDoc, so
+            // a quote marker that lives inside a `++…++` / `+++…+++` passthrough must
+            // not terminate the surrounding span. Skip the whole passthrough region;
+            // its inner content (incl. any markers) is handled when the span is reparsed.
+            if b == b'+'
+                && let Some(skip) = Self::passthrough_span_len(s, i)
+            {
+                i += skip;
+                continue;
             }
+            if b == marker && i > 0 && bytes.get(i + 1).copied() != Some(marker) {
+                return Some(i);
+            }
+            i += 1;
         }
         None
+    }
+
+    /// If a closed `++…++` or `+++…+++` passthrough begins at byte offset `i` in `s`,
+    /// return its total byte length (so quote-delimiter scanning can skip over it).
+    /// Mirrors the matching in `try_double_plus_passthrough` / `try_triple_plus_passthrough`
+    /// (non-empty content, nearest closing delimiter). `i` must point at a `+`.
+    fn passthrough_span_len(s: &str, i: usize) -> Option<usize> {
+        let rest = &s[i..];
+        if let Some(after) = rest.strip_prefix("+++") {
+            let close = after.find("+++")?;
+            (close != 0).then_some(3 + close + 3)
+        } else if let Some(after) = rest.strip_prefix("++") {
+            let close = after.find("++")?;
+            (close != 0).then_some(2 + close + 2)
+        } else {
+            None
+        }
     }
 
     fn try_unconstrained(
@@ -3119,6 +3147,36 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello ")),
             Event::Text(Cow::Borrowed("+text+ world")),
+        ]);
+    }
+
+    #[test]
+    fn test_passthrough_inside_monospace() {
+        // `++`++` — the inner backtick lives in a ++…++ passthrough and must not
+        // close the monospace span early. Asciidoctor renders <code>`</code>.
+        let events = parse("(`++`++`)");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(")),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("`")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(")")),
+        ]);
+
+        // ++b++ inside monospace → passthrough yields literal "b".
+        let events = parse("`++b++`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("b")),
+            Event::End(TagEnd::Monospace),
+        ]);
+
+        // A lone, unclosed ++ stays literal; the monospace span matches normally.
+        let events = parse("`x ++ y`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("x ++ y")),
+            Event::End(TagEnd::Monospace),
         ]);
     }
 

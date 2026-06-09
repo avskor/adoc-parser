@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-09, поздняя-16) — Фаза 3: passthrough внутри monospace/quote (`` `++`++` ``)
+
+`fix/attr-ref-path-before-brackets` УЖЕ смержена в master (`a57aeda`, origin == master, дерево чистое;
+session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` обновлён из ТЕКУЩЕГО чистого
+master `a57aeda` ПЕРЕД правкой (скопирован свежесобранный release-бинарь). Baseline подтверждён:
+Identical 186, Different 158, Errors 0. near-miss: 1-diff keyboard-macro (passthrough `+...+`, фидли —
+отложен), 2-diff counter (архитектурный — отложен). Из трёх неразведанных 4-diff (role/user-index/
+text-index) разведка дала ДВА корня: (A) **`` `++`++` ``** passthrough-внутри-monospace (role.adoc +
+text/index.adoc — ОДИН корень, 2 флипа), (B) user-index.adoc — escape `\indexterm2:[...]` внутри
+monospace (отдельный, отложен). Выбран A — чистый, 2 флипа.
+
+### Ветка `fix/passthrough-inside-monospace` (от master `a57aeda`; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами через файл, НЕ по памяти): passthrough
+  (`++…++`/`+++…+++`/`+…+`) извлекается в пре-пасс ДО quote-подстановки. Поэтому quote-маркер ВНУТРИ
+  passthrough не закрывает внешний span. `` (`++`++`) ``→`<code>`</code>`, `` `++b++` ``→`<code>b</code>`,
+  `` `x ++ y` ``→`<code>x ++ y</code>` (одиночный незакрытый `++` остаётся литералом — span матчится
+  нормально), `` `pre ++*bold*++ post` ``→`<code>pre *bold* post</code>` (passthrough-контент сырой),
+  `` `+++<b>r</b>+++` ``→`<code><b>r</b></code>`.
+- **Корень**: `inline.rs::find_closing_constrained` сканировал байты слева-направо и возвращал ПЕРВЫЙ
+  `marker` (для backtick — backtick ВНУТРИ `++`++` на offset 2) → `<code>++</code>` + каскад остатка
+  (`++`)` литералом). Парсер однопроходный, пре-пасса извлечения passthrough нет.
+- **Фикс** (1 точка + хелпер, ТОЛЬКО `inline.rs`): новый `passthrough_span_len(s, i) -> Option<usize>`
+  (зеркалит `try_double/triple_plus_passthrough`: `+++…+++` или `++…++`, non-empty контент, ближайший
+  закрывающий делимитер; возвращает длину региона в байтах; `i` указывает на `+`; все делимитеры ASCII →
+  валидные char-границы). `find_closing_constrained` переписан с byte-индекс-цикла на `while i<len`:
+  если `bytes[i]==b'+'` и `passthrough_span_len` вернул Some(skip) → `i += skip; continue` (пропуск
+  passthrough-региона); иначе проверка marker как раньше (`i>0`, next != marker). Применяется ко ВСЕМ
+  constrained-маркерам (`*`/`_`/`` ` ``/`#` — общая функция). Внутренний reparse в `try_constrained`
+  уже корректно эмитит passthrough через `handle_inline_passthrough` (`InlinePassthrough`, raw).
+  Одиночный `+…+` СОЗНАТЕЛЬНО НЕ пропускается (для корпуса не нужен — `` `+*+` ``/`` `+_+` `` уже
+  работали, внутри них нет backtick; меньше риска). `find_closing_unconstrained` НЕ тронут (корпусу не
+  нужен). +1 тест `test_passthrough_inside_monospace` (3 кейса). Использует let-chain (`&& let`) —
+  валидно в Rust 2024.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 446→447, html 317,
+  parsing_lab **233/233** verified `--nocapture`). Правка в close-finder, ASG читает события парсера —
+  но кейсов с passthrough-внутри-quote в фикстурах нет, `br`/события не задеты.
+- Корпус `compare_full.py` (release): **Identical 186→188 (+2), Different 156, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `a57aeda`): **5 файлов** изменили
+  вывод — **2 FLIP→IDENTICAL** (role.adoc, text/index.adoc), **0 регрессий**. 3 changed-still-different
+  УЛУЧШЕНЫ: bold.adoc/italic.adoc 6→2 raw-diff (body-passthrough совпал; остаток — pre-existing diff в
+  author-блоке standalone-обёртки `<div class="details">`/author-span/комментарий, НЕ связан с фиксом,
+  проверено), troubleshoot-unconstrained 38→36 (`_++__kernel++_`→`<em>__kernel</em>` точно совпал с
+  asciidoctor).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/passthrough-inside-monospace` (только по запросу).
+  master == origin сейчас, после мержа потребуется пуш (по запросу).
+- Чистые flip-кандидаты (near-miss на 188): **keyboard-macro** (1-diff, kbd `+`-passthrough — фидли),
+  **counter.adoc** (2-diff, архитектурный). Неразведанный остаток 4-diff: **user-index.adoc** — escape
+  макроса внутри monospace `` `\indexterm2:[<primary>]` `` (asciidoctor: литерал `indexterm2:[<primary>]`,
+  `\` снят; мы: `<code>\&lt;primary&gt;</code>` — теряем `indexterm2:[`/`]`, парсим макрос). Корень —
+  `\` перед макросом внутри `` ` `` не подавляет макрос. Стоит глянуть role.adoc/user-index ещё раз на
+  предмет чистого корня.
+- Возможное расширение ЭТОГО фикса (НЕ нужно для флипов): пропуск passthrough в
+  `find_closing_unconstrained` (для `**`/`__`/`` `` ``/`##`) и одиночный `+…+` — для симметрии/
+  корректности, если всплывёт в корпусе. Сейчас сознательно узко.
+- Архитектурные (отложены): наследование `m`/`e`/`s` стиля колонки таблицы, nested-форматирование в
+  ТЕКСТЕ ссылки (QUOTES в `[label]`), inline-monospace passthrough char-ref (`` `&#167;` `` в `<code>`,
+  `Event::Code`), inline-anchor reftext из dt-терма (lexicon), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически (пробы asciidoctor
+  через ФАЙЛ — shell экранирует backtick'и в `echo`/heredoc-`<<'EOF'` ок).
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `a57aeda`; зовёт `-a nofooter`, сравнивает `<body>`).
+  near-miss `/tmp/nearmiss.py` (вывод в `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM,
+  `convert_charrefs=True` → `&#8217;`≡`’`; `style`-атрибут игнорится). LSP для навигации, context7 MCP.
+
+---
+
 ## Сессия (2026-06-09, поздняя-15) — Фаза 3: путь между `}` и `[` в attr-ref (`{url}/issues[text]`)
 
 `fix/attr-ref-respect-block-subs` УЖЕ смержена в master (`107b7e2`/`18f7ca2`, дерево чистое, master ==
