@@ -1005,7 +1005,7 @@ impl HtmlRenderer {
         match tag {
             Tag::Paragraph | Tag::UnorderedList { .. } | Tag::OrderedList { .. }
             | Tag::DescriptionList | Tag::DelimitedBlock { .. } | Tag::SourceBlock { .. }
-            | Tag::BlockImage { .. } | Tag::Table
+            | Tag::BlockImage { .. } | Tag::Table | Tag::Admonition { .. }
                 if self.li_p_open.last() == Some(&true) =>
             {
                 output.push_str("</p>\n");
@@ -1145,6 +1145,12 @@ impl HtmlRenderer {
             }
             Tag::CalloutListItem { .. } => {
                 output.push_str("<li><p>");
+                // Track the principal `<p>` like a regular list item so a
+                // continuation block (e.g. a `+`-attached NOTE) closes it
+                // before the block is emitted, instead of nesting the block
+                // inside the still-open `<p>`.
+                self.li_p_open.push(true);
+                self.li_para_count.push(1);
             }
             Tag::Admonition { kind } => self.start_admonition(output, kind, &meta),
             Tag::Table => self.start_table(output, &meta),
@@ -2306,7 +2312,14 @@ impl HtmlRenderer {
                 output.push_str("</ol>\n</div>\n");
             }
             TagEnd::CalloutListItem => {
-                output.push_str("</p></li>\n");
+                self.li_para_count.pop();
+                if self.li_p_open.pop() == Some(true) {
+                    output.push_str("</p></li>\n");
+                } else {
+                    // The principal `<p>` was already closed by a continuation
+                    // block (e.g. a NOTE attached with `+`).
+                    output.push_str("</li>\n");
+                }
             }
             TagEnd::Admonition => {
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
@@ -3926,6 +3939,34 @@ mod tests {
         assert!(html.contains("<b class=\"conum\">(1)</b> <b class=\"conum\">(2)</b>"));
         assert!(html.contains("<li><p>First</p></li>"));
         assert!(html.contains("<li><p>Second</p></li>"));
+    }
+
+    #[test]
+    fn test_callout_item_with_continuation_note_html() {
+        // A NOTE attached to a callout item with `+` is a child block: the
+        // item's principal `<p>` must close before the admonition, not nest it.
+        let input = "[source]\n----\ncode <1>\nmore <2>\n----\n<1> simple\n<2> has note\n+\nNOTE: the note";
+        let html = to_html(input);
+        // Simple item unchanged.
+        assert!(html.contains("<li><p>simple</p></li>"));
+        // Item 2: <p> closed before the admonition (not nested inside it).
+        assert!(html.contains("<li><p>has note</p>\n<div class=\"admonitionblock note\">"));
+        // The item closes after the admonition; no stray </p> nesting the block.
+        assert!(html.contains("</table>\n</div>\n</li>"));
+        assert!(!html.contains("has note<div"));
+        assert!(!html.contains("</div></p></li>"));
+    }
+
+    #[test]
+    fn test_source_lang_shifted_by_leading_named_attr_html() {
+        // `[id=app, source, yaml]` — the leading `id=` shifts positionals, so
+        // `source` is the language (slot 2), not `yaml` (slot 3).
+        let html = to_html("[id=app, source, yaml]\n----\nspring:\n  x: 1\n----");
+        assert!(html.contains("class=\"language-source\" data-lang=\"source\""));
+        assert!(!html.contains("language-yaml"));
+        // Explicit `[source, yaml]` is unaffected.
+        let html = to_html("[source, yaml]\n----\na: 1\n----");
+        assert!(html.contains("class=\"language-yaml\" data-lang=\"yaml\""));
     }
 
     #[test]
