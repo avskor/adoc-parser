@@ -1,6 +1,66 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-7) — Фаза 3: preserve bare char-ref (остаток п.15)
+## Последняя сессия (2026-06-09, поздняя-8) — Фаза 3: `link:url[]` пустой текст → `class="bare"` (п.14)
+
+bare-char-reference-preserved УЖЕ смержена в master (`8b7ee64`, origin == master; worktree
+`/tmp/master-wt` убран, `/tmp/adoc_base` пересобран из master перед правкой). session.md прошлой
+сессии была устаревшей (писалась до мержа). Выбор кандидата: near-miss на 171 дал 3 «1-diff»
+(verse `// end::para[]`, keyboard-macro `+`-passthrough, listing-blocks subs) — все рискованные/
+обрезанные. Кластер `index/icons-font/auto-ids` = `{url-xxx}[text^]` (attr-ref как target —
+архитектурный subs-order, отложен). Чистый флип нашёлся в README.adoc (2 diff, оба `link:X[]`
+без `class="bare"`).
+
+### Ветка `fix/link-macro-empty-bare` (от master; НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробами, НЕ по памяти): link-макрос/URL-макрос/autolink
+  БЕЗ явного текста (`link:LICENSE[]`, `https://x[]`, `link:++url++[]`, голый `https://x`) →
+  «bare» → `class="bare"` (видимый текст = target). Явный текст (даже равный target,
+  `link:LICENSE[LICENSE]`) → НЕ bare. **Исключения**: `mailto:a@b.com[]` НЕ bare; email-autolink
+  `a@b.com` тоже НЕ bare у asciidoctor (у нас ставится bare — ПРЕДСУЩЕСТВУЮЩЕЕ расхождение в
+  ОБРАТНУЮ сторону, отдельный путь `try_email_autolink:1817` + тест `test_email_autolink_html`
+  кодирует старое; НЕ трогал — мой фикс его не регрессирует). С ролью asciidoctor даёт
+  `class="bare external"` — роль на ссылке у нас не захватывается (нет поля role в `Tag::Link`).
+- **Корень**: `inline.rs` — `link:`/url-макрос при пустом тексте пушил URL как видимый текст, но
+  `is_bare: false` жёстко. Bare ставился только в голом autolink (`try_autolink:1747`).
+- **Фикс**: `let is_bare = link_attrs.text.is_empty();` в 3 точках — `try_link_macro` (`++url++`-путь
+  ~1389 и обычный ~1429) и `try_autolink` with-text при пустом `[]` (~1730). mailto (~1479) НЕ
+  тронут (остаётся `is_bare: false`). +2 теста (`test_link_macro_empty_text_is_bare` в inline.rs:
+  link/explicit/url-empty; `test_link_macro_empty_text_bare_class` в lib.rs: render + mailto-NOT-bare).
+  Обновлены 2 теста под верное поведение: `test_macro_label_replacements` (`link:a'b.html[]`
+  false→true), `test_link_passthrough_url_empty_text` (добавлен `class="bare"`; verified пробой).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 442→443, html 307→309).
+- Корпус `compare_full.py` (release): **Identical 171→172 (+1), Different 172, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` пересобран из чистого master `8b7ee64`):
+  **2 файла** изменили вывод — **1 FLIP→IDENTICAL** (README.adoc), **0 регрессий**. url.adoc
+  улучшен (`link:tools.html#editors[]`→`class="bare"` верно, verified vs asciidoctor), но остаётся
+  Different по др. причинам (irc custom-macro, nested `*…*` в тексте ссылки, sect0-обёртка, link-role
+  `class="green"`). TODO.md: baseline 171→172, п.14 под-пункт `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/link-macro-empty-bare` (только по запросу).
+- Следующие чистые flip-кандидаты (near-miss на 172, все 1-diff, все рискованные/архитектурные):
+  - **verse `// end::para[]`** утечка тег-региона: verse-параграф (verse.adoc) КЕЕРS comment-строку
+    в выводе, мы дропаем как комментарий. Трогает comment-handling блок-сканера в verbatim — риск шире.
+  - **kbd `+`-разделитель** `kbd:[key(+key)*]` (keyboard-macro): mono-literal `+...+` passthrough
+    ест внутренний `+` → даём `kbd:[key(key)*]+`. Passthrough-парсинг, риск выше.
+  - **listing-blocks subs** (`[subs="+attributes"]` внутри outer `------` listing): обрезанный
+    1-diff, надо смотреть полностью — вероятно `{replace-me}` или verbatim-нюанс.
+  - **inline-anchor reftext из dt-терма** `[[id]]term::` (lexicon, ~14 ссылок; БОЛЬШЕ по объёму).
+- Архитектурные (отложены): `{attr-ref}[text]` как target ссылки (порядок subs — index/icons-font/
+  auto-ids/custom-ids), link-role `class="external"`/`green` (нет поля role в `Tag::Link`),
+  nested-форматирование в тексте ссылки (`link:u[*bold*]`), inline-monospace passthrough char-ref.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `8b7ee64`). near-miss `/tmp/nearmiss.py`. Сравнение
+  семантическое (DOM): `class="bare"` на `<a>` сравнивается (виден как `attr_diff on <a>`).
+  LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-7) — Фаза 3: preserve bare char-ref (остаток п.15)
 
 literal-unknown-style-class смержена в master (`a4547fd`, origin == master). Выбран следующий
 чистый flip по near-miss на 170 — `§`/bare char-ref (title-links, 2-diff один корень). Кандидаты
