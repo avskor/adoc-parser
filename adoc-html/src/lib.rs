@@ -10,6 +10,37 @@ use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind,
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
 
+// MathJax docinfo injected before `</body>` when the document sets the `stem`
+// attribute (any value). Asciidoctor emits this fixed block regardless of the
+// notation (asciimath/latexmath) or whether actual stem content is present.
+// `autoNumber: "none"` is the default; the `eqnums` attribute (not in corpus)
+// would change it.
+const MATHJAX_DOCINFO: &str = r#"<script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  messageStyle: "none",
+  tex2jax: {
+    inlineMath: [["\\(", "\\)"]],
+    displayMath: [["\\[", "\\]"]],
+    ignoreClass: "nostem|nolatexmath"
+  },
+  asciimath2jax: {
+    delimiters: [["\\$", "\\$"]],
+    ignoreClass: "nostem|noasciimath"
+  },
+  TeX: { equationNumbers: { autoNumber: "none" } }
+})
+MathJax.Hub.Register.StartupHook("AsciiMath Jax Ready", function () {
+  MathJax.InputJax.AsciiMath.postfilterHooks.Add(function (data, node) {
+    if ((node = data.script.parentNode) && (node = node.parentNode) && node.classList.contains("stemblock")) {
+      data.math.root.display = "block"
+    }
+    return data
+  })
+})
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-MML-AM_HTMLorMML"></script>
+"#;
+
 const INTRINSIC_ATTRIBUTES: &[(&str, &str)] = &[
     ("amp", "&amp;"),
     ("apos", "&#39;"),
@@ -2934,6 +2965,11 @@ impl HtmlRenderer {
             output.push_str(footer);
             output.push('\n');
         }
+        // Asciidoctor injects the MathJax loader before `</body>` whenever the
+        // `stem` attribute is set on the document.
+        if self.document_attrs.contains_key("stem") {
+            output.push_str(MATHJAX_DOCINFO);
+        }
         output.push_str("</body>\n</html>");
     }
 
@@ -3682,6 +3718,39 @@ mod tests {
         let html = to_html_with_options("= My Document\n\nContent.", HtmlOptions { standalone: true, ..Default::default() });
         assert!(html.contains("<h1>My Document</h1>"),
             "expected <h1>My Document</h1> in standalone mode, got:\n{html}");
+    }
+
+    #[test]
+    fn test_stem_mathjax_docinfo() {
+        // When `:stem:` is set, the MathJax loader is injected before </body>.
+        let html = to_html_with_options(
+            "= Doc\n:stem: asciimath\n\nHello.",
+            HtmlOptions { standalone: true, ..Default::default() },
+        );
+        assert!(html.contains("<script type=\"text/x-mathjax-config\">"),
+            "stem doc should inject MathJax config. Got:\n{html}");
+        assert!(html.contains("cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-MML-AM_HTMLorMML"),
+            "stem doc should inject MathJax loader. Got:\n{html}");
+        // Block sits before </body>, after content.
+        let body_pos = html.find("</body>").unwrap();
+        let mathjax_pos = html.find("x-mathjax-config").unwrap();
+        assert!(mathjax_pos < body_pos, "MathJax must precede </body>");
+
+        // latexmath produces the identical (notation-agnostic) block.
+        let html_tex = to_html_with_options(
+            "= Doc\n:stem: latexmath\n\nHello.",
+            HtmlOptions { standalone: true, ..Default::default() },
+        );
+        assert!(html_tex.contains("<script type=\"text/x-mathjax-config\">"),
+            "latexmath stem doc should also inject MathJax. Got:\n{html_tex}");
+
+        // No `:stem:` → no injection.
+        let html_none = to_html_with_options(
+            "= Doc\n\nHello.",
+            HtmlOptions { standalone: true, ..Default::default() },
+        );
+        assert!(!html_none.contains("x-mathjax-config"),
+            "doc without stem must not inject MathJax. Got:\n{html_none}");
     }
 
     #[test]
