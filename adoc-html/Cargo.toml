@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 adoc-parser = { path = "../adoc-parser" }
+adoc-render-core = { path = "../adoc-render-core" }

@@ -50,15 +50,21 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
 - [x] **R6**: хелперы `open_li_paragraph`/`close_li_paragraph`; 3 arm'а ListItem схлопнуты
   в один (match по checked), CalloutListItem/TagEnd-обработчики на хелперах.
   DescriptionDescription НЕ тронут (асимметричный rollback-механизм dd_output_start).
-- [ ] **R7 (АРХИТЕКТУРА — подготовка ко 2-му рендереру)**: семантика AsciiDoc, застрявшая в
-  adoc-html и УЖЕ продублированная в adoc-compat-tests/builder.rs (второй потребитель событий):
-  резолюция attr-refs (`INTRINSIC_ATTRIBUTES` lib.rs:44 ≈ `intrinsic_attribute_text`
-  builder.rs:39; `resolve_attr_refs` builder.rs:1015; обработка `trailing_brackets` в обоих).
-  Вынести в крейт `adoc-render-core`: AttributeResolver (intrinsic-значения хранить
-  семантически, НЕ pre-HTML-encoded), XrefResolver (natural xref, bracketed fallback,
-  .adoc→расширение цели), SectionNumberer+TocBuilder, счётчики (figure/table/example/footnote),
-  author/revision-семантика. Уже хорошо разделено (не трогать): subs — в парсере (inline.rs),
-  table-grid (colspan/rowspan) — в парсере (block.rs).
+- [~] **R7 (АРХИТЕКТУРА — подготовка ко 2-му рендереру)**: ЭТАП 1 СДЕЛАН (ветка
+  `refactor/render-core-attr-resolver`, 2026-06-10; НЕ закоммичено): создан крейт
+  **`adoc-render-core`** (zero-dep, workspace-member) — единая таблица интринсиков
+  (`IntrinsicAttribute { name, text, html }`: `text` — семантическое значение, `html` —
+  байт-в-байт форма asciidoctor; обе колонки — данные, кодировка НЕ выводима правилом:
+  `plus`→`&#43;`, но `cpp`→литеральный `C++`), `resolve_attribute_reference()` (полный
+  precedence doc→intrinsic→env-*→fallback→attribute-missing, generic через closure-lookups)
+  и `resolve_attr_refs_text()` (eager `{name}`-резолв в строках). adoc-html и
+  adoc-compat-tests/builder.rs переведены, локальные копии удалены. Попутно закрыт ДРЕЙФ:
+  в builder.rs отсутствовали `apos`/`pp`/`quot` — теперь таблица общая. Корпус байт-в-байт
+  (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +4 юнит-теста core.
+  ОСТАЛОСЬ: XrefResolver (natural xref, bracketed fallback, .adoc→расширение цели — сейчас
+  `ResolutionContext` в adoc-html/finish(), завязан на html_escape), SectionNumberer+TocBuilder,
+  счётчики (figure/table/example/footnote), author/revision-семантика. Уже хорошо разделено
+  (не трогать): subs — в парсере (inline.rs), table-grid (colspan/rowspan) — в парсере (block.rs).
 - [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
   (blocks/inline/media/finish/escape) независимо от R7.
 - [ ] **R9 (wart)**: `Parser.experimental` — парсер наблюдает `Event::Attribute` для гейтинга

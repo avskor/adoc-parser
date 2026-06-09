@@ -6,43 +6,6 @@ use adoc_parser::{
 
 use crate::asg::{AsgHeader, AsgNode, AuthorInfo};
 
-const INTRINSIC_ATTRIBUTES_TEXT: &[(&str, &str)] = &[
-    ("amp", "&"),
-    ("asterisk", "*"),
-    ("backslash", "\\"),
-    ("backtick", "`"),
-    ("blank", ""),
-    ("brvbar", "\u{00a6}"),
-    ("caret", "^"),
-    ("cpp", "C++"),
-    ("deg", "\u{00b0}"),
-    ("empty", ""),
-    ("endsb", "]"),
-    ("gt", ">"),
-    ("ldquo", "\u{201c}"),
-    ("lsquo", "\u{2018}"),
-    ("lt", "<"),
-    ("nbsp", "\u{00a0}"),
-    ("plus", "+"),
-    ("rdquo", "\u{201d}"),
-    ("rsquo", "\u{2019}"),
-    ("sp", " "),
-    ("startsb", "["),
-    ("tilde", "~"),
-    ("two-colons", "::"),
-    ("two-semicolons", ";;"),
-    ("vbar", "|"),
-    ("wj", "\u{2060}"),
-    ("zwsp", "\u{200b}"),
-];
-
-fn intrinsic_attribute_text(name: &str) -> Option<&'static str> {
-    INTRINSIC_ATTRIBUTES_TEXT
-        .iter()
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| *v)
-}
-
 /// Stack frame representing an open tag being built.
 enum BuildFrame {
     Document {
@@ -406,17 +369,21 @@ pub fn build_asg<'a>(
             }
 
             Event::AttributeReference { name, fallback, trailing_brackets } => {
-                let lower_name = name.to_ascii_lowercase();
-                let mut resolved = match attrs.get(lower_name.as_str()) {
-                    Some(Some(value)) => value.clone(),
-                    _ => {
-                        if let Some(value) = intrinsic_attribute_text(&lower_name) {
-                            value.to_string()
-                        } else if let Some(fb) = fallback {
-                            fb.to_string()
-                        } else {
-                            format!("{{{name}}}")
-                        }
+                use adoc_render_core::AttrRefOutcome;
+                let mut resolved = match adoc_render_core::resolve_attribute_reference(
+                    &name,
+                    |n| attrs.get(n).and_then(|v| v.as_deref()),
+                    |_| None,
+                    fallback.as_deref(),
+                    None,
+                ) {
+                    AttrRefOutcome::Document(value) => value.to_string(),
+                    // The ASG layer is plain text — use the semantic column.
+                    AttrRefOutcome::Intrinsic(attr) => attr.text.to_string(),
+                    AttrRefOutcome::Fallback(fb) => fb.to_string(),
+                    AttrRefOutcome::Env(value) => value,
+                    AttrRefOutcome::MissingSkip | AttrRefOutcome::MissingDrop => {
+                        format!("{{{name}}}")
                     }
                 };
                 // The trailing `[...]` was captured into the reference event; the
@@ -1013,33 +980,7 @@ fn admonition_variant(kind: &AdmonitionKind) -> String {
 
 /// Resolve `{name}` attribute references in a string value.
 fn resolve_attr_refs(value: &str, attrs: &HashMap<String, Option<String>>) -> String {
-    let mut result = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(start) = rest.find('{') {
-        result.push_str(&rest[..start]);
-        let after_brace = &rest[start + 1..];
-        if let Some(end) = after_brace.find('}') {
-            let name = &after_brace[..end];
-            let lower_name = name.to_ascii_lowercase();
-            if let Some(Some(resolved)) = attrs.get(lower_name.as_str()) {
-                result.push_str(resolved);
-            } else if let Some(resolved) = intrinsic_attribute_text(&lower_name) {
-                result.push_str(resolved);
-            } else {
-                // Unresolved — passthrough
-                result.push('{');
-                result.push_str(name);
-                result.push('}');
-            }
-            rest = &after_brace[end + 1..];
-        } else {
-            // No closing brace — keep as is
-            result.push('{');
-            rest = after_brace;
-        }
-    }
-    result.push_str(rest);
-    result
+    adoc_render_core::resolve_attr_refs_text(value, |n| attrs.get(n).and_then(|v| v.as_deref()))
 }
 
 /// Extract plain text from inline nodes.

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "adoc-parser",
+    "adoc-render-core",
     "adoc-html",
     "adoc-wasm",
     "adoc-cli",

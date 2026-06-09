@@ -1,5 +1,64 @@
 # Session context
 
+## Сессия (2026-06-10, третья) — R7 этап 1: крейт adoc-render-core (AttributeResolver)
+
+Запрос «продолжи R7». master `2a9bf9f` (R5 уже смержен), новая ветка
+**`refactor/render-core-attr-resolver`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `2a9bf9f` ПЕРЕД правками.
+
+### Что сделано (этап 1 R7 — attr-refs; XrefResolver/SectionNumberer/счётчики — следующие этапы)
+- **Новый крейт `adoc-render-core`** (zero-dep; добавлен в workspace `members` ПОСЛЕ
+  adoc-parser). API:
+  - `IntrinsicAttribute { name, text, html }` + `INTRINSIC_ATTRIBUTES` (sorted) +
+    `intrinsic_attribute(name)`. ДВЕ колонки данными: `text` — семантика (для ASG/будущих
+    рендереров), `html` — байт-в-байт форма asciidoctor. Кодировку НЕЛЬЗЯ вывести правилом
+    из text: `plus`/`pp` → `&#43;` (защита от passthrough-реинтерпретации), но `cpp` →
+    литеральный `C++` — это per-attribute данные самого asciidoctor.
+  - `resolve_attribute_reference(name, doc_lookup, env_lookup, fallback, attribute_missing)
+    -> AttrRefOutcome` — полный precedence (doc → intrinsic → `env-*` → fallback →
+    missing-mode). Generic через closures — потребители с разными типами мап работают
+    без конверсий. Нюанс сохранён: env-miss БЕЗ fallback → MissingSkip (литерал `{name}`)
+    НЕ консультируя attribute-missing (зеркало старого html-кода).
+  - `resolve_attr_refs_text(value, doc_lookup)` — eager `{name}`-резолв в строке
+    (бывший builder::resolve_attr_refs), intrinsic через `text`-колонку.
+  - 4 юнит-теста (sorted-инвариант+колонки, precedence, env-семантика, строковый резолв).
+- **adoc-html**: удалены `INTRINSIC_ATTRIBUTES`/`intrinsic_attribute` (lib.rs:44-82);
+  arm `Event::AttributeReference` → match по `AttrRefOutcome` (Document — прежний
+  combine-and-reparse с trailing_brackets; Intrinsic — `attr.html` raw; Env/Fallback —
+  html_escape; MissingSkip — литерал+brackets; MissingDrop — ничего). Поведение 1:1.
+- **adoc-compat-tests/builder.rs**: удалены `INTRINSIC_ATTRIBUTES_TEXT`/
+  `intrinsic_attribute_text`/тело `resolve_attr_refs` (теперь делегат в core);
+  arm AttributeReference → core (`attr.text`). **Дрейф-фикс**: builder НЕ знал
+  `apos`/`pp`/`quot` — теперь знает (parsing-lab не дрогнул: кейсов нет).
+- trailing_brackets НЕ в core — это consumer-policy (html реparse'ит `value[...]`,
+  ASG дописывает литералом); зафиксировано доками на `AttrRefOutcome`.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser 461,
+  html 328+36, render-core 4, parsing-lab **233/233** `--nocapture`, html-compat 6/6+1,
+  integration 25, author_rendering 6).
+- **Рефакторинг-нейтральность: raw-вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**.
+- Корпус `compare_full.py` (release): **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки (только по запросу). В diff: Cargo.toml (workspace),
+  adoc-render-core/* (новый), adoc-html/Cargo.toml+src/lib.rs,
+  adoc-compat-tests/Cargo.toml+src/builder.rs, TODO.md, session.md, Cargo.lock.
+- R7 этап 2 (кандидаты): XrefResolver — вынести семантику `ResolutionContext` из
+  adoc-html/finish() (precedence link-text/href, natural xref, .adoc→.html) в core;
+  сложность: завязан на html_escape/готовый HTML заголовков блоков — нужна абстракция
+  «как экранировать». Затем SectionNumberer+TocBuilder, счётчики, author/revision.
+  R9 (канал document-attrs → inline-парсер) стыкуется с этим же выносом.
+- R8 (распил lib.rs ~6300 строк) — независим, можно в любой момент.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, вторая) — R5 завершён: ResolutionContext + однопроходный резолв сентинелей
 
 `fix/block-image-figure-caption` УЖЕ смержена в master (`eab7a20`, дерево чистое; session.md
