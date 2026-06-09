@@ -1,6 +1,52 @@
 # Session context
 
-## Последняя сессия (2026-05-31, поздняя) — Фаза 3: em-dash границы + ZWSP
+## Последняя сессия (2026-06-09) — Фаза 3: п.18 image alt двойные кавычки
+
+Самый чистый near-miss-кандидат на baseline 153 (предсказан в прошлой session.md).
+em-dash и escaped-preprocessor уже смержены в master (dfa0819).
+
+### Ветка `fix/image-alt-quotes` (от master; НЕ закоммичено)
+- **Симптом**: `image::set-version-label.png["Byline...",role=screenshot]` →
+  `<img alt="&quot;Byline...&quot;">` вместо `alt="Byline...">`.
+- **Корень**: `adoc-parser/src/attributes.rs::parse_image_attrs`. Именованные значения
+  (`key="v"`) снимали обрамляющие `"` (строки ~436-439), а **позиционные** (alt = positional[0],
+  width=[1], height=[2]) пушились сырыми → кавычки доезжали до рендерера → `&quot;`.
+- **Фикс**: вынесен хелпер `fn strip_enclosing_quotes(&str)->&str` (снимает ОДНУ пару двойных
+  кавычек, согласован со `split_respecting_quotes`, который трекает только `"`). Применён в обеих
+  ветках разбора (именованной — рефактор, поведение то же; позиционной — новое). Один источник
+  `parse_image_attrs` → покрывает block-image (block.rs:563) и inline-image (inline.rs:1521).
+  НЕ трогал общий `BlockAttributes::parse` (строка 199) — чтобы не расширять blast radius.
+- +1 тест `test_parse_image_attrs_quoted_alt`.
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 437→438).
+- Корпус `compare_full.py` (release): **Identical 153→157 (+4), Different 187, Errors 0**.
+- Blast radius — РОВНО 6 файлов с закавыченным позиционным alt (`grep image::?…["`), проверены
+  поштучно (`/tmp/check6.py`, normalize из compare_full, base vs new бинари):
+  4 FLIP DIFFERENT→IDENTICAL (author-attribute-entries, reference-revision-attributes,
+  revision-attribute-entries, version-label); 2 остались DIFFERENT по НЕ-alt причинам
+  (image.adoc — обёртка `<a class="image">`/block-vs-inline; revision-line — вне alt). 0 регрессий.
+- TODO.md: baseline 153→157, п.18 помечен `[x]`.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/image-alt-quotes` (только по запросу).
+  NB: на master 2 незапушенных коммита (em-dash) — `origin/master` отстаёт на 2.
+- Следующие чистые flip-кандидаты Фазы 3 (по near-miss на 157):
+  - **xref-id норм.** `#Substitutions`→`#_substitutions` (п.19/24, positional-and-named-attributes).
+  - **link `^`+rel/target** для литеральных `link:`/URL (description, xref-text-and-style — по 2 diff);
+    NB: `{attr-ref}[text]` — архитектурно (порядок subs).
+  - **`// end::para[]` утечка** тег-региона (verse.adoc, literal.adoc).
+  - **остаток п.37**: апостроф `'`→’ в display-тексте макроса (xref/link) не проходит REPLACEMENTS.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). near-miss: `/tmp/nearmiss.py`.
+  Сравнение семантическое (DOM) — сырой `diff` может «врать» (`’`/`&#8217;`, whitespace в `<code>`).
+  LSP для навигации, context7 MCP для доков.
+
+---
+
+## Сессия (2026-05-31, поздняя) — Фаза 3: em-dash границы + ZWSP
 
 Кандидат по near-miss на baseline 149. Кластер «типографика» (п.37) — самый безопасный/выгодный
 из чистых flip (link через `{attr-ref}` оказался архитектурным — порядок подстановок, отложен).

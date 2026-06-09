@@ -38,6 +38,15 @@ fn split_respecting_quotes(s: &str) -> Vec<&str> {
     parts
 }
 
+/// Strip a single matching pair of enclosing double quotes, mirroring the
+/// quote-awareness of `split_respecting_quotes`. Returns the input unchanged
+/// when both quotes are not present (so `"x` or `x"` are left intact).
+fn strip_enclosing_quotes(s: &str) -> &str {
+    s.strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(s)
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct AttributeStore {
@@ -423,11 +432,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         }
         if let Some((key, value)) = part.split_once('=') {
             let key = key.trim();
-            let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(value);
+            let value = strip_enclosing_quotes(value.trim());
             match key {
                 "alt" => alt = Some(value),
                 "width" => width = Some(value),
@@ -439,7 +444,10 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
                 _ => {}
             }
         } else {
-            positional.push(part);
+            // Positional values (alt is positional[0]) may be quoted, e.g.
+            // `image::x["Alt text",role=…]`. Asciidoctor strips the enclosing
+            // quotes; the named branch above already does.
+            positional.push(strip_enclosing_quotes(part));
         }
     }
 
@@ -909,6 +917,15 @@ mod tests {
         assert_eq!(attrs.alt, "A beautiful sunset");
         assert_eq!(attrs.width, None);
         assert_eq!(attrs.height, None);
+    }
+
+    #[test]
+    fn test_parse_image_attrs_quoted_alt() {
+        // Positional alt in double quotes: enclosing quotes are stripped
+        // (Asciidoctor: `image::x["Alt text",role=r]` → alt="Alt text").
+        let attrs = parse_image_attrs("\"Byline with custom version label\",role=screenshot");
+        assert_eq!(attrs.alt, "Byline with custom version label");
+        assert_eq!(attrs.role, Some("screenshot"));
     }
 
     #[test]
