@@ -182,6 +182,11 @@ impl<'a> InlineState<'a> {
         let has_macros = self.subs.has(SubstitutionSet::MACROS);
         let has_attributes = self.subs.has(SubstitutionSet::ATTRIBUTES);
         let has_post_replacements = self.subs.has(SubstitutionSet::POST_REPLACEMENTS);
+        // A valid char-ref survives only when specialchars AND replacements are both active:
+        // specialchars escapes `&#167;` to `&amp;#167;`, then the replacements sub restores it.
+        // Verbatim blocks have specialchars but not replacements, so they escape char-refs.
+        let preserve_char_refs =
+            self.subs.has(SubstitutionSet::SPECIALCHARS) && self.subs.has(SubstitutionSet::REPLACEMENTS);
 
         let mut text_start = self.pos;
 
@@ -202,6 +207,24 @@ impl<'a> InlineState<'a> {
 
             if self.handle_inline_macro(b, has_quotes, has_macros, has_attributes, events, &mut text_start) {
                 continue;
+            }
+
+            // Bare character reference: &#167; &copy; &amp; → preserve as a raw entity.
+            // Asciidoctor keeps a valid char-ref intact in normal text (specialchars escapes it,
+            // then replacements restores it); an invalid one (`&#1;`, bare `&`) stays escaped.
+            // Verbatim blocks lack replacements, so they keep their char-refs escaped (matching
+            // Asciidoctor). The reference is emitted as a passthrough so the renderer does not
+            // escape its `&`.
+            if b == b'&' && preserve_char_refs {
+                let ref_len = self.char_ref_len_at(self.pos);
+                if ref_len > 0 {
+                    self.flush_text(text_start, self.pos, events);
+                    let ref_start = self.pos;
+                    self.advance_by(ref_len);
+                    events.push(Event::InlinePassthrough(Cow::Borrowed(&self.input[ref_start..self.pos])));
+                    text_start = self.pos;
+                    continue;
+                }
             }
 
             self.pos += 1;
@@ -2724,6 +2747,38 @@ mod tests {
             assert!(
                 events.iter().any(|e| matches!(e, Event::Text(t) if t.contains('\\'))),
                 "backslash should be preserved for {input:?}, got {events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bare_char_reference_preserved() {
+        // A valid bare char-ref (no backslash) is preserved as a raw entity (InlinePassthrough),
+        // so the renderer does not escape its `&` — matching Asciidoctor's specialchars sub.
+        for (input, want) in [
+            ("a &#167; b", "&#167;"),
+            ("a &copy; b", "&copy;"),
+            ("a &amp; b", "&amp;"),
+            ("a &#x1F600; b", "&#x1F600;"),
+        ] {
+            let events = parse(input);
+            assert_eq!(events, vec![
+                Event::Text(Cow::Borrowed("a ")),
+                Event::InlinePassthrough(Cow::Borrowed(want)),
+                Event::Text(Cow::Borrowed(" b")),
+            ], "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_bare_invalid_char_reference_not_preserved() {
+        // An invalid char-ref (too-few digits, single-letter name, missing `;`, bare `&`) is left
+        // as plain text — the renderer escapes its `&` to `&amp;`. No InlinePassthrough is emitted.
+        for input in ["a &#1; b", "a &x; b", "a &#167 b", "a & b", "a &#xZ; b"] {
+            let events = parse(input);
+            assert!(
+                !events.iter().any(|e| matches!(e, Event::InlinePassthrough(_))),
+                "no passthrough should be emitted for {input:?}, got {events:?}"
             );
         }
     }
