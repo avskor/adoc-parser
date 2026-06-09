@@ -1065,20 +1065,38 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
+        // Single-plus passthrough is a *constrained* pair (like `*`/`_`/`` ` ``):
+        // the opening '+' must not follow a word character (`C+a+` stays literal)
+        // and the content's first char must not be a space (`+ a+` stays literal).
+        if self.is_word_char_before(start_pos) {
+            return false;
+        }
+
         let after_open = start_pos + 1; // skip "+"
         if after_open >= self.input.len() {
             return false;
         }
+        if self.input.as_bytes()[after_open] == b' ' {
+            return false;
+        }
 
-        // Find closing single '+' that is not part of '++' or '+++'
+        // Find a closing single '+' obeying the constrained-close rule: it must not
+        // be part of '++'/'+++', must not be immediately followed by a word char,
+        // and the content must not end with a space. A '+' that fails these (e.g. the
+        // inner '+' in `+a+b+`, followed by a word char) cannot close, so the scan
+        // continues to the next candidate (`+a+b+` → content `a+b`).
         let bytes = &self.input.as_bytes()[after_open..];
         let mut close = None;
         for (i, &b) in bytes.iter().enumerate() {
             if b == b'+' && i > 0 {
-                // Check it's not preceded by '+' or followed by '+'
-                let preceded_by_plus = bytes.get(i.wrapping_sub(1)).copied() == Some(b'+');
-                let followed_by_plus = bytes.get(i + 1).copied() == Some(b'+');
-                if !preceded_by_plus && !followed_by_plus {
+                let preceded_by_plus = bytes[i - 1] == b'+';
+                let preceded_by_space = bytes[i - 1] == b' ';
+                let next = bytes.get(i + 1).copied();
+                let followed_by_plus = next == Some(b'+');
+                let followed_by_word =
+                    next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
+                if !preceded_by_plus && !preceded_by_space && !followed_by_plus && !followed_by_word
+                {
                     close = Some(i);
                     break;
                 }
@@ -3129,6 +3147,42 @@ mod tests {
         let events = parse("+(C) 2024+");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("(C) 2024")),
+        ]);
+    }
+
+    #[test]
+    fn test_single_plus_passthrough_constrained() {
+        // Constrained close: an inner '+' followed by a word char cannot close, so
+        // the scan continues to the trailing '+'. `+a+b+` → content "a+b".
+        let events = parse("+a+b+");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("a+b"))]);
+
+        // Inner '+' surrounded by spaces stays literal; close is the trailing '+'.
+        let events = parse("+a + b+");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("a + b"))]);
+
+        // Opening '+' after a word char does not start a passthrough (whole literal).
+        let events = parse("C+a+b+");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("C+a+b+"))]);
+
+        // No valid (non-word-followed) close → the leading '+' stays literal.
+        let events = parse("+a+b");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("+a+b"))]);
+
+        // Content may not start with a space → literal.
+        let events = parse("+ a+");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("+ a+"))]);
+    }
+
+    #[test]
+    fn test_monospace_passthrough_inner_plus() {
+        // `+...+` literal-monospace: the inner '+' in kbd:[key(+key)*] must survive
+        // (Asciidoctor renders <code>kbd:[key(+key)*]</code>).
+        let events = parse("`+kbd:[key(+key)*]+`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("kbd:[key(+key)*]")),
+            Event::End(TagEnd::Monospace),
         ]);
     }
 
