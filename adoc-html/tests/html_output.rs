@@ -422,3 +422,19 @@ fn test_xref_unresolvable_falls_back_to_id() {
         "unresolvable xref should fall back to bracketed target id. Got: {html}"
     );
 }
+
+#[test]
+fn test_xref_to_block_whose_title_contains_xref() {
+    // The registered title HTML of `blk` itself holds xref placeholders; the
+    // reference to `blk` must resolve them instead of leaking a raw sentinel.
+    let input = "[#blk]\n.See <<Later>>\n----\nx\n----\n\nRef: <<blk>>\n\n== Later\n\ntext";
+    let html = to_html(input);
+    assert!(
+        html.contains("Ref: <a href=\"#blk\">See <a href=\"#_later\">Later</a></a>"),
+        "xref to block must resolve nested xref inside the block title. Got: {html}"
+    );
+    assert!(
+        !html.contains('\u{0}'),
+        "no placeholder sentinel may leak into output. Got: {html:?}"
+    );
+}
