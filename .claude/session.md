@@ -1,6 +1,72 @@
 # Session context
 
-## Последняя сессия (2026-06-09, поздняя-10) — Фаза 3: trailing whitespace строк параграфа
+## Сессия (2026-06-09, поздняя-11) — Фаза 3: `{attr-ref}[text]` как ссылка (subs-order)
+
+`fix/paragraph-trailing-whitespace` УЖЕ смержена+запушена в master (`e41ad48`, origin == master,
+дерево чистое; session.md прошлой сессии писалась ДО мержа — как всегда). `/tmp/adoc_base` пересобран
+из master `e41ad48` ПЕРЕД правкой. Baseline подтверждён near-miss: Identical 175, Different 169, Errors 0.
+
+Выбор кандидата по near-miss на 175: 1-diff (verse `// end::para[]`, kbd `+`, listing-blocks subs)
+рискованны/архитектурны. Самый крупный доступный кластер — **4 файла по 3-diff с ОДНИМ корнем**
+(`index/icons-font/auto-ids/custom-ids`): паттерн `{url-xxx}[text^]`. Откладывался ~6 сессий как
+«архитектурный subs-order», но решился ЧИСТО через combine-and-reparse (проба asciidoctor подтвердила
+семантику: раскрыть атрибут → склеить со скобкой → переразобрать как макрос; не-URL → литерал).
+
+### Ветка `fix/attr-ref-link-macro` (от master; СТАТУС: НЕ закоммичено)
+- **Правило Asciidoctor** (верифицировано пробой, НЕ по памяти): attributes-sub идёт ДО macros-sub.
+  `{url-x}[the page^]` где `:url-x: https://…` → атрибут раскрывается в URL, затем `URL[the page^]`
+  распознаётся как URL-макрос → `<a href=URL target=_blank rel=noopener>the page</a>` (НЕ bare, текст
+  из скобок, `^`→blank-window). `{nm}[bracket]` где nm=John (не-URL) → `John[bracket]` литерал.
+  `{undef}[bracket]` (forward/undefined) → `{undef}[bracket]` (оба сохранены).
+- **Корень**: парсер эмитил `Event::AttributeReference` и оставлял `[text^]` отдельным `Text`;
+  рендерер раскрывал атрибут через `render_inline_value`, который переразбирал URL В ИЗОЛЯЦИИ →
+  bare-autolink, а `[text^]` доезжал литералом.
+- **Фикс** (4 файла, combine-and-reparse):
+  - `event.rs`: `Event::AttributeReference` + поле `trailing_brackets: Option<CowStr>` (+ into_static).
+  - `inline.rs::try_attribute_reference`: захват `[...]` СРАЗУ после `}` (локальная копия `self.input`
+    для lifetime; `tail.starts_with('[') && !"[["`; первый `]`; без пробела/без `]` → None). `pos`
+    сдвигается за скобки.
+  - `adoc-html/lib.rs` arm `AttributeReference`: при резолве из `document_attrs` → `format!("{value}{br}")`
+    + `render_inline_value` (URL→ссылка, не-URL→тот же литерал). В ветках intrinsic/env/fallback/missing-skip
+    скобки дописываются `html_escape_text` (были отдельным Text до фикса).
+  - `adoc-compat-tests/builder.rs` arm: `resolved.push_str(&br)` — ASG-слой сохраняет скобки как текст
+    после резолва (в parsing-lab инлайн-`{attr}[...]` НЕТ — единственный `}[` это block-`image::{target}[]`,
+    идёт мимо inline; 233/233 целы).
+  - +2 теста: `test_attribute_reference_captures_trailing_brackets` (inline: capture/`[[`-skip/space-skip/
+    no-close), `test_attribute_reference_link_target` (html: url→link+blank-window, non-url→литерал, undef→оба).
+
+### Статус (верифицировано)
+- `cargo clippy --workspace`: 0 warnings. `cargo test --workspace`: зелёное (parser 443→444, html 313→314,
+  parsing_lab 233/233 целы, остальные без изменений).
+- Корпус `compare_full.py` (release): **Identical 175→180 (+5), Different 164, Errors 0**.
+- Blast radius (`/tmp/blast.py`, base `/tmp/adoc_base` = чистый master `e41ad48`): **17 файлов** изменили
+  вывод — **5 FLIP→IDENTICAL** (CONTRIBUTING, index, icons-font, auto-ids, custom-ids), **0 регрессий**.
+  12 changed-still-different: число позиционных diff'ов улучшено/без изменений (links 235→232,
+  replacements 155→148, index 20→14/22→6, image-size лучше); **audio-and-video 766→796 ВЫРОС — но это
+  АРТЕФАКТ выравнивания**: фикс семантически верен (`<a target=_blank rel=noopener>`mono`</a>` вместо
+  bare+leftover), в base leftover-bracket случайно содержал `<code>` токены, позиционно совпадавшие с
+  ожидаемым asciidoctor. Остаток — nested-mono в тексте ссылки (backticks не → `<code>`, текст ссылки
+  проходит REPLACEMENTS но не QUOTES — предсуществующее, см. baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** ветки `fix/attr-ref-link-macro` (только по запросу).
+- Следующие чистые flip-кандидаты (near-miss на 180): counter.adoc (`{counter:index}` не пишет в attrs →
+  `{index}` не резолвится; п.36 — 2-diff один корень), width.adoc (`th` vs `td` header-row из include +
+  autowidth `~`; 2-diff), 1-diff (рискованные): verse `// end::para[]`, kbd `+`-разделитель, listing-blocks
+  `[subs="+attributes"]`. Архитектурные (отложены): nested-форматирование в ТЕКСТЕ ссылки (QUOTES в
+  `[label]` — флипнул бы audio-and-video/links/replacements; текст ссылки сейчас только REPLACEMENTS через
+  `push_macro_label`), inline-monospace passthrough char-ref (`Event::Code`), link-role `class="external"`.
+
+### Предостережения (без изменений)
+- НЕ `cargo fmt`. Коммит только по запросу. Верифицировать находки эмпирически.
+- Корпус: `python3 /mnt/c/tmp/adoc-test/compare_full.py` (release). blast: `/tmp/blast.py`
+  (base `/tmp/adoc_base` = чистый master `e41ad48`). near-miss `/tmp/nearmiss.py` (вывод в
+  `/tmp/nearmiss_out.txt`). Сравнение семантическое (DOM); позиц. счётчик может «врать» при сдвиге.
+  LSP для навигации, context7 MCP.
+
+---
+
+## Сессия (2026-06-09, поздняя-10) — Фаза 3: trailing whitespace строк параграфа
 
 `fix/table-caption-doc-attr` УЖЕ смержена в master (`759771c`, origin == master, дерево чистое;
 session.md прошлой сессии писалась ДО мержа). `/tmp/adoc_base` пересобран из master `759771c`

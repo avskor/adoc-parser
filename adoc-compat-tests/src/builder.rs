@@ -405,9 +405,9 @@ pub fn build_asg<'a>(
                 }
             }
 
-            Event::AttributeReference { name, fallback } => {
+            Event::AttributeReference { name, fallback, trailing_brackets } => {
                 let lower_name = name.to_ascii_lowercase();
-                let resolved = match attrs.get(lower_name.as_str()) {
+                let mut resolved = match attrs.get(lower_name.as_str()) {
                     Some(Some(value)) => value.clone(),
                     _ => {
                         if let Some(value) = intrinsic_attribute_text(&lower_name) {
@@ -419,6 +419,11 @@ pub fn build_asg<'a>(
                         }
                     }
                 };
+                // The trailing `[...]` was captured into the reference event; the
+                // ASG layer keeps it as literal text following the resolved value.
+                if let Some(br) = trailing_brackets {
+                    resolved.push_str(&br);
+                }
                 push_inline_to_current(
                     &mut stack,
                     AsgNode::Text {

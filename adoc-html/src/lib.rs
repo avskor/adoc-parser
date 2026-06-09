@@ -574,14 +574,27 @@ impl HtmlRenderer {
                     }
                 }
             }
-            Event::AttributeReference { name, fallback } => {
+            Event::AttributeReference { name, fallback, trailing_brackets } => {
                 let lower_name = name.to_ascii_lowercase();
                 if let Some(value) = self.document_attrs.get(lower_name.as_str()) {
                     let value = value.clone();
-                    self.render_inline_value(output, &value);
+                    // Attributes substitute before macros: if a trailing `[...]`
+                    // was captured, re-parse `value[...]` together so a URL-valued
+                    // attribute forms a link macro. For non-URL values the bracket
+                    // stays literal — same result as rendering them separately.
+                    match trailing_brackets {
+                        Some(br) => {
+                            let combined = format!("{value}{br}");
+                            self.render_inline_value(output, &combined);
+                        }
+                        None => self.render_inline_value(output, &value),
+                    }
                 } else if let Some(value) = intrinsic_attribute(&lower_name) {
                     // Intrinsic values are pre-encoded HTML — push raw
                     output.push_str(value);
+                    if let Some(br) = trailing_brackets {
+                        html_escape_text(output, &br);
+                    }
                 } else if let Some(env_name) = name.strip_prefix("env-") {
                     if let Ok(value) = std::env::var(env_name) {
                         html_escape(output, &value);
@@ -592,8 +605,14 @@ impl HtmlRenderer {
                         output.push_str(&name);
                         output.push('}');
                     }
+                    if let Some(br) = trailing_brackets {
+                        html_escape_text(output, &br);
+                    }
                 } else if let Some(fb) = fallback {
                     html_escape(output, &fb);
+                    if let Some(br) = trailing_brackets {
+                        html_escape_text(output, &br);
+                    }
                 } else {
                     let mode = self.document_attrs.get("attribute-missing").map(|s| s.as_str());
                     match mode {
@@ -605,6 +624,9 @@ impl HtmlRenderer {
                             output.push('{');
                             output.push_str(&name);
                             output.push('}');
+                            if let Some(br) = trailing_brackets {
+                                html_escape_text(output, &br);
+                            }
                         }
                     }
                 }
@@ -3463,6 +3485,30 @@ mod tests {
         let html3 = to_html("mailto:user@example.com[]");
         assert!(html3.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"), "{html3}");
         assert!(!html3.contains("class=\"bare\""), "{html3}");
+    }
+
+    #[test]
+    fn test_attribute_reference_link_target() {
+        // `{url}[text^]` — attributes substitute before macros, so once the URL
+        // attribute resolves the trailing `[text^]` forms a link macro with a
+        // blank-window target (matches Asciidoctor). No leftover literal bracket.
+        let html = to_html(":url-x: https://example.com/foo\n\nSee {url-x}[the page^] now.");
+        assert!(
+            html.contains("<a href=\"https://example.com/foo\" target=\"_blank\" rel=\"noopener\">the page</a>"),
+            "{html}"
+        );
+        assert!(!html.contains("[the page"), "leftover bracket not consumed: {html}");
+        assert!(!html.contains("class=\"bare\""), "{html}");
+
+        // A non-URL attribute value followed by `[...]` stays literal (the
+        // re-parsed `value[text]` matches no macro) — same as Asciidoctor.
+        let html2 = to_html(":nm: John\n\nName {nm}[bracket] here.");
+        assert!(html2.contains("John[bracket]"), "{html2}");
+        assert!(!html2.contains("<a "), "{html2}");
+
+        // An undefined attribute keeps both the reference and the brackets.
+        let html3 = to_html("Name {undefined-attr}[bracket] here.");
+        assert!(html3.contains("{undefined-attr}[bracket]"), "{html3}");
     }
 
     #[test]

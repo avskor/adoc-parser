@@ -76,6 +76,13 @@ pub enum Event<'a> {
     AttributeReference {
         name: CowStr<'a>,
         fallback: Option<CowStr<'a>>,
+        /// Raw `[...]` text (brackets included) immediately following the
+        /// reference, e.g. the `[text]` in `{url}[text]`. Asciidoctor performs
+        /// attribute substitution before macro substitution, so once `{url}`
+        /// resolves to a URL the trailing brackets form a link macro. The
+        /// renderer re-parses `value` + these brackets together to reproduce
+        /// that ordering; for non-URL values the result is the same literal.
+        trailing_brackets: Option<CowStr<'a>>,
     },
     Footnote {
         id: Option<CowStr<'a>>,
@@ -142,9 +149,10 @@ impl<'a> Event<'a> {
                 name: cow_owned(name),
                 value: cow_owned(value),
             },
-            Event::AttributeReference { name, fallback } => Event::AttributeReference {
+            Event::AttributeReference { name, fallback, trailing_brackets } => Event::AttributeReference {
                 name: cow_owned(name),
                 fallback: fallback.map(cow_owned),
+                trailing_brackets: trailing_brackets.map(cow_owned),
             },
             Event::Footnote { id, text } => Event::Footnote {
                 id: id.map(cow_owned),
