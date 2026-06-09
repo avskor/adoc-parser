@@ -1175,7 +1175,9 @@ impl HtmlRenderer {
             Tag::BlockAudio { target, attrs } => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &meta, "audioblock");
-                output.push_str(">\n<div class=\"content\">\n");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<div class=\"content\">\n");
                 render_audio_tag(output, target, attrs);
             }
             Tag::InlineImage { target, alt, width, height, align, float, link } =>
@@ -3061,7 +3063,9 @@ fn parse_media_attrs(attrs: &str) -> MediaAttrs<'_> {
                 "poster" => result.poster = Some(value),
                 "start" => result.start = Some(value),
                 "end" => result.end = Some(value),
-                "options" => {
+                // `opts` is the documented shorthand for `options` (Asciidoctor
+                // treats them identically).
+                "opts" | "options" => {
                     for opt in value.split(',') {
                         let opt = opt.trim();
                         match opt {
@@ -3184,17 +3188,39 @@ fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
 fn render_audio_tag(output: &mut String, target: &str, attrs: &str) {
     let media = parse_media_attrs(attrs);
 
-    output.push_str("<audio");
-    write_attr(output, "src", target);
-
-    if !media.nocontrols {
-        output.push_str(" controls");
+    // Build src with an optional media time fragment (#t=start,end), mirroring
+    // the HTML5 video tag.
+    output.push_str("<audio src=\"");
+    html_escape(output, target);
+    match (media.start, media.end) {
+        (Some(s), Some(e)) => {
+            output.push_str("#t=");
+            html_escape(output, s);
+            output.push(',');
+            html_escape(output, e);
+        }
+        (Some(s), None) => {
+            output.push_str("#t=");
+            html_escape(output, s);
+        }
+        (None, Some(e)) => {
+            output.push_str("#t=,");
+            html_escape(output, e);
+        }
+        (None, None) => {}
     }
+    output.push('"');
+
+    // Asciidoctor emits the boolean attributes in this order: autoplay, loop,
+    // controls (controls is on by default unless `nocontrols`).
     if media.autoplay {
         output.push_str(" autoplay");
     }
     if media.loop_ {
         output.push_str(" loop");
+    }
+    if !media.nocontrols {
+        output.push_str(" controls");
     }
     output.push_str(">\nYour browser does not support the audio tag.\n</audio>\n</div>\n");
 }
@@ -4285,7 +4311,8 @@ mod tests {
     #[test]
     fn test_audio_options_html() {
         let html = to_html("audio::audio.mp3[options=\"autoplay,loop\"]");
-        assert!(html.contains("<audio src=\"audio.mp3\" controls autoplay loop>"));
+        // Asciidoctor order: autoplay, loop, controls.
+        assert!(html.contains("<audio src=\"audio.mp3\" autoplay loop controls>"));
     }
 
     #[test]
@@ -4293,6 +4320,19 @@ mod tests {
         let html = to_html("audio::audio.mp3[options=\"nocontrols\"]");
         assert!(html.contains("<audio src=\"audio.mp3\">"));
         assert!(!html.contains("controls"));
+    }
+
+    #[test]
+    fn test_audio_start_opts_and_title() {
+        // `start`/`end` add a #t= media fragment; `opts` is the shorthand for
+        // `options`; a `.Title` renders before the content div.
+        let html = to_html(".Take a zen moment\naudio::ocean-waves.wav[start=60,opts=autoplay]");
+        assert!(
+            html.contains(
+                "<div class=\"audioblock\">\n<div class=\"title\">Take a zen moment</div>\n<div class=\"content\">\n<audio src=\"ocean-waves.wav#t=60\" autoplay controls>"
+            ),
+            "audio start/opts/title rendering wrong: {html}"
+        );
     }
 
     // Index term tests
