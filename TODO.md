@@ -72,7 +72,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   (`resolve_sentinels_into`, плейсхолдеры) осталась в рендерере — это механика отложенного
   резолва HTML-вывода, не семантика. Корпус байт-в-байт (344/344), parsing-lab 233/233,
   clippy 0, +2 юнит-теста core (всего 6).
-  ЭТАП 3 СДЕЛАН (ветка `refactor/render-core-section-toc`, 2026-06-10; НЕ закоммичено):
+  ЭТАП 3 СДЕЛАН (ветка `refactor/render-core-section-toc`, в master `86d8685`):
   **SectionNumberer + TocBuilder** вынесены в core. `TocEntry` (pub-поля level/id/title;
   бывший приватный тип рендерера), `TocBuilder` (push/entries + `toc_steps(toc_levels)
   -> Vec<TocStep>` — структурная раскладка дерева TOC: EnterLevel/Item/CloseItem/LeaveLevel,
@@ -84,9 +84,24 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   body, newline-guard) остались в рендерере; generate_toc — теперь map TocStep→HTML.
   Поля toc_entries/section_counters/appendix_counter удалены из HtmlRenderer. Корпус
   байт-в-байт (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 8).
-  ОСТАЛОСЬ: счётчики (figure/table/example/footnote — каждый со своей caption-логикой),
-  author/revision-семантика. Уже хорошо разделено (не трогать): subs — в парсере (inline.rs),
-  table-grid (colspan/rowspan) — в парсере (block.rs).
+  ЭТАП 4 СДЕЛАН (ветка `refactor/render-core-captions`, 2026-06-10; НЕ закоммичено):
+  **CaptionCounters + FootnoteRegistry** вынесены в core. `CaptionKind`
+  (Figure/Table/Example), `CaptionPrefix::{None,Custom,Numbered}` (plain-текст, потребитель
+  экранирует/форматирует «Label N. »), `CaptionCounters::caption_prefix(kind, caption_attr,
+  doc_label)` — правило выбора префикса: `caption=""` подавляет, `caption=X` verbatim,
+  иначе нумерованный при наличии doc_label; bump-семантика по kind: figure/table бампят
+  ТОЛЬКО при Numbered, example — на КАЖДЫЙ titled-блок (даже под caption=-override) —
+  зеркало старого кода рендерера. `FootnoteRegistry` (define → номер в document-order +
+  реестр named id last-wins; lookup; footnotes() для финальной секции; text — plain,
+  экранирует потребитель). adoc-html: удалены поля figure/table/example_counter,
+  footnotes/footnote_counter/named_footnotes; `push_caption_prefix` стал методом поверх
+  core (example-arm переведён на него — было inline-дублирование), footnote-arms и
+  render_footnotes на FootnoteRegistry. Откуда берётся label (document_attrs
+  `figure-caption`/`table-caption`, хардкод «Example») — осталось в рендерере. Корпус
+  байт-в-байт (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 10).
+  ОСТАЛОСЬ: author/revision-семантика (details-div; revnumber-strip уже в scanner.rs
+  парсера — проверить границу). Уже хорошо разделено (не трогать): subs — в парсере
+  (inline.rs), table-grid (colspan/rowspan) — в парсере (block.rs).
 - [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
   (blocks/inline/media/finish/escape) независимо от R7.
 - [ ] **R9 (wart)**: `Parser.experimental` — парсер наблюдает `Event::Attribute` для гейтинга
