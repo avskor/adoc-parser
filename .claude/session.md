@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-10, седьмая) — R7 этап 5 (ФИНАЛ): Author/Revision в adoc-render-core
+
+Запрос «продолжи R7». Этап 4 уже в master (`de4decd`, merge
+`refactor/render-core-captions`; session.md прошлой сессии писалась ДО мержа — как
+всегда). Новая ветка **`refactor/render-core-author-revision`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `de4decd` ПЕРЕД правками.
+
+### Что сделано
+- **Граница со scanner.rs проверена, корректна**: `parse_authors`/`parse_revision_line`
+  (включая revnumber-strip нецифрового префикса `\D*`) — парсинг строки заголовка,
+  остаются в ПАРСЕРЕ. В core уезжает рендер-семантика поверх событий Author/Revision.
+- **adoc-render-core** (+author/revision-секция после FootnoteRegistry):
+  - `Author` — 6 pub-полей String (fullname/firstname/middlename/lastname/initials/
+    address), plain-текст.
+  - `AuthorRegistry`: `add(author) -> Vec<(String,String)>` — document-attribute-entries
+    с suffix-правилом (index 0 → без суффикса `author`/`email`/…; дальше `author2`…;
+    `middlename{s}`/`email{s}` ТОЛЬКО non-empty); `attr_suffix(index)` (статич.);
+    `authors()`; `is_empty()`.
+  - `Revision { version, date, remark }`: `attr_entries() -> Vec<(&'static str,&str)>`
+    (revnumber/revdate/revremark, пустые компоненты — ничего), `display_version()`
+    (strip ОДНОГО ведущего `v`/`V` — семантика details-заголовка; revision-line приходит
+    уже стрипнутой scanner'ом → no-op, важно для explicit-установленных строк).
+  - +2 юнит-теста (author_registry_attr_entries: suffix-правило/conditional-поля;
+    revision_entries_and_display: non-empty-фильтр/strip v|V/Default-пусто). Всего 12.
+- **adoc-html**: удалены `AuthorData`/`RevisionData`; поля → `authors: AuthorRegistry`,
+  `revision: Option<Revision>`. Arm `Event::Author` → `add` + `document_attrs.extend`;
+  arm `Event::Revision` → `Revision` + цикл по `attr_entries`. `render_author_details`:
+  итерация `authors()`, `AuthorRegistry::attr_suffix(i)`, `rev.display_version()`;
+  весь details-div HTML (span'ы id=author/email/revnumber/revdate/revremark,
+  mailto-ссылка, формат «version X,», `<br>`) остался в рендерере.
+- **R7 ЗАВЕРШЁН** (все 5 этапов): attr-refs, xref, section-numbering/TOC, captions,
+  footnotes, author/revision — в adoc-render-core. TODO.md: R7 отмечен `[x]`.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (18 suites ok:
+  parser 461, html 328+36, render-core 12, parsing-lab **233/233**, html-compat 6/6+6,
+  integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `de4decd`) на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**.
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-render-core/src/lib.rs,
+  adoc-html/src/lib.rs, TODO.md, session.md.
+- R7 закрыт. Остались из аудита: **R8** (распил adoc-html/src/lib.rs ~6300 строк на
+  модули — независим), **R9** (канал document-attrs → inline-парсер вместо ad-hoc
+  `Parser.experimental`). Либо возврат к Фазе 3 (флипы корпуса, near-miss-кандидаты
+  в TODO.md).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, шестая) — R7 этап 4: CaptionCounters + FootnoteRegistry в adoc-render-core
 
 Запрос «продолжи R7». Этап 3 уже в master (`86d8685`, merge

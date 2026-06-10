@@ -544,6 +544,107 @@ impl FootnoteRegistry {
     }
 }
 
+/// An author parsed from the document header's author line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Author {
+    pub fullname: String,
+    pub firstname: String,
+    pub middlename: String,
+    pub lastname: String,
+    pub initials: String,
+    /// Email address (or other contact), empty when absent.
+    pub address: String,
+}
+
+/// Authors collected from the document header, plus the attribute-naming
+/// rule behind `{author}` / `{author2}` / … references.
+#[derive(Default)]
+pub struct AuthorRegistry {
+    authors: Vec<Author>,
+}
+
+impl AuthorRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attribute-name suffix for the author at `index`: the first author's
+    /// attributes are unsuffixed (`author`, `email`), subsequent authors are
+    /// numbered from 2 (`author2`, `email2`, …).
+    pub fn attr_suffix(index: usize) -> String {
+        if index == 0 { String::new() } else { (index + 1).to_string() }
+    }
+
+    /// Register the next author and return the document-attribute entries it
+    /// implies: `author{suffix}`, `firstname{suffix}`, `lastname{suffix}`,
+    /// `authorinitials{suffix}` always, `middlename{suffix}` and
+    /// `email{suffix}` only when non-empty.
+    pub fn add(&mut self, author: Author) -> Vec<(String, String)> {
+        let suffix = Self::attr_suffix(self.authors.len());
+        let mut entries = vec![
+            (format!("author{suffix}"), author.fullname.clone()),
+            (format!("firstname{suffix}"), author.firstname.clone()),
+        ];
+        if !author.middlename.is_empty() {
+            entries.push((format!("middlename{suffix}"), author.middlename.clone()));
+        }
+        entries.push((format!("lastname{suffix}"), author.lastname.clone()));
+        entries.push((format!("authorinitials{suffix}"), author.initials.clone()));
+        if !author.address.is_empty() {
+            entries.push((format!("email{suffix}"), author.address.clone()));
+        }
+        self.authors.push(author);
+        entries
+    }
+
+    /// All authors in document order.
+    pub fn authors(&self) -> &[Author] {
+        &self.authors
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.authors.is_empty()
+    }
+}
+
+/// The revision line from the document header. Components are plain text
+/// (the consumer escapes when rendering).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Revision {
+    pub version: String,
+    pub date: String,
+    pub remark: String,
+}
+
+impl Revision {
+    /// Document-attribute entries this revision implies (`revnumber`,
+    /// `revdate`, `revremark`); empty components contribute nothing.
+    pub fn attr_entries(&self) -> Vec<(&'static str, &str)> {
+        let mut entries = Vec::new();
+        if !self.version.is_empty() {
+            entries.push(("revnumber", self.version.as_str()));
+        }
+        if !self.date.is_empty() {
+            entries.push(("revdate", self.date.as_str()));
+        }
+        if !self.remark.is_empty() {
+            entries.push(("revremark", self.remark.as_str()));
+        }
+        entries
+    }
+
+    /// Version as displayed in the header details: Asciidoctor strips one
+    /// leading `v`/`V` marker (`v1.0` → `1.0`). Revision-line versions
+    /// arrive pre-stripped from the parser (which strips any non-digit
+    /// prefix), so this only changes explicitly set version strings.
+    pub fn display_version(&self) -> &str {
+        self.version
+            .strip_prefix('v')
+            .or_else(|| self.version.strip_prefix('V'))
+            .unwrap_or(&self.version)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,6 +890,73 @@ mod tests {
         assert_eq!(f.footnotes()[1].id.as_deref(), Some("note"));
         assert_eq!(f.footnotes()[0].id, None);
         assert!(!f.is_empty());
+    }
+
+    #[test]
+    fn author_registry_attr_entries() {
+        let mut reg = AuthorRegistry::new();
+        assert!(reg.is_empty());
+        // First author: unsuffixed names, middlename/email skipped when empty.
+        let entries = reg.add(Author {
+            fullname: "John Doe".into(),
+            firstname: "John".into(),
+            middlename: String::new(),
+            lastname: "Doe".into(),
+            initials: "JD".into(),
+            address: String::new(),
+        });
+        assert_eq!(
+            entries,
+            [
+                ("author".to_string(), "John Doe".to_string()),
+                ("firstname".to_string(), "John".to_string()),
+                ("lastname".to_string(), "Doe".to_string()),
+                ("authorinitials".to_string(), "JD".to_string()),
+            ]
+        );
+        // Second author: `2`-suffixed, full set when all components present.
+        let entries = reg.add(Author {
+            fullname: "Ann B. Lee".into(),
+            firstname: "Ann".into(),
+            middlename: "B.".into(),
+            lastname: "Lee".into(),
+            initials: "ABL".into(),
+            address: "ann@example.com".into(),
+        });
+        assert_eq!(
+            entries,
+            [
+                ("author2".to_string(), "Ann B. Lee".to_string()),
+                ("firstname2".to_string(), "Ann".to_string()),
+                ("middlename2".to_string(), "B.".to_string()),
+                ("lastname2".to_string(), "Lee".to_string()),
+                ("authorinitials2".to_string(), "ABL".to_string()),
+                ("email2".to_string(), "ann@example.com".to_string()),
+            ]
+        );
+        assert_eq!(reg.authors().len(), 2);
+        assert_eq!(reg.authors()[1].address, "ann@example.com");
+        assert_eq!(AuthorRegistry::attr_suffix(2), "3");
+    }
+
+    #[test]
+    fn revision_entries_and_display() {
+        let rev = Revision {
+            version: "v8.3".into(),
+            date: "2024-01-01".into(),
+            remark: String::new(),
+        };
+        assert_eq!(
+            rev.attr_entries(),
+            [("revnumber", "v8.3"), ("revdate", "2024-01-01")]
+        );
+        assert_eq!(rev.display_version(), "8.3");
+        let rev = Revision { version: "V2".into(), ..Default::default() };
+        assert_eq!(rev.display_version(), "2");
+        assert_eq!(rev.attr_entries(), [("revnumber", "V2")]);
+        let rev = Revision { version: "1.0".into(), ..Default::default() };
+        assert_eq!(rev.display_version(), "1.0");
+        assert!(Revision::default().attr_entries().is_empty());
     }
 
     #[test]
