@@ -132,9 +132,23 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   push_hardbreaks_text (был прилипший — pre-existing). Корпус байт-в-байт (344/344,
   0 diffs, 0 exit-diffs), Identical 204/Different 140/Errors 0 (= baseline), clippy 0,
   test --workspace зелёное.
-- [ ] **R9 (wart)**: `Parser.experimental` — парсер наблюдает `Event::Attribute` для гейтинга
-  kbd/btn/menu; при выносе семантики в core продумать общий канал document-attrs → inline-парсер
-  (сейчас ad-hoc флаг).
+- [x] **R9 (wart)**: СДЕЛАНО (ветка `refactor/inline-doc-attrs-channel`, 2026-06-11).
+  Ad-hoc `Parser.experimental: bool` заменён общим каналом document-attrs → inline-парсер:
+  pub-тип **`InlineOptions`** (adoc-parser/inline.rs, реэкспорт из lib.rs; Copy/Default/Eq,
+  поле `experimental`) с ДВУМЯ путями заполнения: streaming `apply_attribute(name)` — имя как
+  в `Event::Attribute`, unset-формы `!name`/`name!` нормализуются генерически (Parser зовёт
+  в arm'е Event::Attribute — mid-document семантика сохранена); snapshot
+  `from_attr_lookup(is_set)` — для рендереров поверх таблицы атрибутов (adoc-html
+  `render_inline_value`). API: `parse_str_with_subs_options(text, subs, options)`;
+  `parse_str_with_subs_experimental` удалён (все 3 потребителя мигрированы),
+  `parse_str_with_subs` = wrapper с Default. `InlineState.experimental` → `options:
+  InlineOptions` (5 inner-reparse наследуют целиком). Новые attr-гейтящие фичи inline-парсинга
+  = поле в InlineOptions + arm в обоих конструкторах (задокументировано doc-комментом).
+  +1 тест (set/unset-формы, snapshot, чужие атрибуты игнорируются). Рефакторинг-нейтральность:
+  байт-в-байт vs master `1fbbde4` на всех 344 файлах корпуса (0 diffs, 0 exit-diffs);
+  Identical 204/Different 140/Errors 0 (= baseline); clippy 0, test --workspace зелёное
+  (parser 461→462). **АУДИТ РЕНДЕРЕРА R1–R9 ЗАКРЫТ** (R3 — частично by design:
+  новые block-arm'ы писать через `open_block_with_title`).
 
 ## Сделано (в master)
 

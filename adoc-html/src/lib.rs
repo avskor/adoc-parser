@@ -395,11 +395,12 @@ impl HtmlRenderer {
         // specialchars run, so an apostrophe in the value stays straight rather than
         // being curled by replacements. At top level / in normal paragraphs this is
         // NORMAL, so behavior there is unchanged.
-        let experimental = self.document_attrs.contains_key("experimental");
-        let events = adoc_parser::InlineParser::parse_str_with_subs_experimental(
+        let options =
+            adoc_parser::InlineOptions::from_attr_lookup(|name| self.document_attrs.contains_key(name));
+        let events = adoc_parser::InlineParser::parse_str_with_subs_options(
             value,
             self.current_subs(),
-            experimental,
+            options,
         );
         // If inline parsing produced only a single Text event identical to the input,
         // there is no inline markup — just escape and output directly.
