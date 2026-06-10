@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-11, третья) — Фаза 3: pass:[…] внутри single-plus (случай A)
+
+Запрос «продолжи». `fix/youtube-playlist-params` уже в master (`3c2f0af`, merge;
+session.md прошлой сессии писалась ДО мержа — как всегда). Новая ветка
+**`fix/pass-macro-in-single-plus`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base`
+пересобран из чистого master `3c2f0af` ПЕРЕД правками, baseline подтверждён:
+Identical 205, Different 139, Errors 0.
+
+### Выбор задачи
+Взят pass/index.adoc (6 diff) — отложенный «случай A». Семантика верифицирована
+пробами /tmp/p_pass.adoc: asciidoctor извлекает `pass:[…]` в ПЕРВОМ regex-пассе
+substitutor'а (вместе с `++`/`+++`/`$$`-спанами, позиционно слева-направо), single-plus
+`+…+` и literal-monospace `` `+…+` `` матчатся ВТОРЫМ пассом — поэтому:
+- `+pass:[x]+` → `x`; `` `+pass:[]+` `` → `<code></code>` (корпусный кейс, стр.15 ×2);
+- `` `++pass:[y]++` `` → `<code>pass:[y]</code>` (double-plus побеждает позиционно,
+  pass НЕ извлекается — у нас уже было верно);
+- дискриминатор `` `+pass:[]+more+` `` → `<code>+more</code>` (наш constrained-close
+  скан даёт ту же границу: `+` после `]` не закрывает — за ним word char).
+
+### Что сделано
+- **Фикс — только ПАРСЕР** (`adoc-parser/src/inline.rs::try_single_plus_passthrough`):
+  (1) close-скан single-plus пропускает регион `pass:[…]` (переиспользован
+  `pass_macro_span_len` — `+` внутри скобок не может закрыть; зеркало уже сделанного
+  в `find_closing_constrained` для backtick, «случай G»);
+  (2) эмиссия контента через новый хелпер `push_single_plus_content(inner, events)` —
+  литеральный Text с извлечением `pass:[…]` → `Event::InlinePassthrough` (raw до
+  первого `]`, зеркало `try_pass_macro`); было — один сырой `Event::Text(inner)`.
+- `++…++`/`+++…+++` НЕ тронуты (там извлечение verbatim — корректно).
+- +1 тест `test_pass_macro_inside_single_plus` (bare/`[]`-в-monospace/дискриминатор/
+  смешанный контент/`++…++`-guard).
+- НЕ реализовано (нет в корпусе, pre-existing): `pass:subs[…]` со spec внутри `+…+`;
+  `++…++` внутри single-plus (`+a ++b++ c+` — asciidoctor извлекает, мы литералом).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser
+  462→**463**, html 329+36, render-core 12, compat-suites ok, integration 25).
+- Пробы /tmp/p_pass.adoc: все 5 вариантов байт-в-байт с asciidoctor.
+- **Корпус: Identical 205→206 (+1)** (pass/index.adoc); blast РОВНО 1 файл: 1 флип,
+  **0 регрессий**, 0 changed-still-different (идеально узко).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/inline.rs,
+  TODO.md, session.md.
+- nearmiss на 206: revision-line-with-version-prefix (1 diff — замороженный `{docdate}`,
+  дата-зависим, НЕ флипается, скип), **special-section-numbers** (10-diff, QUOTES в
+  [label] xref — архитектурный), **callout** (20-diff), **part** (22-diff),
+  version-label (28). Архитектурные кластеры: наследование `m`/`e`/`s` стиля колонки
+  таблицы (много файлов), author-header `<div class="details">`, sect0-heading.
+  Либо старт второго рендерера (core готов).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `3c2f0af`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_pass.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, вторая) — Фаза 3: YouTube-плейлисты в video-макросе
 
 Запрос «продолжи». R9 уже в master (`d9d1502`, merge `refactor/inline-doc-attrs-channel`;
