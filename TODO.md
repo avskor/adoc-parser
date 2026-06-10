@@ -51,7 +51,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   в один (match по checked), CalloutListItem/TagEnd-обработчики на хелперах.
   DescriptionDescription НЕ тронут (асимметричный rollback-механизм dd_output_start).
 - [~] **R7 (АРХИТЕКТУРА — подготовка ко 2-му рендереру)**: ЭТАП 1 СДЕЛАН (ветка
-  `refactor/render-core-attr-resolver`, 2026-06-10; НЕ закоммичено): создан крейт
+  `refactor/render-core-attr-resolver`, в master `cf39bb1`): создан крейт
   **`adoc-render-core`** (zero-dep, workspace-member) — единая таблица интринсиков
   (`IntrinsicAttribute { name, text, html }`: `text` — семантическое значение, `html` —
   байт-в-байт форма asciidoctor; обе колонки — данные, кодировка НЕ выводима правилом:
@@ -61,10 +61,20 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   adoc-compat-tests/builder.rs переведены, локальные копии удалены. Попутно закрыт ДРЕЙФ:
   в builder.rs отсутствовали `apos`/`pp`/`quot` — теперь таблица общая. Корпус байт-в-байт
   (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +4 юнит-теста core.
-  ОСТАЛОСЬ: XrefResolver (natural xref, bracketed fallback, .adoc→расширение цели — сейчас
-  `ResolutionContext` в adoc-html/finish(), завязан на html_escape), SectionNumberer+TocBuilder,
-  счётчики (figure/table/example/footnote), author/revision-семантика. Уже хорошо разделено
-  (не трогать): subs — в парсере (inline.rs), table-grid (colspan/rowspan) — в парсере (block.rs).
+  ЭТАП 2 СДЕЛАН (ветка `refactor/render-core-xref-resolver`, 2026-06-10; НЕ закоммичено):
+  **XrefResolver** вынесен в core — `RefText::{Plain,Markup}` (решение проблемы html_escape:
+  секции хранятся Plain и экранируются потребителем, заголовки блоков/библиография — Markup
+  verbatim), `XrefResolver` (add_section/add_block, link_text/href_id с precedence
+  asciidoctor: known-id → natural xref по заголовку секции, case-sensitive; last-wins для
+  id секций, or_insert для блоков), `unresolved_xref_label` (`[target]`),
+  `is_interdoc_xref_target`, `interdoc_xref_href` (.adoc→.html с сохранением #fragment;
+  = auto-text). `ResolutionContext` удалён из adoc-html; сентинель-машинерия
+  (`resolve_sentinels_into`, плейсхолдеры) осталась в рендерере — это механика отложенного
+  резолва HTML-вывода, не семантика. Корпус байт-в-байт (344/344), parsing-lab 233/233,
+  clippy 0, +2 юнит-теста core (всего 6).
+  ОСТАЛОСЬ: SectionNumberer+TocBuilder, счётчики (figure/table/example/footnote),
+  author/revision-семантика. Уже хорошо разделено (не трогать): subs — в парсере (inline.rs),
+  table-grid (colspan/rowspan) — в парсере (block.rs).
 - [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
   (blocks/inline/media/finish/escape) независимо от R7.
 - [ ] **R9 (wart)**: `Parser.experimental` — парсер наблюдает `Event::Attribute` для гейтинга
