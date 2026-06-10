@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-10, восьмая) — R8: распил adoc-html/src/lib.rs на модули
+
+Запрос «продолжи R8». R7 этап 5 уже в master (`490a082`, merge
+`refactor/render-core-author-revision`; session.md прошлой сессии писалась ДО мержа — как
+всегда). Новая ветка **`refactor/html-modules`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `490a082` ПЕРЕД правками.
+
+### Что сделано
+- **lib.rs (6220 строк) распилен на 8 файлов** скриптом `/tmp/split_html.py` (экстракция
+  чанков по line-ranges с пере-привязкой предшествующих комментариев; ловушка: хвостовые
+  комментарии чанка = doc следующего элемента, иначе дублирование — починено strip'ом):
+  - **lib.rs** (417): doc, uses, mod-декларации, `use blocks::*/escape::*/media::*`,
+    HtmlOptions, push_html/to_html(+_with_options), DlistStyle, BlockMeta,
+    parse_highlight_spec, struct HtmlRenderer, impl-core (new, new_with_options,
+    apply_attribute, current_subs, default_subs_for_delimited, run, render_inline_value).
+  - **events.rs** (1009): push_event, start_tag, end_tag (3 диспетчера).
+  - **blocks.rs** (861): start_admonition/table/table_cell/lists/section_title/section_div/
+    paragraph/delimited_block/source_block, emit_pending_block_title, open/close_li_paragraph,
+    open_block_with_title, push_caption_prefix, take_block_meta, trim_verbatim_content,
+    col-width/tableblock-class хелперы, strip_block_style, write_meta_attrs,
+    current_dlist_style, is_book/find_section_level/is_inside_*-контекст-хелперы +
+    free fns parse_manpage_title, section_level_to_h.
+  - **inline.rs** (251): start_cross_reference, push_inline_id_class, render_kbd_keys,
+    render_menu, render_icon, render_inline_stem, render_stem_block.
+  - **media.rs** (342): start_block_image, start_inline_image, image_base_class +
+    MediaAttrs, parse_media_attrs, detect_video_provider, render_video_tag,
+    push_media_time_fragment, render_audio_tag, auto_alt_from_target.
+  - **finish.rs** (317): finish, render_footnotes, generate_toc, render_author_details,
+    write_document_head/tail + resolve_sentinels_into + DEFAULT_STYLESHEET (include_str —
+    путь относительный файлу, работает из src/), MATHJAX_DOCINFO.
+  - **escape.rs** (84): html_escape, html_escape_text, push_hardbreaks_text,
+    rstrip_line_trailing_ws, write_attr.
+  - **tests.rs** (2972): бывший `mod tests` (дедент на 4; raw-строк в тестах нет —
+    единственный `r#"` в файле был MATHJAX const).
+- **Видимость**: всё перенесённое в дочерние модули — `pub(crate)` (методы siblings зовут
+  кросс-модульно); элементы корня (struct, BlockMeta, parse_highlight_spec, uses) НЕ меняли
+  видимость — приватные элементы корня видны потомкам, `use crate::*` в каждом модуле
+  глоб-импортирует их (тот же механизм, что старый `use super::*` в tests).
+- **Сохранность кода доказана**: diff отсортированных мультимножеств непустых строк
+  (без отступов, без `pub(crate) `) old vs new — отличие ТОЛЬКО обёртки `impl HtmlRenderer {`,
+  mod/use-строки и module-docs. Попутная микро-правка: doc-комментарий
+  rstrip_line_trailing_ws был прилипшим над push_hardbreaks_text (pre-existing) — отлеплен
+  на своё место (только комментарии).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser 461,
+  html 328+36, render-core 12, parsing-lab ok, html-compat 6/6+6, integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `490a082`) на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**
+  — проверено дважды (после распила и после комментарной правки).
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-html/src/lib.rs +
+  7 НОВЫХ файлов (events/blocks/inline/media/finish/escape/tests .rs), TODO.md, session.md.
+- Из аудита остался **R9** (канал document-attrs → inline-парсер вместо ad-hoc
+  `Parser.experimental`). Либо возврат к Фазе 3 (флипы корпуса: pass/index 6-diff,
+  special-section-numbers 10-diff, callout 20-diff, part 22-diff; архитектурный кластер —
+  наследование `m`/`e`/`s` стиля колонки таблицы, sect0-heading).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, седьмая) — R7 этап 5 (ФИНАЛ): Author/Revision в adoc-render-core
 
 Запрос «продолжи R7». Этап 4 уже в master (`de4decd`, merge

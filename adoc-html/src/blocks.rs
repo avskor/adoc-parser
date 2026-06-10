@@ -1,0 +1,861 @@
+//! Block-level rendering: sections, paragraphs, lists, tables, delimited
+//! blocks, block titles/captions and block-metadata helpers.
+
+use crate::*;
+
+pub(crate) fn parse_manpage_title(title: &str) -> Option<(String, String)> {
+    let title = title.trim();
+    let paren_start = title.rfind('(')?;
+    if !title.ends_with(')') {
+        return None;
+    }
+    let name = title[..paren_start].trim();
+    let volnum = &title[paren_start + 1..title.len() - 1];
+    if name.is_empty() || volnum.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), volnum.to_string()))
+}
+
+pub(crate) fn section_level_to_h(level: u8) -> u8 {
+    // AsciiDoc: = (doc title/h1), == (h2), === (h3), etc.
+    // level 0 = doc title = h1, level 2 = h2, level 3 = h3...
+    if level == 0 {
+        1
+    } else {
+        level
+    }
+}
+
+impl HtmlRenderer {
+    pub(crate) fn start_admonition(&mut self, output: &mut String, kind: &AdmonitionKind, meta: &Option<BlockMeta>) {
+        let label = match kind {
+            AdmonitionKind::Note => "Note",
+            AdmonitionKind::Tip => "Tip",
+            AdmonitionKind::Important => "Important",
+            AdmonitionKind::Warning => "Warning",
+            AdmonitionKind::Caution => "Caution",
+        };
+        let adm_class = format!("admonitionblock {}", label.to_lowercase());
+        // A block-level [caption="…"] overrides the displayed label text (but not the
+        // admonitionblock class or icon kind, which always track the admonition type).
+        let caption = meta
+            .as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.as_ref()));
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, &adm_class);
+        output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n");
+        if self.document_attrs.get("icons").is_some_and(|v| v == "font") {
+            let icon_name = label.to_lowercase();
+            output.push_str("<i class=\"fa icon-");
+            output.push_str(&icon_name);
+            output.push_str("\" title=\"");
+            match caption {
+                Some(c) => html_escape(output, c),
+                None => output.push_str(label),
+            }
+            output.push_str("\"></i>\n");
+        } else {
+            output.push_str("<div class=\"title\">");
+            match caption {
+                Some(c) => html_escape(output, c),
+                None => output.push_str(label),
+            }
+            output.push_str("</div>\n");
+        }
+        output.push_str("</td>\n<td class=\"content\">\n");
+        self.emit_pending_block_title(output);
+    }
+
+    pub(crate) fn start_table(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        // Collect extra CSS classes from options/named attrs
+        let has_autowidth = meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "autowidth"));
+        let stripes_value = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "stripes").map(|(_, v)| v.clone()));
+
+        // Base Asciidoctor table classes
+        let mut classes = String::from("tableblock frame-all grid-all");
+        if !has_autowidth {
+            classes.push_str(" stretch");
+        } else {
+            classes.push_str(" fit-content");
+        }
+        if let Some(ref sv) = stripes_value {
+            classes.push_str(" stripes-");
+            classes.push_str(sv);
+        }
+
+        // Extract cols spec for colgroup generation
+        let cols_value = meta.as_ref().and_then(|m| m.named.iter()
+            .find(|(k, _)| k == "cols").map(|(_, v)| v.clone()));
+
+        output.push_str("<table");
+        Self::write_meta_attrs(output, meta, &classes);
+        output.push_str(">\n");
+
+        // Caption must come before colgroup per HTML5 spec
+        let title_html = self.block_title_inner_html.take();
+        if let Some(title) = title_html {
+            output.push_str("<caption class=\"title\">");
+            let label = self.document_attrs.get("table-caption").cloned();
+            self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Table);
+            output.push_str(&title);
+            output.push_str("</caption>\n");
+        }
+
+        // Emit <colgroup> based on cols spec
+        if let Some(ref cols_str) = cols_value {
+            let col_widths = Self::parse_col_widths(cols_str);
+            if !col_widths.is_empty() {
+                output.push_str("<colgroup>\n");
+                if has_autowidth {
+                    for _ in &col_widths {
+                        output.push_str("<col>\n");
+                    }
+                } else {
+                    for w in &col_widths {
+                        output.push_str("<col style=\"width: ");
+                        output.push_str(&Self::format_col_width(*w));
+                        output.push_str(";\">\n");
+                    }
+                }
+                output.push_str("</colgroup>\n");
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_table_cell(&mut self, output: &mut String, is_header: bool, colspan: &u8, rowspan: &u8, style: &CellStyle, halign: &HAlign, valign: &VAlign) {
+        self.cell_style_stack.push(*style);
+        let cell_class = Self::tableblock_cell_class(halign, valign);
+        // A header-row cell, or a body cell in a header (`h`) column, uses <th>.
+        // The body header cell still gets the <p class="tableblock"> wrapper below.
+        let use_th = is_header || matches!(style, CellStyle::Header);
+        output.push_str(if use_th { "<th class=\"" } else { "<td class=\"" });
+        output.push_str(&cell_class);
+        output.push('"');
+        if *colspan > 1 {
+            output.push_str(&format!(" colspan=\"{}\"", colspan));
+        }
+        if *rowspan > 1 {
+            output.push_str(&format!(" rowspan=\"{}\"", rowspan));
+        }
+        output.push('>');
+        if is_header {
+            match style {
+                CellStyle::Emphasis => output.push_str("<em>"),
+                CellStyle::Strong => output.push_str("<strong>"),
+                CellStyle::Monospace | CellStyle::Literal => output.push_str("<code>"),
+                _ => {}
+            }
+        } else {
+            match style {
+                CellStyle::Emphasis => output.push_str("<p class=\"tableblock\"><em>"),
+                CellStyle::Strong => output.push_str("<p class=\"tableblock\"><strong>"),
+                CellStyle::Monospace | CellStyle::Literal => output.push_str("<p class=\"tableblock\"><code>"),
+                CellStyle::AsciiDoc => {}
+                _ => output.push_str("<p class=\"tableblock\">"),
+            }
+        }
+    }
+
+    pub(crate) fn start_unordered_list(&mut self, output: &mut String, has_checklist: &bool, meta: &Option<BlockMeta>) {
+        let is_bibliography = self.section_style_stack.last()
+            .and_then(|s| s.as_deref()) == Some("bibliography");
+        if !self.is_inside_list_item() {
+            let wrapper_class = if *has_checklist {
+                "ulist checklist"
+            } else if is_bibliography {
+                "ulist bibliography"
+            } else {
+                "ulist"
+            };
+            output.push_str("<div");
+            Self::write_meta_attrs(output, meta, wrapper_class);
+            output.push_str(">\n<ul");
+            if *has_checklist {
+                output.push_str(" class=\"checklist\"");
+            } else if is_bibliography {
+                output.push_str(" class=\"bibliography\"");
+            }
+            output.push_str(">\n");
+        } else {
+            let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
+            output.push_str("<div class=\"");
+            output.push_str(wrapper_class);
+            output.push_str("\">\n<ul");
+            if *has_checklist {
+                output.push_str(" class=\"checklist\"");
+            }
+            output.push_str(">\n");
+        }
+    }
+
+    pub(crate) fn start_ordered_list(&mut self, output: &mut String, start: &Option<u32>, reversed: &bool, meta: &Option<BlockMeta>) {
+        let style_name = meta.as_ref()
+            .and_then(|m| m.style.as_deref())
+            .unwrap_or_else(|| {
+                // Auto-assign style based on nesting depth (like Asciidoctor).
+                // tag_stack already contains the current OrderedList, so subtract 1.
+                let depth = self.tag_stack.iter()
+                    .filter(|t| matches!(t, TagEnd::OrderedList))
+                    .count()
+                    .saturating_sub(1);
+                match depth {
+                    0 => "arabic",
+                    1 => "loweralpha",
+                    2 => "lowerroman",
+                    3 => "upperalpha",
+                    _ => "upperroman",
+                }
+            });
+        let wrapper_class = format!("olist {style_name}");
+        if !self.is_inside_list_item() {
+            output.push_str("<div");
+            // Write id/roles from meta onto the wrapper div
+            let mut wrapper_meta = meta.clone();
+            if let Some(ref mut m) = wrapper_meta {
+                m.style = None; // style goes into wrapper class
+            }
+            Self::write_meta_attrs(output, &wrapper_meta, &wrapper_class);
+            output.push_str(">\n");
+        } else {
+            output.push_str("<div");
+            write_attr(output, "class", &wrapper_class);
+            output.push_str(">\n");
+        }
+        output.push_str("<ol");
+        write_attr(output, "class", style_name);
+        let type_attr = match style_name {
+            "loweralpha" => Some("a"),
+            "upperalpha" => Some("A"),
+            "lowerroman" => Some("i"),
+            "upperroman" => Some("I"),
+            _ => None,
+        };
+        if let Some(t) = type_attr {
+            output.push_str(" type=\"");
+            output.push_str(t);
+            output.push('"');
+        }
+        if let Some(s) = start {
+            use std::fmt::Write;
+            let _ = write!(output, " start=\"{}\"", s);
+        }
+        if *reversed {
+            output.push_str(" reversed");
+        }
+        output.push_str(">\n");
+    }
+
+    pub(crate) fn start_description_list(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        let style_str = meta.as_ref().and_then(|m| m.style.as_deref());
+        let dlist_style = match style_str {
+            Some("horizontal") => DlistStyle::Horizontal,
+            Some("qanda") => DlistStyle::Qanda,
+            _ => DlistStyle::Normal,
+        };
+        self.dlist_stack.push(dlist_style);
+        let mut adjusted_meta = meta.clone();
+        if let Some(ref mut m) = adjusted_meta {
+            m.style = None;
+        }
+        match dlist_style {
+            DlistStyle::Horizontal => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &adjusted_meta, "hdlist");
+                output.push_str(">\n<table>\n");
+            }
+            DlistStyle::Qanda => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &adjusted_meta, "qlist qanda");
+                output.push_str(">\n<ol>\n");
+            }
+            DlistStyle::Normal => {
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &adjusted_meta, "dlist");
+                output.push_str(">\n<dl>\n");
+            }
+        }
+    }
+
+    pub(crate) fn start_section_title(&mut self, output: &mut String, level: &u8, id: &CowStr<'_>) {
+        if *level >= 2 {
+            self.in_section_title = true;
+            self.current_toc_entry = Some(TocEntry {
+                level: *level,
+                id: id.to_string(),
+                title: String::new(),
+            });
+        }
+        let h = section_level_to_h(*level);
+        let is_part = self.is_book() && *level == 1
+            && self.book_part_stack.last() == Some(&true);
+        output.push_str("<h");
+        output.push_str(&h.to_string());
+        if !self.in_header {
+            output.push_str(" id=\"");
+            html_escape(output, id);
+            output.push('"');
+        }
+        if is_part {
+            output.push_str(" class=\"sect0\"");
+        }
+        output.push('>');
+        if self.sectanchors && !self.in_header {
+            output.push_str("<a class=\"anchor\" href=\"#");
+            html_escape(output, id);
+            output.push_str("\"></a>");
+        }
+        if self.sectnums
+            && self.pending_section_caption.is_none()
+            && let Some(prefix) = self.section_numberer.number_prefix(*level)
+        {
+            output.push_str(&prefix);
+            if let Some(ref mut entry) = self.current_toc_entry {
+                entry.title.push_str(&prefix);
+            }
+        }
+        if let Some(caption) = self.pending_section_caption.take() {
+            output.push_str(&caption);
+            if let Some(ref mut entry) = self.current_toc_entry {
+                entry.title.push_str(&caption);
+            }
+        }
+    }
+
+    pub(crate) fn start_section_div(&mut self, output: &mut String, level: &u8, meta: &Option<BlockMeta>) {
+        let style = meta.as_ref().and_then(|m| m.style.as_deref());
+        let is_special = matches!(style, Some(
+            "appendix" | "glossary" | "bibliography" | "colophon"
+            | "abstract" | "preface" | "dedication" | "index"
+        ));
+        let is_part = self.is_book() && *level == 1 && !is_special;
+        self.book_part_stack.push(is_part);
+        self.sectionbody_stack.push(*level == 2 && !is_part);
+        self.section_style_stack.push(
+            if is_special { style.map(|s| s.to_string()) } else { None }
+        );
+        if !is_part {
+            output.push_str("<div");
+            let sect_class = format!("sect{}", level - 1);
+            // ID goes on the heading, not on the section div
+            let mut div_meta = meta.clone();
+            if let Some(ref mut m) = div_meta {
+                m.id = None;
+                if is_special {
+                    m.style = None;
+                }
+            }
+            Self::write_meta_attrs(output, &div_meta, &sect_class);
+            output.push_str(">\n");
+        }
+        if style == Some("appendix") {
+            self.pending_section_caption = Some(self.section_numberer.appendix_caption());
+        } else if is_special {
+            self.pending_section_caption = Some(String::new());
+        }
+    }
+
+    pub(crate) fn start_paragraph(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        // The `hardbreaks` option (`[%hardbreaks]`) — or the document-wide
+        // `hardbreaks-option` attribute — turns every soft line break in the
+        // paragraph into a hard break (`<br>`).
+        self.para_hardbreaks = self.document_attrs.contains_key("hardbreaks-option")
+            || meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "hardbreaks"));
+        // Track paragraph count in list items
+        if let Some(count) = self.li_para_count.last_mut() {
+            *count += 1;
+        }
+        let is_continuation_para = self.li_para_count.last().is_some_and(|&c| c > 1);
+        if self.is_direct_child_of_admonition() {
+            // Inline admonitions: no <p> wrapper
+        } else if !self.is_inside_compact_context() || is_continuation_para {
+            output.push_str("<div");
+            Self::write_meta_attrs(output, meta, "paragraph");
+            output.push_str(">\n");
+            self.emit_pending_block_title(output);
+            output.push_str("<p>");
+        } else {
+            output.push_str("<p>");
+        }
+    }
+
+    pub(crate) fn start_delimited_block(&mut self, output: &mut String, kind: &DelimitedBlockKind, meta: &Option<BlockMeta>) {
+        match kind {
+            DelimitedBlockKind::Listing => {
+                self.delimited_block_stack.push((*kind, false));
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &Self::strip_block_style(meta), "listingblock");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<div class=\"content\">\n<pre>");
+            }
+            DelimitedBlockKind::Literal => {
+                self.delimited_block_stack.push((*kind, false));
+                output.push_str("<div");
+                Self::write_meta_attrs(output, &Self::strip_block_style(meta), "literalblock");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<div class=\"content\">\n<pre>");
+            }
+            DelimitedBlockKind::Example => {
+                let is_collapsible = meta.as_ref()
+                    .is_some_and(|m| m.options.iter().any(|o| o == "collapsible"));
+
+                if is_collapsible {
+                    let is_open = meta.as_ref()
+                        .is_some_and(|m| m.options.iter().any(|o| o == "open"));
+
+                    let summary = self.block_title_inner_html.take()
+                        .unwrap_or_else(|| "Details".to_string());
+
+                    output.push_str("<details");
+                    Self::write_meta_attrs(output, meta, "");
+                    if is_open {
+                        output.push_str(" open");
+                    }
+                    output.push_str(">\n<summary class=\"title\">");
+                    output.push_str(&summary);
+                    output.push_str("</summary>\n<div class=\"content\">\n");
+                    self.delimited_block_stack.push((*kind, true));
+                } else {
+                    self.delimited_block_stack.push((*kind, false));
+                    output.push_str("<div");
+                    Self::write_meta_attrs(output, meta, "exampleblock");
+                    output.push_str(">\n");
+                    if let Some(title) = self.block_title_inner_html.take() {
+                        output.push_str("<div class=\"title\">");
+                        self.push_caption_prefix(output, meta, Some("Example"), CaptionKind::Example);
+                        output.push_str(&title);
+                        output.push_str("</div>\n");
+                    }
+                    output.push_str("<div class=\"content\">\n");
+                }
+            }
+            DelimitedBlockKind::Sidebar => {
+                self.delimited_block_stack.push((*kind, false));
+                output.push_str("<div");
+                Self::write_meta_attrs(output, meta, "sidebarblock");
+                output.push_str(">\n<div class=\"content\">\n");
+                self.emit_pending_block_title(output);
+            }
+            DelimitedBlockKind::Quote => {
+                self.delimited_block_stack.push((*kind, false));
+                // Capture attribution and citetitle from metadata
+                if let Some(m) = meta {
+                    self.quote_attribution = m.named.iter()
+                        .find(|(k, _)| k == "attribution")
+                        .map(|(_, v)| v.clone());
+                    self.quote_citetitle = m.named.iter()
+                        .find(|(k, _)| k == "citetitle")
+                        .map(|(_, v)| v.clone());
+                }
+                output.push_str("<div");
+                Self::write_meta_attrs(output, meta, "quoteblock");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<blockquote>\n");
+            }
+            DelimitedBlockKind::Open => {
+                self.delimited_block_stack.push((*kind, false));
+                self.open_block_with_title(output, meta, "openblock");
+            }
+            DelimitedBlockKind::Comment => {
+                self.delimited_block_stack.push((*kind, false));
+                self.block_title_inner_html = None;
+                // Comment blocks are not rendered
+            }
+            DelimitedBlockKind::Passthrough => {
+                self.delimited_block_stack.push((*kind, false));
+                self.block_title_inner_html = None;
+                // Passthrough: content is rendered as-is
+            }
+            DelimitedBlockKind::Verse => {
+                self.delimited_block_stack.push((*kind, false));
+                // Capture attribution and citetitle from metadata
+                if let Some(m) = meta {
+                    self.quote_attribution = m.named.iter()
+                        .find(|(k, _)| k == "attribution")
+                        .map(|(_, v)| v.clone());
+                    self.quote_citetitle = m.named.iter()
+                        .find(|(k, _)| k == "citetitle")
+                        .map(|(_, v)| v.clone());
+                }
+                output.push_str("<div");
+                Self::write_meta_attrs(output, meta, "verseblock");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<pre class=\"content\">");
+            }
+        }
+    }
+
+    pub(crate) fn start_source_block(&mut self, output: &mut String, language: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
+        self.in_source_block = true;
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, "listingblock");
+        output.push_str(">\n");
+        self.emit_pending_block_title(output);
+        output.push_str("<div class=\"content\">\n<pre");
+
+        let highlighter = self.document_attrs.get("source-highlighter").cloned();
+        let linenums = meta.as_ref().is_some_and(|m| {
+            m.options.iter().any(|o| o == "linenums")
+        });
+
+        // Build <pre> class
+        let mut pre_classes = Vec::new();
+        match highlighter.as_deref() {
+            Some("highlight.js" | "highlightjs") => pre_classes.push("highlightjs"),
+            Some("rouge") => pre_classes.push("rouge"),
+            Some("pygments") => pre_classes.push("pygments"),
+            Some("coderay") => pre_classes.push("CodeRay"),
+            _ => {}
+        }
+        // Source blocks always get "highlight" class (matches Asciidoctor behavior)
+        pre_classes.push("highlight");
+        if linenums {
+            pre_classes.push("linenums");
+        }
+        if !pre_classes.is_empty() {
+            output.push_str(" class=\"");
+            output.push_str(&pre_classes.join(" "));
+            output.push('"');
+        }
+
+        output.push_str("><code");
+
+        // Build <code> attrs
+        if let Some(lang) = language {
+            if matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs")) {
+                output.push_str(" class=\"hljs language-");
+                html_escape(output, lang);
+                output.push('"');
+            } else if highlighter.is_none() {
+                output.push_str(" class=\"language-");
+                html_escape(output, lang);
+                output.push('"');
+            }
+            write_attr(output, "data-lang", lang);
+        }
+
+        if let Some(hl_spec) = meta.as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "highlight").map(|(_, v)| v.clone()))
+        {
+            self.highlight_lines = parse_highlight_spec(&hl_spec);
+            self.source_line_num = 1;
+        } else {
+            self.source_line_num = 0;
+        }
+        self.source_line_highlighted = false;
+
+        if linenums {
+            self.linenums_active = true;
+            self.linenums_start = meta.as_ref()
+                .and_then(|m| m.named.iter().find(|(k, _)| k == "start"))
+                .and_then(|(_, v)| v.parse::<usize>().ok())
+                .unwrap_or(1);
+            self.source_code_buffer = Some(String::new());
+            if self.source_line_num == 0 {
+                self.source_line_num = 1;
+            }
+        }
+
+        output.push('>');
+    }
+
+    pub(crate) fn emit_pending_block_title(&mut self, output: &mut String) {
+        if let Some(title) = self.block_title_inner_html.take() {
+            output.push_str("<div class=\"title\">");
+            output.push_str(&title);
+            output.push_str("</div>\n");
+        }
+    }
+
+    /// Open the principal `<p>` of a list item, tracking it so a continuation
+    /// block can close it before being emitted (see the guard in `start_tag`).
+    pub(crate) fn open_li_paragraph(&mut self) {
+        self.li_p_open.push(true);
+        self.li_para_count.push(1); // count the initial <p>
+    }
+
+    /// Pop a list-item scope; returns whether the principal `<p>` is still
+    /// open and needs its closing tag.
+    pub(crate) fn close_li_paragraph(&mut self) -> bool {
+        self.li_para_count.pop();
+        self.li_p_open.pop() == Some(true)
+    }
+
+    /// Open a block wrapper div with meta attrs, emit a pending `.Title`,
+    /// then open the content div — the shared shape of the audio/video/stem
+    /// and open-block arms. Forgetting the title emission in a hand-rolled
+    /// wrapper has caused a string of leak bugs; new block arms should use
+    /// this instead.
+    pub(crate) fn open_block_with_title(&mut self, output: &mut String, meta: &Option<BlockMeta>, default_class: &str) {
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, default_class);
+        output.push_str(">\n");
+        self.emit_pending_block_title(output);
+        output.push_str("<div class=\"content\">\n");
+    }
+
+    /// Emit the numbered caption prefix for a titled block (table/figure).
+    /// A block-level `caption=` overrides verbatim with no counter bump
+    /// (empty value → no prefix); otherwise a set `*-caption` document
+    /// attribute gives "{label} {n}. " and bumps the counter, while an unset
+    /// one (`:table-caption!:` / `:figure-caption!:`) gives no prefix.
+    pub(crate) fn push_caption_prefix(
+        &mut self,
+        output: &mut String,
+        meta: &Option<BlockMeta>,
+        doc_label: Option<&str>,
+        kind: CaptionKind,
+    ) {
+        let caption_attr = meta
+            .as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
+        match self.caption_counters.caption_prefix(kind, caption_attr.as_deref(), doc_label) {
+            CaptionPrefix::None => {}
+            CaptionPrefix::Custom(prefix) => html_escape(output, prefix),
+            CaptionPrefix::Numbered { label, number } => {
+                html_escape(output, label);
+                output.push(' ');
+                output.push_str(&number.to_string());
+                output.push_str(". ");
+            }
+        }
+    }
+
+    pub(crate) fn take_block_meta(&mut self) -> Option<BlockMeta> {
+        self.pending_block_meta.take()
+    }
+
+    /// Trim leading and trailing blank lines from verbatim (pre) content in the output buffer.
+    /// Finds the last `<pre>` or `<pre ...>` tag and trims blank lines after it and before end.
+    pub(crate) fn trim_verbatim_content(output: &mut String) {
+        // Find the position right after the last <pre> or <pre ...> tag
+        if let Some(pre_start) = output.rfind("<pre") {
+            let after_pre = if let Some(gt) = output[pre_start..].find('>') {
+                pre_start + gt + 1
+            } else {
+                return;
+            };
+            let content = &output[after_pre..];
+            // Trim leading blank lines
+            let leading_trimmed = content.trim_start_matches('\n');
+            let leading_removed = content.len() - leading_trimmed.len();
+            // Trim trailing blank lines
+            let trailing_trimmed = leading_trimmed.trim_end_matches('\n');
+            if leading_removed > 0 || trailing_trimmed.len() != leading_trimmed.len() {
+                let new_content = trailing_trimmed.to_string();
+                output.truncate(after_pre);
+                output.push_str(&new_content);
+            }
+        }
+    }
+
+    /// Parse a cols spec string (e.g. "1,1" or "3" or "<,^,>") and return percentage widths.
+    /// Uses f64 with 4-decimal precision to match Asciidoctor output.
+    /// The last column gets the remainder to ensure percentages sum to exactly 100%.
+    pub(crate) fn parse_col_widths(cols_str: &str) -> Vec<f64> {
+        let trimmed = cols_str.trim();
+
+        // Simple numeric: "3" → 3 equal columns
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n == 0 { return Vec::new(); }
+            return Self::distribute_widths(&vec![1.0; n]);
+        }
+
+        // Comma-separated: parse each part for weight
+        let parts: Vec<&str> = trimmed.split(',').collect();
+        let mut weights: Vec<f64> = Vec::new();
+        for part in &parts {
+            let part = part.trim();
+            if part.is_empty() { continue; }
+            // Extract numeric weight from the spec (e.g., "1", "<2", "^.>1")
+            // The weight is the trailing number, default is 1
+            let weight = part.chars().rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .chars().rev().collect::<String>()
+                .parse::<f64>()
+                .unwrap_or(1.0);
+            weights.push(weight);
+        }
+
+        if weights.is_empty() { return Vec::new(); }
+
+        Self::distribute_widths(&weights)
+    }
+
+    /// Distribute column widths as percentages with 4-decimal precision.
+    /// Last column gets the remainder so the total is exactly 100%.
+    pub(crate) fn distribute_widths(weights: &[f64]) -> Vec<f64> {
+        let total: f64 = weights.iter().sum();
+        if total == 0.0 { return Vec::new(); }
+
+        let n = weights.len();
+        let mut widths: Vec<f64> = Vec::with_capacity(n);
+        let mut sum: f64 = 0.0;
+        for (i, w) in weights.iter().enumerate() {
+            if i == n - 1 {
+                // Last column gets remainder to ensure sum = 100%
+                // Truncate to 4 decimal places
+                let raw = 100.0_f64 - sum;
+                let last = (raw * 10000.0).round() / 10000.0;
+                widths.push(last);
+            } else {
+                // Truncate to 4 decimal places (floor)
+                let raw = w * 100.0 / total;
+                let pct = (raw * 10000.0).floor() / 10000.0;
+                sum += pct;
+                widths.push(pct);
+            }
+        }
+        widths
+    }
+
+    /// Format a column width percentage to match Asciidoctor output.
+    /// Integer values: "50%" (no decimals). Fractional: "33.3333%" (4 decimals).
+    pub(crate) fn format_col_width(w: f64) -> String {
+        if (w - w.round()).abs() < 0.00005 {
+            format!("{}%", w.round() as u32)
+        } else {
+            format!("{:.4}%", w)
+        }
+    }
+
+    pub(crate) fn tableblock_cell_class(halign: &HAlign, valign: &VAlign) -> String {
+        let ha = match halign {
+            HAlign::Left => "halign-left",
+            HAlign::Center => "halign-center",
+            HAlign::Right => "halign-right",
+        };
+        let va = match valign {
+            VAlign::Top => "valign-top",
+            VAlign::Middle => "valign-middle",
+            VAlign::Bottom => "valign-bottom",
+        };
+        format!("tableblock {ha} {va}")
+    }
+
+    /// Write HTML id and class attributes from block metadata into an already-started tag.
+    /// `default_class` is the base class (e.g. "sect", "listingblock").
+    /// If no metadata and default_class is non-empty, writes ` class="default_class"`.
+    /// Roles from metadata are appended to the class list.
+    /// Verbatim blocks (literal/listing) derive their CSS class from the block
+    /// context alone. An unrecognized block style (e.g. `[plantuml]`, `[ditaa]`)
+    /// is dropped from the class, matching Asciidoctor — only id and roles
+    /// survive. Styles that carry meaning (`source` → SourceBlock path,
+    /// `listing`/`literal` → context) are resolved before reaching this arm.
+    pub(crate) fn strip_block_style(meta: &Option<BlockMeta>) -> Option<BlockMeta> {
+        meta.clone().map(|mut m| {
+            m.style = None;
+            m
+        })
+    }
+
+    pub(crate) fn write_meta_attrs(output: &mut String, meta: &Option<BlockMeta>, default_class: &str) {
+        if let Some(m) = meta
+            && let Some(ref id) = m.id
+        {
+            output.push_str(" id=\"");
+            html_escape(output, id);
+            output.push('"');
+        }
+        let style = meta.as_ref().and_then(|m| m.style.as_deref());
+        let roles = meta.as_ref().map(|m| &m.roles[..]).unwrap_or(&[]);
+        if !default_class.is_empty() || style.is_some() || !roles.is_empty() {
+            output.push_str(" class=\"");
+            let mut first = true;
+            if !default_class.is_empty() {
+                // Escape at the emission boundary: every value entering an HTML
+                // attribute is escaped exactly once here (D1/D7 systemic rule).
+                // No-op for fixed class literals; protects user-derived default_class
+                // such as the ordered-list `olist {style}` wrapper class.
+                html_escape(output, default_class);
+                first = false;
+            }
+            if let Some(s) = style {
+                if !first {
+                    output.push(' ');
+                }
+                html_escape(output, s);
+                first = false;
+            }
+            for role in roles {
+                if !first {
+                    output.push(' ');
+                }
+                html_escape(output, role);
+                first = false;
+            }
+            output.push('"');
+        }
+    }
+
+    pub(crate) fn current_dlist_style(&self) -> DlistStyle {
+        self.dlist_stack.last().copied().unwrap_or(DlistStyle::Normal)
+    }
+
+    pub(crate) fn is_book(&self) -> bool {
+        self.document_attrs.get("doctype").map(|s| s.as_str()) == Some("book")
+    }
+
+    pub(crate) fn find_section_level(&self) -> u8 {
+        for tag_end in self.tag_stack.iter().rev() {
+            if let TagEnd::Section { level } = tag_end {
+                return *level;
+            }
+        }
+        1
+    }
+
+    /// Returns true when the immediate parent on the tag stack is an Admonition.
+    /// Used to suppress <p> tags for inline admonitions.
+    pub(crate) fn is_direct_child_of_admonition(&self) -> bool {
+        // In start_tag: stack has [..., Admonition, Paragraph], so check second-to-last
+        // In end_tag: stack has [..., Admonition] (Paragraph already popped), so check last
+        // Both cases: look for Admonition as the nearest non-Paragraph ancestor
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::Paragraph => continue, // skip self during start_tag
+                TagEnd::Admonition => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Returns true when inside a list item (for skipping list wrapper divs on nested lists).
+    pub(crate) fn is_inside_list_item(&self) -> bool {
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::ListItem | TagEnd::DescriptionDescription | TagEnd::CalloutListItem => return true,
+                TagEnd::Section { .. } | TagEnd::DelimitedBlock => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Returns true when inside a context that should NOT get paragraph/list wrapper divs.
+    /// These are: ListItem, DescriptionDescription, Admonition, CalloutListItem, TableCell, TableHeaderCell.
+    pub(crate) fn is_inside_compact_context(&self) -> bool {
+        for tag_end in self.tag_stack.iter().rev() {
+            match tag_end {
+                TagEnd::ListItem
+                | TagEnd::DescriptionDescription
+                | TagEnd::Admonition
+                | TagEnd::CalloutListItem
+                | TagEnd::TableCell
+                | TagEnd::TableHeaderCell => return true,
+                TagEnd::Section { .. }
+                | TagEnd::DelimitedBlock
+                | TagEnd::SourceBlock => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+}

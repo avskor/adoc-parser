@@ -116,8 +116,22 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   **R7 ЗАВЕРШЁН** — вынесенная семантика: attr-refs, xref, section-numbering/TOC,
   captions, footnotes, author/revision. Уже хорошо разделено (не трогать): subs — в парсере
   (inline.rs), table-grid (colspan/rowspan) — в парсере (block.rs).
-- [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
-  (blocks/inline/media/finish/escape) независимо от R7.
+- [x] **R8 (структура)**: СДЕЛАНО (ветка `refactor/html-modules`, 2026-06-10).
+  adoc-html/src/lib.rs (6220 строк) распилен на модули: **lib.rs** (417 — API, BlockMeta/
+  DlistStyle, struct HtmlRenderer, core-методы new/run/apply_attribute/render_inline_value),
+  **events.rs** (1009 — диспетчеры push_event/start_tag/end_tag), **blocks.rs** (861 —
+  start_* блоков/таблиц/списков/секций, caption/meta-хелперы, parse_manpage_title,
+  section_level_to_h), **inline.rs** (251 — xref, kbd/btn/menu, icon, stem),
+  **media.rs** (342 — image/video/audio, MediaAttrs), **finish.rs** (317 — finish/TOC/
+  footnotes/author-details/document head+tail, resolve_sentinels_into, консты
+  DEFAULT_STYLESHEET/MATHJAX_DOCINFO), **escape.rs** (84 — html_escape*/write_attr/
+  push_hardbreaks_text/rstrip_line_trailing_ws), **tests.rs** (2972 — бывший mod tests).
+  Методы/функции в дочерних модулях — `pub(crate)`; модули видят приватные элементы корня
+  через `use crate::*` (потомки корня). Код перенесён байт-в-байт (проверено diff'ом
+  мультимножеств строк); попутно doc-комментарий rstrip_line_trailing_ws отлеплен от
+  push_hardbreaks_text (был прилипший — pre-existing). Корпус байт-в-байт (344/344,
+  0 diffs, 0 exit-diffs), Identical 204/Different 140/Errors 0 (= baseline), clippy 0,
+  test --workspace зелёное.
 - [ ] **R9 (wart)**: `Parser.experimental` — парсер наблюдает `Event::Attribute` для гейтинга
   kbd/btn/menu; при выносе семантики в core продумать общий канал document-attrs → inline-парсер
   (сейчас ad-hoc флаг).
