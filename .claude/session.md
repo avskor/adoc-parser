@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-10, пятая) — R7 этап 3: SectionNumberer + TocBuilder в adoc-render-core
+
+Запрос «продолжи R7 — этап 3, SectionNumberer+TocBuilder». Этап 2 уже в master
+(`280e0ce`, merge `refactor/render-core-xref-resolver`). Новая ветка
+**`refactor/render-core-section-toc`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `280e0ce` ПЕРЕД правками.
+
+### Что сделано
+- **adoc-render-core** (+секция TOC/нумерации в lib.rs):
+  - `TocEntry { level, id, title }` (pub-поля) — бывший приватный тип рендерера; title —
+    plain-текст (потребитель экранирует), включая префиксы, которые потребитель доклеил.
+  - `TocBuilder` — push/entries (entries() двойного назначения: TOC + реестр секций для
+    XrefResolver) + **`toc_steps(toc_levels) -> Vec<TocStep>`**: структурная раскладка
+    дерева TOC (EnterLevel(u8)/Item(&TocEntry)/CloseItem/LeaveLevel), фильтрация уровней
+    2..=toc_levels+1 (u16-арифметика — нет переполнения u8 при toclevels=255), пустой
+    Vec = «TOC не эмитить». Раскладка 1:1 повторяет цикл старого generate_toc
+    (включая многоуровневые прыжки вглубь: 3→5 открывает два ul подряд).
+  - `DEFAULT_TOC_TITLE` = "Table of Contents".
+  - `SectionNumberer` — `number_prefix(level)`: счётчики sectnums («1.2.3. », хвостовой
+    ". " включён; инкремент уровня + сброс глубже; None вне 2..=5 БЕЗ изменения
+    счётчиков) и `appendix_caption()` («Appendix A: », счётчик внутри).
+  - +2 юнит-теста (toc_structure_steps: вложенность/прыжки/фильтрация/пусто;
+    section_numbering: последовательность/сброс/out-of-range/appendix). Всего в core 8.
+- **adoc-html**: удалены приватный `struct TocEntry` и поля `toc_entries`/
+  `section_counters`/`appendix_counter`; добавлены `toc_builder: TocBuilder`,
+  `section_numberer: SectionNumberer`. `generate_toc` = map TocStep→HTML (div/ul/li,
+  sectlevel{l-1}, newline-guard, html_escape — всё осталось тут). Гейтинг нумерации
+  (`sectnums`-флаг + подавление `pending_section_caption`) остался в рендерере —
+  семантика «когда нумеровать» завязана на спец-секции, механика счётчиков — в core.
+  toc_title init через DEFAULT_TOC_TITLE. Накопление current_toc_entry (Text/Code
+  events) и manpage-NAME-захват не тронуты (работают с core-типом, поля pub).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser 461,
+  html 328+36, render-core 8, parsing-lab **233/233**, html-compat 6/6+6, integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `280e0ce`) на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**.
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-render-core/src/lib.rs,
+  adoc-html/src/lib.rs, TODO.md, session.md.
+- R7 этап 4 (кандидаты): счётчики caption'ов (figure/table/example — у каждого своя
+  логика: figure bump только titled; общий push_caption_prefix уже есть в рендерере;
+  footnote-нумерация/дедуп named), author/revision-семантика (details-div;
+  revnumber-strip уже в scanner.rs парсера — проверить границу). R9 стыкуется
+  (канал document-attrs).
+- R8 (распил lib.rs на модули) — независим.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, четвёртая) — R7 этап 2: XrefResolver в adoc-render-core
 
 Запрос «продолжи R7 — этап 2, XrefResolver». Этап 1 уже в master (`cf39bb1`,

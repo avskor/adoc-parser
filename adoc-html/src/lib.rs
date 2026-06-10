@@ -7,7 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
-use adoc_render_core::{RefText, XrefResolver};
+use adoc_render_core::{
+    RefText, SectionNumberer, TocBuilder, TocEntry, TocStep, XrefResolver, DEFAULT_TOC_TITLE,
+};
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
 
@@ -100,12 +102,6 @@ enum DlistStyle {
     Qanda,
 }
 
-struct TocEntry {
-    level: u8,
-    id: String,
-    title: String,
-}
-
 struct AuthorData {
     fullname: String,
     address: String,
@@ -154,7 +150,7 @@ struct HtmlRenderer {
     footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
     footnote_counter: usize,
     named_footnotes: HashMap<String, usize>, // id → number
-    toc_entries: Vec<TocEntry>,
+    toc_builder: TocBuilder,
     toc_insert_position: Option<usize>,
     toc_levels: u8,
     toc_position: String,
@@ -186,14 +182,13 @@ struct HtmlRenderer {
     capturing_doctitle: bool,
     doctitle_buf: String,
     preamble_start: Option<usize>,
-    appendix_counter: u8,
     pending_section_caption: Option<String>,
     sectnums: bool,
     sectanchors: bool,
     showtitle: bool,
     nofooter: bool,
     doctitle_h1_end: Option<usize>,
-    section_counters: [u32; 6],
+    section_numberer: SectionNumberer,
     highlight_lines: HashSet<usize>,
     source_line_num: usize,
     source_line_highlighted: bool,
@@ -256,11 +251,11 @@ impl HtmlRenderer {
             footnotes: Vec::new(),
             footnote_counter: 0,
             named_footnotes: HashMap::new(),
-            toc_entries: Vec::new(),
+            toc_builder: TocBuilder::new(),
             toc_insert_position: None,
             toc_levels: 2,
             toc_position: String::new(),
-            toc_title: String::from("Table of Contents"),
+            toc_title: String::from(DEFAULT_TOC_TITLE),
             toc_auto_seen: false,
             in_section_title: false,
             current_toc_entry: None,
@@ -288,14 +283,13 @@ impl HtmlRenderer {
             capturing_doctitle: false,
             doctitle_buf: String::new(),
             preamble_start: None,
-            appendix_counter: 0,
             pending_section_caption: None,
             sectnums: false,
             sectanchors: false,
             showtitle: false,
             nofooter: false,
             doctitle_h1_end: None,
-            section_counters: [0; 6],
+            section_numberer: SectionNumberer::new(),
             highlight_lines: HashSet::new(),
             source_line_num: 0,
             source_line_highlighted: false,
@@ -813,7 +807,7 @@ impl HtmlRenderer {
             // Section titles are accumulated as plain text (escaped on use);
             // block titles and bibliography reftexts are already rendered HTML.
             let mut ctx = XrefResolver::new();
-            for entry in &self.toc_entries {
+            for entry in self.toc_builder.entries() {
                 ctx.add_section(&entry.id, &entry.title);
             }
             for (id, title_html) in &self.block_ref_titles {
@@ -898,14 +892,8 @@ impl HtmlRenderer {
     }
 
     fn generate_toc(&self) -> String {
-        let min_level: u8 = 2;
-        let max_level = min_level + self.toc_levels - 1;
-
-        let entries: Vec<&TocEntry> = self.toc_entries.iter()
-            .filter(|e| e.level >= min_level && e.level <= max_level)
-            .collect();
-
-        if entries.is_empty() {
+        let steps = self.toc_builder.toc_steps(self.toc_levels);
+        if steps.is_empty() {
             return String::new();
         }
 
@@ -919,45 +907,25 @@ impl HtmlRenderer {
         html_escape(&mut toc, &self.toc_title);
         toc.push_str("</div>\n");
 
-        let mut current_level = min_level - 1;
-
-        for entry in &entries {
-            let level = entry.level;
-
-            if level > current_level {
-                // Going deeper — open new ul(s)
-                while current_level < level {
+        for step in steps {
+            match step {
+                TocStep::EnterLevel(level) => {
                     if !toc.ends_with('\n') {
                         toc.push('\n');
                     }
-                    current_level += 1;
-                    let sl = current_level - 1;
+                    let sl = level - 1;
                     writeln!(toc, "<ul class=\"sectlevel{sl}\">").unwrap();
                 }
-            } else if level < current_level {
-                // Going shallower — close nested lists
-                while current_level > level {
-                    toc.push_str("</li>\n</ul>\n");
-                    current_level -= 1;
+                TocStep::Item(entry) => {
+                    toc.push_str("<li><a href=\"#");
+                    html_escape(&mut toc, &entry.id);
+                    toc.push_str("\">");
+                    html_escape(&mut toc, &entry.title);
+                    toc.push_str("</a>");
                 }
-                // Close previous item at this level
-                toc.push_str("</li>\n");
-            } else {
-                // Same level — close previous item
-                toc.push_str("</li>\n");
+                TocStep::CloseItem => toc.push_str("</li>\n"),
+                TocStep::LeaveLevel => toc.push_str("</li>\n</ul>\n"),
             }
-
-            toc.push_str("<li><a href=\"#");
-            html_escape(&mut toc, &entry.id);
-            toc.push_str("\">");
-            html_escape(&mut toc, &entry.title);
-            toc.push_str("</a>");
-        }
-
-        // Close all remaining open levels
-        while current_level >= min_level {
-            toc.push_str("</li>\n</ul>\n");
-            current_level -= 1;
         }
         toc.push_str("</div>\n");
 
@@ -1659,20 +1627,10 @@ impl HtmlRenderer {
             html_escape(output, id);
             output.push_str("\"></a>");
         }
-        if self.sectnums && *level >= 2 && *level <= 5 && self.pending_section_caption.is_none() {
-            let lvl = *level as usize;
-            self.section_counters[lvl] += 1;
-            for l in (lvl + 1)..6 {
-                self.section_counters[l] = 0;
-            }
-            let mut prefix = String::new();
-            for l in 2..=lvl {
-                if !prefix.is_empty() {
-                    prefix.push('.');
-                }
-                prefix.push_str(&self.section_counters[l].to_string());
-            }
-            prefix.push_str(". ");
+        if self.sectnums
+            && self.pending_section_caption.is_none()
+            && let Some(prefix) = self.section_numberer.number_prefix(*level)
+        {
             output.push_str(&prefix);
             if let Some(ref mut entry) = self.current_toc_entry {
                 entry.title.push_str(&prefix);
@@ -1713,9 +1671,7 @@ impl HtmlRenderer {
             output.push_str(">\n");
         }
         if style == Some("appendix") {
-            self.appendix_counter += 1;
-            let letter = (b'A' + self.appendix_counter - 1) as char;
-            self.pending_section_caption = Some(format!("Appendix {letter}: "));
+            self.pending_section_caption = Some(self.section_numberer.appendix_caption());
         } else if is_special {
             self.pending_section_caption = Some(String::new());
         }
@@ -1999,7 +1955,7 @@ impl HtmlRenderer {
                         self.manpage_name_capture = true;
                     }
                     if let Some(entry) = self.current_toc_entry.take() {
-                        self.toc_entries.push(entry);
+                        self.toc_builder.push(entry);
                     }
                     self.in_section_title = false;
                 }
