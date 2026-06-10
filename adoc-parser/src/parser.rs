@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::block::BlockScanner;
 use crate::event::{DelimitedBlockKind, Event, SubstitutionSet, Tag, TagEnd};
-use crate::inline::InlineParser;
+use crate::inline::{InlineOptions, InlineParser};
 
 /// A pull parser that turns AsciiDoc source into a stream of [`Event`]s.
 ///
@@ -20,10 +20,11 @@ pub struct Parser<'a> {
     pending_event: Option<Event<'a>>,
     subs_stack: Vec<SubstitutionSet>,
     pending_subs: Option<SubstitutionSet>,
-    /// Whether `:experimental:` is currently set, enabling the `kbd:`/`btn:`/
-    /// `menu:` UI macros for inline parsing. Tracked from `Event::Attribute`
-    /// so body text reflects the attribute state up to that point.
-    experimental: bool,
+    /// Document-attribute-derived inline-parsing options (e.g. `:experimental:`
+    /// gating the `kbd:`/`btn:`/`menu:` UI macros). Updated from
+    /// `Event::Attribute` so body text reflects the attribute state up to
+    /// that point.
+    inline_options: InlineOptions,
 }
 
 impl<'a> Parser<'a> {
@@ -34,7 +35,7 @@ impl<'a> Parser<'a> {
             pending_event: None,
             subs_stack: Vec::new(),
             pending_subs: None,
-            experimental: false,
+            inline_options: InlineOptions::default(),
         }
     }
 
@@ -102,13 +103,10 @@ impl<'a> Iterator for Parser<'a> {
                 self.subs_stack.pop();
             }
             Event::Attribute { name, .. } => {
-                // Track :experimental: so kbd:/btn:/menu: are recognized only
-                // when it is set (Asciidoctor leaves them literal otherwise).
-                match name.as_ref() {
-                    "experimental" => self.experimental = true,
-                    "!experimental" | "experimental!" => self.experimental = false,
-                    _ => {}
-                }
+                // Feed document-attribute entries into the inline-parsing
+                // options channel (e.g. :experimental: gates kbd:/btn:/menu:;
+                // Asciidoctor leaves them literal otherwise).
+                self.inline_options.apply_attribute(name.as_ref());
             }
             _ => {}
         }
@@ -148,7 +146,7 @@ impl<'a> Iterator for Parser<'a> {
                         }
                     }
 
-                    let events = InlineParser::parse_str_with_subs_experimental(&combined, subs, self.experimental);
+                    let events = InlineParser::parse_str_with_subs_options(&combined, subs, self.inline_options);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap().into_static())
                     } else {
@@ -162,7 +160,7 @@ impl<'a> Iterator for Parser<'a> {
                 } else {
                     // Single-line: zero-copy path
                     self.pending_event = next;
-                    let events = InlineParser::parse_str_with_subs_experimental(s, subs, self.experimental);
+                    let events = InlineParser::parse_str_with_subs_options(s, subs, self.inline_options);
                     if events.len() == 1 {
                         Some(events.into_iter().next().unwrap())
                     } else {

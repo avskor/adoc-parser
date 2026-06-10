@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-11) — R9: общий канал document-attrs → inline-парсер (InlineOptions)
+
+Запрос «продолжи R9». R8 уже в master (`1fbbde4`, merge `refactor/html-modules`;
+session.md прошлой сессии писалась ДО мержа — как всегда). Новая ветка
+**`refactor/inline-doc-attrs-channel`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `1fbbde4` ПЕРЕД правками.
+
+### Что сделано
+- **`InlineOptions`** (adoc-parser/src/inline.rs, перед InlineParser; реэкспорт
+  `pub use inline::{InlineOptions, InlineParser}` в lib.rs): pub-struct
+  (Debug/Clone/Copy/Default/PartialEq/Eq), поле `experimental: bool`. Единый канал
+  document-attrs → inline-парсер, ДВА пути заполнения (оба задокументированы doc-комментом
+  «новые attr-гейтящие фичи = поле + arm в обоих конструкторах»):
+  - **streaming** `apply_attribute(&mut self, name)` — имя КАК В `Event::Attribute`
+    (unset-формы `!name`/`name!` нормализуются генерически strip'ом `!`; `!name!` —
+    no-op, как и в старом match). Зовёт `Parser` в arm'е Event::Attribute —
+    mid-document set/unset семантика сохранена 1:1.
+  - **snapshot** `from_attr_lookup(is_set: impl FnMut(&str) -> bool)` — для рендереров
+    поверх готовой таблицы атрибутов.
+- **API InlineParser**: `parse_str_with_subs_options(text, subs, options)` — новая
+  основная точка; `parse_str_with_subs` = wrapper с `InlineOptions::default()`;
+  `parse_str_with_subs_experimental` УДАЛЁН (мигрированы все 3 потребителя:
+  parser.rs ×2 — `self.inline_options`; adoc-html lib.rs `render_inline_value` —
+  `from_attr_lookup(|n| document_attrs.contains_key(n))`; тест-хелпер
+  `parse_experimental` — литерал `InlineOptions { experimental: true }`).
+- **InlineState**: поле `experimental: bool` → `options: InlineOptions`; 5 inner-reparse
+  вызовов `InlineState::new(…, self.options)` наследуют ВЕСЬ набор опций (раньше — один
+  bool). Гейты kbd/btn/menu читают `self.options.experimental`.
+- **Parser**: поле `experimental: bool` → `inline_options: InlineOptions`; ad-hoc match
+  трёх spelling'ов заменён на `self.inline_options.apply_attribute(name.as_ref())`.
+- +1 тест `test_inline_options_channel` (set/обе unset-формы/чужие атрибуты игнорируются;
+  snapshot-путь зеркалит streaming).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (18 suites ok:
+  parser 461→**462**, html 328+36, render-core 12, parsing-lab ok, html-compat, integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `1fbbde4`) на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**.
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/{inline,
+  parser,lib}.rs, adoc-html/src/lib.rs, TODO.md, session.md.
+- **Аудит рендерера R1–R9 ПОЛНОСТЬЮ ЗАКРЫТ** (R3 — частично by design: новые block-arm'ы
+  писать через `open_block_with_title`). Дальше — возврат к Фазе 3 (флипы корпуса:
+  pass/index 6-diff, special-section-numbers 10-diff, callout 20-diff, part 22-diff;
+  архитектурные кластеры — наследование `m`/`e`/`s` стиля колонки таблицы, author-header
+  `<div class="details">`, sect0-heading) либо старт второго рендерера (core готов).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, восьмая) — R8: распил adoc-html/src/lib.rs на модули
 
 Запрос «продолжи R8». R7 этап 5 уже в master (`490a082`, merge

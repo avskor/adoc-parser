@@ -129,6 +129,50 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     }
 }
 
+/// Inline-parsing options derived from document attributes.
+///
+/// This is the single channel through which document attributes influence the
+/// inline parser. Consumers fill it in one of two ways:
+/// - streaming (the pull [`crate::Parser`]): call [`InlineOptions::apply_attribute`]
+///   on each `Event::Attribute`, so body text reflects the attribute state up
+///   to that point (mid-document set/unset works like Asciidoctor);
+/// - snapshot (renderers re-parsing attribute values): build from the current
+///   document-attribute table via [`InlineOptions::from_attr_lookup`].
+///
+/// New attribute-gated inline behavior should add a field here plus an arm in
+/// both constructors, rather than threading another ad-hoc flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InlineOptions {
+    /// Whether the `:experimental:` document attribute is set, enabling the
+    /// `kbd:`/`btn:`/`menu:` UI macros. When false they are left as literal
+    /// text, matching Asciidoctor's default.
+    pub experimental: bool,
+}
+
+impl InlineOptions {
+    /// Update from a document-attribute entry, given the name exactly as it
+    /// appears in `Event::Attribute` (unset spellings `!name`/`name!` included).
+    /// Attributes that do not affect inline parsing are ignored.
+    pub fn apply_attribute(&mut self, name: &str) {
+        let (base, set) = if let Some(base) = name.strip_prefix('!') {
+            (base, false)
+        } else if let Some(base) = name.strip_suffix('!') {
+            (base, false)
+        } else {
+            (name, true)
+        };
+        if base == "experimental" {
+            self.experimental = set;
+        }
+    }
+
+    /// Build from a snapshot of the document-attribute table; `is_set` reports
+    /// whether the named attribute is currently set.
+    pub fn from_attr_lookup(mut is_set: impl FnMut(&str) -> bool) -> Self {
+        Self { experimental: is_set("experimental") }
+    }
+}
+
 pub struct InlineParser;
 
 impl InlineParser {
@@ -138,24 +182,22 @@ impl InlineParser {
     }
 
     pub fn parse_str_with_subs<'a>(text: &'a str, subs: SubstitutionSet) -> Vec<Event<'a>> {
-        Self::parse_str_with_subs_experimental(text, subs, false)
+        Self::parse_str_with_subs_options(text, subs, InlineOptions::default())
     }
 
-    /// Like [`parse_str_with_subs`], but enables the experimental UI macros
-    /// (`kbd:`/`btn:`/`menu:`) when `experimental` is true (the `:experimental:`
-    /// document attribute). When false they are left as literal text, matching
-    /// Asciidoctor's default.
-    pub fn parse_str_with_subs_experimental<'a>(
+    /// Like [`Self::parse_str_with_subs`], but with explicit [`InlineOptions`]
+    /// (document-attribute-derived state such as `:experimental:`).
+    pub fn parse_str_with_subs_options<'a>(
         text: &'a str,
         subs: SubstitutionSet,
-        experimental: bool,
+        options: InlineOptions,
     ) -> Vec<Event<'a>> {
         if text.is_empty() {
             return vec![Event::Text(Cow::Borrowed(""))];
         }
 
         let mut events = Vec::new();
-        let mut parser = InlineState::new(text, subs, experimental);
+        let mut parser = InlineState::new(text, subs, options);
         parser.parse_inline(&mut events);
 
         if events.is_empty() {
@@ -170,15 +212,14 @@ struct InlineState<'a> {
     input: &'a str,
     pos: usize,
     subs: SubstitutionSet,
-    /// Whether the `:experimental:` document attribute is set, enabling the
-    /// `kbd:`/`btn:`/`menu:` UI macros. When false they are left as literal
-    /// text, matching Asciidoctor's default.
-    experimental: bool,
+    /// Document-attribute-derived options (e.g. `:experimental:` gating the
+    /// `kbd:`/`btn:`/`menu:` UI macros).
+    options: InlineOptions,
 }
 
 impl<'a> InlineState<'a> {
-    fn new(input: &'a str, subs: SubstitutionSet, experimental: bool) -> Self {
-        Self { input, pos: 0, subs, experimental }
+    fn new(input: &'a str, subs: SubstitutionSet, options: InlineOptions) -> Self {
+        Self { input, pos: 0, subs, options }
     }
 
     fn remaining(&self) -> &'a str {
@@ -332,7 +373,7 @@ impl<'a> InlineState<'a> {
 
             // Keyboard macro: kbd:[keys] — experimental only; otherwise literal text.
             b'k' if has_macros && self.remaining().starts_with("kbd:") => {
-                if self.experimental {
+                if self.options.experimental {
                     if self.try_kbd_macro(events, text_start) {
                         return true;
                     }
@@ -345,7 +386,7 @@ impl<'a> InlineState<'a> {
 
             // Button macro: btn:[label] — experimental only; otherwise literal text.
             b'b' if has_macros && self.remaining().starts_with("btn:") => {
-                if self.experimental {
+                if self.options.experimental {
                     if self.try_btn_macro(events, text_start) {
                         return true;
                     }
@@ -367,7 +408,7 @@ impl<'a> InlineState<'a> {
 
             // Menu macro — experimental only; otherwise literal text.
             b'm' if has_macros && self.remaining().starts_with("menu:") => {
-                if self.experimental {
+                if self.options.experimental {
                     if self.try_menu_macro(events, text_start) {
                         return true;
                     }
@@ -944,7 +985,7 @@ impl<'a> InlineState<'a> {
             } else {
                 self.subs
             };
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1082,7 +1123,7 @@ impl<'a> InlineState<'a> {
             } else {
                 self.subs
             };
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -2365,7 +2406,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(end_tag));
@@ -2400,7 +2441,7 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(start_tag));
 
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.experimental);
+            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(end_tag));
@@ -2445,7 +2486,7 @@ impl<'a> InlineState<'a> {
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::Text(Cow::Borrowed(open_q)));
 
-        let mut inner_parser = InlineState::new(inner, self.subs, self.experimental);
+        let mut inner_parser = InlineState::new(inner, self.subs, self.options);
         inner_parser.parse_inline(events);
 
         events.push(Event::Text(Cow::Borrowed(close_q)));
@@ -2551,7 +2592,11 @@ mod tests {
     /// Parse with the experimental UI macros (`kbd:`/`btn:`/`menu:`) enabled,
     /// as if `:experimental:` were set.
     fn parse_experimental(text: &str) -> Vec<Event<'_>> {
-        InlineParser::parse_str_with_subs_experimental(text, SubstitutionSet::NORMAL, true)
+        InlineParser::parse_str_with_subs_options(
+            text,
+            SubstitutionSet::NORMAL,
+            InlineOptions { experimental: true },
+        )
     }
 
     #[test]
@@ -3632,6 +3677,30 @@ mod tests {
             parse("menu:file[save]"),
             vec![Event::Text(Cow::Borrowed("menu:file[save]"))]
         );
+    }
+
+    #[test]
+    fn test_inline_options_channel() {
+        // Streaming path: set / both unset spellings, unrelated attrs ignored.
+        let mut opts = InlineOptions::default();
+        assert!(!opts.experimental);
+        opts.apply_attribute("experimental");
+        assert!(opts.experimental);
+        opts.apply_attribute("!experimental");
+        assert!(!opts.experimental);
+        opts.apply_attribute("experimental");
+        opts.apply_attribute("experimental!");
+        assert!(!opts.experimental);
+        opts.apply_attribute("toc");
+        opts.apply_attribute("!sectnums");
+        assert_eq!(opts, InlineOptions::default());
+
+        // Snapshot path mirrors the streaming result.
+        assert_eq!(
+            InlineOptions::from_attr_lookup(|name| name == "experimental"),
+            InlineOptions { experimental: true }
+        );
+        assert_eq!(InlineOptions::from_attr_lookup(|_| false), InlineOptions::default());
     }
 
     // Icon macro tests
