@@ -1051,6 +1051,24 @@ fn test_video_options_html() {
 }
 
 #[test]
+fn test_video_youtube_playlist_params() {
+    // `list=` attribute and `video_id/list_id` target are equivalent.
+    let html = to_html("video::RvRhUHTV_8k[youtube,list=PLDitloy]");
+    assert!(html.contains("src=\"https://www.youtube.com/embed/RvRhUHTV_8k?rel=0&amp;list=PLDitloy\""), "{html}");
+    let html = to_html("video::RvRhUHTV_8k/PLDitloy[youtube]");
+    assert!(html.contains("src=\"https://www.youtube.com/embed/RvRhUHTV_8k?rel=0&amp;list=PLDitloy\""), "{html}");
+    // `playlist=` attribute and comma-separated target both emit `&playlist=`
+    // with the video id prepended.
+    let html = to_html("video::RvRhUHTV_8k[youtube,playlist=\"_Svw,SGqg\"]");
+    assert!(html.contains("src=\"https://www.youtube.com/embed/RvRhUHTV_8k?rel=0&amp;playlist=RvRhUHTV_8k,_Svw,SGqg\""), "{html}");
+    let html = to_html("video::RvRhUHTV_8k,_Svw,SGqg[youtube]");
+    assert!(html.contains("src=\"https://www.youtube.com/embed/RvRhUHTV_8k?rel=0&amp;playlist=RvRhUHTV_8k,_Svw,SGqg\""), "{html}");
+    // A bare `loop` needs a playlist for YouTube to loop: the video id is used.
+    let html = to_html("video::RvRhUHTV_8k[youtube,opts=loop]");
+    assert!(html.contains("src=\"https://www.youtube.com/embed/RvRhUHTV_8k?rel=0&amp;loop=1&amp;playlist=RvRhUHTV_8k\""), "{html}");
+}
+
+#[test]
 fn test_video_start_end_html() {
     let html = to_html("video::video.mp4[start=60,end=120]");
     assert!(html.contains("src=\"video.mp4#t=60,120\""));

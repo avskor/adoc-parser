@@ -8,6 +8,8 @@ pub(crate) struct MediaAttrs<'a> {
     poster: Option<&'a str>,
     start: Option<&'a str>,
     end: Option<&'a str>,
+    list: Option<&'a str>,
+    playlist: Option<&'a str>,
     autoplay: bool,
     loop_: bool,
     nocontrols: bool,
@@ -20,6 +22,8 @@ pub(crate) fn parse_media_attrs(attrs: &str) -> MediaAttrs<'_> {
         poster: None,
         start: None,
         end: None,
+        list: None,
+        playlist: None,
         autoplay: false,
         loop_: false,
         nocontrols: false,
@@ -55,6 +59,8 @@ pub(crate) fn parse_media_attrs(attrs: &str) -> MediaAttrs<'_> {
                 "poster" => result.poster = Some(value),
                 "start" => result.start = Some(value),
                 "end" => result.end = Some(value),
+                "list" => result.list = Some(value),
+                "playlist" => result.playlist = Some(value),
                 // `opts` is the documented shorthand for `options` (Asciidoctor
                 // treats them identically).
                 "opts" | "options" => {
@@ -89,6 +95,23 @@ pub(crate) fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
 
     match detect_video_provider(attrs) {
         Some("youtube") => {
+            // Asciidoctor: target `video_id/list_id` carries an optional playlist
+            // (else the `list` attribute); failing that, `video_id1,video_id2,...`
+            // is a dynamic playlist (else the `playlist` attribute), emitted as
+            // `&playlist=` with the video id prepended. A bare `loop` still needs
+            // a playlist for YouTube to actually loop, so the video id is used.
+            let (video_id, list) = match target.split_once('/') {
+                Some((id, list)) => (id, Some(list)),
+                None => (target, media.list),
+            };
+            let (video_id, playlist) = if list.is_some() {
+                (video_id, None)
+            } else {
+                match video_id.split_once(',') {
+                    Some((id, rest)) => (id, Some(rest)),
+                    None => (video_id, media.playlist),
+                }
+            };
             output.push_str("<iframe");
             if let Some(w) = media.width {
                 write_attr(output, "width", w);
@@ -97,8 +120,18 @@ pub(crate) fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
                 write_attr(output, "height", h);
             }
             output.push_str(" src=\"https://www.youtube.com/embed/");
-            html_escape(output, target);
+            html_escape(output, video_id);
+            // Query parameters follow Asciidoctor's order: rel, start, end,
+            // autoplay, loop, controls, list/playlist.
             output.push_str("?rel=0");
+            if let Some(s) = media.start {
+                output.push_str("&amp;start=");
+                html_escape(output, s);
+            }
+            if let Some(e) = media.end {
+                output.push_str("&amp;end=");
+                html_escape(output, e);
+            }
             if media.autoplay {
                 output.push_str("&amp;autoplay=1");
             }
@@ -108,13 +141,17 @@ pub(crate) fn render_video_tag(output: &mut String, target: &str, attrs: &str) {
             if media.nocontrols {
                 output.push_str("&amp;controls=0");
             }
-            if let Some(s) = media.start {
-                output.push_str("&amp;start=");
-                html_escape(output, s);
-            }
-            if let Some(e) = media.end {
-                output.push_str("&amp;end=");
-                html_escape(output, e);
+            if let Some(list) = list {
+                output.push_str("&amp;list=");
+                html_escape(output, list);
+            } else if let Some(playlist) = playlist {
+                output.push_str("&amp;playlist=");
+                html_escape(output, video_id);
+                output.push(',');
+                html_escape(output, playlist);
+            } else if media.loop_ {
+                output.push_str("&amp;playlist=");
+                html_escape(output, video_id);
             }
             output.push_str("\" frameborder=\"0\" allowfullscreen></iframe>\n</div>\n");
         }

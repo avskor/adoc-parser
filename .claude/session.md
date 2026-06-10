@@ -1,5 +1,60 @@
 # Session context
 
+## Сессия (2026-06-11, вторая) — Фаза 3: YouTube-плейлисты в video-макросе
+
+Запрос «продолжи». R9 уже в master (`d9d1502`, merge `refactor/inline-doc-attrs-channel`;
+session.md прошлой сессии писалась ДО мержа — как всегда). Аудит R1–R9 закрыт → возврат к
+Фазе 3. Новая ветка **`fix/youtube-playlist-params`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `d9d1502` ПЕРЕД правками, baseline
+подтверждён: Identical 204, Different 140, Errors 0.
+
+### Выбор задачи
+nearmiss-ранжирование: video.adoc (4 diff, len_delta=0 — не разведан с R2!) → pass/index
+(6, рисковый «случай A») → special-section-numbers (10, архитектурный QUOTES в [label]) →
+callout (20) → part (22). Взят video.adoc.
+
+### Что сделано
+- **Корень (4 diff = 4 youtube-плейлист-варианта)**, семантика верифицирована пробами
+  /tmp/p_video.adoc, /tmp/p_video2.adoc + чтением гема
+  (`/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/converter/html5.rb:1049-1093`):
+  - target `video_id/list_id` → `&list={list_id}` (приоритет над атрибутом `list=`);
+  - иначе target `id1,id2,…` → `&playlist=` (приоритет над атрибутом `playlist=`);
+  - `&playlist=` ВСЕГДА начинается с ID видео: `{video_id},{playlist}`;
+  - голый `loop` без list/playlist → `&playlist={video_id}` (иначе YouTube не зацикливает);
+  - порядок query-параметров: `rel, start, end, autoplay, loop, [mute,] controls,
+    list/playlist, [fs, modest, theme, hl]` — у нас БЫЛО `rel, autoplay, loop, controls,
+    start, end` (латентно при комбинациях; проба `start=60,opts="autoplay,loop"` подтвердила).
+- **Фикс — только РЕНДЕРЕР** (`adoc-html/src/media.rs`): `MediaAttrs` +поля `list`/`playlist`
+  (+2 arm'а в parse_media_attrs; quoted-значения с запятой уже работали — сплит уважает
+  кавычки); youtube-ветка `render_video_tag`: двухступенчатый сплит target (split_once('/')
+  → или split_once(',')), эмиссия параметров в порядке asciidoctor. НЕ реализованы (нет в
+  корпусе): опции `muted`/`modest`/`related`/`nofullscreen`, атрибуты `theme`/`lang`.
+- +1 тест `test_video_youtube_playlist_params` (list-attr/list-in-target/playlist-attr/
+  playlist-in-target + loop-fallback). Старые тесты порядок youtube-параметров не кодировали.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser 462,
+  html 328→**329**+36, render-core 12, compat-suites ok, integration 25).
+- **Корпус: Identical 204→205 (+1)** (video.adoc); blast РОВНО 1 файл: 1 флип,
+  **0 регрессий**, 0 changed-still-different (идеально узко).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-html/src/media.rs,
+  adoc-html/src/tests.rs, TODO.md, session.md.
+- Следующие near-miss (на 205): **pass/index** (6-diff, «случай A» — асимметричный
+  single-plus `` `+pass:[]+` ``, риск), **special-section-numbers** (10-diff, QUOTES в
+  [label] xref — архитектурный), **callout** (20-diff), **part** (22-diff). Архитектурные
+  кластеры: наследование `m`/`e`/`s` стиля колонки таблицы (много файлов), author-header
+  `<div class="details">`, sect0-heading. Либо старт второго рендерера (core готов).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `d9d1502`). fdiff: /tmp/fdiff.py <relpath>. Пробы /tmp/p_video*.adoc.
+  CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11) — R9: общий канал document-attrs → inline-парсер (InlineOptions)
 
 Запрос «продолжи R9». R8 уже в master (`1fbbde4`, merge `refactor/html-modules`;
