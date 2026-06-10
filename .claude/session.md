@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-10, четвёртая) — R7 этап 2: XrefResolver в adoc-render-core
+
+Запрос «продолжи R7 — этап 2, XrefResolver». Этап 1 уже в master (`cf39bb1`,
+merge `refactor/render-core-attr-resolver`). Новая ветка
+**`refactor/render-core-xref-resolver`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `cf39bb1` ПЕРЕД правками.
+
+### Что сделано
+- **adoc-render-core** (+xref-секция в lib.rs):
+  - `RefText::{Plain, Markup}` — решение проблемы «завязан на html_escape»: секции
+    регистрируются Plain (потребитель экранирует под свой формат), заголовки блоков и
+    bibliography-reftext'ы — Markup (готовая разметка потребителя, verbatim).
+  - `XrefResolver<'a>` — бывший `ResolutionContext`: `add_section` (id last-wins,
+    natural-xref title→id first-wins), `add_block` (or_insert — секции побеждают, звать
+    ПОСЛЕ секций), `link_text` (известный id → текст, иначе по заголовку секции),
+    `href_id` (известный id литерально → title→id → литерально).
+  - `unresolved_xref_label(target)` → `[target]` (дефолтный xreflabel asciidoctor),
+    `is_interdoc_xref_target` (`.` и не `#…`), `interdoc_xref_href` (.adoc→.html,
+    `file.adoc#anchor` → `file.html#anchor`; = auto-text безлейбльного inter-doc xref).
+  - +2 юнит-теста (precedence/natural-xref/href; interdoc-таргеты). Всего в core 6.
+- **adoc-html**: `ResolutionContext` (struct+impl, ~60 строк) удалён; `finish()` строит
+  `XrefResolver` из трёх реестров (toc_entries → Plain; block_ref_titles,
+  bibliography_reftexts → Markup), матчит `RefText` при сборке replacements
+  (Markup → push verbatim, Plain → html_escape; None → unresolved_xref_label для
+  internal, экранирование снаружи скобок эквивалентно — `[`/`]` не экранируются).
+  `start_cross_reference` использует core-функции interdoc. Сентинель-машинерия
+  (`resolve_sentinels_into`, XREF_/XREFHREF_-плейсхолдеры) НЕ тронута — это механика
+  отложенного резолва HTML-вывода, не семантика.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (parser 461,
+  html 328+36, render-core 6, parsing-lab **233/233**, html-compat, integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `cf39bb1`) на ВСЕХ 344 файлах корпуса (0 diffs)**.
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-render-core/src/lib.rs,
+  adoc-html/src/lib.rs, TODO.md, session.md.
+- R7 этап 3 (кандидаты): SectionNumberer+TocBuilder (toc_entries/generate_toc/sectnums в
+  adoc-html), счётчики (figure/table/example/footnote — каждый со своей caption-логикой,
+  push_caption_prefix), author/revision-семантика (details-div, revnumber-strip уже в
+  scanner.rs парсера — проверить границу). R9 стыкуется (канал document-attrs).
+- R8 (распил lib.rs на модули) — независим.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, третья) — R7 этап 1: крейт adoc-render-core (AttributeResolver)
 
 Запрос «продолжи R7». master `2a9bf9f` (R5 уже смержен), новая ветка

@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
+use adoc_render_core::{RefText, XrefResolver};
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
 
@@ -809,28 +810,41 @@ impl HtmlRenderer {
         // Resolve xref placeholders (link text and internal hrefs) against the
         // unified id/title registries in a single pass over the output.
         if !self.xref_placeholders.is_empty() || !self.xref_href_placeholders.is_empty() {
-            let ctx = ResolutionContext::new(
-                &self.toc_entries,
-                &self.block_ref_titles,
-                &self.bibliography_reftexts,
-            );
+            // Section titles are accumulated as plain text (escaped on use);
+            // block titles and bibliography reftexts are already rendered HTML.
+            let mut ctx = XrefResolver::new();
+            for entry in &self.toc_entries {
+                ctx.add_section(&entry.id, &entry.title);
+            }
+            for (id, title_html) in &self.block_ref_titles {
+                ctx.add_block(id, RefText::Markup(title_html));
+            }
+            for (id, reftext) in &self.bibliography_reftexts {
+                ctx.add_block(id, RefText::Markup(reftext));
+            }
             let mut replacements: HashMap<&str, String> = HashMap::with_capacity(
                 self.xref_placeholders.len() + self.xref_href_placeholders.len(),
             );
             for (placeholder, fallback, is_internal) in &self.xref_placeholders {
-                let replacement = if let Some(text) = ctx.link_text(fallback) {
-                    text.to_string()
-                } else if *is_internal {
-                    // Unresolved internal anchor reference: Asciidoctor's default
-                    // xreflabel is the target id wrapped in square brackets.
-                    let mut escaped = String::from("[");
-                    html_escape(&mut escaped, fallback);
-                    escaped.push(']');
-                    escaped
-                } else {
-                    let mut escaped = String::new();
-                    html_escape(&mut escaped, fallback);
-                    escaped
+                let replacement = match ctx.link_text(fallback) {
+                    Some(RefText::Markup(html)) => html.to_string(),
+                    Some(RefText::Plain(text)) => {
+                        let mut escaped = String::new();
+                        html_escape(&mut escaped, text);
+                        escaped
+                    }
+                    None => {
+                        // Unresolved internal anchor reference: Asciidoctor's
+                        // default xreflabel wraps the target id in brackets.
+                        let plain = if *is_internal {
+                            adoc_render_core::unresolved_xref_label(fallback)
+                        } else {
+                            fallback.clone()
+                        };
+                        let mut escaped = String::new();
+                        html_escape(&mut escaped, &plain);
+                        escaped
+                    }
                 };
                 replacements.insert(placeholder.as_str(), replacement);
             }
@@ -1364,20 +1378,12 @@ impl HtmlRenderer {
     }
 
     fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>) {
-        let is_interdoc = target.contains('.') && !target.starts_with('#');
+        let is_interdoc = adoc_render_core::is_interdoc_xref_target(target);
         // Inter-document target with the .adoc extension rewritten to .html.
         // Asciidoctor uses this rewritten path both as href and, when the xref
         // has no explicit text, as the auto-generated link text.
         let interdoc_href = if is_interdoc {
-            if let Some(base) = target.strip_suffix(".adoc") {
-                format!("{base}.html")
-            } else if let Some((file_part, anchor)) = target.split_once('#')
-                && file_part.ends_with(".adoc")
-            {
-                format!("{}.html#{anchor}", &file_part[..file_part.len() - 5])
-            } else {
-                target.to_string()
-            }
+            adoc_render_core::interdoc_xref_href(target)
         } else {
             String::new()
         };
@@ -3211,68 +3217,6 @@ fn auto_alt_from_target(target: &str) -> String {
     };
     // Replace hyphens and underscores with spaces
     stem.replace(['-', '_'], " ")
-}
-
-/// Unified lookup context for resolving xref placeholders in `finish()`,
-/// built once from every id/title registry the renderer accumulates:
-/// section TOC entries, titled blocks and bibliography entries.
-struct ResolutionContext<'a> {
-    /// Anchor id -> ready-to-insert link text. Section titles are accumulated
-    /// as plain text and escaped on construction; block titles and bibliography
-    /// reftexts are already rendered HTML and borrowed verbatim. Key membership
-    /// doubles as the "known id" check for href resolution.
-    id_to_text: HashMap<&'a str, CowStr<'a>>,
-    /// Section title -> section id (case-sensitive natural cross reference).
-    title_to_id: HashMap<&'a str, &'a str>,
-}
-
-impl<'a> ResolutionContext<'a> {
-    fn new(
-        toc_entries: &'a [TocEntry],
-        block_ref_titles: &'a [(String, String)],
-        bibliography_reftexts: &'a [(String, String)],
-    ) -> Self {
-        let mut id_to_text: HashMap<&str, CowStr> = HashMap::new();
-        let mut title_to_id: HashMap<&str, &str> = HashMap::new();
-        for entry in toc_entries {
-            let mut escaped = String::new();
-            html_escape(&mut escaped, &entry.title);
-            id_to_text.insert(entry.id.as_str(), CowStr::Owned(escaped));
-            title_to_id.entry(entry.title.as_str()).or_insert(entry.id.as_str());
-        }
-        for (id, title_html) in block_ref_titles {
-            id_to_text.entry(id.as_str()).or_insert(CowStr::Borrowed(title_html));
-        }
-        for (id, reftext) in bibliography_reftexts {
-            id_to_text.entry(id.as_str()).or_insert(CowStr::Borrowed(reftext));
-        }
-        Self { id_to_text, title_to_id }
-    }
-
-    /// Link text for an unlabeled xref: a registered id (section/block/
-    /// bibliography) wins, then a target matching a section title resolves to
-    /// that section's text (natural cross reference).
-    fn link_text(&self, target: &str) -> Option<&str> {
-        if let Some(text) = self.id_to_text.get(target) {
-            return Some(text);
-        }
-        self.title_to_id
-            .get(target)
-            .and_then(|id| self.id_to_text.get(id))
-            .map(|text| text.as_ref())
-    }
-
-    /// Anchor id for an internal xref href. Precedence matches Asciidoctor:
-    /// a target that is itself a registered id stays literal; otherwise a
-    /// target exactly matching a section title (case-sensitive) becomes that
-    /// section's id (natural cross reference); else it stays literal.
-    fn href_id(&self, target: &'a str) -> &'a str {
-        if self.id_to_text.contains_key(target) {
-            target
-        } else {
-            self.title_to_id.get(target).copied().unwrap_or(target)
-        }
-    }
 }
 
 /// Replace every `\x00…\x00` xref sentinel found in `text` in a single pass,

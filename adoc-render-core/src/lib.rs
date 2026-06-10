@@ -6,6 +6,8 @@
 //! precedence of `{name}` attribute references, and so on. This crate is the
 //! single source of truth for those rules so consumers cannot drift apart.
 
+use std::collections::HashMap;
+
 /// A predefined (intrinsic) document attribute.
 ///
 /// `text` is the semantic value — what the attribute *means*, independent of
@@ -156,6 +158,105 @@ pub fn resolve_attr_refs_text<'a>(
     result
 }
 
+/// Reference text registered for an anchor, distinguishing how much
+/// processing it still needs from the consumer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefText<'a> {
+    /// Plain text — the consumer must escape it for its output format
+    /// (section titles are accumulated unescaped).
+    Plain(&'a str),
+    /// Already in the consumer's output markup (e.g. a block title rendered
+    /// to HTML, inline formatting included) — insert verbatim.
+    Markup(&'a str),
+}
+
+/// Cross-reference lookup built from every id/title registry a renderer
+/// accumulates while walking the event stream: section (TOC) entries, titled
+/// blocks and bibliography entries. Encodes Asciidoctor's resolution
+/// precedence for unlabeled xrefs and natural cross references.
+#[derive(Default)]
+pub struct XrefResolver<'a> {
+    /// Anchor id -> link text. Key membership doubles as the "known id"
+    /// check for href resolution.
+    id_to_text: HashMap<&'a str, RefText<'a>>,
+    /// Section title -> section id (case-sensitive natural cross reference).
+    title_to_id: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> XrefResolver<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a section. For duplicate ids the last registration wins; for
+    /// duplicate titles the first section keeps the natural-xref mapping.
+    pub fn add_section(&mut self, id: &'a str, title: &'a str) {
+        self.id_to_text.insert(id, RefText::Plain(title));
+        self.title_to_id.entry(title).or_insert(id);
+    }
+
+    /// Register a titled block or bibliography entry. Sections win over
+    /// blocks on id collision, and earlier blocks win over later ones, so
+    /// call this after all sections are registered.
+    pub fn add_block(&mut self, id: &'a str, reftext: RefText<'a>) {
+        self.id_to_text.entry(id).or_insert(reftext);
+    }
+
+    /// Link text for an unlabeled xref: a registered id (section/block/
+    /// bibliography) wins, then a target matching a section title resolves to
+    /// that section's text (natural cross reference).
+    pub fn link_text(&self, target: &str) -> Option<RefText<'a>> {
+        if let Some(&text) = self.id_to_text.get(target) {
+            return Some(text);
+        }
+        self.title_to_id
+            .get(target)
+            .and_then(|id| self.id_to_text.get(id))
+            .copied()
+    }
+
+    /// Anchor id for an internal xref href. Precedence matches Asciidoctor:
+    /// a target that is itself a registered id stays literal; otherwise a
+    /// target exactly matching a section title (case-sensitive) becomes that
+    /// section's id (natural cross reference); else it stays literal.
+    pub fn href_id(&self, target: &'a str) -> &'a str {
+        if self.id_to_text.contains_key(target) {
+            target
+        } else {
+            self.title_to_id.get(target).copied().unwrap_or(target)
+        }
+    }
+}
+
+/// Default xreflabel for an unresolved internal reference: Asciidoctor wraps
+/// the target id in square brackets.
+pub fn unresolved_xref_label(target: &str) -> String {
+    format!("[{target}]")
+}
+
+/// True when an xref target refers to another document (a path containing a
+/// dot) rather than an in-document anchor.
+pub fn is_interdoc_xref_target(target: &str) -> bool {
+    target.contains('.') && !target.starts_with('#')
+}
+
+/// Rewrite an inter-document xref target for HTML conversion: the `.adoc`
+/// extension becomes `.html` (Asciidoctor's default `outfilesuffix`),
+/// preserving a `#fragment`; other targets pass through unchanged. The
+/// rewritten path doubles as the auto-generated link text when the xref has
+/// no explicit label.
+pub fn interdoc_xref_href(target: &str) -> String {
+    if let Some(base) = target.strip_suffix(".adoc") {
+        format!("{base}.html")
+    } else if let Some((file_part, anchor)) = target.split_once('#')
+        && let Some(base) = file_part.strip_suffix(".adoc")
+    {
+        format!("{base}.html#{anchor}")
+    } else {
+        target.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +345,46 @@ mod tests {
             resolve_attribute_reference("env-HOME", doc, env, None, None),
             AttrRefOutcome::Document("doc")
         ));
+    }
+
+    #[test]
+    fn xref_resolver_precedence() {
+        let mut r = XrefResolver::new();
+        r.add_section("_intro", "Introduction");
+        r.add_section("_dup", "Shared Title");
+        r.add_section("_dup2", "Shared Title"); // natural xref: first section keeps the title
+        r.add_block("_intro", RefText::Markup("<em>loser</em>")); // section wins on id collision
+        r.add_block("_fig", RefText::Markup("<em>Figure</em>"));
+        r.add_block("_fig", RefText::Markup("ignored")); // first block wins
+
+        // Registered id resolves to its text.
+        assert_eq!(r.link_text("_intro"), Some(RefText::Plain("Introduction")));
+        assert_eq!(r.link_text("_fig"), Some(RefText::Markup("<em>Figure</em>")));
+        // Natural xref: a target matching a section title resolves to that section.
+        assert_eq!(r.link_text("Introduction"), Some(RefText::Plain("Introduction")));
+        assert_eq!(r.link_text("Shared Title"), Some(RefText::Plain("Shared Title")));
+        assert_eq!(r.link_text("unknown"), None);
+
+        // Href: known id stays literal, section title becomes its id, else literal.
+        assert_eq!(r.href_id("_intro"), "_intro");
+        assert_eq!(r.href_id("Introduction"), "_intro");
+        assert_eq!(r.href_id("Shared Title"), "_dup");
+        assert_eq!(r.href_id("unknown"), "unknown");
+
+        assert_eq!(unresolved_xref_label("missing-id"), "[missing-id]");
+    }
+
+    #[test]
+    fn interdoc_xref_targets() {
+        assert!(is_interdoc_xref_target("other.adoc"));
+        assert!(is_interdoc_xref_target("docs/guide.html"));
+        assert!(!is_interdoc_xref_target("_section"));
+        assert!(!is_interdoc_xref_target("#frag.with.dot"));
+
+        assert_eq!(interdoc_xref_href("other.adoc"), "other.html");
+        assert_eq!(interdoc_xref_href("dir/other.adoc#sec"), "dir/other.html#sec");
+        assert_eq!(interdoc_xref_href("page.html"), "page.html");
+        assert_eq!(interdoc_xref_href("page.html#sec"), "page.html#sec");
     }
 
     #[test]
