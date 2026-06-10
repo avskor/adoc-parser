@@ -1236,9 +1236,20 @@ impl<'a> InlineState<'a> {
         // and the content must not end with a space. A '+' that fails these (e.g. the
         // inner '+' in `+a+b+`, followed by a word char) cannot close, so the scan
         // continues to the next candidate (`+a+b+` → content `a+b`).
-        let bytes = &self.input.as_bytes()[after_open..];
+        // `pass:[…]` macros are extracted before the `+…+` span in AsciiDoc, so a
+        // '+' inside their brackets cannot close — skip the whole macro region.
+        let s = &self.input[after_open..];
+        let bytes = s.as_bytes();
         let mut close = None;
-        for (i, &b) in bytes.iter().enumerate() {
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'p'
+                && let Some(skip) = Self::pass_macro_span_len(s, i)
+            {
+                i += skip;
+                continue;
+            }
             if b == b'+' && i > 0 {
                 let preceded_by_plus = bytes[i - 1] == b'+';
                 let preceded_by_space = bytes[i - 1] == b' ';
@@ -1252,6 +1263,7 @@ impl<'a> InlineState<'a> {
                     break;
                 }
             }
+            i += 1;
         }
 
         let close = match close {
@@ -1262,12 +1274,46 @@ impl<'a> InlineState<'a> {
         let inner = &self.input[after_open..after_open + close];
 
         self.flush_text(*text_start, start_pos, events);
-        // Single-plus: emit as plain Text (no inline parsing, no typographic replacements)
-        events.push(Event::Text(Cow::Borrowed(inner)));
+        // Single-plus: literal content (no inline parsing, no typographic
+        // replacements) — except `pass:[…]` macros, which AsciiDoc extracts
+        // before the `+…+` span is matched (`+pass:[x]+` → `x`). Inside
+        // `++…++`/`+++…+++` the macro is NOT extracted (the double/triple-plus
+        // span wins positionally in the same extraction pass) — those emit
+        // their content verbatim and stay untouched.
+        Self::push_single_plus_content(inner, events);
 
         self.pos = after_open + close + 1;
         *text_start = self.pos;
         true
+    }
+
+    /// Emit the content of a single-plus passthrough: literal `Text`, except
+    /// embedded `pass:[…]` macros, which become `InlinePassthrough` (mirrors
+    /// `try_pass_macro` — raw content to the first `]`).
+    fn push_single_plus_content(inner: &'a str, events: &mut Vec<Event<'a>>) {
+        let bytes = inner.as_bytes();
+        let mut text_start = 0;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'p'
+                && let Some(skip) = Self::pass_macro_span_len(inner, i)
+            {
+                if i > text_start {
+                    events.push(Event::Text(Cow::Borrowed(&inner[text_start..i])));
+                }
+                // skip = "pass:[" + content + "]"
+                events.push(Event::InlinePassthrough(Cow::Borrowed(
+                    &inner[i + 6..i + skip - 1],
+                )));
+                i += skip;
+                text_start = i;
+                continue;
+            }
+            i += 1;
+        }
+        if text_start < inner.len() {
+            events.push(Event::Text(Cow::Borrowed(&inner[text_start..])));
+        }
     }
 
     /// Parse a `<prefix>[content]` bracket macro from the current position.
@@ -3465,6 +3511,51 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::InlinePassthrough(Cow::Borrowed("++++")),
+            Event::End(TagEnd::Monospace),
+        ]);
+    }
+
+    #[test]
+    fn test_pass_macro_inside_single_plus() {
+        // pass:[…] is extracted BEFORE the single-plus span (asciidoctor
+        // substitution order), so `+pass:[x]+` yields the raw macro content.
+        let events = parse("+pass:[x]+");
+        assert_eq!(events, vec![Event::InlinePassthrough(Cow::Borrowed("x"))]);
+
+        // Empty macro: `+pass:[]+` (typically inside monospace: `` `+pass:[]+` ``)
+        // yields empty content — asciidoctor renders <code></code>.
+        let events = parse("`+pass:[]+`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("")),
+            Event::End(TagEnd::Monospace),
+        ]);
+
+        // Discriminator: `+pass:[]+more+` — the '+' after the macro cannot close
+        // (followed by a word char), the span runs to the last '+'; the macro is
+        // resolved within. Asciidoctor: <code>+more</code>.
+        let events = parse("`+pass:[]+more+`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("")),
+            Event::Text(Cow::Borrowed("+more")),
+            Event::End(TagEnd::Monospace),
+        ]);
+
+        // Mixed literal + macro content.
+        let events = parse("+a pass:[b] c+");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("a ")),
+            Event::InlinePassthrough(Cow::Borrowed("b")),
+            Event::Text(Cow::Borrowed(" c")),
+        ]);
+
+        // Inside `++…++` the macro is NOT extracted (the double-plus span wins
+        // positionally in the same extraction pass) — content stays verbatim.
+        let events = parse("`++pass:[y]++`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("pass:[y]")),
             Event::End(TagEnd::Monospace),
         ]);
     }
