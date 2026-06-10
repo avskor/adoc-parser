@@ -1,5 +1,62 @@
 # Session context
 
+## Сессия (2026-06-10, шестая) — R7 этап 4: CaptionCounters + FootnoteRegistry в adoc-render-core
+
+Запрос «продолжи R7». Этап 3 уже в master (`86d8685`, merge
+`refactor/render-core-section-toc`; session.md прошлой сессии писалась ДО мержа — как
+всегда). Новая ветка **`refactor/render-core-captions`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `86d8685` ПЕРЕД правками.
+
+### Что сделано
+- **adoc-render-core** (+caption/footnote-секция в lib.rs после SectionNumberer):
+  - `CaptionKind { Figure, Table, Example }`, `CaptionPrefix::{None, Custom(&str),
+    Numbered { label, number }}` — plain-текст, потребитель экранирует и форматирует
+    («Label N. » в HTML).
+  - `CaptionCounters::caption_prefix(kind, caption_attr, doc_label)`: `caption=""` →
+    None; `caption=X` → Custom verbatim; иначе Numbered при doc_label=Some, None при
+    unset. **Bump-семантика по kind (зеркало старого рендерера, 1:1)**: figure/table
+    бампят счётчик ТОЛЬКО в Numbered-ветке; example — на КАЖДЫЙ titled-блок, даже под
+    caption=-override/подавлением (задокументировано в doc-комменте).
+  - `Footnote { number, id: Option<String>, text }` (text — plain, потребитель
+    экранирует), `FootnoteRegistry`: `define(id, text) -> usize` (номер = document-order;
+    named id регистрируется, redefinition — обе записи остаются, id указывает на
+    новейшую), `lookup(id)`, `footnotes()`, `is_empty()`.
+  - +2 юнит-теста (caption_counters: bump-различия/подавление/custom/независимость
+    kind'ов; footnote_registry: нумерация/named lookup/redefinition last-wins). Всего 10.
+- **adoc-html**: удалены поля `figure_counter`/`table_counter`/`example_counter`,
+  `footnotes`/`footnote_counter`/`named_footnotes`; добавлены `caption_counters:
+  CaptionCounters`, `footnote_registry: FootnoteRegistry`. `push_caption_prefix` —
+  static fn → метод `&mut self` поверх core (match CaptionPrefix → html_escape/формат);
+  example-arm (бывшее inline-дублирование с хардкодом «Example N. ») переведён на
+  него же (`Some("Example")` как doc_label — рендерер решает, откуда label).
+  Footnote-arms (`Event::Footnote` → `define`, `Event::FootnoteRef` → `lookup`) и
+  `render_footnotes` (итерация по `footnotes()`) — на реестре. Label-источники
+  (document_attrs `figure-caption`/`table-caption` с дефолтами, `:figure-caption!:` →
+  None) остались в рендерере.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (18 suites ok:
+  parser 461, html 328+36, render-core 10, parsing-lab **233/233**, html-compat 6/6+6,
+  integration 25).
+- **Рефакторинг-нейтральность: вывод нового release-бинаря байт-в-байт совпадает с
+  `/tmp/adoc_base` (master `86d8685`) на ВСЕХ 344 файлах корпуса (0 diffs, 0 exit-diffs)**.
+- Корпус `compare_full.py`: **Identical 204, Different 140, Errors 0** (= baseline).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-render-core/src/lib.rs,
+  adoc-html/src/lib.rs, TODO.md, session.md.
+- R7 этап 5 (последний кандидат): author/revision-семантика (details-div в standalone;
+  revnumber-strip уже в scanner.rs парсера — проверить границу). R9 стыкуется (канал
+  document-attrs). Уже хорошо разделено (не трогать): subs — inline.rs, table-grid — block.rs.
+- R8 (распил lib.rs на модули) — независим.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). Нейтральность: цикл cmp /tmp/adoc_base vs
+  /tmp/adoc_new по всем .adoc корпуса. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-10, пятая) — R7 этап 3: SectionNumberer + TocBuilder в adoc-render-core
 
 Запрос «продолжи R7 — этап 3, SectionNumberer+TocBuilder». Этап 2 уже в master

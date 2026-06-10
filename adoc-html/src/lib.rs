@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 use adoc_render_core::{
-    RefText, SectionNumberer, TocBuilder, TocEntry, TocStep, XrefResolver, DEFAULT_TOC_TITLE,
+    CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry, RefText, SectionNumberer,
+    TocBuilder, TocEntry, TocStep, XrefResolver, DEFAULT_TOC_TITLE,
 };
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
@@ -147,9 +148,7 @@ struct HtmlRenderer {
     pending_subs: Option<SubstitutionSet>,
     document_attrs: HashMap<String, String>,
     delimited_block_stack: Vec<(DelimitedBlockKind, bool)>,
-    footnotes: Vec<(usize, Option<String>, String)>, // (number, id, text)
-    footnote_counter: usize,
-    named_footnotes: HashMap<String, usize>, // id → number
+    footnote_registry: FootnoteRegistry,
     toc_builder: TocBuilder,
     toc_insert_position: Option<usize>,
     toc_levels: u8,
@@ -170,9 +169,7 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
-    table_counter: usize,
-    example_counter: usize,
-    figure_counter: usize,
+    caption_counters: CaptionCounters,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
     dlist_stack: Vec<DlistStyle>,
@@ -248,9 +245,7 @@ impl HtmlRenderer {
                 ("figure-caption".to_string(), "Figure".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
-            footnotes: Vec::new(),
-            footnote_counter: 0,
-            named_footnotes: HashMap::new(),
+            footnote_registry: FootnoteRegistry::new(),
             toc_builder: TocBuilder::new(),
             toc_insert_position: None,
             toc_levels: 2,
@@ -271,9 +266,7 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
-            table_counter: 0,
-            example_counter: 0,
-            figure_counter: 0,
+            caption_counters: CaptionCounters::new(),
             block_title_output_start: None,
             block_title_inner_html: None,
             dlist_stack: Vec::new(),
@@ -644,12 +637,7 @@ impl HtmlRenderer {
                 }
             }
             Event::Footnote { id, text } => {
-                self.footnote_counter += 1;
-                let num = self.footnote_counter;
-                if let Some(ref id) = id {
-                    self.named_footnotes.insert(id.to_string(), num);
-                }
-                self.footnotes.push((num, id.as_ref().map(|s| s.to_string()), text.to_string()));
+                let num = self.footnote_registry.define(id.as_deref(), &text);
                 output.push_str("<sup class=\"footnote\"");
                 if let Some(ref id) = id {
                     output.push_str(" id=\"_footnote_");
@@ -665,7 +653,7 @@ impl HtmlRenderer {
                 output.push_str("</a>]</sup>");
             }
             Event::FootnoteRef { id } => {
-                if let Some(&num) = self.named_footnotes.get(id.as_ref()) {
+                if let Some(num) = self.footnote_registry.lookup(id.as_ref()) {
                     output.push_str("<sup class=\"footnote\">[<a class=\"footnote\" id=\"_footnoteref_");
                     output.push_str(&num.to_string());
                     output.push_str("\" href=\"#_footnotedef_");
@@ -852,7 +840,7 @@ impl HtmlRenderer {
             *output = resolved;
         }
 
-        if !self.footnotes.is_empty() {
+        if !self.footnote_registry.is_empty() {
             self.render_footnotes(output);
         }
 
@@ -877,15 +865,16 @@ impl HtmlRenderer {
 
     fn render_footnotes(&self, output: &mut String) {
         output.push_str("<div id=\"footnotes\">\n<hr>\n");
-        for (num, _id, text) in &self.footnotes {
+        for note in self.footnote_registry.footnotes() {
+            let num = note.number.to_string();
             output.push_str("<div class=\"footnote\" id=\"_footnotedef_");
-            output.push_str(&num.to_string());
+            output.push_str(&num);
             output.push_str("\">\n<a href=\"#_footnoteref_");
-            output.push_str(&num.to_string());
+            output.push_str(&num);
             output.push_str("\">");
-            output.push_str(&num.to_string());
+            output.push_str(&num);
             output.push_str("</a>. ");
-            html_escape_text(output, text);
+            html_escape_text(output, &note.text);
             output.push_str("\n</div>\n");
         }
         output.push_str("</div>\n");
@@ -1292,7 +1281,7 @@ impl HtmlRenderer {
         if let Some(title) = self.block_title_inner_html.take() {
             output.push_str("<div class=\"title\">");
             let label = self.document_attrs.get("figure-caption").cloned();
-            Self::push_caption_prefix(output, meta, label.as_deref(), &mut self.figure_counter);
+            self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Figure);
             output.push_str(&title);
             output.push_str("</div>\n");
         }
@@ -1418,7 +1407,7 @@ impl HtmlRenderer {
         if let Some(title) = title_html {
             output.push_str("<caption class=\"title\">");
             let label = self.document_attrs.get("table-caption").cloned();
-            Self::push_caption_prefix(output, meta, label.as_deref(), &mut self.table_counter);
+            self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Table);
             output.push_str(&title);
             output.push_str("</caption>\n");
         }
@@ -1745,22 +1734,8 @@ impl HtmlRenderer {
                     Self::write_meta_attrs(output, meta, "exampleblock");
                     output.push_str(">\n");
                     if let Some(title) = self.block_title_inner_html.take() {
-                        self.example_counter += 1;
-                        let caption_attr = meta.as_ref().and_then(|m| {
-                            m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone())
-                        });
                         output.push_str("<div class=\"title\">");
-                        match caption_attr.as_deref() {
-                            Some("") => {}
-                            Some(prefix) => {
-                                html_escape(output, prefix);
-                            }
-                            None => {
-                                output.push_str("Example ");
-                                output.push_str(&self.example_counter.to_string());
-                                output.push_str(". ");
-                            }
-                        }
+                        self.push_caption_prefix(output, meta, Some("Example"), CaptionKind::Example);
                         output.push_str(&title);
                         output.push_str("</div>\n");
                     }
@@ -2346,25 +2321,23 @@ impl HtmlRenderer {
     /// attribute gives "{label} {n}. " and bumps the counter, while an unset
     /// one (`:table-caption!:` / `:figure-caption!:`) gives no prefix.
     fn push_caption_prefix(
+        &mut self,
         output: &mut String,
         meta: &Option<BlockMeta>,
         doc_label: Option<&str>,
-        counter: &mut usize,
+        kind: CaptionKind,
     ) {
         let caption_attr = meta
             .as_ref()
             .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
-        match caption_attr.as_deref() {
-            Some("") => {}
-            Some(prefix) => html_escape(output, prefix),
-            None => {
-                if let Some(label) = doc_label {
-                    *counter += 1;
-                    html_escape(output, label);
-                    output.push(' ');
-                    output.push_str(&counter.to_string());
-                    output.push_str(". ");
-                }
+        match self.caption_counters.caption_prefix(kind, caption_attr.as_deref(), doc_label) {
+            CaptionPrefix::None => {}
+            CaptionPrefix::Custom(prefix) => html_escape(output, prefix),
+            CaptionPrefix::Numbered { label, number } => {
+                html_escape(output, label);
+                output.push(' ');
+                output.push_str(&number.to_string());
+                output.push_str(". ");
             }
         }
     }

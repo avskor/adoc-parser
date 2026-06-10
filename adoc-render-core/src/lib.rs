@@ -405,6 +405,145 @@ impl SectionNumberer {
     }
 }
 
+/// Kinds of titled blocks that carry a numbered caption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionKind {
+    Figure,
+    Table,
+    Example,
+}
+
+/// How a titled block's caption prefix renders, as decided by
+/// [`CaptionCounters::caption_prefix`]. Text is plain — the consumer escapes
+/// it and formats `Numbered` in its own markup (`"Label N. "` in HTML).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionPrefix<'a> {
+    /// No prefix: suppressed via `caption=""` or an unset caption document
+    /// attribute (`:figure-caption!:`).
+    None,
+    /// A block-level `caption="…"` override, emitted verbatim in place of
+    /// the numbered label.
+    Custom(&'a str),
+    /// Numbered prefix: the caption label (e.g. `"Figure"`) and this block's
+    /// number.
+    Numbered { label: &'a str, number: usize },
+}
+
+/// Per-kind counters behind Asciidoctor's `Figure N.` / `Table N.` /
+/// `Example N.` caption numbering. Where the label comes from (the
+/// `figure-caption`-style document attributes, their defaults and unsetting)
+/// is the consumer's call; this type owns the counter state and the
+/// prefix-selection rule.
+#[derive(Default)]
+pub struct CaptionCounters {
+    figure: usize,
+    table: usize,
+    example: usize,
+}
+
+impl CaptionCounters {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decide the caption prefix for the next titled block of `kind`.
+    ///
+    /// `caption_attr` is the block-level `caption=` named attribute
+    /// (empty string suppresses the prefix, any other value replaces it
+    /// verbatim); `doc_label` is the resolved caption label, `None` when the
+    /// corresponding document attribute is unset.
+    ///
+    /// Counter semantics differ by kind: figure and table bump their counter
+    /// only when a `Numbered` prefix is actually produced, while example
+    /// bumps for every titled block — even when `caption=` overrides or
+    /// suppresses the text.
+    pub fn caption_prefix<'a>(
+        &mut self,
+        kind: CaptionKind,
+        caption_attr: Option<&'a str>,
+        doc_label: Option<&'a str>,
+    ) -> CaptionPrefix<'a> {
+        let counter = match kind {
+            CaptionKind::Figure => &mut self.figure,
+            CaptionKind::Table => &mut self.table,
+            CaptionKind::Example => &mut self.example,
+        };
+        if kind == CaptionKind::Example {
+            *counter += 1;
+        }
+        match caption_attr {
+            Some("") => CaptionPrefix::None,
+            Some(prefix) => CaptionPrefix::Custom(prefix),
+            None => match doc_label {
+                Some(label) => {
+                    if kind != CaptionKind::Example {
+                        *counter += 1;
+                    }
+                    CaptionPrefix::Numbered { label, number: *counter }
+                }
+                None => CaptionPrefix::None,
+            },
+        }
+    }
+}
+
+/// A footnote definition collected while walking the event stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Footnote {
+    /// 1-based document-order number.
+    pub number: usize,
+    /// Anchor id of a named footnote (`footnote:id[text]`).
+    pub id: Option<String>,
+    /// Footnote text as plain text (the consumer escapes when rendering).
+    pub text: String,
+}
+
+/// Footnote numbering and the named-footnote registry: definitions are
+/// numbered in document order, named definitions can be referenced again by
+/// id (`footnote:id[]`), and the collected list drives the consumer's
+/// footnote section at the end of the document.
+#[derive(Default)]
+pub struct FootnoteRegistry {
+    footnotes: Vec<Footnote>,
+    by_id: HashMap<String, usize>,
+}
+
+impl FootnoteRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register the next footnote definition and return its number. A named
+    /// footnote also registers its id for later references; redefining an id
+    /// keeps both definitions and points the id at the newest one.
+    pub fn define(&mut self, id: Option<&str>, text: &str) -> usize {
+        let number = self.footnotes.len() + 1;
+        if let Some(id) = id {
+            self.by_id.insert(id.to_string(), number);
+        }
+        self.footnotes.push(Footnote {
+            number,
+            id: id.map(str::to_string),
+            text: text.to_string(),
+        });
+        number
+    }
+
+    /// Number of the named footnote `id` refers to, if defined.
+    pub fn lookup(&self, id: &str) -> Option<usize> {
+        self.by_id.get(id).copied()
+    }
+
+    /// All definitions in document order.
+    pub fn footnotes(&self) -> &[Footnote] {
+        &self.footnotes
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.footnotes.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +734,61 @@ mod tests {
 
         assert_eq!(n.appendix_caption(), "Appendix A: ");
         assert_eq!(n.appendix_caption(), "Appendix B: ");
+    }
+
+    #[test]
+    fn caption_counters() {
+        let mut c = CaptionCounters::new();
+        // Figure/table: numbered prefix bumps the counter…
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Figure, None, Some("Figure")),
+            CaptionPrefix::Numbered { label: "Figure", number: 1 }
+        );
+        // …but caption="" / caption=X / unset doc label do NOT.
+        assert_eq!(c.caption_prefix(CaptionKind::Figure, Some(""), Some("Figure")), CaptionPrefix::None);
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Figure, Some("Fig X: "), Some("Figure")),
+            CaptionPrefix::Custom("Fig X: ")
+        );
+        assert_eq!(c.caption_prefix(CaptionKind::Figure, None, None), CaptionPrefix::None);
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Figure, None, Some("Рисунок")),
+            CaptionPrefix::Numbered { label: "Рисунок", number: 2 }
+        );
+        // Counters are independent per kind.
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Table, None, Some("Table")),
+            CaptionPrefix::Numbered { label: "Table", number: 1 }
+        );
+        // Example bumps for every titled block, even under caption= override.
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Example, None, Some("Example")),
+            CaptionPrefix::Numbered { label: "Example", number: 1 }
+        );
+        assert_eq!(c.caption_prefix(CaptionKind::Example, Some(""), Some("Example")), CaptionPrefix::None);
+        assert_eq!(
+            c.caption_prefix(CaptionKind::Example, None, Some("Example")),
+            CaptionPrefix::Numbered { label: "Example", number: 3 }
+        );
+    }
+
+    #[test]
+    fn footnote_registry() {
+        let mut f = FootnoteRegistry::new();
+        assert!(f.is_empty());
+        assert_eq!(f.define(None, "first"), 1);
+        assert_eq!(f.define(Some("note"), "second"), 2);
+        assert_eq!(f.define(None, "third"), 3);
+        assert_eq!(f.lookup("note"), Some(2));
+        assert_eq!(f.lookup("unknown"), None);
+        // Redefinition keeps both entries; the id points at the newest.
+        assert_eq!(f.define(Some("note"), "fourth"), 4);
+        assert_eq!(f.lookup("note"), Some(4));
+        let texts: Vec<&str> = f.footnotes().iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(texts, ["first", "second", "third", "fourth"]);
+        assert_eq!(f.footnotes()[1].id.as_deref(), Some("note"));
+        assert_eq!(f.footnotes()[0].id, None);
+        assert!(!f.is_empty());
     }
 
     #[test]
