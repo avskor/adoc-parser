@@ -783,17 +783,18 @@ impl<'a> InlineState<'a> {
         }
     }
 
-    /// Emit the explicit display text of an inline macro (link/xref/mailto label),
-    /// applying REPLACEMENTS when active. Asciidoctor runs the replacements
-    /// substitution before the macros substitution, so apostrophes, dashes, arrows,
-    /// etc. inside an explicit `[label]` are already transformed by the time the
-    /// macro is rendered. Targets/URLs used as fallback display are emitted raw.
+    /// Emit the explicit display text of an inline macro (link/xref/mailto label).
+    /// Asciidoctor runs the quotes, attributes and replacements substitutions
+    /// before the macros substitution, so formatting spans (`` `x` `` → `<code>`),
+    /// `{attr}` references, apostrophes, dashes, arrows, etc. inside an explicit
+    /// `[label]` are already transformed by the time the macro is rendered.
+    /// Re-parsing the label with MACROS disabled reproduces that ordering
+    /// (a macro consumed into the label is not scanned again by Asciidoctor).
+    /// Targets/URLs used as fallback display are emitted raw.
     fn push_macro_label(&self, text: &'a str, events: &mut Vec<Event<'a>>) {
-        if self.subs.has(SubstitutionSet::REPLACEMENTS) {
-            events.push(Event::Text(apply_typographic_replacements(text)));
-        } else {
-            events.push(Event::Text(Cow::Borrowed(text)));
-        }
+        let label_subs = self.subs.without(SubstitutionSet::MACROS);
+        let mut inner_parser = InlineState::new(text, label_subs, self.options);
+        inner_parser.parse_inline(events);
     }
 
     /// Returns the length of a typographic pattern following a backslash, or 0 if none.
@@ -2850,6 +2851,78 @@ mod tests {
             }),
             Event::Text(Cow::Borrowed("a'b.html")),
             Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_macro_label_quotes_formatting() {
+        // Asciidoctor runs QUOTES before macros, so formatting spans inside an
+        // explicit link/xref/mailto label are already converted when the macro
+        // is rendered: xref:t.adoc[see `code`] → <a …>see <code>code</code></a>.
+        assert_eq!(parse("xref:t.adoc[see `partnums`]"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("t.adoc"),
+                label: Some(Cow::Borrowed("see `partnums`")),
+            }),
+            Event::Text(Cow::Borrowed("see ")),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("partnums")),
+            Event::End(TagEnd::Monospace),
+            Event::End(TagEnd::CrossReference),
+        ]);
+        // link: macro with bold + italic in the label.
+        assert_eq!(parse("link:u.html[*b* and _i_]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("u.html"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+            }),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::Strong),
+            Event::Text(Cow::Borrowed(" and ")),
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("i")),
+            Event::End(TagEnd::Emphasis),
+            Event::End(TagEnd::Link),
+        ]);
+        // <<id,label>> shorthand form.
+        assert_eq!(parse("<<sec,`mono` label>>"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("sec"),
+                label: Some(Cow::Borrowed("`mono` label")),
+            }),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("mono")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" label")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+        // ATTRIBUTES also precede macros: `{attr}` in a label is a reference.
+        assert_eq!(parse("xref:t.adoc[with {myattr} ref]"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("t.adoc"),
+                label: Some(Cow::Borrowed("with {myattr} ref")),
+            }),
+            Event::Text(Cow::Borrowed("with ")),
+            Event::AttributeReference {
+                name: Cow::Borrowed("myattr"),
+                fallback: None,
+                trailing_brackets: None,
+            },
+            Event::Text(Cow::Borrowed(" ref")),
+            Event::End(TagEnd::CrossReference),
+        ]);
+        // A macro consumed into the label is NOT scanned again (MACROS disabled
+        // in the label re-parse) — the inner macro text stays literal.
+        assert_eq!(parse("xref:t.adoc[see <<other>>]"), vec![
+            Event::Start(Tag::CrossReference {
+                target: Cow::Borrowed("t.adoc"),
+                label: Some(Cow::Borrowed("see <<other>>")),
+            }),
+            Event::Text(Cow::Borrowed("see <<other>>")),
+            Event::End(TagEnd::CrossReference),
         ]);
     }
 

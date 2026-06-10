@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-11, четвёртая) — Фаза 3: QUOTES/ATTRIBUTES в метках link/xref/mailto
+
+Запрос «продолжи». `fix/pass-macro-in-single-plus` уже в master (`1d61977`, merge;
+session.md прошлой сессии писалась ДО мержа — как всегда). Новая ветка
+**`fix/macro-label-inline-formatting`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base`
+пересобран из чистого master `1d61977` ПЕРЕД правками, baseline подтверждён:
+Identical 206, Different 138, Errors 0.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, дата-зависим, скип) →
+**special-section-numbers (10 diff)** — ярлык «архитектурный QUOTES в [label]» оказался
+преувеличением: это кластер «nested-форматирование в тексте ссылки» (отложен в TODO),
+решается 1 точкой. Семантика верифицирована пробами /tmp/p_label.adoc (8 кейсов) +
+/tmp/p_label2.adoc: asciidoctor прогоняет QUOTES/ATTRIBUTES/REPLACEMENTS ДО macros-пасса →
+`` xref:t[see `x`] ``→`<a>see <code>x</code></a>`, `*b*`/`_i_`/`{attr}` в метке
+преобразованы; макрос внутри метки (`xref:t[see <<other>>]`) повторно НЕ сканируется.
+
+### Что сделано
+- **Фикс — только ПАРСЕР, 1 точка** (`adoc-parser/src/inline.rs::push_macro_label`):
+  вместо одного `Event::Text` с replacements — inner-reparse метки
+  `InlineState::new(text, self.subs.without(MACROS), self.options)` (стандартный
+  механизм, как у quote-спанов/attr-спанов). Покрывает все 3 макроса (link/xref/mailto +
+  shorthand `<<id,label>>`) — все шли через push_macro_label. Рендерер не тронут:
+  labeled-xref/link рендерят вложенные события как есть (placeholder-машинерия — только
+  для unlabeled). Bare-URL fallback (текст = target) остался raw.
+- +1 тест `test_macro_label_quotes_formatting` (mono-в-xref / bold+italic-в-link /
+  shorthand / `{attr}`-ref / guard: внутренний макрос остаётся литералом).
+- НЕ закрыто (pre-existing, НЕ метко-специфично): экранированный `` \` `` — asciidoctor
+  оставляет ВТОРОЙ backslash литералом, мы съедаем оба (escape-обработка quote-спанов
+  вообще).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (883 суммарно:
+  parser 463→**464**, html 329+36, render-core 12, compat-suites ok, integration 25).
+- Пробы: 7/8 кейсов p_label.adoc байт-в-байт (8-й — escape-остаток выше).
+- **Корпус: Identical 206→208 (+2)** (special-section-numbers,
+  link-macro-attribute-parsing); blast 4 файла: 2 флипа, **0 регрессий**,
+  2 changed-still-different УЛУЧШЕНЫ: url.adoc 192→142, audio-and-video 796→457.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/inline.rs,
+  TODO.md, session.md.
+- nearmiss на 208 (пересчитать!): callout (20-diff), part (22-diff), version-label (28),
+  add-header-row (29); url/audio-and-video сильно продвинулись (142/457) — возможно,
+  новые корни стали видны. Архитектурные кластеры: наследование `m`/`e`/`s` стиля
+  колонки таблицы (много файлов), author-header `<div class="details">`, sect0-heading.
+  Либо старт второго рендерера (core готов).
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `1d61977`). fdiff: /tmp/fdiff.py <relpath> [base]. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_label*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, третья) — Фаза 3: pass:[…] внутри single-plus (случай A)
 
 Запрос «продолжи». `fix/youtube-playlist-params` уже в master (`3c2f0af`, merge;
