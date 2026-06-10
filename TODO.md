@@ -50,7 +50,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
 - [x] **R6**: хелперы `open_li_paragraph`/`close_li_paragraph`; 3 arm'а ListItem схлопнуты
   в один (match по checked), CalloutListItem/TagEnd-обработчики на хелперах.
   DescriptionDescription НЕ тронут (асимметричный rollback-механизм dd_output_start).
-- [~] **R7 (АРХИТЕКТУРА — подготовка ко 2-му рендереру)**: ЭТАП 1 СДЕЛАН (ветка
+- [x] **R7 (АРХИТЕКТУРА — подготовка ко 2-му рендереру)**: ЭТАП 1 СДЕЛАН (ветка
   `refactor/render-core-attr-resolver`, в master `cf39bb1`): создан крейт
   **`adoc-render-core`** (zero-dep, workspace-member) — единая таблица интринсиков
   (`IntrinsicAttribute { name, text, html }`: `text` — семантическое значение, `html` —
@@ -84,7 +84,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   body, newline-guard) остались в рендерере; generate_toc — теперь map TocStep→HTML.
   Поля toc_entries/section_counters/appendix_counter удалены из HtmlRenderer. Корпус
   байт-в-байт (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 8).
-  ЭТАП 4 СДЕЛАН (ветка `refactor/render-core-captions`, 2026-06-10; НЕ закоммичено):
+  ЭТАП 4 СДЕЛАН (ветка `refactor/render-core-captions`, в master `de4decd`):
   **CaptionCounters + FootnoteRegistry** вынесены в core. `CaptionKind`
   (Figure/Table/Example), `CaptionPrefix::{None,Custom,Numbered}` (plain-текст, потребитель
   экранирует/форматирует «Label N. »), `CaptionCounters::caption_prefix(kind, caption_attr,
@@ -99,8 +99,22 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   render_footnotes на FootnoteRegistry. Откуда берётся label (document_attrs
   `figure-caption`/`table-caption`, хардкод «Example») — осталось в рендерере. Корпус
   байт-в-байт (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 10).
-  ОСТАЛОСЬ: author/revision-семантика (details-div; revnumber-strip уже в scanner.rs
-  парсера — проверить границу). Уже хорошо разделено (не трогать): subs — в парсере
+  ЭТАП 5 СДЕЛАН (ветка `refactor/render-core-author-revision`, 2026-06-10; НЕ закоммичено):
+  **Author/AuthorRegistry + Revision** вынесены в core. `Author` (6 pub-полей plain-текстом),
+  `AuthorRegistry`: `add(author) -> Vec<(String,String)>` — document-attribute-entries с
+  suffix-правилом (первый автор без суффикса: `author`/`email`; дальше `2`/`3`…;
+  `middlename`/`email` только non-empty), `attr_suffix(index)`, `authors()`, `is_empty()`.
+  `Revision { version, date, remark }`: `attr_entries()` (revnumber/revdate/revremark,
+  пустые компоненты — ничего), `display_version()` (strip одного ведущего `v`/`V`).
+  ГРАНИЦА со scanner.rs проверена, корректна: parse_authors/parse_revision_line (включая
+  revnumber-strip нецифрового префикса) — парсинг строки заголовка, остаются в ПАРСЕРЕ;
+  display_version в core — рендер-семантика для explicit-строк (revision-line приходит уже
+  стрипнутой — там strip no-op). adoc-html: удалены AuthorData/RevisionData, arms
+  Event::Author/Revision и render_author_details на core-типах; details-div HTML (span'ы,
+  mailto-ссылка, формат «version X,») остался в рендерере. Корпус байт-в-байт (344/344,
+  0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 12).
+  **R7 ЗАВЕРШЁН** — вынесенная семантика: attr-refs, xref, section-numbering/TOC,
+  captions, footnotes, author/revision. Уже хорошо разделено (не трогать): subs — в парсере
   (inline.rs), table-grid (colspan/rowspan) — в парсере (block.rs).
 - [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
   (blocks/inline/media/finish/escape) независимо от R7.

@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 use adoc_render_core::{
-    CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry, RefText, SectionNumberer,
-    TocBuilder, TocEntry, TocStep, XrefResolver, DEFAULT_TOC_TITLE,
+    Author, AuthorRegistry, CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry,
+    RefText, Revision, SectionNumberer, TocBuilder, TocEntry, TocStep, XrefResolver,
+    DEFAULT_TOC_TITLE,
 };
 
 const DEFAULT_STYLESHEET: &str = include_str!("asciidoctor.css");
@@ -101,17 +102,6 @@ enum DlistStyle {
     Normal,
     Horizontal,
     Qanda,
-}
-
-struct AuthorData {
-    fullname: String,
-    address: String,
-}
-
-struct RevisionData {
-    version: String,
-    date: String,
-    remark: String,
 }
 
 #[derive(Clone)]
@@ -227,8 +217,8 @@ struct HtmlRenderer {
     header_suppress_start: Option<usize>,
     quote_attribution: Option<String>,
     quote_citetitle: Option<String>,
-    authors: Vec<AuthorData>,
-    revision: Option<RevisionData>,
+    authors: AuthorRegistry,
+    revision: Option<Revision>,
 }
 
 impl HtmlRenderer {
@@ -312,7 +302,7 @@ impl HtmlRenderer {
             header_suppress_start: None,
             quote_attribution: None,
             quote_citetitle: None,
-            authors: Vec::new(),
+            authors: AuthorRegistry::new(),
             revision: None,
         }
     }
@@ -723,38 +713,26 @@ impl HtmlRenderer {
                 output.push_str("[] -->\n");
             }
             Event::Author { fullname, firstname, middlename, lastname, initials, address } => {
-                let idx = self.authors.len();
-                let suffix = if idx == 0 { String::new() } else { (idx + 1).to_string() };
-                self.document_attrs.insert(format!("author{suffix}"), fullname.to_string());
-                self.document_attrs.insert(format!("firstname{suffix}"), firstname.to_string());
-                if !middlename.is_empty() {
-                    self.document_attrs.insert(format!("middlename{suffix}"), middlename.to_string());
-                }
-                self.document_attrs.insert(format!("lastname{suffix}"), lastname.to_string());
-                self.document_attrs.insert(format!("authorinitials{suffix}"), initials.to_string());
-                if !address.is_empty() {
-                    self.document_attrs.insert(format!("email{suffix}"), address.to_string());
-                }
-                self.authors.push(AuthorData {
+                let entries = self.authors.add(Author {
                     fullname: fullname.to_string(),
+                    firstname: firstname.to_string(),
+                    middlename: middlename.to_string(),
+                    lastname: lastname.to_string(),
+                    initials: initials.to_string(),
                     address: address.to_string(),
                 });
+                self.document_attrs.extend(entries);
             }
             Event::Revision { version, date, remark } => {
-                if !version.is_empty() {
-                    self.document_attrs.insert("revnumber".to_string(), version.to_string());
-                }
-                if !date.is_empty() {
-                    self.document_attrs.insert("revdate".to_string(), date.to_string());
-                }
-                if !remark.is_empty() {
-                    self.document_attrs.insert("revremark".to_string(), remark.to_string());
-                }
-                self.revision = Some(RevisionData {
+                let revision = Revision {
                     version: version.to_string(),
                     date: date.to_string(),
                     remark: remark.to_string(),
-                });
+                };
+                for (name, value) in revision.attr_entries() {
+                    self.document_attrs.insert(name.to_string(), value.to_string());
+                }
+                self.revision = Some(revision);
             }
             Event::BlockMetadata { style, id, roles, options, named, subs } => {
                 if let Some(s) = subs {
@@ -2460,8 +2438,8 @@ impl HtmlRenderer {
             return;
         }
         output.push_str("<div class=\"details\">\n");
-        for (i, author) in self.authors.iter().enumerate() {
-            let suffix = if i == 0 { String::new() } else { (i + 1).to_string() };
+        for (i, author) in self.authors.authors().iter().enumerate() {
+            let suffix = AuthorRegistry::attr_suffix(i);
             output.push_str("<span id=\"author");
             output.push_str(&suffix);
             output.push_str("\" class=\"author\">");
@@ -2480,10 +2458,7 @@ impl HtmlRenderer {
         if let Some(ref rev) = self.revision {
             if !rev.version.is_empty() {
                 output.push_str("<span id=\"revnumber\">version ");
-                let ver = rev.version.strip_prefix('v')
-                    .or_else(|| rev.version.strip_prefix('V'))
-                    .unwrap_or(&rev.version);
-                html_escape(output, ver);
+                html_escape(output, rev.display_version());
                 output.push_str(",</span>\n");
             }
             if !rev.date.is_empty() {
