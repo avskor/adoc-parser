@@ -257,6 +257,154 @@ pub fn interdoc_xref_href(target: &str) -> String {
     }
 }
 
+/// A section heading collected while walking the event stream. Doubles as
+/// the section registry for xref resolution (see [`XrefResolver`]) and as
+/// the source of TOC entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TocEntry {
+    /// Heading level as emitted by the parser (1 = document title,
+    /// 2 = top-level section).
+    pub level: u8,
+    /// Anchor id of the section.
+    pub id: String,
+    /// Title as plain text (unescaped), including any number prefix or
+    /// caption the consumer prepended while accumulating it.
+    pub title: String,
+}
+
+/// Sections eligible for the TOC start at this heading level (level 1 is
+/// the document title).
+const TOC_MIN_LEVEL: u8 = 2;
+
+/// Asciidoctor's default `toc-title`.
+pub const DEFAULT_TOC_TITLE: &str = "Table of Contents";
+
+/// One structural step of a TOC layout produced by [`TocBuilder::toc_steps`].
+/// The consumer maps each step to its output format (e.g. `<ul>`/`<li>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TocStep<'a> {
+    /// Open a nested list for sections at `level` (the display depth is
+    /// `level - 1`, e.g. HTML's `sectlevel1` class for level-2 sections).
+    EnterLevel(u8),
+    /// Emit one entry. The item stays open so a deeper list can nest inside
+    /// it; it is closed by a later `CloseItem` or `LeaveLevel`.
+    Item(&'a TocEntry),
+    /// Close the current item before a sibling at the same level.
+    CloseItem,
+    /// Close the current item and its enclosing list.
+    LeaveLevel,
+}
+
+/// Collects section entries in document order and lays out the TOC
+/// structure. The semantics (which levels are visible, how lists nest) live
+/// here; the markup is the consumer's.
+#[derive(Default)]
+pub struct TocBuilder {
+    entries: Vec<TocEntry>,
+}
+
+impl TocBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, entry: TocEntry) {
+        self.entries.push(entry);
+    }
+
+    /// All collected sections in document order.
+    pub fn entries(&self) -> &[TocEntry] {
+        &self.entries
+    }
+
+    /// Structural steps for a TOC limited to `toc_levels` levels of depth
+    /// (Asciidoctor's `toclevels`, default 2): section levels 2 through
+    /// `toc_levels + 1` are included. An empty result means no entry is in
+    /// range and no TOC should be emitted at all.
+    pub fn toc_steps(&self, toc_levels: u8) -> Vec<TocStep<'_>> {
+        let max_level = TOC_MIN_LEVEL as u16 + toc_levels as u16 - 1;
+        let mut steps = Vec::new();
+        let mut current_level = TOC_MIN_LEVEL - 1;
+        let visible = self
+            .entries
+            .iter()
+            .filter(|e| e.level >= TOC_MIN_LEVEL && (e.level as u16) <= max_level);
+        for entry in visible {
+            if entry.level > current_level {
+                // Going deeper — open new list(s)
+                while current_level < entry.level {
+                    current_level += 1;
+                    steps.push(TocStep::EnterLevel(current_level));
+                }
+            } else if entry.level < current_level {
+                // Going shallower — close nested lists, then the sibling item
+                while current_level > entry.level {
+                    steps.push(TocStep::LeaveLevel);
+                    current_level -= 1;
+                }
+                steps.push(TocStep::CloseItem);
+            } else {
+                steps.push(TocStep::CloseItem);
+            }
+            steps.push(TocStep::Item(entry));
+        }
+        // Close all levels left open
+        while current_level >= TOC_MIN_LEVEL {
+            steps.push(TocStep::LeaveLevel);
+            current_level -= 1;
+        }
+        steps
+    }
+}
+
+/// Counters behind Asciidoctor's `sectnums` numbering and appendix captions.
+/// Whether numbering applies at all (the `sectnums` attribute, caption
+/// suppression for special sections) is the consumer's call; this type only
+/// owns the counter state and the prefix format.
+#[derive(Default)]
+pub struct SectionNumberer {
+    /// Per-level section counters; indices 2..=5 are used.
+    counters: [u32; 6],
+    appendix_counter: u8,
+}
+
+impl SectionNumberer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number prefix (`"1.2. "`, trailing space included) for the next
+    /// section at `level`: bumps that level's counter and resets all deeper
+    /// levels. Returns `None` outside the numbered range (levels 2 through
+    /// 5), leaving the counters untouched.
+    pub fn number_prefix(&mut self, level: u8) -> Option<String> {
+        if !(2..=5).contains(&level) {
+            return None;
+        }
+        let lvl = level as usize;
+        self.counters[lvl] += 1;
+        for l in (lvl + 1)..6 {
+            self.counters[l] = 0;
+        }
+        let mut prefix = String::new();
+        for l in 2..=lvl {
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(&self.counters[l].to_string());
+        }
+        prefix.push_str(". ");
+        Some(prefix)
+    }
+
+    /// Caption prefix (`"Appendix A: "`) for the next appendix section.
+    pub fn appendix_caption(&mut self) -> String {
+        self.appendix_counter += 1;
+        let letter = (b'A' + self.appendix_counter - 1) as char;
+        format!("Appendix {letter}: ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +533,68 @@ mod tests {
         assert_eq!(interdoc_xref_href("dir/other.adoc#sec"), "dir/other.html#sec");
         assert_eq!(interdoc_xref_href("page.html"), "page.html");
         assert_eq!(interdoc_xref_href("page.html#sec"), "page.html#sec");
+    }
+
+    #[test]
+    fn toc_structure_steps() {
+        let mut b = TocBuilder::new();
+        for (level, id) in [(2, "a"), (3, "a1"), (3, "a2"), (5, "deep"), (2, "b")] {
+            b.push(TocEntry { level, id: id.to_string(), title: id.to_uppercase() });
+        }
+        assert_eq!(b.entries().len(), 5);
+
+        // toclevels=4 → levels 2..=5 visible; level 5 under level 3 opens
+        // two lists at once, returning to level 2 closes three.
+        let ids: Vec<String> = b
+            .toc_steps(4)
+            .iter()
+            .map(|s| match s {
+                TocStep::EnterLevel(l) => format!(">{l}"),
+                TocStep::Item(e) => e.id.clone(),
+                TocStep::CloseItem => "/i".to_string(),
+                TocStep::LeaveLevel => "<".to_string(),
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [">2", "a", ">3", "a1", "/i", "a2", ">4", ">5", "deep",
+             "<", "<", "<", "/i", "b", "<"]
+        );
+
+        // Default toclevels=2 → only levels 2..=3.
+        let visible: Vec<&str> = b
+            .toc_steps(2)
+            .iter()
+            .filter_map(|s| match s {
+                TocStep::Item(e) => Some(e.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(visible, ["a", "a1", "a2", "b"]);
+
+        // toclevels=0 → nothing in range, no steps at all.
+        assert!(b.toc_steps(0).is_empty());
+        assert!(TocBuilder::new().toc_steps(2).is_empty());
+    }
+
+    #[test]
+    fn section_numbering() {
+        let mut n = SectionNumberer::new();
+        assert_eq!(n.number_prefix(2).as_deref(), Some("1. "));
+        assert_eq!(n.number_prefix(3).as_deref(), Some("1.1. "));
+        assert_eq!(n.number_prefix(4).as_deref(), Some("1.1.1. "));
+        assert_eq!(n.number_prefix(3).as_deref(), Some("1.2. "));
+        // Deeper counter was reset by the level-3 bump.
+        assert_eq!(n.number_prefix(4).as_deref(), Some("1.2.1. "));
+        assert_eq!(n.number_prefix(2).as_deref(), Some("2. "));
+        assert_eq!(n.number_prefix(3).as_deref(), Some("2.1. "));
+        // Outside the numbered range: no prefix, counters untouched.
+        assert_eq!(n.number_prefix(1), None);
+        assert_eq!(n.number_prefix(6), None);
+        assert_eq!(n.number_prefix(3).as_deref(), Some("2.2. "));
+
+        assert_eq!(n.appendix_caption(), "Appendix A: ");
+        assert_eq!(n.appendix_caption(), "Appendix B: ");
     }
 
     #[test]

@@ -61,7 +61,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   adoc-compat-tests/builder.rs переведены, локальные копии удалены. Попутно закрыт ДРЕЙФ:
   в builder.rs отсутствовали `apos`/`pp`/`quot` — теперь таблица общая. Корпус байт-в-байт
   (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +4 юнит-теста core.
-  ЭТАП 2 СДЕЛАН (ветка `refactor/render-core-xref-resolver`, 2026-06-10; НЕ закоммичено):
+  ЭТАП 2 СДЕЛАН (ветка `refactor/render-core-xref-resolver`, в master `280e0ce`):
   **XrefResolver** вынесен в core — `RefText::{Plain,Markup}` (решение проблемы html_escape:
   секции хранятся Plain и экранируются потребителем, заголовки блоков/библиография — Markup
   verbatim), `XrefResolver` (add_section/add_block, link_text/href_id с precedence
@@ -72,7 +72,19 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
   (`resolve_sentinels_into`, плейсхолдеры) осталась в рендерере — это механика отложенного
   резолва HTML-вывода, не семантика. Корпус байт-в-байт (344/344), parsing-lab 233/233,
   clippy 0, +2 юнит-теста core (всего 6).
-  ОСТАЛОСЬ: SectionNumberer+TocBuilder, счётчики (figure/table/example/footnote),
+  ЭТАП 3 СДЕЛАН (ветка `refactor/render-core-section-toc`, 2026-06-10; НЕ закоммичено):
+  **SectionNumberer + TocBuilder** вынесены в core. `TocEntry` (pub-поля level/id/title;
+  бывший приватный тип рендерера), `TocBuilder` (push/entries + `toc_steps(toc_levels)
+  -> Vec<TocStep>` — структурная раскладка дерева TOC: EnterLevel/Item/CloseItem/LeaveLevel,
+  фильтрация уровней 2..=toc_levels+1, пустой результат = «TOC не эмитить вообще»),
+  `DEFAULT_TOC_TITLE`, `SectionNumberer` (`number_prefix(level)` — счётчики sectnums
+  «1.2.3. » с инкрементом+сбросом глубже, None вне 2..=5; `appendix_caption()` —
+  «Appendix A: »). Гейтинг (`sectnums`-флаг, подавление caption'ом спец-секций) и вся
+  HTML-механика (div/ul/li, sectlevel-классы, html_escape, insert-позиция, toc2-классы
+  body, newline-guard) остались в рендерере; generate_toc — теперь map TocStep→HTML.
+  Поля toc_entries/section_counters/appendix_counter удалены из HtmlRenderer. Корпус
+  байт-в-байт (344/344, 0 diffs), parsing-lab 233/233, clippy 0, +2 юнит-теста core (всего 8).
+  ОСТАЛОСЬ: счётчики (figure/table/example/footnote — каждый со своей caption-логикой),
   author/revision-семантика. Уже хорошо разделено (не трогать): subs — в парсере (inline.rs),
   table-grid (colspan/rowspan) — в парсере (block.rs).
 - [ ] **R8 (структура)**: adoc-html/src/lib.rs — 6291 строка одним файлом; распилить на модули
