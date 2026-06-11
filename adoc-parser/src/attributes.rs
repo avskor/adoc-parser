@@ -218,10 +218,19 @@ impl BlockAttributes {
                     .strip_prefix('"')
                     .and_then(|v| v.strip_suffix('"'))
                     .unwrap_or(value);
-                // Promote id= and role= to structural fields
+                // Promote id=, role= and options=/opts= to structural fields
                 match key {
                     "id" => { attrs.id = Some(value.to_string()); }
                     "role" => { attrs.roles.push(value.to_string()); }
+                    "options" | "opts" => {
+                        attrs.options.extend(
+                            value
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|o| !o.is_empty())
+                                .map(str::to_string),
+                        );
+                    }
                     _ => { attrs.named.insert(key.to_string(), value.to_string()); }
                 }
             } else if part.starts_with('#') || part.starts_with('.') || part.starts_with('%') {
