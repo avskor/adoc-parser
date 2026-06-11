@@ -1318,8 +1318,14 @@ fn test_sidebar_with_id_and_role() {
 
 #[test]
 fn test_source_block_with_id() {
-    let html = to_html("[source,rust,#code1]\n----\nfn main() {}\n----");
+    let html = to_html("[source#code1,rust]\n----\nfn main() {}\n----");
     assert!(html.contains("id=\"code1\""));
+    // Shorthand outside the first comma-part is verbatim positional text:
+    // slot 3 of a source block is `linenums`, so `#code1` there enables
+    // numbering and sets no id (matches Asciidoctor).
+    let html = to_html(":source-highlighter: rouge\n\n[source,rust,#code1]\n----\nfn main() {}\n----");
+    assert!(!html.contains("id=\"code1\""));
+    assert!(html.contains("<table class=\"linenotable\">"));
 }
 
 #[test]
@@ -2387,35 +2393,41 @@ fn test_source_block_rouge() {
 
 #[test]
 fn test_source_block_linenums() {
-    let html = to_html(":source-highlighter: highlight.js\n\n[source,rust,%linenums]\n----\nfn main() {}\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,rust,%linenums]\n----\nfn main() {}\n----");
     assert!(html.contains("linenums"), "linenums option should add linenums class. Got: {html}");
-    assert!(html.contains("highlightjs highlight"), "highlightjs highlight classes should be present. Got: {html}");
+    assert!(html.contains("rouge highlight"), "rouge highlight classes should be present. Got: {html}");
     assert!(html.contains("<table class=\"linenotable\">"), "linenums should produce linenotable. Got: {html}");
 }
 
 #[test]
-fn test_source_block_linenums_no_highlighter() {
+fn test_source_block_linenums_needs_build_time_highlighter() {
+    // Asciidoctor renders line numbers only under a build-time highlighter
+    // (rouge/pygments/coderay); without one, or with the client-side
+    // highlight.js, the option is ignored entirely.
     let html = to_html("[source,rust,%linenums]\n----\nfn main() {}\n----");
-    assert!(html.contains("linenums"), "linenums should work even without highlighter. Got: {html}");
-    assert!(html.contains("<table class=\"linenotable\">"), "linenums should produce linenotable. Got: {html}");
+    assert!(!html.contains("linenums"), "no highlighter ignores linenums. Got: {html}");
+    assert!(!html.contains("linenotable"), "no highlighter gives no table. Got: {html}");
+    let html = to_html(":source-highlighter: highlight.js\n\n[source,rust,%linenums]\n----\nfn main() {}\n----");
+    assert!(!html.contains("linenotable"), "highlight.js gives no table. Got: {html}");
+    assert!(html.contains("highlightjs highlight"), "highlightjs classes stay. Got: {html}");
 }
 
 #[test]
 fn test_source_block_linenums_basic() {
-    let html = to_html("[source,ruby,%linenums]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,ruby,%linenums]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
     assert!(html.contains("<td class=\"linenos\"><pre class=\"linenos\">1\n2\n3</pre></td>"), "should have line numbers 1-3. Got: {html}");
     assert!(html.contains("<td class=\"code\"><pre>puts \"Hello\"\nx = 42\nputs x</pre></td>"), "should have code in td. Got: {html}");
 }
 
 #[test]
 fn test_source_block_linenums_start() {
-    let html = to_html("[source,ruby,%linenums,start=10]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,ruby,%linenums,start=10]\n----\nputs \"Hello\"\nx = 42\nputs x\n----");
     assert!(html.contains("<td class=\"linenos\"><pre class=\"linenos\">10\n11\n12</pre></td>"), "should have line numbers 10-12. Got: {html}");
 }
 
 #[test]
 fn test_source_block_linenums_with_highlight() {
-    let html = to_html("[source,rust,%linenums,highlight=2]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,rust,%linenums,highlight=2]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
     assert!(html.contains("<table class=\"linenotable\">"), "should have linenotable. Got: {html}");
     assert!(html.contains("<span class=\"hll\">let b = 2;</span>"), "should have highlight span in code. Got: {html}");
     assert!(html.contains("<td class=\"code\">"), "should have code td. Got: {html}");
@@ -2423,13 +2435,13 @@ fn test_source_block_linenums_with_highlight() {
 
 #[test]
 fn test_source_block_linenums_single_line() {
-    let html = to_html("[source,ruby,%linenums]\n----\nputs \"hi\"\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,ruby,%linenums]\n----\nputs \"hi\"\n----");
     assert!(html.contains("<pre class=\"linenos\">1</pre>"), "single line should have just 1. Got: {html}");
 }
 
 #[test]
 fn test_source_block_linenums_with_callouts() {
-    let html = to_html("[source,ruby,%linenums]\n----\nputs \"Hello\" <1>\nx = 42 <2>\n----");
+    let html = to_html(":source-highlighter: rouge\n\n[source,ruby,%linenums]\n----\nputs \"Hello\" <1>\nx = 42 <2>\n----");
     assert!(html.contains("<td class=\"code\">"), "should have code td. Got: {html}");
     assert!(html.contains("<b class=\"conum\">(1)</b>"), "should have callout. Got: {html}");
 }
@@ -3373,4 +3385,33 @@ fn test_self_referential_attribute_no_recursion() {
     // Mutual recursion through render_inline_value must also terminate.
     let html = to_html(":a: {b}\n:b: {a}\n\nval {a} end");
     assert!(html.contains("val"), "mutual recursion must terminate. Got: {html}");
+}
+
+#[test]
+fn test_example_caption_document_attribute() {
+    // Default label, numbered.
+    let html = to_html(".Optional title\n====\ncontent\n====");
+    assert!(html.contains("<div class=\"title\">Example 1. Optional title</div>"), "default Example label. Got: {html}");
+    // Unset attribute suppresses the prefix entirely.
+    let html = to_html(":!example-caption:\n\n.Optional title\n====\ncontent\n====");
+    assert!(html.contains("<div class=\"title\">Optional title</div>"), "unset example-caption gives bare title. Got: {html}");
+    // Custom label keeps the shared counter.
+    let html = to_html(":example-caption: Demo\n\n.A\n====\nx\n====\n\n.B\n====\ny\n====");
+    assert!(html.contains("<div class=\"title\">Demo 1. A</div>"), "custom label first. Got: {html}");
+    assert!(html.contains("<div class=\"title\">Demo 2. B</div>"), "custom label second. Got: {html}");
+}
+
+#[test]
+fn test_attrlist_shorthand_only_in_first_position() {
+    // Shorthand markers inside later comma-parts are verbatim positional
+    // text: the quote attribution keeps its periods and nothing leaks into
+    // the wrapper class (matches Asciidoctor).
+    let html = to_html("[quote#roads,Dr. Emmett Brown,Back to the Future]\nRoads.");
+    assert!(html.contains("<div id=\"roads\" class=\"quoteblock\">"), "id from first-part shorthand, no role leak. Got: {html}");
+    assert!(html.contains("&#8212; Dr. Emmett Brown<br>"), "attribution stays whole. Got: {html}");
+    assert!(html.contains("<cite>Back to the Future</cite>"), "citetitle stays whole. Got: {html}");
+    // Pure shorthand in the second part is attribution text, not an id/role.
+    let html = to_html("[quote,#bar]\nText.");
+    assert!(html.contains("&#8212; #bar"), "verbatim #bar attribution. Got: {html}");
+    assert!(!html.contains("id=\"bar\""), "no id from second-part shorthand. Got: {html}");
 }

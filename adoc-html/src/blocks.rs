@@ -461,7 +461,8 @@ impl HtmlRenderer {
                     output.push_str(">\n");
                     if let Some(title) = self.block_title_inner_html.take() {
                         output.push_str("<div class=\"title\">");
-                        self.push_caption_prefix(output, meta, Some("Example"), CaptionKind::Example);
+                        let label = self.document_attrs.get("example-caption").cloned();
+                        self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Example);
                         output.push_str(&title);
                         output.push_str("</div>\n");
                     }
@@ -535,9 +536,13 @@ impl HtmlRenderer {
         output.push_str("<div class=\"content\">\n<pre");
 
         let highlighter = self.document_attrs.get("source-highlighter").cloned();
-        let linenums = meta.as_ref().is_some_and(|m| {
-            m.options.iter().any(|o| o == "linenums")
-        });
+        // Line numbering only renders under a build-time highlighter; with
+        // highlight.js or no highlighter Asciidoctor ignores the option
+        // entirely (no class, no table).
+        let linenums = matches!(highlighter.as_deref(), Some("rouge" | "pygments" | "coderay"))
+            && meta.as_ref().is_some_and(|m| {
+                m.options.iter().any(|o| o == "linenums")
+            });
 
         // Build <pre> class
         let mut pre_classes = Vec::new();

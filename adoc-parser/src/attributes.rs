@@ -208,7 +208,7 @@ impl BlockAttributes {
         }
 
         let parts = split_respecting_quotes(attr_str);
-        for part in &parts {
+        for (idx, part) in parts.iter().enumerate() {
             let part = part.trim();
             if part.is_empty() {
                 continue;
@@ -236,20 +236,22 @@ impl BlockAttributes {
                     }
                     _ => { attrs.named.insert(key.to_string(), value.to_string()); }
                 }
-            } else if part.starts_with('#') || part.starts_with('.') || part.starts_with('%') {
-                // Pure shorthand: #id.role1.role2%opt1
+            } else if idx == 0
+                && (part.starts_with('#') || part.starts_with('.') || part.starts_with('%'))
+            {
+                // Pure shorthand: #id.role1.role2%opt1 — only valid in the
+                // style slot (first comma-part); elsewhere it is verbatim
+                // positional text (`[quote,#bar]` → attribution "#bar").
                 Self::parse_shorthand(part, &mut attrs);
-            } else if let Some(pos) = part.find(['#', '.', '%']) {
-                // Mixed: "discrete#myid.role" → positional + shorthand
-                // But only if the shorthand marker is not preceded by a space
-                // (e.g., "Captain James T. Kirk" is plain text, not shorthand)
-                let before = &part[..pos];
-                if !before.contains(' ') {
-                    attrs.positional.push(before.to_string());
-                    Self::parse_shorthand(&part[pos..], &mut attrs);
-                } else {
-                    attrs.positional.push(part.to_string());
-                }
+            } else if idx == 0
+                && let Some(pos) = part.find(['#', '.', '%'])
+                && !part[..pos].contains(' ')
+            {
+                // Mixed: "discrete#myid.role" → positional + shorthand.
+                // A marker preceded by a space is plain text, not shorthand
+                // (e.g., "Captain James T. Kirk").
+                attrs.positional.push(part[..pos].to_string());
+                Self::parse_shorthand(&part[pos..], &mut attrs);
             } else {
                 attrs.positional.push(part.to_string());
             }
@@ -272,6 +274,20 @@ impl BlockAttributes {
             && is_bare_positional(lang)
         {
             attrs.implied_source_lang = Some(lang.trim().to_string());
+        }
+
+        // Slot 3 of a source block is `linenums`: any non-empty positional
+        // value there enables numbering (`[source,ruby,linenums]`,
+        // `[source,ruby,%linenums]`, `[,ruby,linenums]`). A named attribute
+        // in that slot does not fill it (`[source,ruby,start=10]` → off).
+        let is_source_style = attrs.first_positional_is_style
+            && parts.first().is_some_and(|s| s.trim() == "source");
+        if (is_source_style || attrs.implied_source_lang.is_some())
+            && let Some(third) = parts.get(2).map(|s| s.trim())
+            && !third.is_empty()
+            && !third.contains('=')
+        {
+            attrs.options.push("linenums".to_string());
         }
 
         attrs
@@ -810,8 +826,14 @@ mod tests {
 
     #[test]
     fn test_block_attributes_parse_role() {
-        let attrs = BlockAttributes::parse(".role1,.role2");
+        let attrs = BlockAttributes::parse(".role1.role2");
         assert_eq!(attrs.roles, vec!["role1", "role2"]);
+
+        // Shorthand in a later comma-part is verbatim positional text,
+        // not a role (matches Asciidoctor).
+        let attrs = BlockAttributes::parse(".role1,.role2");
+        assert_eq!(attrs.roles, vec!["role1"]);
+        assert_eq!(attrs.positional, vec![".role2"]);
     }
 
     #[test]
@@ -850,9 +872,15 @@ mod tests {
         assert!(attrs.has_option("header"));
         assert!(!attrs.has_option("footer"));
 
-        let attrs = BlockAttributes::parse("%header,%footer");
+        let attrs = BlockAttributes::parse("%header%footer");
         assert!(attrs.has_option("header"));
         assert!(attrs.has_option("footer"));
+
+        // An option only parses in the first comma-part; "%footer" in the
+        // second part is positional text (matches Asciidoctor).
+        let attrs = BlockAttributes::parse("%header,%footer");
+        assert!(attrs.has_option("header"));
+        assert!(!attrs.has_option("footer"));
     }
 
     #[test]
@@ -899,9 +927,16 @@ mod tests {
 
     #[test]
     fn test_source_with_shorthand_id() {
-        let attrs = BlockAttributes::parse("source,rust,#code1");
+        let attrs = BlockAttributes::parse("source#code1,rust");
         assert_eq!(attrs.positional, vec!["source", "rust"]);
         assert_eq!(attrs.id.as_deref(), Some("code1"));
+
+        // "#code1" in slot 3 is no id — it is a non-empty positional that
+        // turns on linenums (matches Asciidoctor).
+        let attrs = BlockAttributes::parse("source,rust,#code1");
+        assert_eq!(attrs.positional, vec!["source", "rust", "#code1"]);
+        assert_eq!(attrs.id, None);
+        assert!(attrs.options.iter().any(|o| o == "linenums"));
     }
 
     #[test]
@@ -1322,5 +1357,38 @@ mod tests {
         let attrs = parse_image_attrs("Alt text,caption=C");
         assert_eq!(attrs.alt, "Alt text");
         assert_eq!(attrs.caption, Some("C"));
+    }
+
+    #[test]
+    fn test_shorthand_only_in_first_position() {
+        // Mixed shorthand parses in the style slot only.
+        let attrs = BlockAttributes::parse("quote#roads,Dr. Emmett Brown,Back to the Future");
+        assert_eq!(attrs.id.as_deref(), Some("roads"));
+        assert!(attrs.roles.is_empty());
+        assert_eq!(attrs.positional, vec!["quote", "Dr. Emmett Brown", "Back to the Future"]);
+
+        // Pure shorthand in a later part is verbatim positional text.
+        let attrs = BlockAttributes::parse("quote,#bar");
+        assert_eq!(attrs.id, None);
+        assert_eq!(attrs.positional, vec!["quote", "#bar"]);
+
+        let attrs = BlockAttributes::parse("quote,.baz");
+        assert!(attrs.roles.is_empty());
+        assert_eq!(attrs.positional, vec!["quote", ".baz"]);
+    }
+
+    #[test]
+    fn test_source_third_slot_is_linenums() {
+        // Any non-empty positional value in slot 3 of a source block
+        // enables line numbering.
+        for attr_str in ["source,ruby,linenums", "source,ruby,%linenums", ",ruby,linenums"] {
+            let attrs = BlockAttributes::parse(attr_str);
+            assert!(attrs.options.iter().any(|o| o == "linenums"), "expected linenums for [{attr_str}]");
+        }
+        // A named attribute does not fill the slot; non-source styles are unaffected.
+        for attr_str in ["source,ruby,start=10", "source,ruby", "quote,a,b"] {
+            let attrs = BlockAttributes::parse(attr_str);
+            assert!(!attrs.options.iter().any(|o| o == "linenums"), "no linenums for [{attr_str}]");
+        }
     }
 }

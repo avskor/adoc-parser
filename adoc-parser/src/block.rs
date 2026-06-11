@@ -267,6 +267,11 @@ impl<'a> BlockScanner<'a> {
             // For implied source shorthand (`[,ruby]`) positional[0] is the
             // language, not a block style — don't leak it onto the wrapper class.
             .filter(|_| attrs.implied_source_lang.is_none())
+            // A block style only ever sits in slot 1. When slot 1 was consumed
+            // by a named/shorthand attribute, the remaining positionals belong
+            // to later slots (`[%header,%footer]` → "%footer" is slot 2, not
+            // a style).
+            .filter(|_| attrs.first_positional_is_style)
             .map(|s| Cow::Owned(s.clone()));
         let subs = attrs.substitution_set(default_subs);
         // Pass through named attributes that are not consumed by the parser
@@ -3882,7 +3887,7 @@ mod tests {
 
     #[test]
     fn test_table_header_footer_combined() {
-        let input = "[%header,%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
+        let input = "[%header%footer]\n|===\n| H1 | H2\n| C1 | C2\n| F1 | F2\n|===";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
             Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![Cow::Owned("header".into()), Cow::Owned("footer".into())], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
