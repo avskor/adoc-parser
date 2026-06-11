@@ -2583,6 +2583,48 @@ fn test_revision_attrs_from_attribute_entries() {
 }
 
 #[test]
+fn test_author_attrs_from_attribute_entries() {
+    let opts = HtmlOptions { standalone: true, ..Default::default() };
+    // `:author:`/`:email:` header entries alone produce the detail spans,
+    // derive firstname/middlename/lastname/authorinitials, and the section
+    // auto-id is generated from the title with attribute refs resolved.
+    let html = to_html_with_options(
+        "= T\n:author: Kismet R. Lee\n:email: kismet@asciidoctor.org\n\n== About {author}\n\n{firstname}/{middlename}/{lastname}/{authorinitials}",
+        opts.clone(),
+    );
+    assert!(html.contains("<span id=\"author\" class=\"author\">Kismet R. Lee</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"email\" class=\"email\"><a href=\"mailto:kismet@asciidoctor.org\">"), "Got: {html}");
+    assert!(html.contains("<h2 id=\"_about_kismet_r_lee\">About Kismet R. Lee</h2>"), "Got: {html}");
+    assert!(html.contains("Kismet/R./Lee/KRL"), "derived attrs. Got: {html}");
+    // The entry overrides the author line and re-derives the names (the
+    // rescan clobbers an explicit `:firstname:`), and underscores in the
+    // value become spaces in the recomposed fullname.
+    let html = to_html_with_options(
+        "= T\nReal Author <real@x.org>\n:author: Mara_Moss Wirribi\n:firstname: Manual\n\n{firstname}/{lastname}/{authorinitials}",
+        opts.clone(),
+    );
+    assert!(html.contains("<span id=\"author\" class=\"author\">Mara Moss Wirribi</span>"), "Got: {html}");
+    assert!(html.contains("Mara Moss/Wirribi/MW"), "re-derived names. Got: {html}");
+    // An explicit `:authorinitials:` differing from the line-derived value
+    // survives the rescan.
+    let html = to_html_with_options(
+        "= T\n:author: Mary Sue Jones\n:authorinitials: XX\n\n{authorinitials}",
+        opts.clone(),
+    );
+    assert!(html.contains("<p>XX</p>"), "explicit initials win. Got: {html}");
+    // `:email:` alone opens no details (author required); `:!author:` after an
+    // author line suppresses the whole div.
+    let html = to_html_with_options("= T\n:email: solo@x.org\n\nbody", opts.clone());
+    assert!(!html.contains("<div class=\"details\">"), "Got: {html}");
+    let html = to_html_with_options("= T\nReal Author\n:!author:\n\nbody", opts.clone());
+    assert!(!html.contains("<div class=\"details\">"), "Got: {html}");
+    // A mid-document `:author:` derives nothing and opens no details.
+    let html = to_html_with_options("= T\n\nbody\n\n:author: Mid Document\n\n{firstname}|{author}", opts);
+    assert!(!html.contains("<div class=\"details\">"), "Got: {html}");
+    assert!(html.contains("{firstname}|Mid Document"), "no mid-doc derivation. Got: {html}");
+}
+
+#[test]
 fn test_paragraph_hardbreaks_option() {
     // `[%hardbreaks]` turns every soft line break into a hard break.
     let html = to_html("[%hardbreaks]\nLine one\nLine two\nLine three");

@@ -305,6 +305,10 @@ impl HtmlRenderer {
                     address: address.to_string(),
                 });
                 self.document_attrs.extend(entries);
+                self.document_attrs.insert(
+                    "authorcount".to_string(),
+                    self.authors.authors().len().to_string(),
+                );
             }
             Event::Revision { version, date, remark } => {
                 let revision = Revision {
@@ -641,6 +645,7 @@ impl HtmlRenderer {
         match tag_end {
             TagEnd::Header => {
                 self.in_header = false;
+                self.finalize_header_authors();
                 if self.standalone {
                     self.render_author_details(output);
                     output.push_str("</div>\n");

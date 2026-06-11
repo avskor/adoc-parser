@@ -556,6 +556,56 @@ pub struct Author {
     pub address: String,
 }
 
+impl Author {
+    /// Parse an `:author:` attribute-entry value into author metadata —
+    /// Asciidoctor's "names only" mode (`process_authors author_line, true,
+    /// false`): the value is split into at most three whitespace-separated
+    /// segments (firstname / middlename / rest-as-lastname), underscores in
+    /// each segment become spaces, the initials are the first character of
+    /// each segment, and the fullname is recomposed from the segments (so
+    /// `Mara_Moss Wirribi` yields the fullname `Mara Moss Wirribi`). No email
+    /// is ever extracted — `address` is always empty.
+    pub fn from_attribute_value(value: &str) -> Author {
+        let mut words = value.split_whitespace();
+        let seg1 = words.next().unwrap_or("");
+        let seg2 = words.next();
+        let rest: Vec<&str> = words.collect();
+        let seg3 = if rest.is_empty() { None } else { Some(rest.join(" ")) };
+
+        let tr = |s: &str| s.replace('_', " ");
+        let initial = |s: &str| s.chars().next().map(String::from).unwrap_or_default();
+
+        let firstname = tr(seg1);
+        let (middlename, lastname) = match (seg2, &seg3) {
+            (Some(s2), Some(s3)) => (tr(s2), tr(s3)),
+            (Some(s2), None) => (String::new(), tr(s2)),
+            _ => (String::new(), String::new()),
+        };
+
+        let mut fullname = firstname.clone();
+        let mut initials = initial(&firstname);
+        if !middlename.is_empty() {
+            fullname.push(' ');
+            fullname.push_str(&middlename);
+            initials.push_str(&initial(&middlename));
+        }
+        if !lastname.is_empty() {
+            fullname.push(' ');
+            fullname.push_str(&lastname);
+            initials.push_str(&initial(&lastname));
+        }
+
+        Author {
+            fullname,
+            firstname,
+            middlename,
+            lastname,
+            initials,
+            address: String::new(),
+        }
+    }
+}
+
 /// Authors collected from the document header, plus the attribute-naming
 /// rule behind `{author}` / `{author_2}` / … references.
 #[derive(Default)]
@@ -674,6 +724,28 @@ mod tests {
         assert_eq!(pp.text, "++");
         assert_eq!(pp.html, "&#43;&#43;");
         assert!(intrinsic_attribute("unknown").is_none());
+    }
+
+    #[test]
+    fn author_from_attribute_value_names_only() {
+        // Three segments: first/middle/last, initials from each.
+        let a = Author::from_attribute_value("Mary Sue Jones");
+        assert_eq!(a.fullname, "Mary Sue Jones");
+        assert_eq!((a.firstname.as_str(), a.middlename.as_str(), a.lastname.as_str()), ("Mary", "Sue", "Jones"));
+        assert_eq!(a.initials, "MSJ");
+        assert!(a.address.is_empty());
+        // Four+ words: the remainder joins into the lastname.
+        let a = Author::from_attribute_value("A B C D");
+        assert_eq!((a.lastname.as_str(), a.initials.as_str()), ("C D", "ABC"));
+        // Underscores become spaces; the fullname is recomposed.
+        let a = Author::from_attribute_value("Mara_Moss Wirribi");
+        assert_eq!(a.fullname, "Mara Moss Wirribi");
+        assert_eq!((a.firstname.as_str(), a.lastname.as_str(), a.initials.as_str()), ("Mara Moss", "Wirribi", "MW"));
+        assert!(a.middlename.is_empty());
+        // Single name: firstname only.
+        let a = Author::from_attribute_value("Mary");
+        assert_eq!((a.fullname.as_str(), a.initials.as_str()), ("Mary", "M"));
+        assert!(a.middlename.is_empty() && a.lastname.is_empty());
     }
 
     #[test]

@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-11, семнадцатая) — Фаза 3: author-атрибуты из attribute-entries
+
+Запрос «продолжи». Ветка **`fix/author-attr-entries`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 241, master `2d07b0b` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**reference-author.adoc (37 diff)**, три корня.
+
+### Семантика asciidoctor (пробы /tmp/p_au1..16; источник parser.rb/document.rb читан)
+- End-of-header rescan (parse_header_metadata): если `author`-атрибут задан и ≠
+  значения от author-line — names-only парсинг значения (split ≤3 whitespace-сегментов,
+  4+ слов → хвост в lastname, `_`→пробел в каждом сегменте, initials = первые символы,
+  fullname РЕКОМПОЗИРУЕТСЯ) → клоббер firstname/middlename/lastname (даже явных
+  entries!); явный `:authorinitials:`, отличный от line-derived, ВЫЖИВАЕТ;
+  authorcount → 1 («do not allow multiple»). Email из значения НЕ извлекается
+  (`<...>` в attr-entry уже проэкранирован header-subs → ветка sanitize мертва;
+  lastname получает `Jones <m@x.org>` verbatim).
+- `Document#authors` — полностью attribute-backed: спаны details из `author`/`email`
+  + `author_N`/`email_N` (гейт `authorcount`). `:email:` без author → НЕТ details;
+  `:!author:` после author-line — details ПОДАВЛЕН (но firstname от line остаётся).
+- `:author_2:` attr-entry второго автора НЕ создаёт; mid-document `:author:` ничего
+  не дериватит и details не открывает; `:firstname:`+`:lastname:` БЕЗ author author
+  не композируют.
+- Section auto-id: attr-refs в заголовке резолвятся ДО генерации id
+  (`== About {author}` → `_about_kismet_r_lee`); значения entries резолвятся at
+  definition (`:nested: x {foo} y`); undefined — литерал (скобки дропает санация id).
+
+### Что сделано
+- **CORE** `Author::from_attribute_value(value)` — names-only дериватор (+1 юнит-тест).
+- **РЕНДЕРЕР** `finish.rs::finalize_header_authors` (зов в events.rs на TagEnd::Header
+  ДО render_author_details, в обоих режимах — derived attrs нужны body-refs);
+  `render_author_details` — author-спаны attribute-backed (цикл по authorcount,
+  name_suffix/id_suffix из AuthorRegistry); guard details: `author`-attr вместо
+  registry. events.rs Event::Author — +`authorcount` в document_attrs (= len реестра).
+- **ПАРСЕР** `block.rs`: поле `doc_attrs: HashMap` (имена lowercase, значения
+  definition-time resolved); `record_attribute_entry` (unset-формы `!n`/`n!` —
+  remove) на всех 5 точках attr-entry (body, header×3, revision) + запись
+  author-line-атрибутов (suffix `_N`); `resolve_title_attr_refs` перед
+  `generate_id` на всех 4 точках (section/discrete/doc-header×2).
+- +1 html-тест `test_author_attrs_from_attribute_entries` (6 кейсов),
+  +1 parser-тест `test_section_id_resolves_attr_refs` (5 ids).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (902 passed: parser 469,
+  html 342, core 13).
+- Пробы: p_au1 (standalone+embedded) байт-в-байт кроме известной NCR-нормализации;
+  p_au2..16 OK (p_au16 body — pre-existing пустые строки в пустых sectionbody).
+- **Корпус: Identical 241→242 (+1)**; blast (base 2d07b0b): ровно 1 файл — 1 флип
+  (reference-author.adoc), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 242: **id (45 diff)**, checklist (49), collapsible (51),
+  release-plan (56), stem (56), block (57), literal-monospace (59), source (63),
+  customize-title-label (66), include (75), bibliography (77);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing: лишний
+  `</div>` у standalone passthrough, unknown-style течёт в class на quote/sidebar,
+  пустые строки в пустых sectionbody. Известные пределы фикса: parser-карта не
+  дериватит firstname из entry-`:author:` для ids (нет в корпусе); `:authors:`-атрибут
+  (множественный) не поддержан (нет в корпусе).
+
+---
+
 ## Сессия (2026-06-11, шестнадцатая) — Фаза 3: subs trailing-plus + attr-value pass-макрос
 
 Запрос «продолжи». Ветка **`fix/subs-trailing-plus-and-attr-pass-macro`** — НЕ закоммичена
