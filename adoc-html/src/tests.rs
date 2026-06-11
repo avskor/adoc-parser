@@ -578,15 +578,27 @@ fn test_toc_custom_title() {
 #[test]
 fn test_toc_left() {
     let input = "= Doc\n:toc: left\n\n== S1\n\nText.";
-    let html = to_html(input);
-    assert!(html.contains("class=\"toc2 toc-left\""));
+    let html = to_html_with_options(input, HtmlOptions { standalone: true, ..Default::default() });
+    assert!(html.contains("<body class=\"article toc2 toc-left\">"));
+    assert!(html.contains("<div id=\"toc\" class=\"toc2\">"));
 }
 
 #[test]
 fn test_toc_right() {
     let input = "= Doc\n:toc: right\n\n== S1\n\nText.";
-    let html = to_html(input);
-    assert!(html.contains("class=\"toc2 toc-right\""));
+    let html = to_html_with_options(input, HtmlOptions { standalone: true, ..Default::default() });
+    assert!(html.contains("<body class=\"article toc2 toc-right\">"));
+    assert!(html.contains("<div id=\"toc\" class=\"toc2\">"));
+}
+
+#[test]
+fn test_toc_mid_document_no_body_class() {
+    // `:toc:` set after the header has no effect: no TOC and no toc2 body class
+    // (Asciidoctor normalizes toc placement from header attributes only).
+    let input = "= Doc\n\npara\n\n:toc: left\n\n== S1\n\nText.";
+    let html = to_html_with_options(input, HtmlOptions { standalone: true, ..Default::default() });
+    assert!(html.contains("<body class=\"article\">"));
+    assert!(!html.contains("<div id=\"toc\""));
 }
 
 #[test]

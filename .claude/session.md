@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-11, седьмая) — Фаза 3: toc2 body-класс
+
+Запрос «продолжи». `fix/header-after-leading-comments` уже в master (`e3dd825`, merge).
+Новая ветка **`fix/toc2-body-class`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base`
+пересобран из чистого master `e3dd825` (blast сперва гонялся со старым base `9346e4` —
+показывал кумулятив; пересобрал, перегнал). Baseline подтверждён: Identical 228.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип, как всегда) →
+**toc.adoc (1 diff)**: мы эмитим `<body class="article toc2">`, asciidoctor — `article`.
+
+### Семантика asciidoctor (пробы /tmp/p_toc1..6.adoc)
+- `:toc:` (auto) / `preamble` / `macro` → body `article`, div `<div id="toc" class="toc">`.
+- `:toc: left|right` → body `article toc2 toc-left|toc-right`, div — `class="toc2"`
+  (toc-left/right НА BODY, не на div!).
+- **mid-document `:toc: left` → ничего** (ни TOC, ни класса): нормализация
+  toc-class/toc-position — только header-атрибуты (document.rb).
+- В toc.adoc все `:toc:` mid-document → нет TOC (у нас тоже не было), лишним был только класс.
+
+### Что сделано (только РЕНДЕРЕР, finish.rs, 2 точки)
+- `generate_toc`: `left|right` → div `class="toc2"` (было `toc2 toc-left|toc-right`).
+- `write_document_head`: body-класс ` toc2 toc-{pos}` под гейтом
+  `toc_auto_seen && matches!(pos, "left"|"right")` (было: toc2 при любом непустом `toc`).
+  `toc_auto_seen` — готовый признак «toc из header»: парсер эмитит `Event::Toc` внутри
+  header'а только при header-`:toc:` (block.rs has_toc), mid-document Toc-события нет.
+- Обновлены `test_toc_left`/`test_toc_right` (standalone, ассерты body+div),
+  +1 тест `test_toc_mid_document_no_body_class`.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; cargo test --workspace ВСЁ зелёное (html 331→**332**,
+  parser 465, render-core 12, compat ok, integration 25).
+- Пробы p_toc1..6: все 6 байт-в-байт с asciidoctor (body+toc-div строки).
+- **Корпус: Identical 228→229 (+1)**; blast (чистый base e3dd825): изменился РОВНО 1 файл —
+  toc.adoc, 1 флип, **0 регрессий**, 0 changed-still-different.
+
+### Остатки (НЕ в корпусе, записаны в TODO)
+- mid-document смена `toc` ПОСЛЕ header-`:toc:` у нас меняет live-размещение
+  (asciidoctor морозит позицию на header) — снапшот не делал.
+- Кастомный `:toc-class:` не поддержан.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-html/src/finish.rs,
+  adoc-html/src/tests.rs, TODO.md, session.md.
+- nearmiss на 229: **version-label (2 diff)**, multiple-authors (7), url.adoc (9),
+  header.adoc (16), part (18), add-header-row (29), apply-subs-to-blocks (31),
+  reference-revision-attributes (31); revision-line-with-version-prefix (1 — `{docdate}`,
+  скип). Прочее: `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `e3dd825`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_toc*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, шестая) — Фаза 3: п.41 header после ведущих комментариев
 
 Запрос «продолжи». `fix/callout-rendering` уже в master (`9346ce4`, merge). Новая ветка
