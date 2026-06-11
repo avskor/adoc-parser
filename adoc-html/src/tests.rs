@@ -1598,6 +1598,22 @@ fn test_sect0_heading_standalone() {
     assert!(html.contains("<div class=\"sect1\">\n<h2 id=\"_real_section\">"));
 }
 
+#[test]
+fn test_partintro_paragraph_masquerades_as_open_block() {
+    // [partintro] on a paragraph masquerades it as an open block:
+    // <div class="openblock partintro"><div class="content"><div class="paragraph"><p>…
+    let html = to_html("= Book\n:doctype: book\n\n= Part I\n\n[partintro]\nIntro text.\n\n== Chapter A\n\ntext");
+    assert!(html.contains(
+        "<div class=\"openblock partintro\">\n<div class=\"content\">\n<div class=\"paragraph\">\n<p>Intro text.</p>\n</div>\n</div>\n</div>"
+    ));
+    assert!(!html.contains("<div class=\"paragraph partintro\">"));
+    // [partintro] on an explicit open block keeps working unchanged.
+    let html = to_html("= Book\n:doctype: book\n\n= Part I\n\n[partintro]\n--\nIntro text.\n--\n\n== Chapter A\n\ntext");
+    assert!(html.contains(
+        "<div class=\"openblock partintro\">\n<div class=\"content\">\n<div class=\"paragraph\">\n<p>Intro text.</p>\n</div>\n</div>\n</div>"
+    ));
+}
+
 // Preamble tests
 
 #[test]

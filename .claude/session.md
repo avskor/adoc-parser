@@ -1,5 +1,45 @@
 # Session context
 
+## Сессия (2026-06-11, двенадцатая) — Фаза 3: part.adoc ([partintro]-параграф → open block)
+
+Запрос «продолжи». Ветка **`fix/partintro-paragraph-openblock`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 233, master `6f82f8a` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**part.adoc (18 diff)**, один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_pi1..4.adoc)
+- `[partintro]` на параграфе — masquerade в open block:
+  `<div class="openblock partintro"><div class="content"><div class="paragraph"><p>…`.
+- Вне book-part — ERROR + exclude всего блока (НЕ реализовано: в корпусе нет таких).
+- `[partintro]` на `--`-блоке — у нас уже работало (фолбэк `_ => {}`).
+- `[abstract]`-параграф → `<div class="quoteblock abstract"><blockquote>текст` (БЕЗ
+  paragraph-обёртки) — НЕ сделано, отдельный potential-кластер (abstract-block 5 diff).
+
+### Что сделано (только ПАРСЕР, 2 точки)
+- `attributes.rs::block_style_kind`: +`"partintro"`.
+- `block.rs::scan_paragraph`: arm `quote|example|sidebar` → `…|partintro`,
+  kind `DelimitedBlockKind::Open`; style не исключён в emit_block_metadata →
+  класс `openblock partintro` собирает рендерер.
+- +1 html-тест `test_partintro_paragraph_masquerades_as_open_block` (masquerade +
+  guard явного open-блока).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (html 335→336).
+- **Корпус: Identical 233→234 (+1)**; blast (base 6f82f8a): ровно 1 файл — 1 флип
+  (part.adoc, 0 diffs), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 234: **add-header-row (29 diff)**, apply-subs-to-blocks (31),
+  reference-revision-attributes (31), listing (34), reference-author (37),
+  icon-macro (41), id (45); revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Прочее: `[abstract]`-параграф → quoteblock (см. выше), `:icons:`-colist (TODO),
+  кластер `m`/`e`/`s` стиля колонок.
+
+---
+
 ## Сессия (2026-06-11, одиннадцатая) — Фаза 3: url.adoc (irc-схема, link role=, mailto query)
 
 Запрос «продолжи». Ветка **`fix/url-macro-irc-role-mailto`** — НЕ закоммичена
