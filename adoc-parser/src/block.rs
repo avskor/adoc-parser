@@ -473,10 +473,46 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    /// Skip line comments (`//`) and comment blocks (`////`) at the current
+    /// position. Asciidoctor allows comments before the document header and
+    /// between its lines (title/author/revision/attributes) without ending
+    /// the header. Returns true if any lines were consumed.
+    fn skip_header_comments(&mut self) -> bool {
+        let mut skipped = false;
+        while let Some(line) = self.current_line() {
+            if scanner::is_line_comment(line) {
+                self.advance();
+                skipped = true;
+            } else if let Some((scanner::DelimiterType::Comment, delim_len)) =
+                scanner::is_delimiter(line)
+            {
+                self.advance();
+                while let Some(inner) = self.current_line() {
+                    self.advance();
+                    if let Some((dt, dl)) = scanner::is_delimiter(inner)
+                        && dt == scanner::DelimiterType::Comment && dl == delim_len {
+                            break;
+                    }
+                }
+                skipped = true;
+            } else {
+                break;
+            }
+        }
+        skipped
+    }
+
     /// Pre-`body_started` constructs: document header, attribute-only header,
     /// block attribute `[...]`, block title `.Title`.
     /// `Some(r)` → handled (caller returns `r`); `None` → fall through.
     fn scan_header_constructs(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
+        // Comments ahead of the header must not start the body — `= Title`
+        // is still recognized after leading `//` lines and `////` blocks.
+        if !self.body_started && self.skip_header_comments() {
+            self.rescan_requested = true;
+            return Some(None);
+        }
+
         // Document header detection: `= Title` or `# Title` before any body content
         // Skip if [discrete] attribute is pending — treat as discrete heading instead
         if !self.header_emitted && !self.body_started
@@ -952,6 +988,7 @@ impl<'a> BlockScanner<'a> {
         let mut header_events: Vec<Event<'a>> = Vec::new();
 
         // Check for author line: next line that is not blank, not attribute entry, not section marker
+        self.skip_header_comments();
         if let Some(line) = self.current_line()
             && !scanner::is_blank(line)
             && scanner::is_attribute_entry(line).is_none()
@@ -972,6 +1009,7 @@ impl<'a> BlockScanner<'a> {
             self.advance();
 
             // Check for revision line after author line
+            self.skip_header_comments();
             if let Some(rev_line) = self.current_line()
                 && !scanner::is_blank(rev_line)
                 && scanner::is_attribute_entry(rev_line).is_none()
@@ -1006,6 +1044,9 @@ impl<'a> BlockScanner<'a> {
         }
 
         while let Some(line) = self.current_line() {
+            if self.skip_header_comments() {
+                continue;
+            }
             if scanner::is_blank(line) {
                 self.advance();
                 break;
@@ -1062,6 +1103,9 @@ impl<'a> BlockScanner<'a> {
         let mut header_events: Vec<Event<'a>> = Vec::new();
 
         while let Some(line) = self.current_line() {
+            if self.skip_header_comments() {
+                continue;
+            }
             if scanner::is_blank(line) {
                 self.advance();
                 // After blank, check if next non-blank line is `= Title`
@@ -1109,6 +1153,9 @@ impl<'a> BlockScanner<'a> {
         let mut header_events: Vec<Event<'a>> = Vec::new();
 
         while let Some(line) = self.current_line() {
+            if self.skip_header_comments() {
+                continue;
+            }
             if scanner::is_blank(line) {
                 self.advance();
                 break;
@@ -3159,6 +3206,37 @@ mod tests {
             Event::Text(Cow::Borrowed("Hello.")),
             Event::End(TagEnd::Paragraph),
         ]);
+    }
+
+    #[test]
+    fn test_document_header_after_leading_comments() {
+        // Line comments and comment blocks ahead of `= Title` must not start
+        // the body — the header (with author/revision) is still recognized.
+        let input = "// tag::main[]\n////\nhidden\n////\n= Title\n// between\nAuthor Name\n// another\nv1.0, 2024-01-01\n:attr: x\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events[0], Event::Start(Tag::Header), "header must be detected: {events:?}");
+        assert!(events.contains(&Event::Author {
+            fullname: Cow::Borrowed("Author Name"),
+            firstname: Cow::Borrowed("Author"),
+            middlename: Cow::Borrowed(""),
+            lastname: Cow::Borrowed("Name"),
+            initials: Cow::Owned("AN".into()),
+            address: Cow::Borrowed(""),
+        }));
+        assert!(events.contains(&Event::Revision {
+            version: Cow::Borrowed("1.0"),
+            date: Cow::Borrowed("2024-01-01"),
+            remark: Cow::Borrowed(""),
+        }));
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("attr"),
+            value: Cow::Borrowed("x"),
+        }));
+        // Guard: a blank line still ends the header — a comment after it is body
+        let input = "= Title\n\n// body comment\nHello.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.iter().any(|e| matches!(e, Event::Author { .. })));
+        assert!(events.contains(&Event::Text(Cow::Borrowed("Hello."))));
     }
 
     #[test]
