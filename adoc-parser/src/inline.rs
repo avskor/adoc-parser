@@ -455,6 +455,18 @@ impl<'a> InlineState<'a> {
                 true
             }
 
+            // Anchor macro anchor:id[] (MACROS)
+            b'a' if has_macros && self.remaining().starts_with("anchor:") => {
+                if self.try_anchor_macro(events, text_start) {
+                    return true;
+                }
+                // Skip the whole prefix so the custom-macro catch-all doesn't
+                // pick up a bogus `nchor:` macro — an invalid anchor target is
+                // literal text in Asciidoctor.
+                self.pos += 7;
+                true
+            }
+
             // Inline asciimath macro (MACROS)
             b'a' if has_macros && self.remaining().starts_with("asciimath:[") => {
                 if self.try_stem_macro(10, "asciimath", events, text_start) {
@@ -920,9 +932,9 @@ impl<'a> InlineState<'a> {
         };
         // Longest-first is not required (each name is uniquely delimited by its colon), but keep
         // indexterm2 before indexterm for clarity.
-        const NAMES: [&str; 11] = [
+        const NAMES: [&str; 12] = [
             "stem:", "latexmath:", "asciimath:", "link:", "xref:", "mailto:", "icon:",
-            "indexterm2:", "indexterm:", "footnote:", "image:",
+            "indexterm2:", "indexterm:", "footnote:", "image:", "anchor:",
         ];
         let Some(name_len) = NAMES.iter().find_map(|n| rest.starts_with(n).then_some(n.len())) else {
             return 0;
@@ -2236,8 +2248,15 @@ impl<'a> InlineState<'a> {
             Some(c) => c,
             None => return false,
         };
-        let id = &rest[..close];
+        let content = &rest[..close];
 
+        if content.is_empty() {
+            return false;
+        }
+
+        // `[[id,xreflabel]]` — the label is reference text for xrefs, never
+        // part of the id.
+        let id = content.split_once(',').map_or(content, |(i, _)| i.trim_end());
         if id.is_empty() {
             return false;
         }
@@ -2250,6 +2269,43 @@ impl<'a> InlineState<'a> {
         events.push(Event::End(TagEnd::Anchor));
 
         self.pos = start_pos + 2 + close + 2;
+        *text_start = self.pos;
+        true
+    }
+
+    /// Inline anchor macro `anchor:id[]` / `anchor:id[xreflabel]` — equivalent
+    /// to `[[id]]`. The bracket content (xreflabel) is reference text for
+    /// xrefs, never rendered in place.
+    fn try_anchor_macro(
+        &mut self,
+        events: &mut Vec<Event<'a>>,
+        text_start: &mut usize,
+    ) -> bool {
+        let start_pos = self.pos;
+        let rest = &self.input[start_pos + 7..]; // skip "anchor:"
+
+        let bracket = match rest.find('[') {
+            Some(b) => b,
+            None => return false,
+        };
+        let id = &rest[..bracket];
+        // Target is a run of non-whitespace characters (Asciidoctor: \S+).
+        if id.is_empty() || id.contains(char::is_whitespace) {
+            return false;
+        }
+        let close = match rest[bracket + 1..].find(']') {
+            Some(c) => c,
+            None => return false,
+        };
+
+        self.flush_text(*text_start, start_pos, events);
+
+        events.push(Event::Start(Tag::Anchor {
+            id: Cow::Borrowed(id),
+        }));
+        events.push(Event::End(TagEnd::Anchor));
+
+        self.pos = start_pos + 7 + bracket + 1 + close + 1;
         *text_start = self.pos;
         true
     }
@@ -4290,10 +4346,41 @@ mod tests {
 
     #[test]
     fn test_anchor_with_reftext_still_works() {
+        // The xreflabel is reference text for xrefs, never part of the id.
         let events = parse("[[id,reftext]]");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("id,reftext") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("id") }),
             Event::End(TagEnd::Anchor),
+        ]);
+    }
+
+    #[test]
+    fn test_anchor_macro() {
+        // anchor:id[] is equivalent to [[id]]
+        let events = parse("anchor:bookmark-c[]text");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("bookmark-c") }),
+            Event::End(TagEnd::Anchor),
+            Event::Text(Cow::Borrowed("text")),
+        ]);
+
+        // The xreflabel content is not rendered in place.
+        let events = parse("anchor:ok[Custom Label]rest");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("ok") }),
+            Event::End(TagEnd::Anchor),
+            Event::Text(Cow::Borrowed("rest")),
+        ]);
+
+        // A target with whitespace is not a macro — literal text.
+        let events = parse("anchor:b ad[]text");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("anchor:b ad[]text"))]);
+
+        // Escaped macro: backslash dropped, macro skipped.
+        let events = parse("\\anchor:foo[]text");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("anchor:foo[]")),
+            Event::Text(Cow::Borrowed("text")),
         ]);
     }
 

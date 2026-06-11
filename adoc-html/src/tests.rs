@@ -308,6 +308,33 @@ fn test_email_autolink_html() {
 }
 
 #[test]
+fn test_inline_anchor_macro_and_xreflabel_html() {
+    // anchor:id[] renders <a id></a>; the xreflabel is never rendered in place.
+    let html = to_html("anchor:bookmark-c[]Use a cross reference.");
+    assert!(html.contains("<a id=\"bookmark-c\"></a>Use a cross reference."), "{html}");
+    let html = to_html("anchor:bm-x[Custom Label]Text after.");
+    assert!(html.contains("<a id=\"bm-x\"></a>Text after."), "{html}");
+    assert!(!html.contains("Custom Label"), "{html}");
+
+    // [[id,xreflabel]] — inline and block forms strip the label from the id.
+    let html = to_html("[[bookmark-d,last paragraph]]The xreflabel attribute.");
+    assert!(html.contains("<a id=\"bookmark-d\"></a>The xreflabel attribute."), "{html}");
+    let html = to_html("[[tiger-image,Image of a tiger]]\nimage::tiger.png[]");
+    assert!(html.contains("id=\"tiger-image\""), "{html}");
+    assert!(!html.contains("Image of a tiger\""), "{html}");
+
+    // [[id]] with trailing content is a paragraph with an inline anchor,
+    // not a block-attribute line.
+    let html = to_html("[[tiger-image]]image:tiger.png[Image of a tiger]");
+    assert!(html.contains("<div class=\"paragraph\">"), "{html}");
+    assert!(html.contains("<a id=\"tiger-image\"></a><span class=\"image\">"), "{html}");
+
+    // [[id,label]] on a description-list term.
+    let html = to_html("[[cpu,CPU]]Central Processing Unit (CPU)::\nThe brain of the computer.");
+    assert!(html.contains("<dt class=\"hdlist1\"><a id=\"cpu\"></a>Central Processing Unit (CPU)</dt>"), "{html}");
+}
+
+#[test]
 fn test_link_role_and_mailto_query_html() {
     // role= named attr → class on <a>; with empty text the bare class comes
     // first ("bare green"), matching Asciidoctor.
