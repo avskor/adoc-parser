@@ -557,7 +557,7 @@ pub struct Author {
 }
 
 /// Authors collected from the document header, plus the attribute-naming
-/// rule behind `{author}` / `{author2}` / … references.
+/// rule behind `{author}` / `{author_2}` / … references.
 #[derive(Default)]
 pub struct AuthorRegistry {
     authors: Vec<Author>,
@@ -568,11 +568,20 @@ impl AuthorRegistry {
         Self::default()
     }
 
-    /// Attribute-name suffix for the author at `index`: the first author's
-    /// attributes are unsuffixed (`author`, `email`), subsequent authors are
-    /// numbered from 2 (`author2`, `email2`, …).
-    pub fn attr_suffix(index: usize) -> String {
+    /// HTML-id suffix for the author at `index`: the first author's detail
+    /// spans are unsuffixed (`id="author"`, `id="email"`), subsequent authors
+    /// are numbered from 2 without a separator (`author2`, `email3`, …).
+    pub fn id_suffix(index: usize) -> String {
         if index == 0 { String::new() } else { (index + 1).to_string() }
+    }
+
+    /// Document-attribute-name suffix for the author at `index`: the first
+    /// author's attributes are unsuffixed (`author`, `email`), subsequent
+    /// authors are numbered from 2 with an underscore (`author_2`,
+    /// `email_3`, …) — distinct from the separator-less [`Self::id_suffix`]
+    /// used for the detail-span HTML ids.
+    pub fn name_suffix(index: usize) -> String {
+        if index == 0 { String::new() } else { format!("_{}", index + 1) }
     }
 
     /// Register the next author and return the document-attribute entries it
@@ -580,7 +589,7 @@ impl AuthorRegistry {
     /// `authorinitials{suffix}` always, `middlename{suffix}` and
     /// `email{suffix}` only when non-empty.
     pub fn add(&mut self, author: Author) -> Vec<(String, String)> {
-        let suffix = Self::attr_suffix(self.authors.len());
+        let suffix = Self::name_suffix(self.authors.len());
         let mut entries = vec![
             (format!("author{suffix}"), author.fullname.clone()),
             (format!("firstname{suffix}"), author.firstname.clone()),
@@ -914,7 +923,8 @@ mod tests {
                 ("authorinitials".to_string(), "JD".to_string()),
             ]
         );
-        // Second author: `2`-suffixed, full set when all components present.
+        // Second author: `_2`-suffixed attribute names, full set when all
+        // components present.
         let entries = reg.add(Author {
             fullname: "Ann B. Lee".into(),
             firstname: "Ann".into(),
@@ -926,17 +936,19 @@ mod tests {
         assert_eq!(
             entries,
             [
-                ("author2".to_string(), "Ann B. Lee".to_string()),
-                ("firstname2".to_string(), "Ann".to_string()),
-                ("middlename2".to_string(), "B.".to_string()),
-                ("lastname2".to_string(), "Lee".to_string()),
-                ("authorinitials2".to_string(), "ABL".to_string()),
-                ("email2".to_string(), "ann@example.com".to_string()),
+                ("author_2".to_string(), "Ann B. Lee".to_string()),
+                ("firstname_2".to_string(), "Ann".to_string()),
+                ("middlename_2".to_string(), "B.".to_string()),
+                ("lastname_2".to_string(), "Lee".to_string()),
+                ("authorinitials_2".to_string(), "ABL".to_string()),
+                ("email_2".to_string(), "ann@example.com".to_string()),
             ]
         );
         assert_eq!(reg.authors().len(), 2);
         assert_eq!(reg.authors()[1].address, "ann@example.com");
-        assert_eq!(AuthorRegistry::attr_suffix(2), "3");
+        // HTML-id suffix stays separator-less; attribute-name suffix gets `_`.
+        assert_eq!(AuthorRegistry::id_suffix(2), "3");
+        assert_eq!(AuthorRegistry::name_suffix(2), "_3");
     }
 
     #[test]

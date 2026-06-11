@@ -2406,6 +2406,24 @@ fn test_builtin_attr_author() {
 }
 
 #[test]
+fn test_multi_author_attr_names_underscore() {
+    // Attribute names for authors 2+ use an underscore (`{author_2}`), while
+    // the detail-span HTML ids stay separator-less (`id="author2"`).
+    let html = to_html_with_options(
+        "= Title\nKismet R. Lee <kismet@asciidoctor.org>; B. Steppenwolf; Pax Draeke <pax@asciidoctor.org>\n\n{author_2} / {lastname_2} / {firstname_3} / {authorinitials_3} / {email_3}\n\n{author2} stays literal",
+        HtmlOptions { standalone: true, ..Default::default() },
+    );
+    assert!(
+        html.contains("B. Steppenwolf / Steppenwolf / Pax / PD / "),
+        "underscore attr refs should resolve. Got: {html}"
+    );
+    assert!(html.contains("mailto:pax@asciidoctor.org"), "email_3. Got: {html}");
+    assert!(html.contains("{author2} stays literal"), "no-underscore form is not an attribute. Got: {html}");
+    assert!(html.contains("<span id=\"author2\" class=\"author\">B. Steppenwolf</span>"), "span id without underscore. Got: {html}");
+    assert!(html.contains("<span id=\"email3\" class=\"email\">"), "email span id without underscore. Got: {html}");
+}
+
+#[test]
 fn test_builtin_attr_revision() {
     let html = to_html("= Title\nAuthor Name\nv1.0, 2024-01-01: Initial\n\n{revnumber} {revdate} {revremark}");
     // Asciidoctor strips the leading `v` from the revision number, so
