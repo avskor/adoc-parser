@@ -300,7 +300,6 @@ impl HtmlRenderer {
                 for (name, value) in revision.attr_entries() {
                     self.document_attrs.insert(name.to_string(), value.to_string());
                 }
-                self.revision = Some(revision);
             }
             Event::BlockMetadata { style, id, roles, options, named, subs } => {
                 if let Some(s) = subs {

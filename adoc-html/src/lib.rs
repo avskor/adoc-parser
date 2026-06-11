@@ -201,7 +201,6 @@ struct HtmlRenderer {
     quote_attribution: Option<String>,
     quote_citetitle: Option<String>,
     authors: AuthorRegistry,
-    revision: Option<Revision>,
 }
 
 impl HtmlRenderer {
@@ -288,7 +287,6 @@ impl HtmlRenderer {
             quote_attribution: None,
             quote_citetitle: None,
             authors: AuthorRegistry::new(),
-            revision: None,
         }
     }
 

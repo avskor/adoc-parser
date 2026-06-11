@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-11, пятнадцатая) — Фаза 3: revision-атрибуты из attribute-entries
+
+Запрос «продолжи». Ветка **`fix/revision-attrs-from-entries`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 239, master `77b6302` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**reference-revision-attributes.adoc (31 diff)**, один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_rev1..8, после фикса все 8 байт-в-байт)
+- Revision-спаны в `<div class="details">` — attribute-driven (html5.rb смотрит
+  document-атрибуты `revnumber`/`revdate`/`revremark`): attr-entries в header дают
+  спаны БЕЗ revision-line; автор не обязателен.
+- Значение verbatim: `:revnumber: v8.3` → «version v8.3» (`v` стрипается ТОЛЬКО при
+  парсинге revision-line).
+- attr-entry ПОБЕЖДАЕТ revision-line (later-wins в header); `:!revdate:` снимает
+  спан и запятую после version; set-but-empty `:revnumber:` → спан «version ».
+- Body-атрибуты (после blank за header'ом / mid-document) в details НЕ попадают.
+
+### Что сделано (только РЕНДЕРЕР)
+- `finish.rs::render_author_details`: revision-часть читает
+  `document_attrs.get("revnumber"/"revdate"/"revremark")` (метод зовётся на
+  `TagEnd::Header` — документ-атрибуты в этот момент = ровно header-состояние);
+  guard пустоты details расширен на эти три ключа; запятая после version — по
+  наличию revdate; display_version больше не зовётся (verbatim).
+- `lib.rs`: поле `revision: Option<Revision>` удалено; `events.rs` arm
+  Event::Revision только вливает `attr_entries()` в document_attrs (precedence
+  с attr-entries — порядком стрима).
+- +1 html-тест `test_revision_attrs_from_attribute_entries` (4 кейса; негативные
+  ассерты — по `<span id=…`, т.к. голые имена есть в default-stylesheet).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (html 338→339, parser 467).
+- Пробы p_rev1..8 — header-секции байт-в-байт с asciidoctor.
+- **Корпус: Identical 239→240 (+1)**; blast (base 77b6302): ровно 1 файл — 1 флип
+  (reference-revision-attributes.adoc), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 240: **listing (34 diff)**, reference-author (37), id (45),
+  checklist (49), collapsible (51), release-plan (56), stem (56), block (57),
+  literal-monospace (59), source (63), customize-title-label (66);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing: лишний
+  `</div>` у standalone passthrough, unknown-style течёт в class на quote/sidebar.
+
+---
+
 ## Сессия (2026-06-11, четырнадцатая) — Фаза 3: admonition block-форма (параграф-обёртки)
 
 Запрос «продолжи». Ветка **`fix/admonition-block-paragraph-wrappers`** — НЕ закоммичена
