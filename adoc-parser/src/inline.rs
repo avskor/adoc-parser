@@ -2,7 +2,6 @@ use std::borrow::Cow;
 
 use crate::attributes::parse_link_attrs;
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
-use crate::scanner;
 
 fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
@@ -460,9 +459,8 @@ impl<'a> InlineState<'a> {
                 if self.try_anchor_macro(events, text_start) {
                     return true;
                 }
-                // Skip the whole prefix so the custom-macro catch-all doesn't
-                // pick up a bogus `nchor:` macro — an invalid anchor target is
-                // literal text in Asciidoctor.
+                // An invalid anchor target is literal text in Asciidoctor —
+                // skip the whole prefix so its interior isn't rescanned.
                 self.pos += 7;
                 true
             }
@@ -572,15 +570,10 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Custom inline macro catch-all: name:target[attrs] (MACROS)
-            b'a'..=b'z' if has_macros => {
-                if self.try_custom_inline_macro(events, text_start) {
-                    return true;
-                }
-                self.pos += 1;
-                true
-            }
-
+            // No catch-all for unknown `name:target[attrs]` forms: Asciidoctor
+            // matches only registered macro names, so unknown macros stay
+            // literal text and their bracket interior flows through the normal
+            // substitutions (`foo:bar[*b*]` → `foo:bar[<strong>b</strong>]`).
             _ => false,
         }
     }
@@ -733,12 +726,28 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Escape pass macro: \pass:[...] → literal "pass:[" + normal inline parsing of content
-            b'\\' if self.input.get(self.pos + 1..).is_some_and(|s| s.starts_with("pass:[")) => {
+            // Escape pass macro: \pass:[...] or \pass:SPEC[...] → literal "pass:SPEC[" +
+            // normal inline parsing of the rest (Asciidoctor drops the backslash and skips
+            // extraction; the bracketed content and the trailing `]` flow through the
+            // remaining substitutions: `\pass:c[*b*]` → `pass:c[<strong>b</strong>]`).
+            b'\\' if self.pass_escape_prefix_len(self.pos + 1) > 0 => {
+                let skip = self.pass_escape_prefix_len(self.pos + 1);
                 self.flush_text(*text_start, self.pos, events);
                 self.advance_by(1); // skip backslash
                 *text_start = self.pos;
-                self.advance_by(6); // skip "pass:[" — included in next text flush as literal
+                self.advance_by(skip); // skip "pass:SPEC[" — included in next text flush as literal
+                true
+            }
+
+            // `\\pass:SPEC[…]`: only one backslash takes part in the escape
+            // (Asciidoctor's pass regex captures a single `\`); the first one
+            // stays literal text: `\\pass:c[abc]` → `\pass:c[abc]`.
+            b'\\' if self.peek_at(1) == Some(b'\\') && self.pass_escape_prefix_len(self.pos + 2) > 0 => {
+                let skip = self.pass_escape_prefix_len(self.pos + 2);
+                self.flush_text(*text_start, self.pos + 1, events); // first backslash stays
+                self.advance_by(2); // past both backslashes
+                *text_start = self.pos;
+                self.advance_by(skip); // skip "pass:SPEC[" — included in next text flush as literal
                 true
             }
 
@@ -921,7 +930,7 @@ impl<'a> InlineState<'a> {
     /// total byte length; otherwise 0. Used to strip a leading backslash escape and emit the macro
     /// text literally, matching Asciidoctor (which drops the backslash and skips macro processing).
     /// Only macros enabled by default are recognized; the experimental `kbd:`/`btn:`/`menu:` macros
-    /// and the custom catch-all are excluded (Asciidoctor leaves their backslash intact), as is the
+    /// and unknown macro names are excluded (Asciidoctor leaves their backslash intact), as is the
     /// block form `image::` (double colon). Gated on the MACROS substitution being active.
     fn inline_macro_escape_len(&self, p: usize) -> usize {
         if !self.subs.has(SubstitutionSet::MACROS) {
@@ -1116,13 +1125,19 @@ impl<'a> InlineState<'a> {
         None
     }
 
-    /// If a `pass:[…]` inline macro begins at byte offset `i` in `s`, return its
-    /// total byte length (so quote-delimiter scanning can skip over it). Mirrors
-    /// `try_pass_macro` (content runs to the first `]`). `i` must point at `p`.
+    /// If a `pass:[…]`/`pass:SPEC[…]` inline macro begins at byte offset `i` in
+    /// `s`, return its total byte length (so quote-delimiter scanning can skip
+    /// over it). Mirrors `try_pass_macro` (content runs to the first `]`).
+    /// `i` must point at `p`.
     fn pass_macro_span_len(s: &str, i: usize) -> Option<usize> {
-        let after = s[i..].strip_prefix("pass:[")?;
-        let close = after.find(']')?;
-        Some(6 + close + 1)
+        let rest = &s[i..];
+        if !rest.starts_with("pass:") {
+            return None;
+        }
+        let spec_len = Self::pass_spec_len(rest, 5)?;
+        let content_start = 5 + spec_len + 1; // past '['
+        let close = rest[content_start..].find(']')?;
+        Some(content_start + close + 1)
     }
 
     /// If a closed `++…++` or `+++…+++` passthrough begins at byte offset `i` in `s`,
@@ -1338,7 +1353,10 @@ impl<'a> InlineState<'a> {
 
     /// Emit the content of a single-plus passthrough: literal `Text`, except
     /// embedded `pass:[…]` macros, which become `InlinePassthrough` (mirrors
-    /// `try_pass_macro` — raw content to the first `]`).
+    /// `try_pass_macro` — raw content to the first `]`). A spec'd macro whose
+    /// set keeps specialchars (`pass:c[…]`) emits `Text` instead, so the
+    /// renderer escapes it; formatting subs from a spec are not re-run here
+    /// (no parser state in this static helper — membership-only edge).
     fn push_single_plus_content(inner: &'a str, events: &mut Vec<Event<'a>>) {
         let bytes = inner.as_bytes();
         let mut text_start = 0;
@@ -1350,10 +1368,17 @@ impl<'a> InlineState<'a> {
                 if i > text_start {
                     events.push(Event::Text(Cow::Borrowed(&inner[text_start..i])));
                 }
-                // skip = "pass:[" + content + "]"
-                events.push(Event::InlinePassthrough(Cow::Borrowed(
-                    &inner[i + 6..i + skip - 1],
-                )));
+                let spec_len = Self::pass_spec_len(&inner[i..], 5).unwrap_or(0);
+                let spec = &inner[i + 5..i + 5 + spec_len];
+                // content sits between "pass:SPEC[" and the trailing "]"
+                let content = &inner[i + 5 + spec_len + 1..i + skip - 1];
+                if !spec.is_empty()
+                    && Self::pass_spec_to_subs(spec).has(SubstitutionSet::SPECIALCHARS)
+                {
+                    events.push(Event::Text(Cow::Borrowed(content)));
+                } else {
+                    events.push(Event::InlinePassthrough(Cow::Borrowed(content)));
+                }
                 i += skip;
                 text_start = i;
                 continue;
@@ -1427,8 +1452,7 @@ impl<'a> InlineState<'a> {
     /// With the experimental UI macros disabled, advance past a `kbd:`/`btn:`/
     /// `menu:` token so it stays in the surrounding text run as literal text
     /// (matching Asciidoctor's default). Skipping past the `[...]` keeps the
-    /// custom-macro catch-all from re-scanning the token's interior and
-    /// misreading a fragment like `bd:[…]` as a custom macro. `prefix_len` is
+    /// token's interior from being rescanned and misread. `prefix_len` is
     /// the byte length of `kbd:`/`btn:`/`menu:` (colon included).
     fn skip_disabled_ui_macro(&mut self, prefix_len: usize) {
         let rest = &self.input[self.pos + prefix_len..];
@@ -1543,16 +1567,119 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let Some((inner, new_pos)) = self.parse_bracket_macro(5) else {
+        // Optional subs spec between the colon and the bracket: `pass:c[…]`,
+        // `pass:q,a[…]`, full names too (`pass:quotes[…]`). Without brackets
+        // the macro form does not match at all and the text stays literal.
+        let Some(spec_len) = Self::pass_spec_len(self.input, start_pos + 5) else {
+            return false;
+        };
+        let Some((inner, new_pos)) = self.parse_bracket_macro(5 + spec_len) else {
             return false;
         };
 
         self.flush_text(*text_start, start_pos, events);
-        events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+
+        if spec_len == 0 {
+            // Bare `pass:[…]` — raw verbatim insertion.
+            events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+        } else {
+            let spec = &self.input[start_pos + 5..start_pos + 5 + spec_len];
+            self.push_pass_spec_content(inner, Self::pass_spec_to_subs(spec), events);
+        }
 
         self.pos = new_pos;
         *text_start = self.pos;
         true
+    }
+
+    /// If byte `p` (just past `pass:`) starts an optional subs spec immediately
+    /// followed by `[`, return the spec's byte length (0 for the bare `pass:[…]`
+    /// form). `None` when no bracket follows — the macro form does not match and
+    /// the text stays literal in Asciidoctor (`pass:c` without brackets,
+    /// an uppercase spec, an empty comma token, …).
+    fn pass_spec_len(s: &str, p: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        let mut i = p;
+        while bytes
+            .get(i)
+            .is_some_and(|&b| b.is_ascii_lowercase() || b == b',' || b == b'_' || b == b'-')
+        {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'[') {
+            return None;
+        }
+        let spec = &s[p..i];
+        if !spec.is_empty() && !spec.split(',').all(|t| !t.is_empty()) {
+            return None;
+        }
+        Some(i - p)
+    }
+
+    /// Map a pass-macro subs spec to a substitution set. Single-letter aliases
+    /// follow Asciidoctor's SUB_HINTS (`a`/`c`/`m`/`n`/`p`/`q`/`r`/`v`); full
+    /// names share `subs=` parsing. Unknown names are ignored (Asciidoctor
+    /// warns and skips them, still consuming the macro).
+    fn pass_spec_to_subs(spec: &str) -> SubstitutionSet {
+        let mut set = SubstitutionSet::NONE;
+        for token in spec.split(',') {
+            let flags = match token {
+                "a" => Some(SubstitutionSet::ATTRIBUTES),
+                "c" => Some(SubstitutionSet::SPECIALCHARS),
+                "m" => Some(SubstitutionSet::MACROS),
+                "n" => crate::attributes::sub_name_to_flags("normal"),
+                "p" => Some(SubstitutionSet::POST_REPLACEMENTS),
+                "q" => Some(SubstitutionSet::QUOTES),
+                "r" => Some(SubstitutionSet::REPLACEMENTS),
+                "v" => crate::attributes::sub_name_to_flags("verbatim"),
+                _ => crate::attributes::sub_name_to_flags(token),
+            };
+            if let Some(f) = flags {
+                set.add(f);
+            }
+        }
+        set
+    }
+
+    /// Emit `pass:SPEC[content]`: the content is reparsed with exactly the
+    /// spec'd substitutions. When specialchars is absent the plain-text runs
+    /// must reach the output unescaped, so they are downgraded to
+    /// `InlinePassthrough` (the renderer escapes `Text` unconditionally).
+    /// Order-of-application nuances (`pass:c,q[…]` — Asciidoctor runs quotes
+    /// over the already-escaped text, where `;` blocks a constrained open)
+    /// are not representable in the bitflag model; membership only.
+    fn push_pass_spec_content(
+        &self,
+        content: &'a str,
+        set: SubstitutionSet,
+        events: &mut Vec<Event<'a>>,
+    ) {
+        let mut sub_events = Vec::new();
+        let mut inner = InlineState::new(content, set, self.options);
+        inner.parse_inline(&mut sub_events);
+        let escape = set.has(SubstitutionSet::SPECIALCHARS);
+        for ev in sub_events {
+            match ev {
+                Event::Text(t) if !escape => events.push(Event::InlinePassthrough(t)),
+                ev => events.push(ev),
+            }
+        }
+    }
+
+    /// Length of a literal `pass:SPEC[` prefix beginning at byte `p`, for the
+    /// backslash-escape arm; 0 when the escaped form does not match (then the
+    /// backslash itself stays literal, as in Asciidoctor).
+    fn pass_escape_prefix_len(&self, p: usize) -> usize {
+        let Some(rest) = self.input.get(p..) else {
+            return 0;
+        };
+        if !rest.starts_with("pass:") {
+            return 0;
+        }
+        match Self::pass_spec_len(rest, 5) {
+            Some(spec_len) => 5 + spec_len + 1, // "pass:" + spec + "["
+            None => 0,
+        }
     }
 
     fn try_footnote_macro(
@@ -2675,77 +2802,6 @@ impl<'a> InlineState<'a> {
         None
     }
 
-    /// Try to parse a custom inline macro: `name:target[attrs]`
-    fn try_custom_inline_macro(
-        &mut self,
-        events: &mut Vec<Event<'a>>,
-        text_start: &mut usize,
-    ) -> bool {
-        let start_pos = self.pos;
-        let rest = &self.input[start_pos..];
-        let bytes = rest.as_bytes();
-
-        // Find the single colon (not double colon)
-        let mut colon_pos = None;
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == b':' {
-                // Must be single colon, not double
-                if i + 1 < bytes.len() && bytes[i + 1] == b':' {
-                    return false;
-                }
-                colon_pos = Some(i);
-                break;
-            }
-            // Name chars: a-z, 0-9, _, -
-            if !(b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
-                return false;
-            }
-        }
-
-        let colon_pos = match colon_pos {
-            Some(p) if p > 0 => p,
-            _ => return false,
-        };
-
-        let name = &rest[..colon_pos];
-        if !scanner::is_valid_macro_name(name) || scanner::is_known_inline_macro(name) {
-            return false;
-        }
-
-        // Find `[` for start of attrs
-        let after_colon = &rest[colon_pos + 1..];
-        let bracket_start = match after_colon.find('[') {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let target = &after_colon[..bracket_start];
-
-        // Find matching `]`
-        let after_bracket = &after_colon[bracket_start + 1..];
-        let bracket_end = match after_bracket.find(']') {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let attrs = &after_bracket[..bracket_end];
-
-        self.flush_text(*text_start, start_pos, events);
-
-        events.push(Event::Start(Tag::CustomInlineMacro {
-            name: Cow::Borrowed(name),
-            target: Cow::Borrowed(target),
-        }));
-        if !attrs.is_empty() {
-            events.push(Event::Text(Cow::Borrowed(attrs)));
-        }
-        events.push(Event::End(TagEnd::CustomInlineMacro));
-
-        // Advance past `name:target[attrs]`
-        self.pos = start_pos + colon_pos + 1 + bracket_start + 1 + bracket_end + 1;
-        *text_start = self.pos;
-        true
-    }
 }
 
 #[cfg(test)]
@@ -3670,6 +3726,29 @@ mod tests {
     }
 
     #[test]
+    fn test_pass_macro_subs_spec_events() {
+        // pass:c[…] — specialchars kept: plain Text (the renderer escapes it).
+        let events = parse("pass:c[<b>]");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("<b>"))]);
+
+        // pass:q[*b*] — no specialchars: text runs are raw passthroughs.
+        let events = parse("pass:q[*b*]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
+            Event::InlinePassthrough(Cow::Borrowed("b")),
+            Event::End(TagEnd::Strong),
+        ]);
+
+        // Bare pass:[…] unchanged — raw verbatim insertion.
+        let events = parse("pass:[<b>]");
+        assert_eq!(events, vec![Event::InlinePassthrough(Cow::Borrowed("<b>"))]);
+
+        // No bracket after the spec — the macro form does not match at all.
+        let events = parse("pass:c here");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("pass:c here"))]);
+    }
+
+    #[test]
     fn test_single_plus_no_typographic() {
         let events = parse("+(C) 2024+");
         assert_eq!(events, vec![
@@ -4017,8 +4096,7 @@ mod tests {
     #[test]
     fn test_experimental_macros_literal_without_experimental() {
         // Without :experimental:, kbd:/btn:/menu: are left as literal text
-        // (Asciidoctor's default). The whole token must survive verbatim — in
-        // particular it must not be misread as a custom inline macro.
+        // (Asciidoctor's default). The whole token must survive verbatim.
         assert_eq!(
             parse("Press kbd:[Ctrl+C] now"),
             vec![Event::Text(Cow::Borrowed("Press kbd:[Ctrl+C] now"))]
@@ -4031,7 +4109,7 @@ mod tests {
             parse("Select menu:File[Save]!"),
             vec![Event::Text(Cow::Borrowed("Select menu:File[Save]!"))]
         );
-        // Lowercase target/content must not slip into the custom-macro catch-all.
+        // Lowercase target/content must not be rescanned as another macro form.
         assert_eq!(
             parse("menu:file[save]"),
             vec![Event::Text(Cow::Borrowed("menu:file[save]"))]

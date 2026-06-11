@@ -3112,10 +3112,24 @@ fn test_env_attribute_missing_var_with_fallback() {
 }
 
 #[test]
-fn test_custom_inline_macro_with_attrs() {
+fn test_unknown_inline_macro_stays_literal() {
+    // Asciidoctor matches only registered inline macro names — an unknown
+    // `name:target[attrs]` form is plain text (probe-verified).
     let html = to_html("chart:sales[Q1,Q2]");
-    assert!(html.contains("<span class=\"custom-macro macro-chart\">Q1,Q2</span>"),
-        "custom inline macro should render. Got: {html}");
+    assert!(html.contains("<p>chart:sales[Q1,Q2]</p>"),
+        "unknown inline macro should stay literal. Got: {html}");
+    assert!(!html.contains("custom-macro"),
+        "no custom-macro span for unknown inline macro. Got: {html}");
+    // The bracket interior still flows through normal substitutions:
+    // foo:bar[*b*] → foo:bar[<strong>b</strong>] (probe-verified).
+    let html = to_html("foo:bar[*b*]");
+    assert!(html.contains("<p>foo:bar[<strong>b</strong>]</p>"),
+        "unknown macro interior gets normal subs. Got: {html}");
+    // A `word: …` prose pattern must never be misread as a macro, even with
+    // brackets later on the line.
+    let html = to_html("Mono with content: `+abc+` [not macro].");
+    assert!(html.contains("<p>Mono with content: <code>abc</code> [not macro].</p>"),
+        "prose colon must not be misread as a macro. Got: {html}");
 }
 
 #[test]
@@ -3130,10 +3144,69 @@ fn test_custom_block_macro_with_attrs() {
 }
 
 #[test]
-fn test_custom_inline_macro_empty_attrs() {
+fn test_unknown_inline_macro_empty_attrs_stays_literal() {
     let html = to_html("widget:component[]");
-    assert!(html.contains("<span class=\"custom-macro macro-widget\"></span>"),
-        "custom inline macro with empty attrs should render empty span. Got: {html}");
+    assert!(html.contains("<p>widget:component[]</p>"),
+        "unknown inline macro with empty attrs should stay literal. Got: {html}");
+}
+
+#[test]
+fn test_pass_macro_subs_spec() {
+    // pass:SPEC[content] applies exactly the spec'd substitutions
+    // (all cases probe-verified against asciidoctor).
+    let html = to_html("A pass:c[<b>not bold</b>] B.");
+    assert!(html.contains("<p>A &lt;b&gt;not bold&lt;/b&gt; B.</p>"),
+        "pass:c escapes specialchars, no formatting. Got: {html}");
+
+    let html = to_html("C pass:q[*bold* and `mono`] D.");
+    assert!(html.contains("<p>C <strong>bold</strong> and <code>mono</code> D.</p>"),
+        "pass:q runs quotes only. Got: {html}");
+
+    let html = to_html("I pass:n[<x> *b*] J.");
+    assert!(html.contains("<p>I &lt;x&gt; <strong>b</strong> J.</p>"),
+        "pass:n runs the normal set. Got: {html}");
+
+    let html = to_html("O pass:v[<y>] P.");
+    assert!(html.contains("<p>O &lt;y&gt; P.</p>"),
+        "pass:v (verbatim) escapes specialchars. Got: {html}");
+
+    let html = to_html("G pass:quotes[*b*] H.");
+    assert!(html.contains("<p>G <strong>b</strong> H.</p>"),
+        "full sub names are accepted in the spec. Got: {html}");
+
+    // q without specialchars: raw markup passes through unescaped.
+    let html = to_html("M pass:q[<b>x</b>] N.");
+    assert!(html.contains("<p>M <b>x</b> N.</p>"),
+        "pass:q must not escape specialchars. Got: {html}");
+
+    // No bracket after the spec — not a macro, literal text.
+    let html = to_html("Bare pass:c here.");
+    assert!(html.contains("<p>Bare pass:c here.</p>"),
+        "pass:c without brackets stays literal. Got: {html}");
+
+    // Single-plus passthrough extracts the spec'd macro too.
+    let html = to_html("S +pass:c[<b>]+ T.");
+    assert!(html.contains("<p>S &lt;b&gt; T.</p>"),
+        "pass:c inside +…+ is extracted and escaped. Got: {html}");
+}
+
+#[test]
+fn test_escaped_pass_macro_with_spec() {
+    // \pass:SPEC[…] drops the backslash; "pass:SPEC[" stays literal and the
+    // content plus trailing "]" flow through normal subs (probe-verified).
+    // The corpus case: `\pass:c[]` inside monospace (literal-monospace.adoc).
+    let html = to_html("The `\\pass:c[]` enclosure.");
+    assert!(html.contains("<p>The <code>pass:c[]</code> enclosure.</p>"),
+        "escaped pass:c[] in monospace renders literally. Got: {html}");
+
+    let html = to_html("E \\pass:c[*b*] F.");
+    assert!(html.contains("<p>E pass:c[<strong>b</strong>] F.</p>"),
+        "escaped pass content still gets normal subs. Got: {html}");
+
+    // Only one backslash takes part in the escape.
+    let html = to_html("Double `\\\\pass:c[abc]` tail.");
+    assert!(html.contains("<p>Double <code>\\pass:c[abc]</code> tail.</p>"),
+        "double-escaped pass keeps one literal backslash. Got: {html}");
 }
 
 #[test]
@@ -3162,10 +3235,10 @@ fn test_block_image_not_captured_as_custom() {
 }
 
 #[test]
-fn test_custom_macro_with_hyphen_underscore_name() {
+fn test_unknown_macro_with_hyphen_underscore_name_stays_literal() {
     let html = to_html("my-custom_macro:target[attrs]");
-    assert!(html.contains("<span class=\"custom-macro macro-my-custom_macro\">attrs</span>"),
-        "macro names with hyphen/underscore should work. Got: {html}");
+    assert!(html.contains("<p>my-custom_macro:target[attrs]</p>"),
+        "unknown macro names with hyphen/underscore stay literal. Got: {html}");
 }
 
 #[test]
