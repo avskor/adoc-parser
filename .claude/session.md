@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-11, двадцать первая) — Фаза 3: assign-id + example-blocks (2 near-miss)
+
+Запрос «продолжи». Ветка **`fix/example-caption-unset-and-positional-shorthand`** —
+НЕ закоммичена (рабочее дерево). Baseline: Identical 247, master `172faf5`
+(base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**assign-id.adoc (2 diff)** + **example-blocks.adoc (2 diff)** — оба почти-флипа
+из прошлой сессии, два независимых корня, взяты вместе в одну ветку.
+
+### Семантика asciidoctor (пробы /tmp/p_ec1..3, p_qa1..2, p_sh1, p_ln1..8)
+- `:!example-caption:` → голый title (и mid-document); `:example-caption: Demo` →
+  «Demo 1.» с общим счётчиком; дефолт «Example 1.».
+- Shorthand attrlist — ТОЛЬКО в первой comma-части: `[quote#roads,Dr. Emmett
+  Brown,Back to the Future]` — attribution целиком; `[quote,#bar]`/`[quote,.baz]` —
+  verbatim positional; `[.r1,.r2]` → только r1; `[%header,%footer]` → только
+  header (`%header%footer` — оба).
+- 3-й позиционный СЛОТ source-блока = linenums: любое непустое позиционное
+  значение включает (`linenums`/`%linenums`/`#code1`/`yaml`; implied
+  `[,ruby,linenums]` тоже), named (`start=10`) слот НЕ занимает.
+- linenums РЕНДЕРИТСЯ только под build-time подсветчиком (rouge/pygments/
+  coderay); без подсветчика и под highlight.js — игнор целиком (ни класса,
+  ни таблицы).
+
+### Что сделано
+- **РЕНДЕРЕР** lib.rs: `example-caption: Example` в дефолтных document_attrs;
+  blocks.rs арм Example: label из document_attrs (как figure/table).
+- **ПАРСЕР** attributes.rs::parse: обе shorthand-ветки гейтятся `idx == 0`;
+  +правило linenums-слота по raw-parts (после implied_source_lang).
+- **ПАРСЕР** block.rs::emit_block_metadata: style гейтится
+  `first_positional_is_style` (позиционал слота 2+ не утекает в style/class).
+- **РЕНДЕРЕР** blocks.rs::start_source_block: linenums гейтится
+  `rouge|pygments|coderay` (закрыта регрессия db-migration.adoc — `[id=app,
+  source, yaml]` слот 3 = `yaml` → linenums on, но подсветчика нет → игнор).
+- Тесты: 4 старых переписаны (фиксировали неверное: parse_role, has_option,
+  source_with_shorthand_id, table_header_footer_combined `[%header,%footer]`→
+  `[%header%footer]`); linenums-тесты переведены на `:source-highlighter:
+  rouge` + негативный test_source_block_linenums_needs_build_time_highlighter;
+  +4 новых (example-caption, shorthand-first-position html+parser, linenums-слот).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 474, html 347).
+- **Корпус: Identical 247→249 (+2)**; blast (base 172faf5): 3 файла — 2 флипа
+  (assign-id.adoc, example-blocks.adoc), **0 регрессий**, add-title 252=252
+  (семантически ближе: mid-document `:!example-caption:` теперь чтится).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 249: **stem (56 — MathJax-остатки?)**, block (57 — корень
+  `.Title` на ulist теряется), literal-monospace (59), source (63),
+  customize-title-label (66), include (75), bibliography (77), subs (89);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+- Кандидат-кластер: **xreflabel → reftext для xref-резолва** (label в
+  Tag::Anchor + регистрация в XrefResolver; закрыл бы p_id1/2/3-строки и
+  lexicon-остаток).
+- Прочее: `.Title` на ulist (block.adoc), `cols="2*"` multiplier (row.adoc),
+  `[abstract]`-параграф → quoteblock, `:icons:`-colist (TODO), кластер
+  `m`/`e`/`s` стиля колонок; pre-existing: лишний `</div>` у standalone
+  passthrough, unknown-style течёт в class на quote/sidebar, пустые строки
+  в пустых sectionbody, list-merge через continuation-attrlist (p_chk2).
+- Латентно (нет в корпусе): наша linenotable-разметка ≠ rouge байт-в-байт
+  (нет server-side подсветки) — всплывёт, если в корпусе появится
+  rouge+linenums файл.
+
+---
+
 ## Сессия (2026-06-11, двадцатая) — Фаза 3: collapsible.adoc (masquerade-параграф — голый контент)
 
 Запрос «продолжи». Ветка **`fix/collapsible-block`** — НЕ закоммичена
