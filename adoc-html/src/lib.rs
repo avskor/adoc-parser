@@ -121,6 +121,9 @@ struct HtmlRenderer {
     // One entry per open Admonition: true = block form (delimited; children get
     // normal paragraph wrappers), false = paragraph form (bare content in the td).
     admonition_block_stack: Vec<bool>,
+    // One entry per open UnorderedList: true = list carries the `interactive`
+    // option (checklist items render <input type="checkbox"> instead of NCRs).
+    interactive_ulist_stack: Vec<bool>,
     footnote_registry: FootnoteRegistry,
     toc_builder: TocBuilder,
     toc_insert_position: Option<usize>,
@@ -225,6 +228,7 @@ impl HtmlRenderer {
             ]),
             delimited_block_stack: Vec::new(),
             admonition_block_stack: Vec::new(),
+            interactive_ulist_stack: Vec::new(),
             footnote_registry: FootnoteRegistry::new(),
             toc_builder: TocBuilder::new(),
             toc_insert_position: None,

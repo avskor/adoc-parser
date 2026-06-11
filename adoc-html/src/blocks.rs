@@ -191,6 +191,9 @@ impl HtmlRenderer {
     }
 
     pub(crate) fn start_unordered_list(&mut self, output: &mut String, has_checklist: &bool, meta: &Option<BlockMeta>) {
+        let interactive = meta.as_ref()
+            .is_some_and(|m| m.options.iter().any(|o| o == "interactive"));
+        self.interactive_ulist_stack.push(interactive);
         let is_bibliography = self.section_style_stack.last()
             .and_then(|s| s.as_deref()) == Some("bibliography");
         if !self.is_inside_list_item() {

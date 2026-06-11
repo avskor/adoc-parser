@@ -427,10 +427,13 @@ impl HtmlRenderer {
             Tag::UnorderedList { has_checklist } => self.start_unordered_list(output, has_checklist, &meta),
             Tag::OrderedList { start, reversed } => self.start_ordered_list(output, start, reversed, &meta),
             Tag::ListItem { checked, .. } => {
-                output.push_str(match checked {
-                    Some(true) => "<li>\n<p>&#10003; ",
-                    Some(false) => "<li>\n<p>&#10063; ",
-                    None => "<li>\n<p>",
+                let interactive = self.interactive_ulist_stack.last().copied().unwrap_or(false);
+                output.push_str(match (checked, interactive) {
+                    (Some(true), true) => "<li>\n<p><input type=\"checkbox\" data-item-complete=\"1\" checked> ",
+                    (Some(false), true) => "<li>\n<p><input type=\"checkbox\" data-item-complete=\"0\"> ",
+                    (Some(true), false) => "<li>\n<p>&#10003; ",
+                    (Some(false), false) => "<li>\n<p>&#10063; ",
+                    (None, _) => "<li>\n<p>",
                 });
                 self.open_li_paragraph();
             }
@@ -863,6 +866,7 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::UnorderedList => {
+                self.interactive_ulist_stack.pop();
                 output.push_str("</ul>\n</div>\n");
             }
             TagEnd::OrderedList => {
