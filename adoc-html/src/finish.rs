@@ -224,7 +224,7 @@ impl HtmlRenderer {
         }
         output.push_str("<div class=\"details\">\n");
         for (i, author) in self.authors.authors().iter().enumerate() {
-            let suffix = AuthorRegistry::attr_suffix(i);
+            let suffix = AuthorRegistry::id_suffix(i);
             output.push_str("<span id=\"author");
             output.push_str(&suffix);
             output.push_str("\" class=\"author\">");

@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-11, десятая) — Фаза 3: multi-author атрибуты `author_2`
+
+Запрос «продолжи». `fix/email-autolink-no-bare-class` уже в master (`05627f9`, merge).
+Новая ветка **`fix/multi-author-attr-underscore`** (СТАТУС: НЕ закоммичено).
+`/tmp/adoc_base` пересобран из чистого master `05627f9` (дерево чистое). Baseline:
+Identical 231.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип, как всегда) →
+**multiple-authors.adoc (4 diff)**: `{author_2}`/`{lastname_2}`/`{firstname_3}`/
+`{authorinitials_3}` не резолвились (оставались литералами).
+
+### Семантика asciidoctor (проба /tmp/p_auth1.adoc)
+- Имена document-атрибутов авторов 2+ — С подчёркиванием: `author_2`, `email_3`…;
+  форма `author2` — НЕ атрибут, остаётся литералом.
+- Span-id в `<div class="details">` — БЕЗ подчёркивания: `id="author2"`, `id="email3"`.
+
+### Что сделано
+- **Только CORE** (`adoc-render-core/src/lib.rs`, `AuthorRegistry`): `attr_suffix`
+  разделён на два метода — `id_suffix(index)` (без сепаратора; потребитель
+  `adoc-html/finish.rs::render_author_details`, span-id) и `name_suffix(index)`
+  (`_2`/`_3`; используется в `add()` для attr-entries). Путь потребления единственный:
+  `events.rs::Event::Author` → `document_attrs`; compat-builder attr-entries не генерирует.
+- Обновлён core-тест `author_registry_attr_entries`; +1 html-тест
+  `test_multi_author_attr_names_underscore` (underscore-формы резолвятся, `{author2}`
+  литерален, span-id без подчёркивания).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (891: parser 466, html 334,
+  render-core 12, compat ok, integration 25).
+- **Корпус: Identical 231→232 (+1)**; blast (base 05627f9): ровно 1 файл — 1 флип
+  (multiple-authors.adoc, verified 0 diffs), **0 регрессий**.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff:
+  adoc-render-core/src/lib.rs, adoc-html/src/{finish,tests}.rs, TODO.md, session.md.
+- nearmiss на 232: **url.adoc (7 diff)**, part (18), add-header-row (29),
+  apply-subs-to-blocks (31), reference-revision-attributes (31), listing (34),
+  reference-author (37), icon-macro (41), id (45);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип). Прочее: `:icons:`-colist
+  (TODO), кластер `m`/`e`/`s` стиля колонок.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `05627f9`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Проба /tmp/p_auth1.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, девятая) — Фаза 3: email-автолинк без class="bare"
 
 Запрос «продолжи». `fix/version-label-revnumber` уже в master (`4f72ab3`, merge). Новая
