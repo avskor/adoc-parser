@@ -335,6 +335,38 @@ fn test_inline_anchor_macro_and_xreflabel_html() {
 }
 
 #[test]
+fn test_anchor_reftext_xref_resolution() {
+    // A leading [[id]] anchor in a dlist term catalogs the rendered term as
+    // the anchor's reference text: an empty <<id>> resolves to the term.
+    let html = to_html("[[el]]element:: An element is a chunk of text.\n\nSee <<el>>.");
+    assert!(html.contains("<a href=\"#el\">element</a>"), "{html}");
+
+    // Inline markup in the term is preserved in the reference text.
+    let html = to_html("[[bt]]term with *bold*:: def.\n\nSee <<bt>>.");
+    assert!(html.contains("<a href=\"#bt\">term with <strong>bold</strong></a>"), "{html}");
+
+    // An explicit xreflabel wins over the term, and is formatted at use.
+    let html = to_html("[[ba,boxed *attribute* list]]boxed attrlist:: def.\n\nSee <<ba>>.");
+    assert!(html.contains("<a href=\"#ba\">boxed <strong>attribute</strong> list</a>"), "{html}");
+
+    // anchor:id[label] registers its label too.
+    let html = to_html("anchor:ff[FLabel]inline anchored text.\n\nSee <<ff>>.");
+    assert!(html.contains("<a href=\"#ff\">FLabel</a>"), "{html}");
+
+    // Forward reference: the xref appears before the anchor is defined.
+    let html = to_html("Refs first: <<aa>>.\n\n[[aa]]term text:: definition.");
+    assert!(html.contains("<a href=\"#aa\">term text</a>"), "{html}");
+
+    // A mid-term anchor (not leading) gets no default reftext — fallback [id].
+    let html = to_html("middle [[jj]]anchored term:: def.\n\nSee <<jj>>.");
+    assert!(html.contains("<a href=\"#jj\">[jj]</a>"), "{html}");
+
+    // A bare [[id]] in a paragraph gets no default reftext either.
+    let html = to_html("[[cc]]Some paragraph text.\n\nSee <<cc>>.");
+    assert!(html.contains("<a href=\"#cc\">[cc]</a>"), "{html}");
+}
+
+#[test]
 fn test_link_role_and_mailto_query_html() {
     // role= named attr → class on <a>; with empty text the bare class comes
     // first ("bare green"), matching Asciidoctor.

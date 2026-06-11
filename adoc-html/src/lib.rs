@@ -193,6 +193,18 @@ struct HtmlRenderer {
     /// Bibliography anchor id -> rendered reftext (`[pp]` / `[gang]`), for
     /// resolving `<<id>>` to a bibliography entry to its bracketed label.
     bibliography_reftexts: Vec<(String, String)>,
+    /// Inline anchor id -> rendered reftext HTML: the xreflabel from
+    /// `[[id,label]]` / `anchor:id[label]`, or — for a leading anchor in a
+    /// description-list term — the rendered term itself (Asciidoctor catalogs
+    /// the term as the anchor's default reference text).
+    anchor_reftexts: Vec<(String, String)>,
+    /// Output position right after the opening markup of the current
+    /// description-list term; used to detect a leading inline anchor.
+    dt_term_start: Option<usize>,
+    /// Leading dlist-term anchor without an explicit label: (id, output
+    /// position after its `</a>`); the rendered term that follows becomes its
+    /// reftext at `TagEnd::DescriptionTerm`.
+    pending_term_anchor: Option<(String, usize)>,
     in_header: bool,
     /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
     li_p_open: Vec<bool>,
@@ -288,6 +300,9 @@ impl HtmlRenderer {
             xref_href_placeholders: Vec::new(),
             block_ref_titles: Vec::new(),
             bibliography_reftexts: Vec::new(),
+            anchor_reftexts: Vec::new(),
+            dt_term_start: None,
+            pending_term_anchor: None,
             in_header: false,
             li_p_open: Vec::new(),
             li_para_count: Vec::new(),
