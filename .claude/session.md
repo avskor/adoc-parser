@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-11, пятая) — Фаза 3: sect0-heading + admonition image-иконки
+
+Запрос «продолжи». `fix/macro-label-inline-formatting` уже в master (`63976fd`, merge;
+session.md прошлой сессии писалась ДО мержа — как всегда). Новая ветка
+**`fix/callout-rendering`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base` пересобран из
+чистого master `63976fd` ПЕРЕД правками, baseline подтверждён:
+Identical 208, Different 136, Errors 0.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип, как всегда) →
+**callout.adoc (20 diff)**. Два корня (оба — известные кластеры из TODO, оба РЕНДЕРЕР):
+sect0-heading и `:icons:` image-admonition.
+
+### Что сделано
+- **sect0** (`blocks.rs::start_section_div`/`start_section_title`, `events.rs`): level-0
+  секция в ТЕЛЕ — у asciidoctor голый `<h1 id class="sect0">` без обёртки-div/sectionbody
+  в ЛЮБОМ doctype (проба p_sect0; article даёт ERROR в stderr, но рендерит так же).
+  Book-part-механизм обобщён: условие `is_book()` снято, `book_part_stack`→`sect0_stack`,
+  мёртвый `is_book()` удалён. Header документа идёт ОТДЕЛЬНЫМ путём (Tag::Header) — не задет.
+- **`:icons:` image-ветка** (`blocks.rs::start_admonition`): match по значению `icons` —
+  `font` → `<i class="fa icon-…">` (было); ЛЮБОЕ другое set-значение (вкл. пустое) →
+  `<img src="{iconsdir|./images/icons}/{label_lc}.{icontype|png}" alt="{caption|label}">`
+  (html5.rb:435-443, abstract_node.rb::icon_uri); unset → `<div class="title">` (было).
+  Нюанс корпуса: `:icons: font <1>` mid-document ≠ `font` → image-ветка → note.png
+  (проба подтвердила; init-нормализация document.rb:1207 действует ТОЛЬКО на header-attrs
+  — у нас НЕ реализована, в корпусе таких нет). iconsdir-дефолт НЕ зависит от
+  header-`imagesdir` (вычисляется до парсинга header — проба).
+- +2 теста: `test_admonition_icons_image` (image/пустое значение/iconsdir+icontype/
+  `font <1>`/caption-alt), `test_sect0_heading_standalone` (голый h1 + guard sect1).
+- НЕ сделано (новая задача в TODO): colist-таблица + image-маркеры callout при `:icons:`
+  (html5.rb:476-513, 1159-1169) — icons-image/icons-font/icons.adoc.
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; `cargo test --workspace` ВСЁ зелёное (885 суммарно:
+  parser 464, html 329→**331**+36, render-core 12, compat-suites ok, integration 25).
+- **Корпус: Identical 208→210 (+2)** (callout.adoc, paragraph.adoc); blast 22 файла:
+  2 флипа, **0 регрессий**, сильные улучшения: abstract-block 61→5, preface 82→7,
+  url 142→9, strong-span →5. Рост счётчиков part 22→24/header 63→69 — позиционный шум
+  поверх pre-existing корня п.41 (проверено fdiff'ом вручную).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-html/src/{blocks,
+  events,lib,tests}.rs, TODO.md, session.md.
+- **Главный кандидат — п.41 «header после ведущих комментариев»** (block.rs:~492,
+  body_started=true на комментарии до header): доминирует в document/*-примерах —
+  header (69), metadata (118), multiple-authors (75), title (40), version-label (28),
+  part (24; там ещё partintro-обёртка). ПАРСЕР-фикс, потенциально много флипов.
+  Прочее: новые nearmiss на 210 — abstract-block (5), strong-span (5), preface (7),
+  url (9); `:icons:`-colist-задача (см. TODO); кластер `m`/`e`/`s` стиля колонок таблиц.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `63976fd`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_sect0*.adoc, /tmp/p_icons*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, четвёртая) — Фаза 3: QUOTES/ATTRIBUTES в метках link/xref/mailto
 
 Запрос «продолжи». `fix/pass-macro-in-single-plus` уже в master (`1d61977`, merge;

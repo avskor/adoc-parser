@@ -1521,6 +1521,40 @@ fn test_block_admonition_icons_font() {
     assert!(!html.contains("<div class=\"title\">Note</div>"));
 }
 
+#[test]
+fn test_admonition_icons_image() {
+    // Any `icons` value other than "font" selects image-based icons.
+    let html = to_html(":icons: image\n\nNOTE: This is a note.");
+    assert!(html.contains("<img src=\"./images/icons/note.png\" alt=\"Note\">"));
+    assert!(!html.contains("<div class=\"title\">Note</div>"));
+
+    // Empty value works too, and iconsdir/icontype are honored.
+    let html = to_html(":icons:\n:iconsdir: img/i\n:icontype: svg\n\nTIP: hint");
+    assert!(html.contains("<img src=\"img/i/tip.svg\" alt=\"Tip\">"));
+
+    // A value that merely starts with "font" is not font mode (mid-document
+    // entries skip Asciidoctor's init-time icons/icontype normalization).
+    let html = to_html(":icons: font <1>\n\nNOTE: hello");
+    assert!(html.contains("<img src=\"./images/icons/note.png\" alt=\"Note\">"));
+
+    // caption= overrides the alt text.
+    let html = to_html(":icons: image\n\n[NOTE,caption=Custom]\n====\nx\n====");
+    assert!(html.contains("alt=\"Custom\""));
+}
+
+#[test]
+fn test_sect0_heading_standalone() {
+    // A level-0 section in the body renders as a bare <h1 class="sect0">
+    // with no wrapper div and no sectionbody (article and book alike).
+    let html = to_html("para\n\n= Heading Zero\n\nafter\n\n== Real Section\n\ninside");
+    assert!(html.contains("<h1 id=\"_heading_zero\" class=\"sect0\">Heading Zero</h1>"));
+    assert!(!html.contains("<div class=\"sect0\">"));
+    // Following content is not nested inside a sect0 div.
+    assert!(html.contains("</h1>\n<div class=\"paragraph\">\n<p>after</p>"));
+    // Regular sections keep their wrapper.
+    assert!(html.contains("<div class=\"sect1\">\n<h2 id=\"_real_section\">"));
+}
+
 // Preamble tests
 
 #[test]
