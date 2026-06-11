@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать вторая) — Фаза 3: block.adoc (`.Title` на списках)
+
+Запрос «продолжи». Ветка **`fix/list-block-title`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 249, master `0e6808c` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+stem (56 — 3-4 независимых корня: `\$`-эскейп, `stem::`-макрос, `++++`+callout,
+`{n!}`; отложен) → **block.adoc (57 diff)**, один корень: `.Title` на ulist.
+
+### Семантика asciidoctor (пробы /tmp/p_lt1..6)
+- `.Title` на списке → `<div class="title">` ВНУТРИ обёртки, ПЕРЕД
+  `<ul>`/`<ol>`/`<dl>`/`<table>` (все формы: ulist/olist/dlist/horizontal/qanda/colist).
+- `.Title` ПОСЛЕ blank в list-контексте закрывает списки (как block-attr/comment);
+  title вешается на следующий блок. Двойной title — последний побеждает.
+- `.Title`-строка БЕЗ blank внутри item/dd/параграфа/admonition-параграфа —
+  обычный wrapped-текст (slurp): титулы НИКОГДА не прерывают параграф
+  (прерывают attr-строки и делимитеры; `== heading` тоже НЕ прерывает — у нас
+  прерывает, pre-existing, не тронуто).
+
+### Что сделано
+- **ПАРСЕР** block.rs: (1) `.Title`-handler в scan_block_metadata — close_list_contexts
+  при had_blank_line в list-контексте (зеркало block-attr-ветки); (2) исключение
+  `is_block_title` УБРАНО из `is_list_continuation_line`, `is_dlist_continuation_line`,
+  break-условий `scan_paragraph` и `scan_admonition` (slurp как у asciidoctor).
+- **РЕНДЕРЕР**: `emit_pending_block_title` после открытия обёртки в
+  `start_unordered_list` (обе ветки), `start_ordered_list`, `start_description_list`
+  (3 арма) — blocks.rs; arm `Tag::CalloutList` — events.rs.
+- +3 теста: parser `test_block_title_after_blank_separates_lists` (2 кейса),
+  parser `test_block_title_line_does_not_interrupt_paragraph`,
+  html `test_list_block_title_html` (7 кейсов).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 476, html 348).
+- Пробы p_lt1 байт-в-байт; p_lt2/4/5/6 — остатки только pre-existing другие корни
+  (вложение списка с другим маркером внутрь li, `[square]`-класс на `<ul>`,
+  компактный colist-`<li><p>`, heading не slurp'ится в параграф).
+- **Корпус: Identical 249→250 (+1)**; blast (base 0e6808c): 6 файлов — 1 флип
+  (block.adoc), **0 регрессий**, 5 changed-still-different — все ближе:
+  ordered 223→90, unordered 298→145, release-and-progress-reviews 409→406,
+  outline 8735→8718, admonition 197=197 (len ближе).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 250: stem (56 — 3-4 корня: инлайн `\$[[...]]`-эскейп ломает текст,
+  `stem::[...]` должен остаться литеральным параграфом а не custom-macro,
+  `++++ <.>` в callout-листинге, `{n!}` дропается в latexmath-параграфе),
+  literal-monospace (59), source (63), customize-title-label (66), include (75),
+  bibliography (77), subs (89), ordered (90 — стало ближе);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+- Кандидат-кластер: **xreflabel → reftext для xref-резолва** (label в Tag::Anchor
+  + регистрация в XrefResolver; закрыл бы p_id1/2/3-строки и lexicon-остаток).
+- Новые pre-existing находки (НЕ в корпусе как флип): `* x` после blank внутри
+  `- y`-списка должен вкладываться как nested ulist в li (у нас — sibling);
+  `[square]`-стиль не даёт класс на `<ul>`; colist-`<li><p>` компактен (нет
+  переносов); `== heading` не прерывает параграф у asciidoctor (у нас прерывает).
+- Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing: лишний
+  `</div>` у standalone passthrough, unknown-style течёт в class на quote/sidebar,
+  пустые строки в пустых sectionbody, list-merge через continuation-attrlist (p_chk2).
+
+---
+
 ## Сессия (2026-06-11, двадцать первая) — Фаза 3: assign-id + example-blocks (2 near-miss)
 
 Запрос «продолжи». Ветка **`fix/example-caption-unset-and-positional-shorthand`** —

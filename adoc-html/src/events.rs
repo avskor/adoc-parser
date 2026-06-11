@@ -473,7 +473,9 @@ impl HtmlRenderer {
                 }
             }
             Tag::CalloutList => {
-                output.push_str("<div class=\"colist arabic\">\n<ol>\n");
+                output.push_str("<div class=\"colist arabic\">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<ol>\n");
             }
             Tag::CalloutListItem { .. } => {
                 output.push_str("<li><p>");

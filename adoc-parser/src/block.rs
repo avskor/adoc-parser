@@ -619,6 +619,15 @@ impl<'a> BlockScanner<'a> {
 
         // Block title `.Title` — checked before body_started
         if let Some(title) = scanner::is_block_title(line) {
+            // If in list context with preceding blank line (not via continuation),
+            // close list: a title line between lists keeps them separate
+            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return Some(self.event_buffer.pop());
+            }
             self.advance();
             self.pending_block_title = Some(title);
             self.rescan_requested = true;
@@ -1875,7 +1884,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || scanner::is_block_title(line).is_some()
                 || (!verbatim_paragraph && scanner::is_line_comment(line))
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_callout_list_item(line).is_some()
@@ -2180,7 +2188,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || scanner::is_block_title(line).is_some()
                 || scanner::is_line_comment(line)
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_callout_list_item(line).is_some()
@@ -2785,7 +2792,6 @@ impl<'a> BlockScanner<'a> {
             && !scanner::is_page_break(line)
             && scanner::is_attribute_entry(line).is_none()
             && scanner::is_block_attribute(line).is_none()
-            && scanner::is_block_title(line).is_none()
             && !scanner::is_line_comment(line)
             && scanner::is_description_list_marker(line).is_none()
             && scanner::is_callout_list_item(line).is_none()
@@ -2950,7 +2956,6 @@ impl<'a> BlockScanner<'a> {
             && !scanner::is_thematic_break(line)
             && !scanner::is_page_break(line)
             && scanner::is_block_attribute(line).is_none()
-            && scanner::is_block_title(line).is_none()
             && !scanner::is_line_comment(line)
             && scanner::is_description_list_marker(line).is_none()
             && scanner::is_callout_list_item(line).is_none()
@@ -3294,6 +3299,64 @@ mod tests {
             Event::Text(Cow::Borrowed("b")),
             Event::End(TagEnd::ListItem),
             Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_block_title_after_blank_separates_lists() {
+        // A `.Title` line after a blank line closes the open list and
+        // becomes the title of the next one (Asciidoctor: a block title
+        // between lists keeps them separate).
+        let input = "* a\n\n.Next\n* b";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("a")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+            Event::Start(Tag::BlockTitle),
+            Event::Text(Cow::Borrowed("Next")),
+            Event::End(TagEnd::BlockTitle),
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+
+        // Without the blank line a `.Title`-looking line is wrapped item text,
+        // not metadata (Asciidoctor slurps it into the item's principal text).
+        let input = "* a\n.Attached\n* b";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("a")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed(".Attached")),
+            Event::End(TagEnd::ListItem),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_block_title_line_does_not_interrupt_paragraph() {
+        // A `.Title`-looking line inside a paragraph is paragraph text
+        // (Asciidoctor: block titles never interrupt a paragraph).
+        let input = "para text\n.NotATitle\nmore";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("para text")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed(".NotATitle")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("more")),
+            Event::End(TagEnd::Paragraph),
         ]);
     }
 
