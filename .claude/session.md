@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-11, шестая) — Фаза 3: п.41 header после ведущих комментариев
+
+Запрос «продолжи». `fix/callout-rendering` уже в master (`9346ce4`, merge). Новая ветка
+**`fix/header-after-leading-comments`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base`
+пересобран из чистого master `9346ce4` ПЕРЕД правками; baseline Identical 210.
+
+### Выбор задачи
+По плану прошлой сессии — **п.41** (доминирующий корень document/*-кластера: header 69,
+metadata 118, multiple-authors 75, title 40, version-label 28, part 24).
+
+### Что сделано
+- **Корень**: `scan_next_block_once` ставил `body_started=true` ДО комментарий-ветки
+  `scan_block_containers` → ведущий `// tag::…[]` ломал детекцию `= Title`.
+- **Семантика asciidoctor** (пробы /tmp/p_hdrcmt{,2,3,4,5}.adoc): `//`-строки и
+  `////`-блоки пропускаются ДО header'а И МЕЖДУ его строками (между title/author/
+  revision/attrs), header не завершается; blank по-прежнему завершает; незакрытый
+  `////` глотает до EOF (закрывашка — точная длина).
+- **Фикс — только ПАРСЕР** (`block.rs`): хелпер `skip_header_comments` (line-комменты
+  + comment-блоки, матч длины закрывашки зеркалит scan_delimited_block) + 5 вызовов:
+  верх `scan_header_constructs` (гейт `!body_started`, Some(None)+rescan), перед
+  author- и revision-проверками `scan_document_header`, верх трёх attr-циклов
+  (scan_document_header, scan_attribute_only_header, scan_document_header_with_pre_attrs).
+- +1 тест `test_document_header_after_leading_comments`.
+- **Попутная находка (pre-existing, НЕ внесён)**: footer `Version X<br>` при revnumber
+  не эмитится рендерером (корпус с `-a nofooter` — латентно; записано в TODO).
+
+### Статус (верифицировано)
+- clippy --workspace 0 warnings; cargo test --workspace ВСЁ зелёное (parser 464→**465**,
+  html 331+36, render-core 12, compat ok, integration 25).
+- Пробы: тела p_hdrcmt/3/4 идентичны asciidoctor (кроме pre-existing footer-Version).
+- **Корпус: Identical 210→228 (+18)**; blast 35 файлов: 18 флипов, **0 регрессий**,
+  17 changed-still-different — кластер раздавлен: header 69→16, multiple-authors 75→7,
+  version-label 28→2, toc →1, part 24→18.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/block.rs,
+  TODO.md, session.md.
+- nearmiss на 228: **toc.adoc (1 diff!)**, version-label (2), multiple-authors (7),
+  url.adoc (9), header.adoc (16), part (18, + partintro), add-header-row (29),
+  revision-line-with-version-prefix (1 — `{docdate}`, скип). Прочее: п.27
+  source-language attr, `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `9346ce4`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_hdrcmt*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, пятая) — Фаза 3: sect0-heading + admonition image-иконки
 
 Запрос «продолжи». `fix/macro-label-inline-formatting` уже в master (`63976fd`, merge;
