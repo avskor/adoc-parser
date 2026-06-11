@@ -691,10 +691,10 @@ impl HtmlRenderer {
                         self.document_attrs.insert("manpurpose".to_string(), trimmed[dash_pos + 3..].trim().to_string());
                     }
                 }
-                let is_part = self.book_part_stack.pop().unwrap_or(false);
+                let is_sect0 = self.sect0_stack.pop().unwrap_or(false);
                 let needs_sectionbody_close = self.sectionbody_stack.pop().unwrap_or(false);
                 self.section_style_stack.pop();
-                if !is_part {
+                if !is_sect0 {
                     if needs_sectionbody_close {
                         output.push_str("</div>\n");
                     }

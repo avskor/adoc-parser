@@ -45,23 +45,54 @@ impl HtmlRenderer {
         output.push_str("<div");
         Self::write_meta_attrs(output, meta, &adm_class);
         output.push_str(">\n<table>\n<tr>\n<td class=\"icon\">\n");
-        if self.document_attrs.get("icons").is_some_and(|v| v == "font") {
-            let icon_name = label.to_lowercase();
-            output.push_str("<i class=\"fa icon-");
-            output.push_str(&icon_name);
-            output.push_str("\" title=\"");
-            match caption {
-                Some(c) => html_escape(output, c),
-                None => output.push_str(label),
+        match self.document_attrs.get("icons").map(|v| v.as_str()) {
+            Some("font") => {
+                let icon_name = label.to_lowercase();
+                output.push_str("<i class=\"fa icon-");
+                output.push_str(&icon_name);
+                output.push_str("\" title=\"");
+                match caption {
+                    Some(c) => html_escape(output, c),
+                    None => output.push_str(label),
+                }
+                output.push_str("\"></i>\n");
             }
-            output.push_str("\"></i>\n");
-        } else {
-            output.push_str("<div class=\"title\">");
-            match caption {
-                Some(c) => html_escape(output, c),
-                None => output.push_str(label),
+            // Any other set value (including empty) selects image-based icons:
+            // {iconsdir}/{name}.{icontype}. Asciidoctor derives iconsdir at init
+            // time, before the header is parsed, so a header imagesdir does not
+            // affect the ./images/icons default.
+            Some(_) => {
+                let iconsdir = self
+                    .document_attrs
+                    .get("iconsdir")
+                    .map(|s| s.as_str())
+                    .unwrap_or("./images/icons");
+                let icontype = self
+                    .document_attrs
+                    .get("icontype")
+                    .map(|s| s.as_str())
+                    .unwrap_or("png");
+                output.push_str("<img src=\"");
+                html_escape(output, iconsdir);
+                output.push('/');
+                output.push_str(&label.to_lowercase());
+                output.push('.');
+                html_escape(output, icontype);
+                output.push_str("\" alt=\"");
+                match caption {
+                    Some(c) => html_escape(output, c),
+                    None => output.push_str(label),
+                }
+                output.push_str("\">\n");
             }
-            output.push_str("</div>\n");
+            None => {
+                output.push_str("<div class=\"title\">");
+                match caption {
+                    Some(c) => html_escape(output, c),
+                    None => output.push_str(label),
+                }
+                output.push_str("</div>\n");
+            }
         }
         output.push_str("</td>\n<td class=\"content\">\n");
         self.emit_pending_block_title(output);
@@ -288,8 +319,7 @@ impl HtmlRenderer {
             });
         }
         let h = section_level_to_h(*level);
-        let is_part = self.is_book() && *level == 1
-            && self.book_part_stack.last() == Some(&true);
+        let is_sect0 = *level == 1 && self.sect0_stack.last() == Some(&true);
         output.push_str("<h");
         output.push_str(&h.to_string());
         if !self.in_header {
@@ -297,7 +327,7 @@ impl HtmlRenderer {
             html_escape(output, id);
             output.push('"');
         }
-        if is_part {
+        if is_sect0 {
             output.push_str(" class=\"sect0\"");
         }
         output.push('>');
@@ -329,13 +359,15 @@ impl HtmlRenderer {
             "appendix" | "glossary" | "bibliography" | "colophon"
             | "abstract" | "preface" | "dedication" | "index"
         ));
-        let is_part = self.is_book() && *level == 1 && !is_special;
-        self.book_part_stack.push(is_part);
-        self.sectionbody_stack.push(*level == 2 && !is_part);
+        // A level-0 section in the body (book part or article sect0) renders as a
+        // standalone <h1 class="sect0"> with no wrapper div and no sectionbody.
+        let is_sect0 = *level == 1 && !is_special;
+        self.sect0_stack.push(is_sect0);
+        self.sectionbody_stack.push(*level == 2 && !is_sect0);
         self.section_style_stack.push(
             if is_special { style.map(|s| s.to_string()) } else { None }
         );
-        if !is_part {
+        if !is_sect0 {
             output.push_str("<div");
             let sect_class = format!("sect{}", level - 1);
             // ID goes on the heading, not on the section div
@@ -796,10 +828,6 @@ impl HtmlRenderer {
 
     pub(crate) fn current_dlist_style(&self) -> DlistStyle {
         self.dlist_stack.last().copied().unwrap_or(DlistStyle::Normal)
-    }
-
-    pub(crate) fn is_book(&self) -> bool {
-        self.document_attrs.get("doctype").map(|s| s.as_str()) == Some("book")
     }
 
     pub(crate) fn find_section_level(&self) -> u8 {
