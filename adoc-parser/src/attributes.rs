@@ -199,6 +199,9 @@ impl BlockAttributes {
             let id = &attr_str[1..attr_str.len() - 1];
             // Only treat as legacy anchor if the inner part doesn't contain brackets
             if !id.contains('[') && !id.contains(']') {
+                // `[[id,xreflabel]]` — the label is reference text for xrefs,
+                // never part of the id.
+                let id = id.split_once(',').map_or(id, |(i, _)| i.trim_end());
                 attrs.id = Some(id.to_string());
                 return attrs;
             }
@@ -793,6 +796,16 @@ mod tests {
     fn test_block_attributes_parse_id() {
         let attrs = BlockAttributes::parse("#my-id");
         assert_eq!(attrs.id.as_deref(), Some("my-id"));
+    }
+
+    #[test]
+    fn test_legacy_anchor_xreflabel_stripped() {
+        // [[id]] → attr_str "[id]"; the xreflabel after the comma is reference
+        // text for xrefs, never part of the id.
+        let attrs = BlockAttributes::parse("[tiger-image,Image of a tiger]");
+        assert_eq!(attrs.id.as_deref(), Some("tiger-image"));
+        let attrs = BlockAttributes::parse("[plain-id]");
+        assert_eq!(attrs.id.as_deref(), Some("plain-id"));
     }
 
     #[test]

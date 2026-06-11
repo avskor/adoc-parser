@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-11, восемнадцатая) — Фаза 3: id.adoc (anchor:-макрос, xreflabel, comment-разделитель списков)
+
+Запрос «продолжи». Ветка **`fix/inline-anchor-macro-and-xreflabel`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 242, master `7e772f6` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**id.adoc (45 diff)**, четыре корня.
+
+### Семантика asciidoctor (пробы /tmp/p_id1..9)
+- `anchor:id[]`/`anchor:id[label]` → `<a id="id"></a>`; label НЕ рендерится in place,
+  используется как reftext для xref. Target с пробелом — литерал; `\anchor:x[]` —
+  литерал без backslash.
+- `[[id,xreflabel]]` (inline И block) → id без label; label = reftext для xref
+  (`<<bookmark-d>>` → «last paragraph»; block-anchor label ПОБЕЖДАЕТ .Title в xref).
+- `<<id>>` на inline-анкер БЕЗ label → fallback `[id]`.
+- `[[id]]image:...[]` (строка с хвостом после `]]`) — параграф с inline-анкором,
+  НЕ block-attrlist (BlockAttributeListRx: первый символ inner — `[\w{,.#"'%]`).
+- Comment-строка ПОСЛЕ blank разделяет смежные списки (даже однотипные, p_id7)
+  и отрывает dlist от ulist-item; comment сразу после item (без blank) — НЕ рвёт
+  (p_id5/8); dlist после голого blank ПРИКРЕПЛЯЕТСЯ к li (p_id4 — asciidoctor тоже).
+
+### Что сделано (только ПАРСЕР; рендерер Tag::Anchor уже был готов)
+- `inline.rs::try_anchor_macro` + dispatch-arm `b'a'`/`anchor:` (при провале
+  `pos += 7` — иначе catch-all ел `nchor:`); `anchor:` в NAMES (11→12);
+  `try_anchor` — split id по запятой.
+- `scanner.rs::is_block_attribute` — ужесточение первого символа + ветка
+  BlockAnchorRx для `[[...]]` (вся строка, interior без скобок).
+- `attributes.rs` legacy-anchor — split по запятой.
+- `block.rs` comment-handler — close_list_contexts при had_blank_line в
+  list-контексте (зеркало block-attribute-ветки, строка ~600).
+- +4 теста: inline `test_anchor_macro` (4 кейса) + обновлён
+  `test_anchor_with_reftext_still_works` (фиксировал НЕВЕРНОЕ поведение);
+  scanner `test_is_block_attribute` (+10 ассертов); attributes
+  `test_legacy_anchor_xreflabel_stripped`; block
+  `test_comment_after_blank_separates_lists`; html
+  `test_inline_anchor_macro_and_xreflabel_html` (6 кейсов).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 472, html 343, core 13).
+- Пробы: p_id4/5/6/8/9 байт-в-байт; p_id7 — только trailing-newline (норм.);
+  p_id1/2/3 — остаток ТОЛЬКО xref-reftext строки (не нужны для флипа).
+- **Корпус: Identical 242→243 (+1)**; blast (base 7e772f6): 9 файлов — 1 флип
+  (id.adoc), **0 регрессий**, 8 changed-still-different (list-файлы ближе к
+  эталону: complex.adoc ulist 1→5 при 13 в ref; checklist 49=49,
+  revision-information 94→96 — позиционный шум).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 243: **checklist (49 diff)**, collapsible (51), release-plan (56),
+  stem (56), block (57), literal-monospace (59), source (63),
+  customize-title-label (66), include (75), bibliography (77);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+- Новый кандидат-кластер: **xreflabel → reftext для xref-резолва** (label в
+  Tag::Anchor + регистрация в XrefResolver; закрыл бы p_id1/2/3-строки и
+  родственный lexicon-остаток «reftext из dt-терма»).
+- Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing:
+  лишний `</div>` у standalone passthrough, unknown-style течёт в class на
+  quote/sidebar, пустые строки в пустых sectionbody.
+
+---
+
 ## Сессия (2026-06-11, семнадцатая) — Фаза 3: author-атрибуты из attribute-entries
 
 Запрос «продолжи». Ветка **`fix/author-attr-entries`** — НЕ закоммичена

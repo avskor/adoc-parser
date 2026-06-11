@@ -120,8 +120,21 @@ pub fn is_block_attribute(line: &str) -> Option<&str> {
     }
     if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
         let inner = &trimmed[1..trimmed.len() - 1];
-        // Reject if content starts with space (e.g. `[ id=idname ]`)
-        if !inner.is_empty() && inner.starts_with(' ') {
+        // Block anchor `[[id]]` / `[[id,reftext]]`: the WHOLE line must be the
+        // anchor (Asciidoctor BlockAnchorRx). `[[id]]text` is a paragraph with
+        // an inline anchor, not an attribute line.
+        if inner.starts_with('[') {
+            let interior = trimmed.strip_prefix("[[").and_then(|s| s.strip_suffix("]]"));
+            return match interior {
+                Some(i) if !i.is_empty() && !i.contains('[') && !i.contains(']') => Some(inner),
+                _ => None,
+            };
+        }
+        // Asciidoctor BlockAttributeListRx: empty `[]`, or the first char must
+        // be a word char, `{`, `,`, `.`, `#`, `"`, `'` or `%`.
+        if let Some(first) = inner.chars().next()
+            && !(first.is_ascii_alphanumeric() || matches!(first, '_' | '{' | ',' | '.' | '#' | '"' | '\'' | '%'))
+        {
             return None;
         }
         Some(inner)
@@ -1248,6 +1261,19 @@ mod tests {
         assert_eq!(is_block_attribute("[]"), Some(""));
         assert_eq!(is_block_attribute("[ id=idname ]"), None);
         assert_eq!(is_block_attribute("not block attr"), None);
+        // Shorthand/quoted/attr-ref first chars are allowed
+        assert_eq!(is_block_attribute("[#id.role]"), Some("#id.role"));
+        assert_eq!(is_block_attribute("[.role]"), Some(".role"));
+        assert_eq!(is_block_attribute("[%opt]"), Some("%opt"));
+        assert_eq!(is_block_attribute("[,ruby]"), Some(",ruby"));
+        assert_eq!(is_block_attribute("[\"a\",\"b\"]"), Some("\"a\",\"b\""));
+        assert_eq!(is_block_attribute("[{attr}]"), Some("{attr}"));
+        // Block anchor: only when the whole line is the anchor
+        assert_eq!(is_block_attribute("[[id]]"), Some("[id]"));
+        assert_eq!(is_block_attribute("[[id,Some reftext]]"), Some("[id,Some reftext]"));
+        // Trailing content after ]] → paragraph with inline anchor, not an attrlist
+        assert_eq!(is_block_attribute("[[id]]image:tiger.png[Image of a tiger]"), None);
+        assert_eq!(is_block_attribute("[[]]"), None);
     }
 
     #[test]

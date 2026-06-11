@@ -850,6 +850,15 @@ impl<'a> BlockScanner<'a> {
         // iteratively rather than recursing, so large comment blocks can't
         // overflow the stack.
         if scanner::is_line_comment(line) {
+            // A comment after a blank line forces adjacent lists apart
+            // (Asciidoctor: line comment between lists keeps them separate).
+            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+                let close_events = self.close_list_contexts();
+                for ev in close_events.into_iter().rev() {
+                    self.push_event(ev);
+                }
+                return Some(self.event_buffer.pop());
+            }
             self.advance();
             while let Some(next) = self.current_line() {
                 if scanner::is_line_comment(next) {
@@ -3228,6 +3237,40 @@ mod tests {
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Second.")),
             Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_comment_after_blank_separates_lists() {
+        // A line comment after a blank line forces adjacent lists apart
+        // (Asciidoctor: comment between lists keeps them separate).
+        let input = "* a\n\n// comment\n* b";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("a")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+
+        // Without the blank line the comment does NOT split the list.
+        let input = "* a\n// comment\n* b";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("a")),
+            Event::End(TagEnd::ListItem),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
         ]);
     }
 
