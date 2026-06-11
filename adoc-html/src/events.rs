@@ -150,17 +150,32 @@ impl HtmlRenderer {
                 use adoc_render_core::AttrRefOutcome;
                 match outcome {
                     AttrRefOutcome::Document(value) => {
-                        let value = value.to_string();
-                        // Attributes substitute before macros: if a trailing `[...]`
-                        // was captured, re-parse `value[...]` together so a URL-valued
-                        // attribute forms a link macro. For non-URL values the bracket
-                        // stays literal — same result as rendering them separately.
-                        match trailing_brackets {
-                            Some(br) => {
-                                let combined = format!("{value}{br}");
-                                self.render_inline_value(output, &combined);
+                        let lower_name = name.to_ascii_lowercase();
+                        if self.attr_refs_in_progress.contains(&lower_name) {
+                            // Re-entered while rendering this attribute's own
+                            // value (`:x: {x}`) — emit the reference literally,
+                            // like asciidoctor's linear substitution does.
+                            output.push('{');
+                            output.push_str(&name);
+                            output.push('}');
+                            if let Some(br) = trailing_brackets {
+                                html_escape_text(output, &br);
                             }
-                            None => self.render_inline_value(output, &value),
+                        } else {
+                            let value = value.to_string();
+                            self.attr_refs_in_progress.push(lower_name);
+                            // Attributes substitute before macros: if a trailing `[...]`
+                            // was captured, re-parse `value[...]` together so a URL-valued
+                            // attribute forms a link macro. For non-URL values the bracket
+                            // stays literal — same result as rendering them separately.
+                            match trailing_brackets {
+                                Some(br) => {
+                                    let combined = format!("{value}{br}");
+                                    self.render_inline_value(output, &combined);
+                                }
+                                None => self.render_inline_value(output, &value),
+                            }
+                            self.attr_refs_in_progress.pop();
                         }
                     }
                     AttrRefOutcome::Intrinsic(attr) => {
