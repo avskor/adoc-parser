@@ -1,5 +1,60 @@
 # Session context
 
+## Сессия (2026-06-11, восьмая) — Фаза 3: version-label + attr-entry в параграфе
+
+Запрос «продолжи». `fix/toc2-body-class` уже в master (`237f92b`, merge). Новая ветка
+**`fix/version-label-revnumber`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base` пересобран
+из чистого master `237f92b` (git stash → build → cp → stash pop). Baseline: Identical 229.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип, как всегда) →
+**version-label.adoc (2 diff)**. Два корня.
+
+### Семантика asciidoctor (пробы /tmp/p_vl1..11, ВСЕ байт-в-байт после фикса)
+- revnumber-span: `{version-label.downcase} {revnumber}` + запятая ТОЛЬКО при revdate;
+  default label `Version`; unset/пустой → `<span id="revnumber"> 3</span>` (ведущий
+  пробел остаётся — артефакт шаблона html5.rb).
+- attr-entry внутри текстового блока: параграф/admonition/principal ulist — ЛИТЕРАЛ;
+  dlist wrapped (принципал на той же строке) — ДРОП (не литерал и НЕ применяется,
+  верифицировано предопределённым атрибутом: значение осталось старым); голый `term::` +
+  attr-entry следующей строкой (даже после blank) — литеральный принципал dd.
+
+### Что сделано
+- **РЕНДЕРЕР**: `finish.rs::render_author_details` — шаблон label+version+условная
+  запятая; `lib.rs::new()` — default `version-label: Version` в document_attrs
+  (apply_attribute уже удаляет ключ при `:!name:` — готово).
+- **ПАРСЕР** (`block.rs`): `is_attribute_entry` убран из break-условий scan_paragraph,
+  admonition-сборщика, `is_list_continuation_line` (ulist/olist); dlist —
+  `is_dlist_continuation_line` НЕ тронут, вместо этого: drop-ветка attr-entry в
+  wrapped-цикле + attr-entry допущен как принципал в точке выбора следующей строки.
+- +2 теста: parser `test_attribute_entry_inside_paragraph_is_literal` (литерал в
+  параграфе/ulist, дроп в dlist, литеральный принципал, guard границы блока),
+  html `test_revnumber_version_label` (default/запятая/custom downcase/unset).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (889: parser 465→**466**,
+  html 332→**333**, render-core 12, compat ok, integration 25).
+- **Корпус: Identical 229→230 (+1)**; blast (base 237f92b): 4 файла — 1 флип
+  (version-label), **0 регрессий**, 3 changed-still-different: **header.adoc 16→3 diff**
+  (сильное улучшение), metadata, stem.
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/block.rs,
+  adoc-html/src/{lib,finish,tests}.rs, TODO.md, session.md.
+- nearmiss на 230: **header.adoc (3 diff!)**, multiple-authors (7), url.adoc (9),
+  part (18), add-header-row (29), apply-subs-to-blocks (31),
+  reference-revision-attributes (31), listing (34), reference-author (37);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип). Прочее: `:icons:`-colist
+  (TODO), кластер `m`/`e`/`s` стиля колонок.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `237f92b`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_vl*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, седьмая) — Фаза 3: toc2 body-класс
 
 Запрос «продолжи». `fix/header-after-leading-comments` уже в master (`e3dd825`, merge).
