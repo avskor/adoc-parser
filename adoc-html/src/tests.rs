@@ -300,8 +300,11 @@ fn test_link_passthrough_url_with_attrs() {
 
 #[test]
 fn test_email_autolink_html() {
+    // Email autolinks get no class="bare" (matches Asciidoctor — bare is only
+    // for URL autolinks and link:/URL macros with empty text).
     let html = to_html("Contact user@example.com for info");
-    assert!(html.contains("<a href=\"mailto:user@example.com\" class=\"bare\">user@example.com</a>"));
+    assert!(html.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"), "{html}");
+    assert!(!html.contains("class=\"bare\""), "{html}");
 }
 
 #[test]

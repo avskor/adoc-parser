@@ -2108,7 +2108,9 @@ impl<'a> InlineState<'a> {
             url: Cow::Owned(format!("mailto:{email}")),
             window: None,
             nofollow: false,
-            is_bare: true,
+            // Asciidoctor does not add class="bare" to email autolinks (only to
+            // bare URL autolinks and link:/URL macros with empty text).
+            is_bare: false,
         }));
         events.push(Event::Text(Cow::Borrowed(email)));
         events.push(Event::End(TagEnd::Link));
@@ -4441,7 +4443,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
-                is_bare: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4649,7 +4651,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
-                is_bare: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4665,7 +4667,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@example.com".to_string()),
                 window: None,
                 nofollow: false,
-                is_bare: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4681,7 +4683,7 @@ mod tests {
                 url: Cow::Owned("mailto:user@mail.example.com".to_string()),
                 window: None,
                 nofollow: false,
-                is_bare: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user@mail.example.com")),
             Event::End(TagEnd::Link),
@@ -4696,7 +4698,7 @@ mod tests {
                 url: Cow::Owned("mailto:user+tag@example.com".to_string()),
                 window: None,
                 nofollow: false,
-                is_bare: true,
+                is_bare: false,
             }),
             Event::Text(Cow::Borrowed("user+tag@example.com")),
             Event::End(TagEnd::Link),

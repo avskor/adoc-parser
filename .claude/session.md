@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-11, девятая) — Фаза 3: email-автолинк без class="bare"
+
+Запрос «продолжи». `fix/version-label-revnumber` уже в master (`4f72ab3`, merge). Новая
+ветка **`fix/email-autolink-no-bare-class`** (СТАТУС: НЕ закоммичено). `/tmp/adoc_base`
+пересобран из чистого master `4f72ab3` (дерево чистое, stash не нужен). Baseline: Identical 230.
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип, как всегда) →
+**header.adoc (3 diff)**: на email-автолинках мы эмитим `class="bare"`, asciidoctor — нет.
+
+### Семантика asciidoctor (пробы /tmp/p_mail1..2.adoc)
+- `user@x.org` (автолинк) → `<a href="mailto:…">…</a>` **без** класса.
+- `mailto:x@y[]` (пустой текст) → тоже БЕЗ bare.
+- URL-автолинк и `link:`-макрос с пустым текстом (вкл. `link:mailto:x@y[]`) → `class="bare"`.
+
+### Что сделано
+- **ПАРСЕР, 1 строка** (`inline.rs::try_email_autolink`): `is_bare: true` → `false`
+  (+ комментарий). `try_mailto_macro` уже был верен (`is_bare: false`).
+- Обновлены 5 parser-тестов (email-автолинк expectations, regex-заменой) + html-тест
+  `test_email_autolink_html` усилен (positive + negative `class="bare"` ассерты).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (890: parser 466, html 333,
+  render-core 12, compat ok, integration 25).
+- **Корпус: Identical 230→231 (+1)**; blast (base 4f72ab3): 4 файла — 1 флип (header.adoc),
+  **0 регрессий**, 3 changed-still-different: multiple-authors 7→4, url 9→7,
+  reference-author 37→37 (нейтрально — доминируют другие корни).
+
+### Что дальше
+- **Спросить про коммит/мерж/пуш** (только по запросу). В diff: adoc-parser/src/inline.rs,
+  adoc-html/src/tests.rs, TODO.md, session.md.
+- nearmiss на 231: **multiple-authors (4 diff!)**, url.adoc (7), part (18),
+  add-header-row (29), apply-subs-to-blocks (31), reference-revision-attributes (31),
+  listing (34), reference-author (37), icon-macro (41);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип). Прочее: `:icons:`-colist
+  (TODO), кластер `m`/`e`/`s` стиля колонок.
+
+### Предостережения (без изменений)
+- НЕ cargo fmt. Коммит только по запросу. Корпус: python3 /mnt/c/tmp/adoc-test/compare_full.py
+  (release, `cargo build --release -p adoc-cli`). blast: /tmp/blast.py (base /tmp/adoc_base =
+  чистый master `4f72ab3`). fdiff: /tmp/fdiff.py <relpath>. nearmiss: /tmp/nearmiss.py.
+  Пробы /tmp/p_mail*.adoc. CLI: `adoc [--no-standalone] file` (флага `-e` НЕТ).
+
+---
+
 ## Сессия (2026-06-11, восьмая) — Фаза 3: version-label + attr-entry в параграфе
 
 Запрос «продолжи». `fix/toc2-body-class` уже в master (`237f92b`, merge). Новая ветка
