@@ -44,6 +44,12 @@ pub struct BlockScanner<'a> {
     /// numeric suffix (`_2`, `_3`, …), matching Asciidoctor's de-duplication.
     /// Explicit ids are registered as-is and never renamed.
     used_ids: std::collections::HashSet<String>,
+    /// Attribute-entry values seen so far (names lowercased, values with
+    /// `{refs}` resolved at definition time), plus the author/revision
+    /// attributes implied by the header lines. Used to substitute attribute
+    /// references in section titles before auto-id generation, mirroring
+    /// Asciidoctor (`== About {author}` → `_about_kismet_r_lee`).
+    doc_attrs: std::collections::HashMap<String, String>,
 }
 
 impl<'a> BlockScanner<'a> {
@@ -64,6 +70,7 @@ impl<'a> BlockScanner<'a> {
             idprefix: "_".to_string(),
             idseparator: "_".to_string(),
             used_ids: std::collections::HashSet::new(),
+            doc_attrs: std::collections::HashMap::new(),
         }
     }
 
@@ -331,6 +338,62 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    /// Record an attribute entry into the title-resolution map: unset forms
+    /// (`:!name:` / `:name!:`) remove the key, set forms store the value with
+    /// `{refs}` resolved against the entries seen so far (definition-time
+    /// resolution, like Asciidoctor). Names are lowercased on both store and
+    /// lookup.
+    fn record_attribute_entry(&mut self, name: &str, value: &str) {
+        if let Some(n) = name.strip_prefix('!') {
+            self.doc_attrs.remove(&n.to_ascii_lowercase());
+        } else if let Some(n) = name.strip_suffix('!') {
+            self.doc_attrs.remove(&n.to_ascii_lowercase());
+        } else {
+            let resolved = self.resolve_title_attr_refs(value).into_owned();
+            self.doc_attrs.insert(name.to_ascii_lowercase(), resolved);
+        }
+    }
+
+    /// Substitute `{name}` attribute references against the recorded entries.
+    /// Used on section/heading titles before auto-id generation (Asciidoctor
+    /// applies attribute substitution to the title before deriving the id)
+    /// and on entry values at definition time. Undefined references stay
+    /// literal — `generate_id`'s character sanitization then drops the
+    /// braces, matching Asciidoctor's default `attribute-missing=skip`.
+    fn resolve_title_attr_refs<'b>(&self, text: &'b str) -> Cow<'b, str> {
+        if self.doc_attrs.is_empty() || !text.contains('{') {
+            return Cow::Borrowed(text);
+        }
+        let mut result = String::with_capacity(text.len());
+        let mut rest = text;
+        let mut changed = false;
+        while let Some(start) = rest.find('{') {
+            result.push_str(&rest[..start]);
+            let after = &rest[start + 1..];
+            if let Some(end) = after.find('}') {
+                let name = &after[..end];
+                if let Some(value) = self.doc_attrs.get(&name.to_ascii_lowercase()) {
+                    result.push_str(value);
+                    changed = true;
+                } else {
+                    result.push('{');
+                    result.push_str(name);
+                    result.push('}');
+                }
+                rest = &after[end + 1..];
+            } else {
+                result.push('{');
+                rest = after;
+            }
+        }
+        result.push_str(rest);
+        if changed {
+            Cow::Owned(result)
+        } else {
+            Cow::Borrowed(text)
+        }
+    }
+
     fn is_in_list_context(&self) -> bool {
         self.context_stack.iter().rev().any(|ctx| {
             matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
@@ -566,6 +629,7 @@ impl<'a> BlockScanner<'a> {
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
             self.advance();
             let value = self.read_multiline_attribute_value(value);
+            self.record_attribute_entry(name, &value);
             if name == "leveloffset" {
                 self.update_leveloffset(&value);
                 return Some(Some(Event::Attribute {
@@ -982,7 +1046,7 @@ impl<'a> BlockScanner<'a> {
         self.header_emitted = true;
         self.advance();
 
-        let id = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+        let id = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
 
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -996,6 +1060,21 @@ impl<'a> BlockScanner<'a> {
         {
             // Parse as author line
             let authors = scanner::parse_authors(line);
+            // Record the implied author attributes for title-id resolution
+            // (`author`/`firstname`/… unsuffixed, `author_2`/… for the rest).
+            for (idx, author) in authors.iter().enumerate() {
+                let suffix = if idx == 0 { String::new() } else { format!("_{}", idx + 1) };
+                self.doc_attrs.insert(format!("author{suffix}"), author.fullname.to_string());
+                self.doc_attrs.insert(format!("firstname{suffix}"), author.firstname.to_string());
+                if !author.middlename.is_empty() {
+                    self.doc_attrs.insert(format!("middlename{suffix}"), author.middlename.to_string());
+                }
+                self.doc_attrs.insert(format!("lastname{suffix}"), author.lastname.to_string());
+                self.doc_attrs.insert(format!("authorinitials{suffix}"), author.initials.clone());
+                if !author.address.is_empty() {
+                    self.doc_attrs.insert(format!("email{suffix}"), author.address.to_string());
+                }
+            }
             for author in authors {
                 header_events.push(Event::Author {
                     fullname: Cow::Borrowed(author.fullname),
@@ -1022,18 +1101,21 @@ impl<'a> BlockScanner<'a> {
                     remark: Cow::Borrowed(rev_info.remark),
                 });
                 if !rev_info.version.is_empty() {
+                    self.record_attribute_entry("revnumber", rev_info.version);
                     header_events.push(Event::Attribute {
                         name: Cow::Borrowed("revnumber"),
                         value: Cow::Borrowed(rev_info.version),
                     });
                 }
                 if !rev_info.date.is_empty() {
+                    self.record_attribute_entry("revdate", rev_info.date);
                     header_events.push(Event::Attribute {
                         name: Cow::Borrowed("revdate"),
                         value: Cow::Borrowed(rev_info.date),
                     });
                 }
                 if !rev_info.remark.is_empty() {
+                    self.record_attribute_entry("revremark", rev_info.remark);
                     header_events.push(Event::Attribute {
                         name: Cow::Borrowed("revremark"),
                         value: Cow::Borrowed(rev_info.remark),
@@ -1054,6 +1136,7 @@ impl<'a> BlockScanner<'a> {
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
                 self.advance();
                 let value = self.read_multiline_attribute_value(value);
+                self.record_attribute_entry(name, &value);
                 if name == "leveloffset" {
                     self.update_leveloffset(&value);
                 }
@@ -1114,6 +1197,7 @@ impl<'a> BlockScanner<'a> {
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
                 self.advance();
                 let value = self.read_multiline_attribute_value(value);
+                self.record_attribute_entry(name, &value);
                 if name == "leveloffset" {
                     self.update_leveloffset(&value);
                 }
@@ -1147,7 +1231,7 @@ impl<'a> BlockScanner<'a> {
         title: &'a str,
         pre_attrs: Vec<Event<'a>>,
     ) -> Option<Event<'a>> {
-        let id = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+        let id = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
 
         // Collect header content lines after the title
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -1163,6 +1247,7 @@ impl<'a> BlockScanner<'a> {
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
                 self.advance();
                 let value = self.read_multiline_attribute_value(value);
+                self.record_attribute_entry(name, &value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value,
@@ -1228,7 +1313,7 @@ impl<'a> BlockScanner<'a> {
                 explicit
             }
             None => {
-                let base = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+                let base = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
                 self.unique_auto_id(base)
             }
         };
@@ -1282,7 +1367,7 @@ impl<'a> BlockScanner<'a> {
             match attrs.id.clone() {
                 Some(explicit) => self.register_explicit_id(&explicit),
                 None => {
-                    let base = scanner::generate_id(title, &self.idprefix, &self.idseparator);
+                    let base = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
                     attrs.id = Some(self.unique_auto_id(base));
                 }
             }
@@ -4433,5 +4518,32 @@ mod tests {
             level: 2,
             id: Cow::Owned("_0_3_0_milestone_build".into()),
         })));
+    }
+
+    #[test]
+    fn test_section_id_resolves_attr_refs() {
+        // Attribute references in a section title resolve before auto-id
+        // generation (defined entries, author-line attrs, definition-time
+        // resolution inside values); undefined refs stay literal and the
+        // braces are dropped by id sanitization. Unset removes the key.
+        let input = "= T\nKismet R. Lee\n:foo: Bar Baz\n:nested: x {foo} y\n\n== About {author}\n\n== Counts {foo}\n\n== Deep {nested}\n\n== With {undefined} ref\n\n:!foo:\n\n== Gone {foo}";
+        let ids: Vec<String> = BlockScanner::new(input)
+            .filter_map(|ev| match ev {
+                Event::Start(Tag::SectionTitle { id, level }) if level > 0 => {
+                    Some(id.into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "_about_kismet_r_lee",
+                "_counts_bar_baz",
+                "_deep_x_bar_baz_y",
+                "_with_undefined_ref",
+                "_gone_foo",
+            ]
+        );
     }
 }

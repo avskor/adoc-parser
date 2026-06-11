@@ -218,6 +218,48 @@ impl HtmlRenderer {
         toc
     }
 
+    /// Apply Asciidoctor's end-of-header author rescan (parser.rb
+    /// `parse_header_metadata`): when the `author` document attribute exists
+    /// and differs from the value the implicit author line produced, it was
+    /// set by an attribute entry — re-derive `author`/`firstname`/
+    /// `middlename`/`lastname`/`authorinitials` from it (names-only parse,
+    /// single author). An explicit `:authorinitials:` that differs from the
+    /// line-derived value survives the rescan; `middlename`/`lastname` keys
+    /// the derivation doesn't produce keep their old values (update, not
+    /// replace). Called at `TagEnd::Header` in both standalone and embedded
+    /// modes — the derived attributes must resolve in body references.
+    pub(crate) fn finalize_header_authors(&mut self) {
+        let Some(author_attr) = self.document_attrs.get("author").cloned() else {
+            return;
+        };
+        let implicit = self.authors.authors().first();
+        if implicit.is_some_and(|a| a.fullname == author_attr) {
+            return;
+        }
+        if author_attr.is_empty() {
+            // Asciidoctor skips empty author entries (`next if author_entry.empty?`)
+            return;
+        }
+        let derived = Author::from_attribute_value(&author_attr);
+        // `author_metadata.delete 'authorinitials' if doc_attrs['authorinitials']
+        // != implicit_authorinitials` — an explicitly set value wins.
+        let keep_initials = self.document_attrs.get("authorinitials").map(String::as_str)
+            != implicit.map(|a| a.initials.as_str());
+        self.document_attrs.insert("author".to_string(), derived.fullname);
+        self.document_attrs.insert("firstname".to_string(), derived.firstname);
+        if !derived.middlename.is_empty() {
+            self.document_attrs.insert("middlename".to_string(), derived.middlename);
+        }
+        if !derived.lastname.is_empty() {
+            self.document_attrs.insert("lastname".to_string(), derived.lastname);
+        }
+        if !keep_initials {
+            self.document_attrs.insert("authorinitials".to_string(), derived.initials);
+        }
+        // "do not allow multiple" — the override always yields a single author
+        self.document_attrs.insert("authorcount".to_string(), "1".to_string());
+    }
+
     pub(crate) fn render_author_details(&self, output: &mut String) {
         // Revision spans are attribute-driven (Asciidoctor html5.rb checks the
         // revnumber/revdate/revremark document attributes, whether they came from
@@ -227,7 +269,12 @@ impl HtmlRenderer {
         let revnumber = self.document_attrs.get("revnumber");
         let revdate = self.document_attrs.get("revdate");
         let revremark = self.document_attrs.get("revremark");
-        if self.authors.is_empty()
+        // Author spans are attribute-backed too (Asciidoctor's Document#authors
+        // reads `author`/`email` and `author_N`/`email_N` gated by `authorcount`)
+        // — so an `:author:` attribute entry opens the details and `:!author:`
+        // suppresses it even when an author line was present.
+        let author_attr = self.document_attrs.get("author");
+        if author_attr.is_none()
             && revnumber.is_none()
             && revdate.is_none()
             && revremark.is_none()
@@ -235,21 +282,37 @@ impl HtmlRenderer {
             return;
         }
         output.push_str("<div class=\"details\">\n");
-        for (i, author) in self.authors.authors().iter().enumerate() {
-            let suffix = AuthorRegistry::id_suffix(i);
-            output.push_str("<span id=\"author");
-            output.push_str(&suffix);
-            output.push_str("\" class=\"author\">");
-            html_escape(output, &author.fullname);
-            output.push_str("</span><br>\n");
-            if !author.address.is_empty() {
-                output.push_str("<span id=\"email");
-                output.push_str(&suffix);
-                output.push_str("\" class=\"email\"><a href=\"mailto:");
-                html_escape(output, &author.address);
-                output.push_str("\">");
-                html_escape(output, &author.address);
-                output.push_str("</a></span><br>\n");
+        if author_attr.is_some() {
+            let authorcount = self
+                .document_attrs
+                .get("authorcount")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(1)
+                .max(1);
+            for idx in 0..authorcount {
+                let id_suffix = AuthorRegistry::id_suffix(idx);
+                let name_suffix = AuthorRegistry::name_suffix(idx);
+                let Some(name) = self.document_attrs.get(&format!("author{name_suffix}")) else {
+                    continue;
+                };
+                output.push_str("<span id=\"author");
+                output.push_str(&id_suffix);
+                output.push_str("\" class=\"author\">");
+                html_escape(output, name);
+                output.push_str("</span><br>\n");
+                if let Some(email) = self
+                    .document_attrs
+                    .get(&format!("email{name_suffix}"))
+                    .filter(|s| !s.is_empty())
+                {
+                    output.push_str("<span id=\"email");
+                    output.push_str(&id_suffix);
+                    output.push_str("\" class=\"email\"><a href=\"mailto:");
+                    html_escape(output, email);
+                    output.push_str("\">");
+                    html_escape(output, email);
+                    output.push_str("</a></span><br>\n");
+                }
             }
         }
         if let Some(version) = revnumber {
