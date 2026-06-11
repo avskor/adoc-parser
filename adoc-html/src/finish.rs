@@ -266,9 +266,18 @@ impl HtmlRenderer {
         // the revision line or from header attribute entries). Called at
         // TagEnd::Header, so document_attrs holds exactly the header-final state;
         // a set-but-empty attribute still produces its span.
-        let revnumber = self.document_attrs.get("revnumber");
-        let revdate = self.document_attrs.get("revdate");
-        let revremark = self.document_attrs.get("revremark");
+        // Attribute references in the values resolve against the document
+        // attributes (Asciidoctor applies header substitutions to the revision
+        // line as it is read — e.g. `{docdate}` in a revdate); undefined ones
+        // stay literal.
+        let resolve = |v: &String| {
+            adoc_render_core::resolve_attr_refs_text(v, |n| {
+                self.document_attrs.get(n).map(|s| s.as_str())
+            })
+        };
+        let revnumber = self.document_attrs.get("revnumber").map(resolve);
+        let revdate = self.document_attrs.get("revdate").map(resolve);
+        let revremark = self.document_attrs.get("revremark").map(resolve);
         // Author spans are attribute-backed too (Asciidoctor's Document#authors
         // reads `author`/`email` and `author_N`/`email_N` gated by `authorcount`)
         // — so an `:author:` attribute entry opens the details and `:!author:`
@@ -315,7 +324,7 @@ impl HtmlRenderer {
                 }
             }
         }
-        if let Some(version) = revnumber {
+        if let Some(version) = &revnumber {
             // Mirrors Asciidoctor: `{version-label.downcase} {revnumber}` with a
             // trailing comma only when a revdate follows; an unset version-label
             // leaves the leading space in place. The value renders verbatim — the
@@ -334,12 +343,12 @@ impl HtmlRenderer {
             }
             output.push_str("</span>\n");
         }
-        if let Some(date) = revdate {
+        if let Some(date) = &revdate {
             output.push_str("<span id=\"revdate\">");
             html_escape(output, date);
             output.push_str("</span>\n");
         }
-        if let Some(remark) = revremark {
+        if let Some(remark) = &revremark {
             output.push_str("<br><span id=\"revremark\">");
             html_escape(output, remark);
             output.push_str("</span>\n");

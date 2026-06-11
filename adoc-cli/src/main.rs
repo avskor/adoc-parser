@@ -74,6 +74,60 @@ fn run(cli: Cli) -> Result<(), String> {
         }
     }
 
+    // Intrinsic document attributes derived from the input: docname/docfile/
+    // docdir/docfilesuffix from the path, docdate/doctime/docdatetime from its
+    // mtime (now when reading stdin; docdir falls back to the cwd). Explicit
+    // -a values win; header attribute entries override the date family like
+    // Asciidoctor (docname/docfile/docdir are locked there — known limit).
+    let cli_attr_names: HashSet<&str> = cli
+        .attributes
+        .iter()
+        .map(|s| {
+            let s = s.strip_prefix('!').unwrap_or(s);
+            let s = s.split_once('=').map_or(s.as_ref(), |(n, _)| n);
+            s.strip_suffix('!').unwrap_or(s)
+        })
+        .collect();
+    let mut seed = |name: &str, value: String| {
+        if cli_attr_names.contains(name) {
+            return;
+        }
+        initial_attrs.insert(name.to_string(), Some(value.clone()));
+        html_attrs.insert(name.to_string(), value);
+    };
+    let input_mtime: DateTime<Local> = cli
+        .input
+        .as_ref()
+        .and_then(|p| fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .map_or_else(Local::now, Into::into);
+    let docdate = input_mtime.format("%Y-%m-%d").to_string();
+    let doctime = input_mtime.format("%H:%M:%S %z").to_string();
+    seed("docdatetime", format!("{docdate} {doctime}"));
+    seed("docdate", docdate);
+    seed("doctime", doctime);
+    let now = Local::now();
+    let localdate = now.format("%Y-%m-%d").to_string();
+    let localtime = now.format("%H:%M:%S %z").to_string();
+    seed("localdatetime", format!("{localdate} {localtime}"));
+    seed("localdate", localdate);
+    seed("localtime", localtime);
+    if let Some(path) = &cli.input {
+        let abs = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if let Some(stem) = abs.file_stem() {
+            seed("docname", stem.to_string_lossy().into_owned());
+        }
+        if let Some(ext) = abs.extension() {
+            seed("docfilesuffix", format!(".{}", ext.to_string_lossy()));
+        }
+        if let Some(dir) = abs.parent() {
+            seed("docdir", dir.to_string_lossy().into_owned());
+        }
+        seed("docfile", abs.to_string_lossy().into_owned());
+    } else if let Ok(cwd) = std::env::current_dir() {
+        seed("docdir", cwd.to_string_lossy().into_owned());
+    }
+
     let preprocessed = adoc_parser::preprocess_with_attrs(&resolved, &initial_attrs, &locked_attrs);
 
     let last_updated = cli.input.as_ref().and_then(|p| {
