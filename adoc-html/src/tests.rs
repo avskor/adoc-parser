@@ -774,6 +774,30 @@ fn test_checklist_mixed_html() {
 }
 
 #[test]
+fn test_checklist_interactive_html() {
+    // %interactive: checkbox items render real <input> controls (probe-verified).
+    let html = to_html("[%interactive]\n* [x] Done\n* [ ] Todo\n* Regular");
+    assert!(html.contains("<li>\n<p><input type=\"checkbox\" data-item-complete=\"1\" checked> Done</p>\n</li>"));
+    assert!(html.contains("<li>\n<p><input type=\"checkbox\" data-item-complete=\"0\"> Todo</p>\n</li>"));
+    assert!(html.contains("<li>\n<p>Regular</p>\n</li>"));
+
+    // Formal options= form is an alias.
+    let html = to_html("[options=interactive]\n* [x] Done");
+    assert!(html.contains("<input type=\"checkbox\" data-item-complete=\"1\" checked> Done"));
+
+    // Nested list does not inherit the option from the outer list.
+    let html = to_html("[%interactive]\n* [x] outer\n** [x] nested\n* [ ] outer2");
+    assert!(html.contains("<input type=\"checkbox\" data-item-complete=\"1\" checked> outer"));
+    assert!(html.contains("<p>&#10003; nested</p>"));
+    assert!(html.contains("<input type=\"checkbox\" data-item-complete=\"0\"> outer2"));
+
+    // Without the option the NCR markers stay.
+    let html = to_html("* [x] Done");
+    assert!(html.contains("<p>&#10003; Done</p>"));
+    assert!(!html.contains("<input"));
+}
+
+#[test]
 fn test_regular_list_no_checklist_class() {
     let html = to_html("* item 1\n* item 2");
     assert!(html.contains("<ul>"));

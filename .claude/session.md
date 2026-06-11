@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-11, девятнадцатая) — Фаза 3: checklist.adoc (%interactive чекбоксы)
+
+Запрос «продолжи». Ветка **`fix/checklist-rendering`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 243, master `715b17e` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**checklist.adoc (49 diff)**, один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_chk1..2)
+- `[%interactive]` (и formal `options=interactive`) на checklist →
+  `<input type="checkbox" data-item-complete="1" checked> ` для checked,
+  `<input type="checkbox" data-item-complete="0"> ` для unchecked (вместо
+  `&#10003;`/`&#10063;`); обычные item'ы списка — без изменений.
+- На списке БЕЗ чекбоксов опция ни на что не влияет (нет и класса checklist).
+- Вложенный список — свой узел, опцию НЕ наследует.
+- Pre-existing (p_chk2, НЕ в корпусе): `+`-continuation с `[%interactive]`+новым
+  `*`-item — asciidoctor вливает всё в ОДИН список, мы открываем второй.
+
+### Что сделано (только РЕНДЕРЕР, 3 точки + поле)
+- `lib.rs`: поле `interactive_ulist_stack: Vec<bool>` (параллельный стек, по
+  образцу admonition_block_stack).
+- `blocks.rs::start_unordered_list`: push флага из `meta.options` (interactive).
+- `events.rs`: arm `Tag::ListItem` — match (checked, interactive) → input-формы;
+  `TagEnd::UnorderedList` — pop.
+- +1 html-тест `test_checklist_interactive_html` (4 кейса: shorthand, formal,
+  не-наследование вложенным, NCR без опции).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (907 passed, html 344).
+- Проба p_chk1 байт-в-байт; p_chk2 — только pre-existing list-merge edge.
+- **Корпус: Identical 243→244 (+1)**; blast (base 715b17e): ровно 1 файл —
+  1 флип (checklist.adoc), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 244: **collapsible (51 diff)**, release-plan (56), stem (56),
+  block (57), literal-monospace (59), source (63), customize-title-label (66),
+  include (75), bibliography (77); revision-line-with-version-prefix (1 —
+  `{docdate}`, скип).
+- Кандидат-кластер: **xreflabel → reftext для xref-резолва** (label в Tag::Anchor +
+  регистрация в XrefResolver; закрыл бы p_id1/2/3-строки и lexicon-остаток).
+- Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing: лишний
+  `</div>` у standalone passthrough, unknown-style течёт в class на quote/sidebar,
+  пустые строки в пустых sectionbody, list-merge через continuation-attrlist (p_chk2).
+
+---
+
 ## Сессия (2026-06-11, восемнадцатая) — Фаза 3: id.adoc (anchor:-макрос, xreflabel, comment-разделитель списков)
 
 Запрос «продолжи». Ветка **`fix/inline-anchor-macro-and-xreflabel`** — НЕ закоммичена
