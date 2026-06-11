@@ -2553,6 +2553,36 @@ fn test_revnumber_version_label() {
 }
 
 #[test]
+fn test_revision_attrs_from_attribute_entries() {
+    let opts = HtmlOptions { standalone: true, ..Default::default() };
+    // Revision spans are attribute-driven: header attribute entries alone produce
+    // them, and the explicit value keeps its `v` prefix (no revision-line strip).
+    let html = to_html_with_options(
+        "= T\nA U\n:revnumber: v8.3\n:revdate: July 29, 2025\n:revremark: Summertime!\n\nbody",
+        opts.clone(),
+    );
+    assert!(html.contains("<span id=\"revnumber\">version v8.3,</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"revdate\">July 29, 2025</span>"), "Got: {html}");
+    assert!(html.contains("<br><span id=\"revremark\">Summertime!</span>"), "Got: {html}");
+    // No author required: a lone revdate still opens the details div.
+    let html = to_html_with_options("= T\n:revdate: 2025-07-29\n\nbody", opts.clone());
+    assert!(html.contains("<div class=\"details\">"), "Got: {html}");
+    assert!(html.contains("<span id=\"revdate\">2025-07-29</span>"), "Got: {html}");
+    assert!(!html.contains("<span id=\"revnumber\""), "Got: {html}");
+    // An attribute entry overrides the revision line; `:!revdate:` removes the
+    // span AND the trailing comma after the version.
+    let html = to_html_with_options(
+        "= T\nA U\nv1.0, 2020-01-01\n:revnumber: 9.9\n:!revdate:\n\nbody",
+        opts.clone(),
+    );
+    assert!(html.contains("<span id=\"revnumber\">version 9.9</span>"), "Got: {html}");
+    assert!(!html.contains("<span id=\"revdate\""), "Got: {html}");
+    // A body attribute entry does NOT reach the header details.
+    let html = to_html_with_options("= T\n\nbody\n\n:revnumber: 5.5\n\nmore", opts);
+    assert!(!html.contains("<div class=\"details\">"), "Got: {html}");
+}
+
+#[test]
 fn test_paragraph_hardbreaks_option() {
     // `[%hardbreaks]` turns every soft line break into a hard break.
     let html = to_html("[%hardbreaks]\nLine one\nLine two\nLine three");

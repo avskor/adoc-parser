@@ -219,7 +219,19 @@ impl HtmlRenderer {
     }
 
     pub(crate) fn render_author_details(&self, output: &mut String) {
-        if self.authors.is_empty() && self.revision.is_none() {
+        // Revision spans are attribute-driven (Asciidoctor html5.rb checks the
+        // revnumber/revdate/revremark document attributes, whether they came from
+        // the revision line or from header attribute entries). Called at
+        // TagEnd::Header, so document_attrs holds exactly the header-final state;
+        // a set-but-empty attribute still produces its span.
+        let revnumber = self.document_attrs.get("revnumber");
+        let revdate = self.document_attrs.get("revdate");
+        let revremark = self.document_attrs.get("revremark");
+        if self.authors.is_empty()
+            && revnumber.is_none()
+            && revdate.is_none()
+            && revremark.is_none()
+        {
             return;
         }
         output.push_str("<div class=\"details\">\n");
@@ -240,35 +252,34 @@ impl HtmlRenderer {
                 output.push_str("</a></span><br>\n");
             }
         }
-        if let Some(ref rev) = self.revision {
-            if !rev.version.is_empty() {
-                // Mirrors Asciidoctor: `{version-label.downcase} {revnumber}` with a
-                // trailing comma only when a revdate follows; an unset version-label
-                // leaves the leading space in place.
-                output.push_str("<span id=\"revnumber\">");
-                let label = self
-                    .document_attrs
-                    .get("version-label")
-                    .map(|s| s.to_lowercase())
-                    .unwrap_or_default();
-                html_escape(output, &label);
-                output.push(' ');
-                html_escape(output, rev.display_version());
-                if !rev.date.is_empty() {
-                    output.push(',');
-                }
-                output.push_str("</span>\n");
+        if let Some(version) = revnumber {
+            // Mirrors Asciidoctor: `{version-label.downcase} {revnumber}` with a
+            // trailing comma only when a revdate follows; an unset version-label
+            // leaves the leading space in place. The value renders verbatim — the
+            // `v` prefix is only stripped when parsing the revision line.
+            output.push_str("<span id=\"revnumber\">");
+            let label = self
+                .document_attrs
+                .get("version-label")
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            html_escape(output, &label);
+            output.push(' ');
+            html_escape(output, version);
+            if revdate.is_some() {
+                output.push(',');
             }
-            if !rev.date.is_empty() {
-                output.push_str("<span id=\"revdate\">");
-                html_escape(output, &rev.date);
-                output.push_str("</span>\n");
-            }
-            if !rev.remark.is_empty() {
-                output.push_str("<br><span id=\"revremark\">");
-                html_escape(output, &rev.remark);
-                output.push_str("</span>\n");
-            }
+            output.push_str("</span>\n");
+        }
+        if let Some(date) = revdate {
+            output.push_str("<span id=\"revdate\">");
+            html_escape(output, date);
+            output.push_str("</span>\n");
+        }
+        if let Some(remark) = revremark {
+            output.push_str("<br><span id=\"revremark\">");
+            html_escape(output, remark);
+            output.push_str("</span>\n");
         }
         output.push_str("</div>\n");
     }
