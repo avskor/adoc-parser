@@ -535,9 +535,24 @@ impl HtmlRenderer {
             Tag::Subscript => {
                 output.push_str("<sub>");
             }
-            Tag::Link { url, window, nofollow, is_bare } => {
+            Tag::Link { url, window, nofollow, is_bare, role } => {
                 output.push_str("<a");
                 write_attr(output, "href", url);
+                // class comes right after href (asciidoctor order); bare
+                // precedes the role: class="bare green".
+                if *is_bare || role.is_some() {
+                    output.push_str(" class=\"");
+                    if *is_bare {
+                        output.push_str("bare");
+                        if role.is_some() {
+                            output.push(' ');
+                        }
+                    }
+                    if let Some(r) = role {
+                        html_escape(output, r);
+                    }
+                    output.push('"');
+                }
                 if let Some(w) = window {
                     write_attr(output, "target", w);
                 }
@@ -554,9 +569,6 @@ impl HtmlRenderer {
                         output.push_str("nofollow");
                     }
                     output.push('"');
-                }
-                if *is_bare {
-                    output.push_str(" class=\"bare\"");
                 }
                 output.push('>');
             }

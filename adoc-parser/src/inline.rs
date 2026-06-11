@@ -129,6 +129,24 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
     }
 }
 
+/// Percent-encode `s` into `buf` the way Asciidoctor encodes mailto query
+/// values (Ruby `ERB::Util.url_encode`): every byte outside `A-Za-z0-9_.~-`
+/// becomes `%XX` with uppercase hex; a space is `%20`, not `+`.
+fn url_encode_into(buf: &mut String, s: &str) {
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'~' | b'-' => {
+                buf.push(b as char);
+            }
+            _ => {
+                buf.push('%');
+                buf.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
+                buf.push(char::from_digit((b & 0xF) as u32, 16).unwrap().to_ascii_uppercase());
+            }
+        }
+    }
+}
+
 /// Inline-parsing options derived from document attributes.
 ///
 /// This is the single channel through which document attributes influence the
@@ -457,6 +475,24 @@ impl<'a> InlineState<'a> {
 
             // Autolink: http:// or https:// (MACROS)
             b'h' if has_macros && (self.remaining().starts_with("http://") || self.remaining().starts_with("https://")) => {
+                if self.try_autolink(events, text_start) {
+                    return true;
+                }
+                self.pos += 1;
+                true
+            }
+
+            // Autolink: ftp:// (MACROS)
+            b'f' if has_macros && self.remaining().starts_with("ftp://") => {
+                if self.try_autolink(events, text_start) {
+                    return true;
+                }
+                self.pos += 1;
+                true
+            }
+
+            // Autolink: irc:// (MACROS)
+            b'i' if has_macros && self.remaining().starts_with("irc://") => {
                 if self.try_autolink(events, text_start) {
                     return true;
                 }
@@ -1651,6 +1687,7 @@ impl<'a> InlineState<'a> {
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
                 is_bare,
+                role: link_attrs.role.map(Cow::Borrowed),
             }));
             if is_bare {
                 events.push(Event::Text(Cow::Borrowed(url)));
@@ -1692,6 +1729,7 @@ impl<'a> InlineState<'a> {
             window: link_attrs.window.map(Cow::Borrowed),
             nofollow: link_attrs.nofollow,
             is_bare,
+            role: link_attrs.role.map(Cow::Borrowed),
         }));
         if is_bare {
             events.push(Event::Text(Cow::Borrowed(url)));
@@ -1734,14 +1772,35 @@ impl<'a> InlineState<'a> {
 
         self.flush_text(*text_start, start_pos, events);
 
-        // Build mailto: URL
+        // Build mailto: URL; positional attrs 2/3 become ?subject=&body= query
+        // params, percent-encoded (asciidoctor keeps only A-Za-z0-9_.~- literal).
         let url = &self.input[start_pos..start_pos + 7 + bracket_start]; // "mailto:email"
         let link_attrs = parse_link_attrs(bracket_content);
+        let url: Cow<'a, str> = match (link_attrs.subject, link_attrs.body) {
+            (None, None) => Cow::Borrowed(url),
+            (subject, body) => {
+                let mut u = String::from(url);
+                let mut sep = '?';
+                if let Some(s) = subject {
+                    u.push(sep);
+                    u.push_str("subject=");
+                    url_encode_into(&mut u, s);
+                    sep = '&';
+                }
+                if let Some(b) = body {
+                    u.push(sep);
+                    u.push_str("body=");
+                    url_encode_into(&mut u, b);
+                }
+                Cow::Owned(u)
+            }
+        };
         events.push(Event::Start(Tag::Link {
-            url: Cow::Borrowed(url),
+            url,
             window: link_attrs.window.map(Cow::Borrowed),
             nofollow: link_attrs.nofollow,
             is_bare: false,
+            role: link_attrs.role.map(Cow::Borrowed),
         }));
         if link_attrs.text.is_empty() {
             events.push(Event::Text(Cow::Borrowed(email)));
@@ -2022,6 +2081,7 @@ impl<'a> InlineState<'a> {
                 window: link_attrs.window.map(Cow::Borrowed),
                 nofollow: link_attrs.nofollow,
                 is_bare,
+                role: link_attrs.role.map(Cow::Borrowed),
             }));
             if is_bare {
                 events.push(Event::Text(Cow::Borrowed(url)));
@@ -2039,6 +2099,7 @@ impl<'a> InlineState<'a> {
             window: None,
             nofollow: false,
             is_bare: true,
+            role: None,
         }));
         events.push(Event::Text(Cow::Borrowed(url)));
         events.push(Event::End(TagEnd::Link));
@@ -2111,6 +2172,7 @@ impl<'a> InlineState<'a> {
             // Asciidoctor does not add class="bare" to email autolinks (only to
             // bare URL autolinks and link:/URL macros with empty text).
             is_bare: false,
+            role: None,
         }));
         events.push(Event::Text(Cow::Borrowed(email)));
         events.push(Event::End(TagEnd::Link));
@@ -2803,9 +2865,76 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("here")),
             Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_link_role_mailto_query_irc_scheme() {
+        // role= named attr is carried on Tag::Link.
+        assert_eq!(parse("https://x.org[text,role=green]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://x.org"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: Some(Cow::Borrowed("green")),
+            }),
+            Event::Text(Cow::Borrowed("text")),
+            Event::End(TagEnd::Link),
+        ]);
+        // Named-only attrlist → empty text → bare (text falls back to the URL).
+        assert_eq!(parse("https://x.org[role=green]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://x.org"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: Some(Cow::Borrowed("green")),
+            }),
+            Event::Text(Cow::Borrowed("https://x.org")),
+            Event::End(TagEnd::Link),
+        ]);
+        // mailto positional 2/3 → ?subject=&body=, percent-encoded (%20 for
+        // space, %21 for '!'); quoted values lose their quotes.
+        assert_eq!(parse("mailto:join@x.org[Subscribe,Subscribe me,I want to join!]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:join@x.org?subject=Subscribe%20me&body=I%20want%20to%20join%21"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text(Cow::Borrowed("Subscribe")),
+            Event::End(TagEnd::Link),
+        ]);
+        assert_eq!(parse("mailto:a@b.c[T,\"comma, inside\"]"), vec![
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("mailto:a@b.c?subject=comma%2C%20inside"),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text(Cow::Borrowed("T")),
+            Event::End(TagEnd::Link),
+        ]);
+        // irc:// is an autolink scheme like http(s)/ftp.
+        assert_eq!(parse("see irc://irc.x.org/#chan now"), vec![
+            Event::Text(Cow::Borrowed("see ")),
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("irc://irc.x.org/#chan"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+            }),
+            Event::Text(Cow::Borrowed("irc://irc.x.org/#chan")),
+            Event::End(TagEnd::Link),
+            Event::Text(Cow::Borrowed(" now")),
         ]);
     }
 
@@ -2820,6 +2949,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("cell\u{2019}s separator")),
             Event::End(TagEnd::Link),
@@ -2850,6 +2980,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: true,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("a'b.html")),
             Event::End(TagEnd::Link),
@@ -2879,6 +3010,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("b")),
@@ -2937,6 +3069,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: true,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("LICENSE")),
             Event::End(TagEnd::Link),
@@ -2948,6 +3081,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("LICENSE")),
             Event::End(TagEnd::Link),
@@ -2959,6 +3093,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: true,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("https://example.org")),
             Event::End(TagEnd::Link),
@@ -3099,6 +3234,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: true,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("https://example.com")),
             Event::End(TagEnd::Link),
@@ -3118,6 +3254,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("HTTP response code spec")),
             Event::End(TagEnd::Link),
@@ -4395,6 +4532,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4410,6 +4548,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("Email Me")),
             Event::End(TagEnd::Link),
@@ -4426,6 +4565,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("us")),
             Event::End(TagEnd::Link),
@@ -4444,6 +4584,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4459,6 +4600,7 @@ mod tests {
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -4474,6 +4616,7 @@ mod tests {
                 window: None,
                 nofollow: true,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -4489,6 +4632,7 @@ mod tests {
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: true,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("Example")),
             Event::End(TagEnd::Link),
@@ -4504,6 +4648,7 @@ mod tests {
                 window: Some(Cow::Borrowed("_blank")),
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("Email")),
             Event::End(TagEnd::Link),
@@ -4652,6 +4797,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4668,6 +4814,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user@example.com")),
             Event::End(TagEnd::Link),
@@ -4684,6 +4831,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user@mail.example.com")),
             Event::End(TagEnd::Link),
@@ -4699,6 +4847,7 @@ mod tests {
                 window: None,
                 nofollow: false,
                 is_bare: false,
+                role: None,
             }),
             Event::Text(Cow::Borrowed("user+tag@example.com")),
             Event::End(TagEnd::Link),
