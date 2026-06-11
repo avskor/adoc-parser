@@ -201,6 +201,12 @@ struct HtmlRenderer {
     quote_attribution: Option<String>,
     quote_citetitle: Option<String>,
     authors: AuthorRegistry,
+    /// Attribute names whose values are being rendered right now
+    /// (`Event::AttributeReference` → `render_inline_value` re-entrancy).
+    /// A reference to a name already on the stack is emitted literally —
+    /// asciidoctor substitutes linearly and never re-scans an inserted
+    /// value, so `:x: {x}` must not recurse.
+    attr_refs_in_progress: Vec<String>,
 }
 
 impl HtmlRenderer {
@@ -287,6 +293,7 @@ impl HtmlRenderer {
             quote_attribution: None,
             quote_citetitle: None,
             authors: AuthorRegistry::new(),
+            attr_refs_in_progress: Vec::new(),
         }
     }
 
@@ -328,7 +335,45 @@ impl HtmlRenderer {
         } else if let Some(stripped) = name.strip_suffix('!') {
             self.document_attrs.remove(stripped);
         } else {
-            self.document_attrs.insert(name.to_string(), value.to_string());
+            let value = self.apply_attr_value_pass_macro(value);
+            self.document_attrs.insert(name.to_string(), value);
+        }
+    }
+
+    /// Asciidoctor treats an attribute-entry value that is exactly
+    /// `pass:SUBS[content]` specially (apply_attribute_value_subs): the named
+    /// substitutions run at DEFINITION time and the result is stored. Our
+    /// pipeline substitutes values at use instead, so only the `attributes`
+    /// sub is honored here — `{refs}` resolve against the current document
+    /// attributes, and an undefined ref stays a literal that is never
+    /// re-scanned at use (`:v: pass:a[{v}]` stores the literal `{v}`). Other
+    /// sub names are accepted (the wrapper is still stripped) but applied by
+    /// the block's own pipeline at use. A bare `pass:[…]` value is left
+    /// untouched: the inline pass macro already handles it at use, inserting
+    /// the content verbatim.
+    fn apply_attr_value_pass_macro(&self, value: &str) -> String {
+        let parsed = value.strip_prefix("pass:").and_then(|rest| {
+            let (spec, bracketed) = rest.split_once('[')?;
+            let content = bracketed.strip_suffix(']')?;
+            if spec.is_empty()
+                || !spec.split(',').all(|t| {
+                    !t.is_empty() && t.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                })
+            {
+                return None;
+            }
+            Some((spec, content))
+        });
+        match parsed {
+            Some((spec, content))
+                if spec.split(',').any(|t| matches!(t, "a" | "attributes")) =>
+            {
+                adoc_render_core::resolve_attr_refs_text(content, |n| {
+                    self.document_attrs.get(n).map(|s| s.as_str())
+                })
+            }
+            Some((_, content)) => content.to_string(),
+            None => value.to_string(),
         }
     }
 

@@ -599,29 +599,41 @@ pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSe
         "verbatim" => SubstitutionSet::VERBATIM,
         "none" => SubstitutionSet::NONE,
         v => {
-            // Check if any token has +/- prefix → incremental mode
+            // Modifier tokens trigger incremental mode: leading `+` (append),
+            // trailing `+` (prepend) or leading `-` (remove).
             let has_incremental = v.split(',').any(|p| {
                 let p = p.trim();
-                p.starts_with('+') || p.starts_with('-')
+                p.starts_with('+') || p.starts_with('-') || p.ends_with('+')
             });
 
             if has_incremental {
-                // Incremental: "+macros,-callouts" or mixed "macros,+attributes"
-                let mut result = default;
+                // Mirrors asciidoctor resolve_subs: the first MODIFIER token
+                // seeds the accumulator with the block's default subs, while a
+                // plain token appearing first seeds it empty (replacement);
+                // later tokens of either kind operate on the accumulated set.
+                // Asciidoctor tracks application ORDER (prepend runs the sub
+                // before the defaults), which a flag set cannot represent —
+                // membership only.
+                let mut acc: Option<SubstitutionSet> = None;
                 for part in v.split(',') {
                     let part = part.trim();
                     if let Some(name) = part.strip_prefix('+') {
-                        if let Some(f) = sub_name_to_flag(name.trim()) {
-                            result.add(f);
+                        if let Some(f) = sub_name_to_flags(name.trim()) {
+                            acc.get_or_insert(default).add(f);
                         }
-                    } else if let Some(name) = part.strip_prefix('-')
-                        && let Some(f) = sub_name_to_flag(name.trim())
-                    {
-                        result.remove(f);
+                    } else if let Some(name) = part.strip_prefix('-') {
+                        if let Some(f) = sub_name_to_flags(name.trim()) {
+                            acc.get_or_insert(default).remove(f);
+                        }
+                    } else if let Some(name) = part.strip_suffix('+') {
+                        if let Some(f) = sub_name_to_flags(name.trim()) {
+                            acc.get_or_insert(default).add(f);
+                        }
+                    } else if let Some(f) = sub_name_to_flags(part) {
+                        acc.get_or_insert(SubstitutionSet::NONE).add(f);
                     }
-                    // Tokens without +/- prefix in incremental mode are ignored
                 }
-                result
+                acc.unwrap_or(default)
             } else {
                 // Explicit list: "specialchars,attributes"
                 let mut result = SubstitutionSet::NONE;
@@ -641,6 +653,24 @@ pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSe
                 result
             }
         }
+    }
+}
+
+/// Like [`sub_name_to_flag`], but also accepts the composite group names
+/// asciidoctor allows in incremental `subs=` tokens (`+verbatim`, `-normal`).
+fn sub_name_to_flags(name: &str) -> Option<u8> {
+    match name {
+        "normal" => Some(
+            SubstitutionSet::SPECIALCHARS
+                | SubstitutionSet::QUOTES
+                | SubstitutionSet::ATTRIBUTES
+                | SubstitutionSet::REPLACEMENTS
+                | SubstitutionSet::MACROS
+                | SubstitutionSet::POST_REPLACEMENTS,
+        ),
+        "verbatim" => Some(SubstitutionSet::SPECIALCHARS | SubstitutionSet::CALLOUTS),
+        "none" => Some(0),
+        _ => sub_name_to_flag(name),
     }
 }
 
@@ -1180,22 +1210,52 @@ mod tests {
 
     #[test]
     fn test_subs_parse_mixed_explicit_incremental() {
-        // "macros,+attributes" — any token with +/- triggers incremental mode
+        // "macros,+attributes" — a plain token FIRST seeds the set empty
+        // (replacement), the modifier then adds to it; the defaults are lost
+        // (asciidoctor resolve_subs, verified: [source,subs="quotes,+attributes"]
+        // drops specialchars).
         let result = parse_subs_value("macros,+attributes", SubstitutionSet::VERBATIM);
-        // Starts from VERBATIM default, adds ATTRIBUTES; "macros" without prefix is ignored
+        assert!(result.has(SubstitutionSet::MACROS));
+        assert!(result.has(SubstitutionSet::ATTRIBUTES));
+        assert!(!result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(!result.has(SubstitutionSet::CALLOUTS));
+    }
+
+    #[test]
+    fn test_subs_parse_trailing_plus() {
+        // "attributes+" — trailing plus is asciidoctor's PREPEND modifier:
+        // the defaults are kept and the sub is added.
+        let result = parse_subs_value("attributes+", SubstitutionSet::VERBATIM);
         assert!(result.has(SubstitutionSet::SPECIALCHARS));
         assert!(result.has(SubstitutionSet::CALLOUTS));
         assert!(result.has(SubstitutionSet::ATTRIBUTES));
-        assert!(!result.has(SubstitutionSet::MACROS)); // no + prefix, ignored
+        assert!(!result.has(SubstitutionSet::MACROS));
+
+        // Mixed with remove: "attributes+,-specialchars"
+        let result = parse_subs_value("attributes+,-specialchars", SubstitutionSet::VERBATIM);
+        assert!(result.has(SubstitutionSet::ATTRIBUTES));
+        assert!(result.has(SubstitutionSet::CALLOUTS));
+        assert!(!result.has(SubstitutionSet::SPECIALCHARS));
+
+        // Composite group name as incremental token: "verbatim+" is a no-op
+        // on verbatim defaults.
+        let result = parse_subs_value("verbatim+", SubstitutionSet::VERBATIM);
+        assert_eq!(result, SubstitutionSet::VERBATIM);
     }
 
     #[test]
     fn test_subs_parse_mixed_remove_in_middle() {
-        // "quotes,-specialchars" — incremental because of -specialchars
+        // "quotes,-specialchars" — the plain token seeds the set empty with
+        // just quotes; the remove is then a no-op (asciidoctor resolve_subs).
         let result = parse_subs_value("quotes,-specialchars", SubstitutionSet::NORMAL);
-        // Starts from NORMAL, removes SPECIALCHARS; "quotes" without prefix is ignored
         assert!(!result.has(SubstitutionSet::SPECIALCHARS));
-        assert!(result.has(SubstitutionSet::QUOTES)); // still in NORMAL default
+        assert!(result.has(SubstitutionSet::QUOTES));
+        assert!(!result.has(SubstitutionSet::MACROS));
+
+        // Modifier FIRST seeds from the defaults; a later plain token adds.
+        let result = parse_subs_value("-specialchars,quotes", SubstitutionSet::NORMAL);
+        assert!(!result.has(SubstitutionSet::SPECIALCHARS));
+        assert!(result.has(SubstitutionSet::QUOTES));
         assert!(result.has(SubstitutionSet::MACROS));
     }
 

@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-11, шестнадцатая) — Фаза 3: subs trailing-plus + attr-value pass-макрос
+
+Запрос «продолжи». Ветка **`fix/subs-trailing-plus-and-attr-pass-macro`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 240, master `1a13391` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**listing.adoc (34 diff)**, два корня.
+
+### Семантика asciidoctor (пробы /tmp/p_subs1..6, p_rec)
+- `subs=` (resolve_subs): модификаторы — `+x` append, `x+` PREPEND (trailing plus!),
+  `-x` remove; первый МОДИФИКАТОР сидит дефолты блока, первый PLAIN-токен сидит
+  ПУСТОЙ набор (замена) — `"quotes,+attributes"` ДРОПАЕТ specialchars; составные
+  имена (`verbatim+`/`-normal`) допустимы. ПОРЯДОК применения (prepend = sub ДО
+  specialchars → двойное экранирование значения) в bitflag-модели непредставим —
+  только membership; два известных edge-предела (p_subs5 case1, p_subs3 case2),
+  в корпусе их нет.
+- Attr-entry значение `pass:SUBS[content]` (full-value, apply_attribute_value_subs):
+  subs применяются при ОПРЕДЕЛЕНИИ; `pass:a[{ref}]` — undefined ref остаётся
+  литералом и при использовании НЕ ре-сканится (`:x: pass:a[{x}]` → литерал `{x}`).
+- ПОПУТНЫЙ pre-existing КРАШ: `:x: {x}` + `{x}` → stack overflow (рекурсия
+  events.rs AttributeReference → render_inline_value). Asciidoctor — литерал.
+
+### Что сделано
+- **ПАРСЕР** `attributes.rs::parse_subs_value`: детекция модификаторов +trailing `+`;
+  логика asciidoctor (acc: Option<SubstitutionSet>, get_or_insert(default) у
+  модификаторов / get_or_insert(NONE) у plain); +`sub_name_to_flags` (составные
+  normal/verbatim/none). 2 юнит-теста переписаны под верную семантику (probe-verified),
+  +1 `test_subs_parse_trailing_plus`.
+- **РЕНДЕРЕР** `lib.rs::apply_attr_value_pass_macro` (зов из apply_attribute):
+  full-value `pass:SPEC[content]` — обёртка стрипается, `a`/`attributes` в SPEC →
+  definition-time резолв через core `resolve_attr_refs_text`; ПУСТОЙ SPEC (`pass:[…]`)
+  НЕ трогается (inline pass-макрос обрабатывает at use, verbatim-вставка).
+- **РЕНДЕРЕР** guard рекурсии: поле `attr_refs_in_progress: Vec<String>`;
+  arm AttrRefOutcome::Document — повторный вход по тому же (lowercase) имени →
+  литерал `{name}` (закрыт краш `:x: {x}` и взаимная рекурсия `:a: {b}`/`:b: {a}`).
+- +2 html-теста: `test_subs_trailing_plus_and_attr_value_pass_macro` (5 кейсов),
+  `test_self_referential_attribute_no_recursion` (2 кейса).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 467→468, html 339→341).
+- Пробы p_subs1/2/6 байт-в-байт; p_rec — литерал как asciidoctor (был abort).
+- **Корпус: Identical 240→241 (+1)**; blast (base 1a13391): 4 файла — 1 флип
+  (listing.adoc, 0 diffs), **0 регрессий**, 3 changed-still-different:
+  include 125→124, subs 92→89, footnote 245→260 (СЕМАНТИЧЕСКИ ЛУЧШЕ:
+  `:fn-disclaimer: pass:c,q[footnote:…]` теперь даёт настоящие footnote-`<sup>`
+  вместо мусорного custom-macro; рост счётчика — позиционный шум от появившихся
+  footnote-определений).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 241: **reference-author (37 diff)**, id (45), checklist (49),
+  collapsible (51), release-plan (56), stem (56), block (57), literal-monospace (59),
+  source (63), customize-title-label (66), include (75);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; pre-existing: лишний
+  `</div>` у standalone passthrough, unknown-style течёт в class на quote/sidebar.
+  Новый известный предел: порядок subs (prepend/append) не представим bitflag'ом —
+  если встретится в корпусе, потребуется упорядоченный Vec<Sub> вместо маски.
+
+---
+
 ## Сессия (2026-06-11, пятнадцатая) — Фаза 3: revision-атрибуты из attribute-entries
 
 Запрос «продолжи». Ветка **`fix/revision-attrs-from-entries`** — НЕ закоммичена

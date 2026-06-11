@@ -3205,3 +3205,52 @@ fn test_listing_block_trailing_whitespace_stripped() {
     assert!(html.contains("first.\nsecond."),
         "listing interior line ws must be stripped. Got: {html:?}");
 }
+
+#[test]
+fn test_subs_trailing_plus_and_attr_value_pass_macro() {
+    // `subs=attributes+` — the trailing plus is asciidoctor's prepend
+    // modifier: the verbatim defaults (specialchars) are KEPT and
+    // attributes is added.
+    let html = to_html(":rv: 1.2.3\n\n[source,xml,subs=attributes+]\n----\n<v>{rv}</v>\n----");
+    assert!(html.contains("&lt;v&gt;1.2.3&lt;/v&gt;"),
+        "attributes+ must keep specialchars and resolve refs. Got: {html}");
+
+    // Plain token in a mixed list REPLACES the defaults (asciidoctor
+    // resolve_subs): "quotes,+attributes" drops specialchars.
+    let html = to_html(":rv: 1.2.3\n\n[source,xml,subs=\"quotes,+attributes\"]\n----\n<q>*b* {rv}</q>\n----");
+    assert!(html.contains("<q><strong>b</strong> 1.2.3</q>"),
+        "plain token must seed empty set (no specialchars). Got: {html}");
+
+    // Full-value `pass:a[...]` attribute entry: attributes resolve at
+    // definition time; an undefined ref stays literal and is NOT re-scanned
+    // at use (asciidoctor apply_attribute_value_subs).
+    let html = to_html(":release-version: pass:a[{release-version}]\n\nv={release-version}");
+    assert!(html.contains("v={release-version}"),
+        "self-protected pass:a value must stay literal. Got: {html}");
+    assert!(!html.contains("pass:"), "pass wrapper must be stripped. Got: {html}");
+
+    // pass:a resolves refs that ARE defined at definition time.
+    let html = to_html(":a: one\n:b: pass:a[{a} two]\n:a: changed\n\nb={b}");
+    assert!(html.contains("b=one two"),
+        "pass:a must resolve refs at definition time. Got: {html}");
+
+    // Bare `pass:[...]` values keep the wrapper: the inline pass macro
+    // handles it at use, inserting the content verbatim.
+    let html = to_html(":v: pass:[<em>x</em>]\n\nval {v} end");
+    assert!(html.contains("val <em>x</em> end"),
+        "bare pass value must insert content verbatim at use. Got: {html}");
+}
+
+#[test]
+fn test_self_referential_attribute_no_recursion() {
+    // `:x: {x}` defines x as the literal text `{x}` (undefined at definition
+    // time). Using `{x}` must emit the literal, not recurse — this used to
+    // stack-overflow.
+    let html = to_html(":x: {x}\n\nval {x} end");
+    assert!(html.contains("val {x} end"),
+        "self-referential attribute must render literally. Got: {html}");
+
+    // Mutual recursion through render_inline_value must also terminate.
+    let html = to_html(":a: {b}\n:b: {a}\n\nval {a} end");
+    assert!(html.contains("val"), "mutual recursion must terminate. Got: {html}");
+}
