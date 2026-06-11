@@ -1811,7 +1811,7 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::Text(Cow::Borrowed(pline)));
             }
             self.push_event(Event::Start(Tag::Paragraph));
-            self.push_event(Event::Start(Tag::Admonition { kind }));
+            self.push_event(Event::Start(Tag::Admonition { kind, block: false }));
             if let Some(ref attrs) = block_attrs {
                 self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
             }
@@ -2088,7 +2088,7 @@ impl<'a> BlockScanner<'a> {
         self.push_event(Event::Text(Cow::Borrowed(text)));
 
         self.push_event(Event::Start(Tag::Paragraph));
-        self.push_event(Event::Start(Tag::Admonition { kind }));
+        self.push_event(Event::Start(Tag::Admonition { kind, block: false }));
         let block_attrs = self.pending_block_attrs.take();
         if let Some(ref attrs) = block_attrs {
             self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
@@ -2218,19 +2218,6 @@ impl<'a> BlockScanner<'a> {
                 _ => {}
             }
         }
-        // Admonition style on any delimited block
-        if let Some(ak) = block_attrs.admonition_kind() {
-            self.context_stack.push(BlockContext::DelimitedBlock {
-                kind: delim_type,
-                delimiter_len: delim_len,
-                admonition_kind: Some(ak.clone()),
-            });
-            self.push_event(Event::Start(Tag::Admonition { kind: ak }));
-            self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
-            self.push_title_then_events(title_events);
-            return self.event_buffer.pop();
-        }
-
         let kind = match delim_type {
             scanner::DelimiterType::Listing => DelimitedBlockKind::Listing,
             scanner::DelimiterType::Literal => DelimitedBlockKind::Literal,
@@ -2327,8 +2314,17 @@ impl<'a> BlockScanner<'a> {
             return self.event_buffer.pop();
         }
 
-        // Structural blocks (example, sidebar, quote, open): recursively parse content
-        let adm_kind = block_attrs.admonition_kind();
+        // Structural blocks (example, sidebar, quote, open): recursively parse content.
+        // An admonition style turns the block into an admonition only on example and
+        // open delimiters; on sidebar/quote (and verbatim above) asciidoctor ignores it.
+        let adm_kind = if matches!(
+            delim_type,
+            scanner::DelimiterType::Example | scanner::DelimiterType::Open
+        ) {
+            block_attrs.admonition_kind()
+        } else {
+            None
+        };
 
         self.context_stack.push(BlockContext::DelimitedBlock {
             kind: delim_type,
@@ -2336,7 +2332,7 @@ impl<'a> BlockScanner<'a> {
             admonition_kind: adm_kind.clone(),
         });
         if let Some(ak) = adm_kind {
-            self.push_event(Event::Start(Tag::Admonition { kind: ak }));
+            self.push_event(Event::Start(Tag::Admonition { kind: ak, block: true }));
         } else {
             self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
         }
@@ -4202,7 +4198,7 @@ mod tests {
         let input = "[NOTE]\n====\nContent\n====";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Note }),
+            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Note, block: true }),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Content")),
             Event::End(TagEnd::Paragraph),
@@ -4215,7 +4211,7 @@ mod tests {
         let input = "[WARNING]\n====\nDanger ahead!\n====";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
-            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Warning }),
+            Event::Start(Tag::Admonition { kind: crate::event::AdmonitionKind::Warning, block: true }),
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("Danger ahead!")),
             Event::End(TagEnd::Paragraph),

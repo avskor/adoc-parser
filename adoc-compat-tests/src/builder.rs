@@ -196,7 +196,7 @@ pub fn build_asg<'a>(
                         children: vec![],
                     },
                     Tag::SourceBlock { .. } => BuildFrame::SourceBlock { children: vec![] },
-                    Tag::Admonition { kind } => BuildFrame::Admonition {
+                    Tag::Admonition { kind, .. } => BuildFrame::Admonition {
                         variant: admonition_variant(&kind),
                         blocks: vec![],
                     },

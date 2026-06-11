@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-11, четырнадцатая) — Фаза 3: admonition block-форма (параграф-обёртки)
+
+Запрос «продолжи». Ветка **`fix/admonition-block-paragraph-wrappers`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 235, master `3dfe796` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**apply-subs-to-blocks.adoc (31 diff)**, один корень (len_delta=8 = 2 параграфа × 4
+строки обёртки).
+
+### Семантика asciidoctor (пробы /tmp/p_adm1..13)
+- paragraph-форма (`NOTE: text` И `[NOTE]` на параграфе) — голый текст в
+  `<td class="content">`.
+- block-форма (`[NOTE]` на `====` example или `--` open) — compound: дети с обычными
+  обёртками (`<div class="paragraph"><p>`, ulist, вложенные admonition и т.д.).
+- admonition-стиль чтится ТОЛЬКО на example/open; на listing/literal/sidebar/quote/
+  passthrough — ИГНОРИРУЕТСЯ, блок остаётся родным, стиль дропается (как и unknown
+  `[foo]` — но у нас на quote/sidebar unknown-стиль ТЕЧЁТ в class, pre-existing).
+- Попутно: голый `++++` passthrough у нас даёт лишний `</div>` (pre-existing, есть в
+  base; p_adm12 поэтому единственная не-байт-в-байт проба из 13).
+
+### Что сделано
+- **ПАРСЕР** `event.rs`: `Tag::Admonition` +поле `block: bool` (+doc-комментарий,
+  into_static). `block.rs`: paragraph-точки (scan_paragraph ~1814, scan_admonition
+  ~2091) → `block: false`; ранний перехват «admonition style on any delimited block»
+  (~2222) УДАЛЁН; в structural-ветке гейт `matches!(delim_type, Example|Open)` →
+  `block: true` (verbatim-типы теперь падают в родную ветку, стиль дропается).
+- **РЕНДЕРЕР** `lib.rs`: поле `admonition_block_stack: Vec<bool>`; `blocks.rs`:
+  start_admonition(+block) пушит; `events.rs`: TagEnd::Admonition попит;
+  `is_direct_child_of_admonition` → подавление `<p>` только при `!block`;
+  `is_inside_compact_context` arm Admonition → компактность только при `!block`
+  (block-форма → полные обёртки; вложенность paragraph-в-block работает: ближайший
+  Admonition в tag_stack = вершина параллельного стека).
+- Тесты: html `test_block_admonition_html`/`test_note_style_on_listing_delimiter`
+  переписаны под верную семантику, +1 `test_admonition_block_vs_paragraph_forms`
+  (open-форма, bare-формы, игнор на sidebar/quote, вложенный admonition);
+  parser `test_block_admonition`/`_warning` → `block: true`; integration 2 места;
+  builder.rs (compat) — паттерн `{ kind, .. }`.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 467, html 337→338).
+- Пробы 11/12 байт-в-байт (искл. p_adm12 — pre-existing passthrough-`</div>`).
+- **Корпус: Identical 235→239 (+4)**; blast (base 3dfe796): 10 файлов — 4 флипа
+  (header.adoc, icon-macro.adoc, apply-subs-to-blocks.adoc, validation.adoc),
+  **0 регрессий**; 6 changed-still-different: ordered 420→232, admonition 223→197,
+  special-characters 150→148, cookbook 2604→2582, java/index 2313=2313,
+  syntax-quick-reference 2759→2791 (позиционный шум — admonition-сегмент проверен
+  локальным diff'ом байт-в-байт).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 239: **reference-revision-attributes (31 diff)**, listing (34),
+  reference-author (37), id (45), checklist (49), collapsible (51), release-plan (56),
+  stem (56), block (57), literal-monospace (59), source (63);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Прочее: `cols="2*"` multiplier (row.adoc), `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist (TODO), кластер `m`/`e`/`s` стиля колонок; новые pre-existing
+  находки: лишний `</div>` у standalone passthrough-блока, unknown-style течёт в
+  class на quote/sidebar (asciidoctor дропает).
+
+---
+
 ## Сессия (2026-06-11, тринадцатая) — Фаза 3: add-header-row.adoc (noheader + formal options=)
 
 Запрос «продолжи». Ветка **`fix/table-noheader-option`** — НЕ закоммичена

@@ -462,7 +462,7 @@ impl HtmlRenderer {
                 // inside the still-open `<p>`.
                 self.open_li_paragraph();
             }
-            Tag::Admonition { kind } => self.start_admonition(output, kind, &meta),
+            Tag::Admonition { kind, block } => self.start_admonition(output, kind, *block, &meta),
             Tag::Table => self.start_table(output, &meta),
             Tag::TableHead => {
                 output.push_str("<thead>\n");
@@ -910,6 +910,7 @@ impl HtmlRenderer {
                 output.push_str(if p_open { "</p></li>\n" } else { "</li>\n" });
             }
             TagEnd::Admonition => {
+                self.admonition_block_stack.pop();
                 output.push_str("</td>\n</tr>\n</table>\n</div>\n");
             }
             TagEnd::Table => {

@@ -28,7 +28,8 @@ pub(crate) fn section_level_to_h(level: u8) -> u8 {
 }
 
 impl HtmlRenderer {
-    pub(crate) fn start_admonition(&mut self, output: &mut String, kind: &AdmonitionKind, meta: &Option<BlockMeta>) {
+    pub(crate) fn start_admonition(&mut self, output: &mut String, kind: &AdmonitionKind, block: bool, meta: &Option<BlockMeta>) {
+        self.admonition_block_stack.push(block);
         let label = match kind {
             AdmonitionKind::Note => "Note",
             AdmonitionKind::Tip => "Tip",
@@ -839,8 +840,10 @@ impl HtmlRenderer {
         1
     }
 
-    /// Returns true when the immediate parent on the tag stack is an Admonition.
-    /// Used to suppress <p> tags for inline admonitions.
+    /// Returns true when the immediate parent on the tag stack is a paragraph-form
+    /// Admonition (`NOTE: text`). Used to suppress <p> tags: paragraph admonitions
+    /// render their text bare in the content td; block admonitions (`[NOTE]` + `====`)
+    /// keep normal paragraph wrappers.
     pub(crate) fn is_direct_child_of_admonition(&self) -> bool {
         // In start_tag: stack has [..., Admonition, Paragraph], so check second-to-last
         // In end_tag: stack has [..., Admonition] (Paragraph already popped), so check last
@@ -848,7 +851,10 @@ impl HtmlRenderer {
         for tag_end in self.tag_stack.iter().rev() {
             match tag_end {
                 TagEnd::Paragraph => continue, // skip self during start_tag
-                TagEnd::Admonition => return true,
+                TagEnd::Admonition => {
+                    // The innermost open admonition is the top of the parallel stack.
+                    return self.admonition_block_stack.last().is_some_and(|&block| !block);
+                }
                 _ => return false,
             }
         }
@@ -872,9 +878,13 @@ impl HtmlRenderer {
     pub(crate) fn is_inside_compact_context(&self) -> bool {
         for tag_end in self.tag_stack.iter().rev() {
             match tag_end {
+                TagEnd::Admonition => {
+                    // Block-form admonitions wrap child paragraphs normally;
+                    // paragraph-form content is compact (suppressed upstream anyway).
+                    return self.admonition_block_stack.last().is_some_and(|&block| !block);
+                }
                 TagEnd::ListItem
                 | TagEnd::DescriptionDescription
-                | TagEnd::Admonition
                 | TagEnd::CalloutListItem
                 | TagEnd::TableCell
                 | TagEnd::TableHeaderCell => return true,

@@ -299,7 +299,11 @@ pub enum Tag<'a> {
     CalloutListItem { number: u32 },
 
     // Admonitions
-    Admonition { kind: AdmonitionKind },
+    /// `block: false` — admonition paragraph (`NOTE: text` / `[NOTE]` on a paragraph),
+    /// content is the admonition's own text (rendered bare).
+    /// `block: true` — admonition block (`[NOTE]` on `====`/`--`), content is
+    /// nested blocks (rendered with normal wrappers).
+    Admonition { kind: AdmonitionKind, block: bool },
 
     // Tables
     Table,
@@ -437,7 +441,7 @@ impl<'a> Tag<'a> {
             Tag::DescriptionDescription => Tag::DescriptionDescription,
             Tag::CalloutList => Tag::CalloutList,
             Tag::CalloutListItem { number } => Tag::CalloutListItem { number },
-            Tag::Admonition { kind } => Tag::Admonition { kind },
+            Tag::Admonition { kind, block } => Tag::Admonition { kind, block },
             Tag::Table => Tag::Table,
             Tag::TableHead => Tag::TableHead,
             Tag::TableBody => Tag::TableBody,
