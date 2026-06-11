@@ -213,6 +213,7 @@ impl HtmlRenderer {
                 ("doctype".to_string(), "article".to_string()),
                 ("table-caption".to_string(), "Table".to_string()),
                 ("figure-caption".to_string(), "Figure".to_string()),
+                ("version-label".to_string(), "Version".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
             footnote_registry: FootnoteRegistry::new(),

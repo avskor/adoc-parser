@@ -242,9 +242,22 @@ impl HtmlRenderer {
         }
         if let Some(ref rev) = self.revision {
             if !rev.version.is_empty() {
-                output.push_str("<span id=\"revnumber\">version ");
+                // Mirrors Asciidoctor: `{version-label.downcase} {revnumber}` with a
+                // trailing comma only when a revdate follows; an unset version-label
+                // leaves the leading space in place.
+                output.push_str("<span id=\"revnumber\">");
+                let label = self
+                    .document_attrs
+                    .get("version-label")
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+                html_escape(output, &label);
+                output.push(' ');
                 html_escape(output, rev.display_version());
-                output.push_str(",</span>\n");
+                if !rev.date.is_empty() {
+                    output.push(',');
+                }
+                output.push_str("</span>\n");
             }
             if !rev.date.is_empty() {
                 output.push_str("<span id=\"revdate\">");

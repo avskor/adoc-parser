@@ -1769,7 +1769,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_include_directive(line).is_some()
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
-                || scanner::is_attribute_entry(line).is_some()
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_block_title(line).is_some()
                 || (!verbatim_paragraph && scanner::is_line_comment(line))
@@ -2054,7 +2053,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_include_directive(line).is_some()
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
-                || scanner::is_attribute_entry(line).is_some()
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_block_title(line).is_some()
                 || scanner::is_line_comment(line)
@@ -2739,7 +2737,12 @@ impl<'a> BlockScanner<'a> {
                 } else {
                     line
                 };
-                if !check.is_empty() && self.is_dlist_continuation_line(check) {
+                // An attribute-entry line here becomes the literal principal text
+                // (Asciidoctor does not process it as an attribute in this position)
+                if !check.is_empty()
+                    && (self.is_dlist_continuation_line(check)
+                        || scanner::is_attribute_entry(check).is_some())
+                {
                     principal_desc = check;
                     self.advance();
                 } else {
@@ -2753,6 +2756,14 @@ impl<'a> BlockScanner<'a> {
         // Collect wrapped continuation lines (non-indented, non-blank)
         if !principal_desc.is_empty() {
             while let Some(line) = self.current_line() {
+                // Asciidoctor silently drops an attribute-entry line wrapped inside
+                // the principal text: not literal text, and not applied either
+                if scanner::is_attribute_entry(line).is_some()
+                    && !line.starts_with(' ') && !line.starts_with('\t')
+                {
+                    self.advance();
+                    continue;
+                }
                 if self.is_dlist_continuation_line(line)
                     && !line.starts_with(' ') && !line.starts_with('\t')
                 {
@@ -2816,7 +2827,6 @@ impl<'a> BlockScanner<'a> {
             && scanner::is_include_directive(line).is_none()
             && !scanner::is_thematic_break(line)
             && !scanner::is_page_break(line)
-            && scanner::is_attribute_entry(line).is_none()
             && scanner::is_block_attribute(line).is_none()
             && scanner::is_block_title(line).is_none()
             && !scanner::is_line_comment(line)
@@ -3237,6 +3247,46 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert!(!events.iter().any(|e| matches!(e, Event::Author { .. })));
         assert!(events.contains(&Event::Text(Cow::Borrowed("Hello."))));
+    }
+
+    #[test]
+    fn test_attribute_entry_inside_paragraph_is_literal() {
+        // An attribute-entry line wrapped inside a paragraph is literal text,
+        // not an attribute definition (Asciidoctor only recognizes entries at
+        // block boundaries).
+        let input = "line one\n:myattr: val\nline two";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.iter().any(|e| matches!(e, Event::Attribute { .. })), "{events:?}");
+        assert!(events.contains(&Event::Text(Cow::Borrowed(":myattr: val"))));
+        assert!(events.contains(&Event::Text(Cow::Borrowed("line two"))));
+
+        // Same inside a list-item principal
+        let input = "* item\n:a: b\nmore";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.iter().any(|e| matches!(e, Event::Attribute { .. })), "{events:?}");
+        assert!(events.contains(&Event::Text(Cow::Borrowed(":a: b"))));
+
+        // Description list: a wrapped entry is silently DROPPED (not literal,
+        // not applied) — Asciidoctor quirk, verified against 2.0.23
+        let input = "term:: desc\n:c: d\nmore dd";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.iter().any(|e| matches!(e, Event::Attribute { .. })), "{events:?}");
+        assert!(!events.contains(&Event::Text(Cow::Borrowed(":c: d"))));
+        assert!(events.contains(&Event::Text(Cow::Borrowed("more dd"))));
+
+        // ...but as the principal of a bare term it IS literal text
+        let input = "term::\n:c: d\nmore dd";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(!events.iter().any(|e| matches!(e, Event::Attribute { .. })), "{events:?}");
+        assert!(events.contains(&Event::Text(Cow::Borrowed(":c: d"))));
+
+        // Guard: an entry at a block boundary (after blank) is still applied
+        let input = "para\n\n:real: yes\n\nafter";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Attribute {
+            name: Cow::Borrowed("real"),
+            value: Cow::Borrowed("yes"),
+        }), "{events:?}");
     }
 
     #[test]

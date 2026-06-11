@@ -2414,6 +2414,23 @@ fn test_builtin_attr_revision() {
 }
 
 #[test]
+fn test_revnumber_version_label() {
+    let opts = HtmlOptions { standalone: true, ..Default::default() };
+    // Default label, no revdate: lowercase `version`, NO trailing comma
+    let html = to_html_with_options("= T\nA U\nv3\n\nbody", opts.clone());
+    assert!(html.contains("<span id=\"revnumber\">version 3</span>"), "Got: {html}");
+    // With revdate: comma re-appears
+    let html = to_html_with_options("= T\nA U\nv3, 2024-01-02\n\nbody", opts.clone());
+    assert!(html.contains("<span id=\"revnumber\">version 3,</span>"), "Got: {html}");
+    // Custom `:version-label:` is downcased
+    let html = to_html_with_options("= T\nA U\nv3: remark\n:version-label: Edition\n\nbody", opts.clone());
+    assert!(html.contains("<span id=\"revnumber\">edition 3</span>"), "Got: {html}");
+    // Unset label keeps the leading space (Asciidoctor template artifact)
+    let html = to_html_with_options("= T\nA U\nv3\n:!version-label:\n\nbody", opts);
+    assert!(html.contains("<span id=\"revnumber\"> 3</span>"), "Got: {html}");
+}
+
+#[test]
 fn test_paragraph_hardbreaks_option() {
     // `[%hardbreaks]` turns every soft line break into a hard break.
     let html = to_html("[%hardbreaks]\nLine one\nLine two\nLine three");
