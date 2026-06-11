@@ -2936,6 +2936,7 @@ impl<'a> BlockScanner<'a> {
         }
         self.push_title_then_events(title_events);
 
+        self.had_blank_line = false;
         self.event_buffer.pop()
     }
 
@@ -3158,6 +3159,7 @@ impl<'a> BlockScanner<'a> {
         }
         self.push_title_then_events(title_events);
 
+        self.had_blank_line = false;
         self.event_buffer.pop()
     }
 
@@ -3300,6 +3302,29 @@ mod tests {
             Event::End(TagEnd::ListItem),
             Event::End(TagEnd::UnorderedList),
         ]);
+    }
+
+    #[test]
+    fn test_comment_after_dlist_entry_does_not_split_list() {
+        // A blank line before a dlist entry must not leave `had_blank_line`
+        // armed: a comment directly after that entry's description (no blank
+        // in between) does not split the list (Asciidoctor keeps one dlist).
+        let input = "a:: text a\n\nb:: text b\n// comment\n\nc:: text c";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let list_starts = events
+            .iter()
+            .filter(|e| matches!(e, Event::Start(Tag::DescriptionList)))
+            .count();
+        assert_eq!(list_starts, 1, "expected a single dlist, got: {events:#?}");
+
+        // Same shape with a comment after a blank line still splits.
+        let input = "a:: text a\n\n// comment\nb:: text b";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let list_starts = events
+            .iter()
+            .filter(|e| matches!(e, Event::Start(Tag::DescriptionList)))
+            .count();
+        assert_eq!(list_starts, 2, "expected two dlists, got: {events:#?}");
     }
 
     #[test]
