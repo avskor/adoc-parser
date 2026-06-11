@@ -3550,3 +3550,17 @@ fn test_attrlist_shorthand_only_in_first_position() {
     assert!(html.contains("&#8212; #bar"), "verbatim #bar attribution. Got: {html}");
     assert!(!html.contains("id=\"bar\""), "no id from second-part shorthand. Got: {html}");
 }
+
+#[test]
+fn test_comment_after_list_entry_keeps_single_list() {
+    // A blank line before a dlist/colist entry must not arm the
+    // "comment separates lists" rule: a comment directly after that
+    // entry's text (no blank in between) keeps a single list.
+    let html = to_html("a:: text a\n\nb:: text b\n// comment\n\nc:: text c");
+    assert_eq!(html.matches("<div class=\"dlist\">").count(), 1, "single dlist. Got: {html}");
+    let html = to_html("----\nx <1>\ny <2>\nz <3>\n----\n<1> one\n\n<2> two\n// comment\n\n<3> three");
+    assert_eq!(html.matches("<div class=\"colist").count(), 1, "single colist. Got: {html}");
+    // Comment after a blank line still separates (unchanged behavior).
+    let html = to_html("a:: text a\n\n// comment\nb:: text b");
+    assert_eq!(html.matches("<div class=\"dlist\">").count(), 2, "comment after blank splits. Got: {html}");
+}

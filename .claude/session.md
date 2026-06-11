@@ -1,5 +1,59 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать пятая) — Фаза 3: revision-information (had_blank_line не сбрасывался в dlist/colist-сканах)
+
+Запрос «продолжи». Ветка **`fix/revision-information`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 255, master `8edb60d`
+(base-бинарь /tmp/adoc_base пересобран через временный worktree).
+
+### Выбор задачи
+nearmiss: **revision-information.adoc (24 diff)** — один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_ri1..15)
+- Comment-строка СРАЗУ после текста item'а (без blank перед ней) список НЕ рвёт —
+  даже если ПЕРЕД этим item'ом была blank-строка (между entries одного dlist).
+  Comment ПОСЛЕ blank — рвёт (поведение 18-й сессии, верно).
+- Минимальный репро (p_ri13): `a:: x\n\nb:: y\n//c\n\nc:: z` → у asciidoctor
+  ОДИН dlist; у нас был раскол после b. То же для colist (p_ri15).
+
+### Корень
+`scan_description_list_item` и `scan_callout_list_item` НЕ сбрасывали
+`had_blank_line` (в отличие от scan_unordered/ordered_list_item). Blank перед
+`b::` оставлял флаг взведённым → comment-handler (block.rs ~870, правило
+«comment после blank разделяет списки») ошибочно закрывал список.
+
+### Что сделано (ПАРСЕР block.rs, 2 строки)
+- `self.had_blank_line = false` в конце `scan_description_list_item` (~2939) и
+  `scan_callout_list_item` (~3161) — зеркало строки 3034 (unordered).
+- +1 parser-тест `test_comment_after_dlist_entry_does_not_split_list`
+  (позитив + негатив «после blank рвёт»), +1 html-тест
+  `test_comment_after_list_entry_keeps_single_list` (dlist, colist, негатив).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 478, html 353).
+- Пробы p_ri1..15 все сходятся; revision-information.adoc 24→0 diff.
+- **Корпус: Identical 255→256 (+1)**; blast (base 8edb60d): ровно 2 файла —
+  1 флип (revision-information.adoc), lexicon.adoc 376→34 (тот же корень рвал
+  dlist по всему файлу), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 256: **lexicon (34!** — остаток: xreflabel → reftext для
+  xref-резолва, давний кандидат-кластер: label в Tag::Anchor + регистрация в
+  XrefResolver + reftext из dt-терма), stem (56 — 3-4 корня: `\$`-эскейп,
+  `stem::`-макрос literal, `++++`+callout, `{n!}`), source (63),
+  customize-title-label (66), include (75), bibliography (77), subs (89),
+  subs-group-table/ordered (90), footnote (101).
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, comment в СЕРЕДИНЕ dd-параграфа должен слить строки в
+  один `<p>` (p_ri4: asciidoctor «text a\nstill a», у нас два блока).
+
+---
+
 ## Сессия (2026-06-12, двадцать четвёртая) — Фаза 3: pass.adoc + revision-line (passthrough-`</div>` + doc-интринсики)
 
 Запрос «продолжи». Ветка **`fix/passthrough-stray-div-and-doc-intrinsics`** —
