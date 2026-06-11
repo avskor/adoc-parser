@@ -1722,6 +1722,33 @@ fn test_partintro_paragraph_masquerades_as_open_block() {
     ));
 }
 
+#[test]
+fn test_style_masqueraded_paragraph_bare_content() {
+    // A paragraph masqueraded by a block style carries its text bare —
+    // no inner <div class="paragraph"><p> wrapper (unlike partintro above).
+    let html = to_html("[example]\nExample para.");
+    assert!(html.contains("<div class=\"exampleblock\">\n<div class=\"content\">\nExample para.\n</div>\n</div>"));
+    // example%collapsible → <details> with bare content
+    let html = to_html("[example%collapsible]\nHidden para.");
+    assert!(html.contains("<details>\n<summary class=\"title\">Details</summary>\n<div class=\"content\">\nHidden para.\n</div>\n</details>"));
+    // sidebar
+    let html = to_html("[sidebar]\nAside text.");
+    assert!(html.contains("<div class=\"sidebarblock\">\n<div class=\"content\">\nAside text.\n</div>\n</div>"));
+    // quote: bare text directly inside <blockquote>
+    let html = to_html("[quote]\nQuoted text.");
+    assert!(html.contains("<div class=\"quoteblock\">\n<blockquote>\nQuoted text.\n</blockquote>\n</div>"));
+    // open style masquerades a paragraph as an open block; style does not leak into class
+    let html = to_html("[open]\nOpen para.");
+    assert!(html.contains("<div class=\"openblock\">\n<div class=\"content\">\nOpen para.\n</div>\n</div>"));
+    assert!(!html.contains("openblock open"));
+    // multi-line paragraph keeps its line break in bare content
+    let html = to_html("[example]\nFirst line\nsecond line.");
+    assert!(html.contains("<div class=\"content\">\nFirst line\nsecond line.\n</div>"));
+    // a real delimited block containing one paragraph keeps the wrapper
+    let html = to_html("====\nWrapped para.\n====");
+    assert!(html.contains("<div class=\"content\">\n<div class=\"paragraph\">\n<p>Wrapped para.</p>\n</div>\n</div>"));
+}
+
 // Preamble tests
 
 #[test]

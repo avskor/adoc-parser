@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-11, двадцатая) — Фаза 3: collapsible.adoc (masquerade-параграф — голый контент)
+
+Запрос «продолжи». Ветка **`fix/collapsible-block`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 244, master `184b97d` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**collapsible.adoc (51 diff)**, один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_col1..3)
+- Параграф, masquerade'нутый стилем (`[example]`, `[example%collapsible]`,
+  `[sidebar]`, `[quote]`, `[open]`) → текст ГОЛЫЙ в `<div class="content">` /
+  `<blockquote>` (без `<div class="paragraph"><p>`); multiline сохраняет строки.
+- `[partintro]` — ИСКЛЮЧЕНИЕ: paragraph-обёртка внутри openblock сохраняется
+  (p_col3, book-контекст; подтверждает сессию 12).
+- `[open]`-параграф → `<div class="openblock">` (класс `open` в обёртку НЕ течёт);
+  у нас не masquerade'ился вовсе (`paragraph open`).
+- `[%collapsible]` без стиля — опция игнорируется, обычный параграф (было верно).
+- partintro вне book-part → ERROR + exclude блока (НЕ реализовано, в корпусе нет).
+
+### Что сделано (ПАРСЕР + newline-guard в рендерере)
+- `block.rs::scan_paragraph`: арм `quote|example|sidebar|open` — Text без
+  Tag::Paragraph (как verse/pass); `partintro` выделен в отдельный арм (с обёрткой).
+- `attributes.rs::block_style_kind`: +`"open"`; `block.rs::emit_block_metadata`
+  exclusion-список: +`"open"`.
+- `events.rs` TagEnd::DelimitedBlock: newline-guard (`!ends_with('\n')`) в армах
+  Quote / Example(details) / Example|Sidebar|Open; verse НЕ тронут (отсутствие
+  `\n` перед `</pre>` намеренное).
+- +1 html-тест `test_style_masqueraded_paragraph_bare_content` (7 кейсов: example,
+  collapsible, sidebar, quote, open без утечки класса, multiline, guard настоящего
+  delimited-блока).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (908 passed, html 345).
+- Пробы p_col1 байт-в-байт; p_col2 — остатки только partintro-вне-book (не в корпусе)
+  и trailing newline.
+- **Корпус: Identical 244→247 (+3)**; blast (base 184b97d): 8 файлов — 3 флипа
+  (collapsible.adoc, sidebars.adoc, release-plan.adoc), **0 регрессий**,
+  5 changed-still-different: assign-id 84→2, example-blocks →2 (почти флипы!),
+  quote 161→109, add-title 291→252, block 57=57 (нейтрально).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- **assign-id (2 diff!)** и **example-blocks (2 diff!)** — почти флипы, разведать
+  первыми. Затем nearmiss: stem (56), block (57 — корень `.Title` на ulist
+  теряется), literal-monospace (59), source (63), customize-title-label (66),
+  include (75), bibliography (77), quote (109 — стало ближе);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+- Кандидат-кластер: **xreflabel → reftext для xref-резолва** (label в Tag::Anchor +
+  регистрация в XrefResolver; закрыл бы p_id1/2/3-строки и lexicon-остаток).
+- Прочее: `.Title` на ulist (block.adoc), `cols="2*"` multiplier (row.adoc),
+  `[abstract]`-параграф → quoteblock, `:icons:`-colist (TODO), кластер `m`/`e`/`s`
+  стиля колонок; pre-existing: лишний `</div>` у standalone passthrough,
+  unknown-style течёт в class на quote/sidebar, пустые строки в пустых sectionbody,
+  list-merge через continuation-attrlist (p_chk2).
+
+---
+
 ## Сессия (2026-06-11, девятнадцатая) — Фаза 3: checklist.adoc (%interactive чекбоксы)
 
 Запрос «продолжи». Ветка **`fix/checklist-rendering`** — НЕ закоммичена

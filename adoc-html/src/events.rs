@@ -762,6 +762,10 @@ impl HtmlRenderer {
                         output.push_str("</pre>\n</div>\n</div>\n");
                     }
                     Some((DelimitedBlockKind::Quote, _)) => {
+                        // Bare masqueraded-paragraph content has no trailing newline
+                        if !output.ends_with('\n') {
+                            output.push('\n');
+                        }
                         output.push_str("</blockquote>\n");
                         let attribution = self.quote_attribution.take();
                         let citetitle = self.quote_citetitle.take();
@@ -808,10 +812,16 @@ impl HtmlRenderer {
                         output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Example, true)) => {
+                        if !output.ends_with('\n') {
+                            output.push('\n');
+                        }
                         output.push_str("</div>\n</details>\n");
                     }
                     Some((DelimitedBlockKind::Example | DelimitedBlockKind::Sidebar
                          | DelimitedBlockKind::Open, false)) => {
+                        if !output.ends_with('\n') {
+                            output.push('\n');
+                        }
                         output.push_str("</div>\n</div>\n");
                     }
                     _ => {

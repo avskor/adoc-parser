@@ -302,7 +302,7 @@ impl BlockAttributes {
 
     pub fn block_style_kind(&self) -> Option<&str> {
         match self.positional.first().map(|s| s.as_str())? {
-            s @ ("listing" | "literal" | "source" | "verse" | "quote" | "example" | "sidebar" | "pass" | "partintro") => Some(s),
+            s @ ("listing" | "literal" | "source" | "verse" | "quote" | "example" | "sidebar" | "pass" | "partintro" | "open") => Some(s),
             _ => None,
         }
     }
