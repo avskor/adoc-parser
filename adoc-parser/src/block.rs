@@ -1872,11 +1872,15 @@ impl<'a> BlockScanner<'a> {
                         self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
                     }
                 }
-                "quote" | "example" | "sidebar" => {
+                // partintro masquerades a paragraph as an open block; the style
+                // is not consumed by emit_block_metadata, so the renderer adds
+                // it to the wrapper class ("openblock partintro").
+                "quote" | "example" | "sidebar" | "partintro" => {
                     let kind = match style.as_str() {
                         "quote" => DelimitedBlockKind::Quote,
                         "example" => DelimitedBlockKind::Example,
-                        _ => DelimitedBlockKind::Sidebar,
+                        "sidebar" => DelimitedBlockKind::Sidebar,
+                        _ => DelimitedBlockKind::Open,
                     };
                     self.push_event(Event::End(TagEnd::DelimitedBlock));
                     self.push_event(Event::End(TagEnd::Paragraph));
