@@ -1,5 +1,49 @@
 # Session context
 
+## Сессия (2026-06-11, тринадцатая) — Фаза 3: add-header-row.adoc (noheader + formal options=)
+
+Запрос «продолжи». Ветка **`fix/table-noheader-option`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 234, master `1c22959` (base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+**add-header-row.adoc (29 diff)**, один корень + попутный пробел.
+
+### Семантика asciidoctor (пробы /tmp/p_nh1..7.adoc)
+- `noheader` (shorthand `%noheader` И formal `options=noheader`) подавляет ТОЛЬКО
+  implicit-промоушен первой строки в header; явный `header` побеждает
+  (`%header%noheader` → `<thead>`).
+- `opts=` — alias `options=`; значение comma-separated (`options="header,footer"`).
+- Попутно обнаружено: formal `options=header` у нас ВООБЩЕ не работал — в корпусе
+  маскировался implicit-правилом (blank после первой строки в formal-таблицах).
+
+### Что сделано (только ПАРСЕР, 3 точки)
+- `attributes.rs::parse`: named `options`/`opts` промотируются в вектор `options`
+  (split по `,`, trim, тот же путь, что shorthand `%`; named["options"] никто не читал).
+- `block.rs`: оба места has_header (psv ~1379, csv/dsv ~1627) —
+  `&& !block_attrs.has_option("noheader")` в implicit-ветке.
+- +1 html-тест `test_table_noheader_option_html` (5 кейсов: shorthand/formal noheader,
+  конфликт, formal header без implicit-layout, opts-alias).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (html 336→337).
+- Все 7 проб байт-в-байт (кроме p_nh4 CSV — остаточный pre-existing `<colgroup>`-diff,
+  НЕ про header; thead подавлен верно).
+- **Корпус: Identical 234→235 (+1)**; blast (base 1c22959): 2 файла — 1 флип
+  (add-header-row.adoc), **0 регрессий**; row.adoc 312→310 (changed-still-different,
+  доминирует корень `cols="2*"` multiplier — НЕ поддержан, потенциальная задача).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 235: **apply-subs-to-blocks (31 diff)**, reference-revision-attributes (31),
+  listing (34), reference-author (37), icon-macro (41), id (45), checklist (49),
+  collapsible (51); revision-line-with-version-prefix (1 — `{docdate}`, скип).
+  Новое: `cols="2*"` multiplier-синтаксис (row.adoc 310 diff — крупный, но один корень?).
+  Прочее: `[abstract]`-параграф → quoteblock, `:icons:`-colist (TODO),
+  кластер `m`/`e`/`s` стиля колонок.
+
+---
+
 ## Сессия (2026-06-11, двенадцатая) — Фаза 3: part.adoc ([partintro]-параграф → open block)
 
 Запрос «продолжи». Ветка **`fix/partintro-paragraph-openblock`** — НЕ закоммичена

@@ -1375,9 +1375,12 @@ impl<'a> BlockScanner<'a> {
             block_attrs.named.insert("cols".to_string(), num_cols.to_string());
         }
 
-        // Determine header: %header option OR blank line after first row
+        // Determine header: %header option OR blank line after first row;
+        // %noheader suppresses the implicit promotion (explicit header wins)
         let has_header = block_attrs.has_option("header")
-            || (first_blank_after_first_row && cells_before_blank_col_width == num_cols);
+            || (first_blank_after_first_row
+                && cells_before_blank_col_width == num_cols
+                && !block_attrs.has_option("noheader"));
 
         // Determine footer: %footer option
         let has_footer = block_attrs.has_option("footer");
@@ -1623,9 +1626,11 @@ impl<'a> BlockScanner<'a> {
             rows[0].len()
         };
 
-        // Determine header/footer
+        // Determine header/footer; %noheader suppresses implicit promotion
         let has_header = block_attrs.has_option("header")
-            || (first_blank_after_first_row && rows[0].len() == num_cols);
+            || (first_blank_after_first_row
+                && rows[0].len() == num_cols
+                && !block_attrs.has_option("noheader"));
         let has_footer = block_attrs.has_option("footer");
 
         // Get column specs for alignment defaults

@@ -458,6 +458,31 @@ fn test_table_html() {
 }
 
 #[test]
+fn test_table_noheader_option_html() {
+    // %noheader suppresses the implicit first-row promotion
+    let html = to_html("[%noheader]\n|===\n|A |B\n\n|1 |2\n|===");
+    assert!(!html.contains("<thead>"));
+    assert!(!html.contains("<th class="));
+
+    // formal syntax: options=noheader
+    let html = to_html("[options=noheader]\n|===\n|A |B\n\n|1 |2\n|===");
+    assert!(!html.contains("<thead>"));
+
+    // explicit header wins over noheader
+    let html = to_html("[%header%noheader]\n|===\n|A |B\n\n|1 |2\n|===");
+    assert!(html.contains("<thead>"));
+
+    // formal options=header works without the implicit blank-line layout
+    let html = to_html("[options=header]\n|===\n|A |B\n|1 |2\n|===");
+    assert!(html.contains("<thead>"));
+    assert!(html.contains("<th class=\"tableblock halign-left valign-top\">A</th>"));
+
+    // opts= is an alias for options=
+    let html = to_html("[opts=header]\n|===\n|A |B\n|1 |2\n|===");
+    assert!(html.contains("<thead>"));
+}
+
+#[test]
 fn test_table_with_header_html() {
     let html = to_html("|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===");
     assert!(html.contains("<thead>"));
