@@ -101,6 +101,9 @@ impl HtmlRenderer {
             for (id, reftext) in &self.bibliography_reftexts {
                 ctx.add_block(id, RefText::Markup(reftext));
             }
+            for (id, reftext) in &self.anchor_reftexts {
+                ctx.add_block(id, RefText::Markup(reftext));
+            }
             let mut replacements: HashMap<&str, String> = HashMap::with_capacity(
                 self.xref_placeholders.len() + self.xref_href_placeholders.len(),
             );

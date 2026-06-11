@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать шестая) — Фаза 3: lexicon (xreflabel/dt-терм → reftext)
+
+Запрос «продолжи». Ветка **`fix/xreflabel-reftext-resolution`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 256, master `f2133db`
+(base-бинарь /tmp/adoc_base пересобран через временный worktree).
+
+### Выбор задачи
+nearmiss: **lexicon.adoc (34 diff)** — давний кандидат-кластер «xreflabel →
+reftext», один корень: все 34 diff'а — нерезолвленные `<<id>>` (у нас fallback
+`[id]`, у asciidoctor — текст dt-терма / label).
+
+### Семантика asciidoctor (пробы /tmp/p_xl/p1..7)
+- `[[id]]term:: def` → `<<id>>` = текст терма; reftext по умолчанию даёт ТОЛЬКО
+  leading-анкер dlist-терма. В параграфах и ulist-item'ах `[[id]]` без label —
+  fallback `[id]`. Mid-term анкер (`middle [[jj]]term::`) — тоже fallback.
+- `[[id,label]]` / `anchor:id[label]` → label побеждает терм; label
+  форматируется при использовании (`label with *bold*` → `<strong>`).
+- reftext — разметка: `[[hh]]term with *bold*::` → ссылка содержит
+  `term with <strong>bold</strong>`.
+- Forward-ref работает (резолв отложен до конца документа).
+- Block-anchor `[[id,label]]` НАД блоком: label побеждает `.Title` (p4) —
+  НЕ реализовано (предел, в корпусе нет; требует Event::BlockMetadata.reftext).
+
+### Что сделано
+- **ПАРСЕР** event.rs: `Tag::Anchor { id, label: Option<CowStr> }` (+into_static);
+  inline.rs: `try_anchor` — label из `[[id,label]]` (trim_start, пустой → None),
+  `try_anchor_macro` — label из bracket-контента. Тесты обновлены
+  (test_anchor_with_reftext_still_works теперь ожидает label).
+- **РЕНДЕРЕР** lib.rs: поля `anchor_reftexts: Vec<(String,String)>`,
+  `dt_term_start: Option<usize>`, `pending_term_anchor: Option<(String,usize)>`.
+  events.rs: Tag::DescriptionTerm — `dt_term_start = output.len()` после
+  открывающей разметки (все 3 стиля); арм Anchor — label рендерится через
+  render_inline_value → anchor_reftexts; leading-анкер в dt без label →
+  pending_term_anchor (id, позиция после `</a>`); TagEnd::DescriptionTerm —
+  захват `output[pos..]` как Markup-reftext, сброс dt_term_start.
+  finish.rs: цикл `ctx.add_block(id, RefText::Markup)` после bibliography
+  (add_block = or_insert, first-wins — секции/блоки/biblio выигрывают).
+- +1 html-тест `test_anchor_reftext_xref_resolution` (7 кейсов: dt-терм,
+  bold в терме, label с форматированием, anchor-макрос, forward-ref,
+  негативы mid-term/параграф).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (923 total).
+- Пробы p1..p7 сходятся (кроме документированного предела p4 `<<ee>>`).
+- **Корпус: Identical 256→257 (+1)**; blast (base f2133db): ровно 1 файл —
+  1 флип (lexicon.adoc 34→0), **0 регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 257: stem (56 — 3-4 корня: `\$`-эскейп, `stem::`-макрос literal,
+  `++++`+callout, `{n!}`), source (63), customize-title-label (66), include (75),
+  bibliography (77), subs (89), subs-group-table (90), ordered (90),
+  footnote (101).
+- Новый известный предел: label block-anchor-строки `[[id,label]]` над блоком
+  не побеждает `.Title` (нужен reftext в Event::BlockMetadata + BlockMeta +
+  приоритет над block_ref_titles в finish).
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, comment в середине dd-параграфа должен слить строки
+  в один `<p>`.
+
+---
+
 ## Сессия (2026-06-12, двадцать пятая) — Фаза 3: revision-information (had_blank_line не сбрасывался в dlist/colist-сканах)
 
 Запрос «продолжи». Ветка **`fix/revision-information`** — НЕ закоммичена

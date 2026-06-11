@@ -2383,7 +2383,13 @@ impl<'a> InlineState<'a> {
 
         // `[[id,xreflabel]]` — the label is reference text for xrefs, never
         // part of the id.
-        let id = content.split_once(',').map_or(content, |(i, _)| i.trim_end());
+        let (id, label) = match content.split_once(',') {
+            Some((i, l)) => {
+                let l = l.trim_start();
+                (i.trim_end(), (!l.is_empty()).then_some(Cow::Borrowed(l)))
+            }
+            None => (content, None),
+        };
         if id.is_empty() {
             return false;
         }
@@ -2392,6 +2398,7 @@ impl<'a> InlineState<'a> {
 
         events.push(Event::Start(Tag::Anchor {
             id: Cow::Borrowed(id),
+            label,
         }));
         events.push(Event::End(TagEnd::Anchor));
 
@@ -2424,11 +2431,13 @@ impl<'a> InlineState<'a> {
             Some(c) => c,
             None => return false,
         };
+        let label_text = &rest[bracket + 1..bracket + 1 + close];
 
         self.flush_text(*text_start, start_pos, events);
 
         events.push(Event::Start(Tag::Anchor {
             id: Cow::Borrowed(id),
+            label: (!label_text.is_empty()).then_some(Cow::Borrowed(label_text)),
         }));
         events.push(Event::End(TagEnd::Anchor));
 
@@ -3386,7 +3395,7 @@ mod tests {
     fn test_anchor() {
         let events = parse("[[my-anchor]]text");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("my-anchor") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("my-anchor"), label: None }),
             Event::End(TagEnd::Anchor),
             Event::Text(Cow::Borrowed("text")),
         ]);
@@ -4408,7 +4417,7 @@ mod tests {
         let events = parse("[[[ref]]");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("[")),
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("ref") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("ref"), label: None }),
             Event::End(TagEnd::Anchor),
         ]);
     }
@@ -4417,7 +4426,7 @@ mod tests {
     fn test_anchor_still_works() {
         let events = parse("[[id]]");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("id") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("id"), label: None }),
             Event::End(TagEnd::Anchor),
         ]);
     }
@@ -4427,7 +4436,7 @@ mod tests {
         // The xreflabel is reference text for xrefs, never part of the id.
         let events = parse("[[id,reftext]]");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("id") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("id"), label: Some(Cow::Borrowed("reftext")) }),
             Event::End(TagEnd::Anchor),
         ]);
     }
@@ -4437,7 +4446,7 @@ mod tests {
         // anchor:id[] is equivalent to [[id]]
         let events = parse("anchor:bookmark-c[]text");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("bookmark-c") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("bookmark-c"), label: None }),
             Event::End(TagEnd::Anchor),
             Event::Text(Cow::Borrowed("text")),
         ]);
@@ -4445,7 +4454,7 @@ mod tests {
         // The xreflabel content is not rendered in place.
         let events = parse("anchor:ok[Custom Label]rest");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("ok") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("ok"), label: Some(Cow::Borrowed("Custom Label")) }),
             Event::End(TagEnd::Anchor),
             Event::Text(Cow::Borrowed("rest")),
         ]);
@@ -4476,7 +4485,7 @@ mod tests {
     fn test_mixed_anchors_and_bibliography() {
         let events = parse("[[id]][[[ref]]]");
         assert_eq!(events, vec![
-            Event::Start(Tag::Anchor { id: Cow::Borrowed("id") }),
+            Event::Start(Tag::Anchor { id: Cow::Borrowed("id"), label: None }),
             Event::End(TagEnd::Anchor),
             Event::BibliographyAnchor { id: Cow::Borrowed("ref"), label: None },
         ]);

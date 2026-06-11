@@ -344,7 +344,9 @@ pub enum Tag<'a> {
     StemBlock { variant: CowStr<'a> },
 
     // Anchors
-    Anchor { id: CowStr<'a> },
+    /// `label` is the xreflabel from `[[id,label]]` / `anchor:id[label]` —
+    /// reference text for xrefs targeting this anchor, never rendered in place.
+    Anchor { id: CowStr<'a>, label: Option<CowStr<'a>> },
 
     // Custom macros
     CustomInlineMacro { name: CowStr<'a>, target: CowStr<'a> },
@@ -517,8 +519,9 @@ impl<'a> Tag<'a> {
             Tag::StemBlock { variant } => Tag::StemBlock {
                 variant: Cow::Owned(variant.into_owned()),
             },
-            Tag::Anchor { id } => Tag::Anchor {
+            Tag::Anchor { id, label } => Tag::Anchor {
                 id: Cow::Owned(id.into_owned()),
+                label: label.map(|l| Cow::Owned(l.into_owned())),
             },
             Tag::CustomInlineMacro { name, target } => Tag::CustomInlineMacro {
                 name: cow_owned(name),

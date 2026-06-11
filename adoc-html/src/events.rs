@@ -455,6 +455,7 @@ impl HtmlRenderer {
                         output.push_str("<dt class=\"hdlist1\">");
                     }
                 }
+                self.dt_term_start = Some(output.len());
             }
             Tag::DescriptionDescription => {
                 self.li_para_count.push(1); // count the initial <p> in <dd>
@@ -618,10 +619,23 @@ impl HtmlRenderer {
                 self.stem_block_content = None;
                 self.open_block_with_title(output, &meta, "stemblock");
             }
-            Tag::Anchor { id } => {
+            Tag::Anchor { id, label } => {
+                let at_term_start = self.dt_term_start == Some(output.len());
                 output.push_str("<a id=\"");
                 html_escape(output, id);
                 output.push_str("\"></a>");
+                if let Some(label) = label {
+                    // Explicit xreflabel: render it (normal subs apply at use)
+                    // and register as this anchor's reference text.
+                    let mut reftext = String::new();
+                    self.render_inline_value(&mut reftext, label);
+                    self.anchor_reftexts.push((id.to_string(), reftext));
+                } else if at_term_start && self.pending_term_anchor.is_none() {
+                    // Leading anchor in a dlist term: the rendered term that
+                    // follows becomes the default reftext (captured at
+                    // TagEnd::DescriptionTerm).
+                    self.pending_term_anchor = Some((id.to_string(), output.len()));
+                }
             }
             Tag::CustomInlineMacro { name, .. } => {
                 output.push_str("<span class=\"custom-macro macro-");
@@ -904,6 +918,13 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::DescriptionTerm => {
+                if let Some((id, pos)) = self.pending_term_anchor.take()
+                    && output.len() > pos
+                {
+                    let reftext = output[pos..].to_string();
+                    self.anchor_reftexts.push((id, reftext));
+                }
+                self.dt_term_start = None;
                 match self.current_dlist_style() {
                     DlistStyle::Horizontal => {}
                     DlistStyle::Qanda => output.push_str("</em></p>\n"),
