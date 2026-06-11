@@ -118,6 +118,9 @@ struct HtmlRenderer {
     pending_subs: Option<SubstitutionSet>,
     document_attrs: HashMap<String, String>,
     delimited_block_stack: Vec<(DelimitedBlockKind, bool)>,
+    // One entry per open Admonition: true = block form (delimited; children get
+    // normal paragraph wrappers), false = paragraph form (bare content in the td).
+    admonition_block_stack: Vec<bool>,
     footnote_registry: FootnoteRegistry,
     toc_builder: TocBuilder,
     toc_insert_position: Option<usize>,
@@ -216,6 +219,7 @@ impl HtmlRenderer {
                 ("version-label".to_string(), "Version".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
+            admonition_block_stack: Vec::new(),
             footnote_registry: FootnoteRegistry::new(),
             toc_builder: TocBuilder::new(),
             toc_insert_position: None,

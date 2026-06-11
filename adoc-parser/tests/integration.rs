@@ -135,7 +135,7 @@ fn test_literal_block() {
 fn test_admonition_note() {
     let events = parse("NOTE: Pay attention.");
 
-    assert_eq!(events[0], Event::Start(Tag::Admonition { kind: AdmonitionKind::Note }));
+    assert_eq!(events[0], Event::Start(Tag::Admonition { kind: AdmonitionKind::Note, block: false }));
     assert_eq!(events[1], Event::Start(Tag::Paragraph));
     assert_eq!(events[2], Event::Text(Cow::Borrowed("Pay attention.")));
     assert_eq!(events[3], Event::End(TagEnd::Paragraph));
@@ -267,7 +267,7 @@ The end.";
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Section { level: 2 }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Section { level: 3 }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::OrderedList { .. }))));
-    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Admonition { kind: AdmonitionKind::Note }))));
+    assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Admonition { kind: AdmonitionKind::Note, .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
     assert!(events.iter().any(|e| matches!(e, Event::ThematicBreak)));
     assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Strong { .. }))));

@@ -1534,7 +1534,11 @@ fn test_block_admonition_html() {
     let html = to_html("[NOTE]\n====\nThis is a note.\n====");
     assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonitionblock note in:\n{html}");
     assert!(html.contains("<div class=\"title\">Note</div>"), "no title in:\n{html}");
-    assert!(html.contains("<td class=\"content\">\nThis is a note.\n</td>"), "no td content in:\n{html}");
+    // Block-form admonition content keeps normal paragraph wrappers
+    assert!(
+        html.contains("<td class=\"content\">\n<div class=\"paragraph\">\n<p>This is a note.</p>\n</div>\n</td>"),
+        "no wrapped td content in:\n{html}"
+    );
     assert!(html.contains("</td>\n</tr>\n</table>\n</div>"), "no closing tags in:\n{html}");
 }
 
@@ -1542,9 +1546,37 @@ fn test_block_admonition_html() {
 fn test_block_admonition_multi_para_html() {
     let html = to_html("[NOTE]\n====\nFirst paragraph.\n\nSecond paragraph.\n====");
     assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonition class in:\n{html}");
-    assert!(html.contains("First paragraph."), "no first para in:\n{html}");
-    assert!(html.contains("Second paragraph."), "no second para in:\n{html}");
+    // Each child paragraph gets its own full wrapper (asciidoctor compound content)
+    assert!(html.contains("<div class=\"paragraph\">\n<p>First paragraph.</p>\n</div>"), "no wrapped first para in:\n{html}");
+    assert!(html.contains("<div class=\"paragraph\">\n<p>Second paragraph.</p>\n</div>"), "no wrapped second para in:\n{html}");
     assert!(html.contains("<td class=\"content\">"), "no td content in:\n{html}");
+}
+
+#[test]
+fn test_admonition_block_vs_paragraph_forms() {
+    // Open block with admonition style: compound admonition, wrapped paragraph
+    let html = to_html("[NOTE]\n--\nopen note.\n--");
+    assert!(html.contains("<div class=\"admonitionblock note\">"), "open form should be admonition:\n{html}");
+    assert!(html.contains("<div class=\"paragraph\">\n<p>open note.</p>\n</div>"), "open form should wrap para:\n{html}");
+
+    // Paragraph forms render bare text in the content td
+    for src in ["TIP: bare text.", "[TIP]\nbare text."] {
+        let html = to_html(src);
+        assert!(html.contains("<td class=\"content\">\nbare text.\n</td>"), "paragraph form should be bare for {src:?}:\n{html}");
+    }
+
+    // Admonition style on sidebar/quote is ignored (native block kept)
+    let html = to_html("[NOTE]\n****\nsidebar text.\n****");
+    assert!(html.contains("sidebarblock"), "sidebar should stay sidebar:\n{html}");
+    assert!(!html.contains("admonitionblock"), "sidebar must not become admonition:\n{html}");
+    let html = to_html("[NOTE]\n____\nquote text.\n____");
+    assert!(html.contains("quoteblock"), "quote should stay quote:\n{html}");
+    assert!(!html.contains("admonitionblock"), "quote must not become admonition:\n{html}");
+
+    // Paragraph-form admonition nested in a block-form one: inner stays bare
+    let html = to_html("[TIP]\n====\nNOTE: nested.\n====");
+    assert!(html.contains("<div class=\"admonitionblock note\">"), "nested admonition missing:\n{html}");
+    assert!(html.contains("<td class=\"content\">\nnested.\n</td>"), "nested paragraph form should be bare:\n{html}");
 }
 
 // Admonition icons tests
@@ -2778,10 +2810,12 @@ fn test_verse_style_on_listing_delimiter() {
 
 #[test]
 fn test_note_style_on_listing_delimiter() {
+    // Admonition style is only honored on example/open delimiters; on a listing
+    // (and literal/sidebar/quote) asciidoctor ignores it and keeps the native block.
     let html = to_html("[NOTE]\n----\nNote content.\n----");
-    assert!(html.contains("admonitionblock note"), "should have admonition. Got: {html}");
+    assert!(html.contains("<div class=\"listingblock\">"), "should stay a listingblock. Got: {html}");
     assert!(html.contains("Note content."), "should contain text. Got: {html}");
-    assert!(!html.contains("listingblock"), "should NOT have listingblock. Got: {html}");
+    assert!(!html.contains("admonitionblock"), "should NOT become admonition. Got: {html}");
 }
 
 #[test]
