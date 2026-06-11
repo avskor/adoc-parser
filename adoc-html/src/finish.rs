@@ -185,8 +185,8 @@ impl HtmlRenderer {
 
         let mut toc = String::new();
         match self.toc_position.as_str() {
-            "left" => toc.push_str("<div id=\"toc\" class=\"toc2 toc-left\">\n"),
-            "right" => toc.push_str("<div id=\"toc\" class=\"toc2 toc-right\">\n"),
+            // Side placement: the div is just `toc2`; `toc-left`/`toc-right` go on <body>
+            "left" | "right" => toc.push_str("<div id=\"toc\" class=\"toc2\">\n"),
             _ => toc.push_str("<div id=\"toc\" class=\"toc\">\n"),
         }
         toc.push_str("<div id=\"toctitle\">");
@@ -287,13 +287,14 @@ impl HtmlRenderer {
         }
         output.push_str("</head>\n");
 
-        // Build body classes
+        // Build body classes. `toc2` (+ `toc-left`/`toc-right`) only for side placement,
+        // and only when the toc attribute came from the header (`toc_auto_seen` — the
+        // parser emits Event::Toc inside the header; mid-document `:toc:` has no effect,
+        // mirroring Asciidoctor's header-only toc normalization).
         let mut body_classes = String::from(doctype);
-        if !self.toc_position.is_empty() {
-            body_classes.push_str(" toc2");
-            if self.toc_position == "right" {
-                body_classes.push_str(" toc-right");
-            }
+        if self.toc_auto_seen && matches!(self.toc_position.as_str(), "left" | "right") {
+            body_classes.push_str(" toc2 toc-");
+            body_classes.push_str(&self.toc_position);
         }
         output.push_str("<body class=\"");
         output.push_str(&body_classes);
