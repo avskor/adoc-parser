@@ -308,6 +308,34 @@ fn test_email_autolink_html() {
 }
 
 #[test]
+fn test_link_role_and_mailto_query_html() {
+    // role= named attr → class on <a>; with empty text the bare class comes
+    // first ("bare green"), matching Asciidoctor.
+    let html = to_html("https://x.org[text,role=green]");
+    assert!(html.contains("<a href=\"https://x.org\" class=\"green\">text</a>"), "{html}");
+    let html = to_html("https://x.org[role=green]");
+    assert!(html.contains("<a href=\"https://x.org\" class=\"bare green\">https://x.org</a>"), "{html}");
+    let html = to_html("https://x.org[*chat*^,role=green]");
+    assert!(
+        html.contains("<a href=\"https://x.org\" class=\"green\" target=\"_blank\" rel=\"noopener\"><strong>chat</strong></a>"),
+        "{html}"
+    );
+
+    // mailto positional attrs 2/3 → percent-encoded subject/body query.
+    let html = to_html("mailto:join@discuss.example.org[Subscribe,Subscribe me,I want to join!]");
+    assert!(
+        html.contains("<a href=\"mailto:join@discuss.example.org?subject=Subscribe%20me&amp;body=I%20want%20to%20join%21\">Subscribe</a>"),
+        "{html}"
+    );
+
+    // irc:// and ftp:// are autolink schemes (bare), like http(s).
+    let html = to_html("Chat in the irc://irc.freenode.org/#fedora[Fedora IRC channel].");
+    assert!(html.contains("<a href=\"irc://irc.freenode.org/#fedora\">Fedora IRC channel</a>"), "{html}");
+    let html = to_html("Get ftp://ftp.example.org/pub/file now");
+    assert!(html.contains("<a href=\"ftp://ftp.example.org/pub/file\" class=\"bare\">ftp://ftp.example.org/pub/file</a>"), "{html}");
+}
+
+#[test]
 fn test_thematic_break() {
     let html = to_html("Before.\n\n'''\n\nAfter.");
     assert!(html.contains("<hr>"));

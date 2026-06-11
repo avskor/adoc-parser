@@ -504,6 +504,10 @@ pub struct LinkAttrs<'a> {
     pub text: &'a str,
     pub window: Option<&'a str>,
     pub nofollow: bool,
+    pub role: Option<&'a str>,
+    /// Positional attrs 2 and 3 — mailto subject/body (other macros ignore them).
+    pub subject: Option<&'a str>,
+    pub body: Option<&'a str>,
 }
 
 pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
@@ -512,11 +516,15 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
             text: "",
             window: None,
             nofollow: false,
+            role: None,
+            subject: None,
+            body: None,
         };
     }
 
     let mut window: Option<&str> = None;
     let mut nofollow = false;
+    let mut role: Option<&str> = None;
     let mut positional = Vec::new();
 
     for part in split_respecting_quotes(bracket_content) {
@@ -525,7 +533,13 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
             positional.push(part);
             continue;
         }
-        if let Some((key, value)) = part.split_once('=') {
+        // Named attr only when the key is a plausible attribute name; a quoted
+        // positional containing '=' ("a=b") must stay positional.
+        let named = part.split_once('=').filter(|(key, _)| {
+            let key = key.trim();
+            !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        });
+        if let Some((key, value)) = named {
             let key = key.trim();
             let value = value.trim();
             let value = value
@@ -535,6 +549,7 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
             match key {
                 "window" => window = Some(value),
                 "opts" if value == "nofollow" => nofollow = true,
+                "role" => role = Some(value),
                 _ => {}
             }
         } else {
@@ -542,7 +557,17 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
         }
     }
 
-    let mut text = positional.first().copied().unwrap_or(bracket_content);
+    fn strip_quotes(s: &str) -> &str {
+        s.strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(s)
+    }
+    let subject = positional.get(1).copied().map(strip_quotes).filter(|s| !s.is_empty());
+    let body = positional.get(2).copied().map(strip_quotes).filter(|s| !s.is_empty());
+
+    // No positional text (named-only attrlist) → empty text; the caller falls
+    // back to the bare form (visible text = target), matching Asciidoctor.
+    let mut text = positional.first().copied().unwrap_or("");
 
     // Blank-window shorthand: a trailing `^` on the link text opens the link in a
     // new window. Asciidoctor strips the caret from the visible text and sets
@@ -555,7 +580,7 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
         }
     }
 
-    LinkAttrs { text, window, nofollow }
+    LinkAttrs { text, window, nofollow, role, subject, body }
 }
 
 pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSet {
