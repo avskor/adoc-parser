@@ -261,6 +261,7 @@ impl<'a> BlockScanner<'a> {
                 | "NOTE" | "TIP" | "IMPORTANT" | "WARNING" | "CAUTION"
                 | "normal"
                 | "listing" | "literal" | "quote" | "example" | "sidebar" | "pass"
+                | "open"
                 | "csv" | "dsv" | "tsv"
             ))
             // For implied source shorthand (`[,ruby]`) positional[0] is the
@@ -1971,16 +1972,33 @@ impl<'a> BlockScanner<'a> {
                         self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
                     }
                 }
-                // partintro masquerades a paragraph as an open block; the style
-                // is not consumed by emit_block_metadata, so the renderer adds
-                // it to the wrapper class ("openblock partintro").
-                "quote" | "example" | "sidebar" | "partintro" => {
+                // A paragraph masqueraded by a block style carries its text bare
+                // (no inner paragraph wrapper), unlike a delimited block that
+                // happens to contain a single paragraph.
+                "quote" | "example" | "sidebar" | "open" => {
                     let kind = match style.as_str() {
                         "quote" => DelimitedBlockKind::Quote,
                         "example" => DelimitedBlockKind::Example,
                         "sidebar" => DelimitedBlockKind::Sidebar,
                         _ => DelimitedBlockKind::Open,
                     };
+                    self.push_event(Event::End(TagEnd::DelimitedBlock));
+                    for (i, &pline) in para_lines.iter().enumerate().rev() {
+                        if i < para_lines.len() - 1 {
+                            self.push_event(Event::SoftBreak);
+                        }
+                        self.push_event(Event::Text(Cow::Borrowed(pline)));
+                    }
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    if let Some(ref attrs) = block_attrs {
+                        self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
+                    }
+                }
+                // partintro masquerades a paragraph as an open block and KEEPS
+                // the paragraph wrapper inside (unlike the styles above); the
+                // style is not consumed by emit_block_metadata, so the renderer
+                // adds it to the wrapper class ("openblock partintro").
+                "partintro" => {
                     self.push_event(Event::End(TagEnd::DelimitedBlock));
                     self.push_event(Event::End(TagEnd::Paragraph));
                     for (i, &pline) in para_lines.iter().enumerate().rev() {
@@ -1990,7 +2008,7 @@ impl<'a> BlockScanner<'a> {
                         self.push_event(Event::Text(Cow::Borrowed(pline)));
                     }
                     self.push_event(Event::Start(Tag::Paragraph));
-                    self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+                    self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Open }));
                     if let Some(ref attrs) = block_attrs {
                         self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
                     }
