@@ -798,6 +798,33 @@ fn test_checklist_interactive_html() {
 }
 
 #[test]
+fn test_list_block_title_html() {
+    // `.Title` on a list renders <div class="title"> inside the wrapper div,
+    // before the list element (probe-verified for all list shapes).
+    let html = to_html(".TODO list\n- a\n- b");
+    assert!(html.contains("<div class=\"ulist\">\n<div class=\"title\">TODO list</div>\n<ul>"));
+
+    let html = to_html(".Ordered\n. one");
+    assert!(html.contains("<div class=\"olist arabic\">\n<div class=\"title\">Ordered</div>\n<ol class=\"arabic\">"));
+
+    let html = to_html(".Desc\nterm:: def");
+    assert!(html.contains("<div class=\"dlist\">\n<div class=\"title\">Desc</div>\n<dl>"));
+
+    let html = to_html(".Horiz\n[horizontal]\na:: 1");
+    assert!(html.contains("<div class=\"hdlist\">\n<div class=\"title\">Horiz</div>\n<table>"));
+
+    let html = to_html(".Q\n[qanda]\nQ?:: A.");
+    assert!(html.contains("<div class=\"qlist qanda\">\n<div class=\"title\">Q</div>\n<ol>"));
+
+    let html = to_html("[source]\n----\nx <1>\n----\n.ColistTitle\n<1> note");
+    assert!(html.contains("<div class=\"colist arabic\">\n<div class=\"title\">ColistTitle</div>\n<ol>"));
+
+    // A title line after a blank splits adjacent lists and titles the second.
+    let html = to_html("- a\n\n.Second\n- b");
+    assert!(html.contains("</ul>\n</div>\n<div class=\"ulist\">\n<div class=\"title\">Second</div>\n<ul>"));
+}
+
+#[test]
 fn test_regular_list_no_checklist_class() {
     let html = to_html("* item 1\n* item 2");
     assert!(html.contains("<ul>"));

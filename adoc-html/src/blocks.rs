@@ -206,7 +206,9 @@ impl HtmlRenderer {
             };
             output.push_str("<div");
             Self::write_meta_attrs(output, meta, wrapper_class);
-            output.push_str(">\n<ul");
+            output.push_str(">\n");
+            self.emit_pending_block_title(output);
+            output.push_str("<ul");
             if *has_checklist {
                 output.push_str(" class=\"checklist\"");
             } else if is_bibliography {
@@ -217,7 +219,9 @@ impl HtmlRenderer {
             let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
             output.push_str("<div class=\"");
             output.push_str(wrapper_class);
-            output.push_str("\">\n<ul");
+            output.push_str("\">\n");
+            self.emit_pending_block_title(output);
+            output.push_str("<ul");
             if *has_checklist {
                 output.push_str(" class=\"checklist\"");
             }
@@ -258,6 +262,7 @@ impl HtmlRenderer {
             write_attr(output, "class", &wrapper_class);
             output.push_str(">\n");
         }
+        self.emit_pending_block_title(output);
         output.push_str("<ol");
         write_attr(output, "class", style_name);
         let type_attr = match style_name {
@@ -298,17 +303,23 @@ impl HtmlRenderer {
             DlistStyle::Horizontal => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &adjusted_meta, "hdlist");
-                output.push_str(">\n<table>\n");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<table>\n");
             }
             DlistStyle::Qanda => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &adjusted_meta, "qlist qanda");
-                output.push_str(">\n<ol>\n");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<ol>\n");
             }
             DlistStyle::Normal => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &adjusted_meta, "dlist");
-                output.push_str(">\n<dl>\n");
+                output.push_str(">\n");
+                self.emit_pending_block_title(output);
+                output.push_str("<dl>\n");
             }
         }
     }
