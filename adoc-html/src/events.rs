@@ -826,6 +826,13 @@ impl HtmlRenderer {
                         }
                         output.push_str("</div>\n</div>\n");
                     }
+                    Some((DelimitedBlockKind::Passthrough, _)) => {
+                        // Passthrough content is emitted bare — no wrapper was opened.
+                        if !output.ends_with('\n') {
+                            output.push('\n');
+                        }
+                    }
+                    Some((DelimitedBlockKind::Comment, _)) => {}
                     _ => {
                         output.push_str("</div>\n");
                     }

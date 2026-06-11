@@ -2700,6 +2700,41 @@ fn test_revision_attrs_from_attribute_entries() {
 }
 
 #[test]
+fn test_revision_attr_refs_resolved_in_details() {
+    // Attribute references in the revision-line components resolve against the
+    // document attributes (Asciidoctor applies header substitutions as the line
+    // is read); undefined refs stay literal. `docdate` arrives here as an
+    // API-level attribute, like the intrinsics the CLI seeds from the input
+    // file's mtime.
+    let mut attributes = HashMap::new();
+    attributes.insert("docdate".to_string(), "2026-03-15".to_string());
+    let html = to_html_with_options(
+        "= T\nA U\nLPR55, {docdate}: Edition {undefinedx}\n\nbody",
+        HtmlOptions { standalone: true, attributes, ..Default::default() },
+    );
+    // The revision-line parse strips the non-digit version prefix ("LPR").
+    assert!(html.contains("<span id=\"revnumber\">version 55,</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"revdate\">2026-03-15</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"revremark\">Edition {undefinedx}</span>"), "Got: {html}");
+}
+
+#[test]
+fn test_passthrough_block_bare_content_no_stray_div() {
+    // A standalone passthrough block emits its content bare — no wrapper is
+    // opened, so nothing must be closed (was: a stray `</div>`).
+    let html = to_html("++++\n<video x=\"1\">\n</video>\n++++");
+    assert!(!html.contains("</div>"), "Got: {html}");
+    assert!(html.contains("<video x=\"1\">\n</video>\n"), "Got: {html}");
+    // `[pass]`-style paragraph: same bare emission; the following block is
+    // unaffected.
+    let html = to_html("[pass]\n<del>a</del> b.\n\nnext para");
+    assert!(
+        html.contains("<del>a</del> b.\n<div class=\"paragraph\">\n<p>next para</p>\n</div>"),
+        "Got: {html}"
+    );
+}
+
+#[test]
 fn test_author_attrs_from_attribute_entries() {
     let opts = HtmlOptions { standalone: true, ..Default::default() };
     // `:author:`/`:email:` header entries alone produce the detail spans,
