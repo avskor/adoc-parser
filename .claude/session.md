@@ -1,5 +1,80 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать третья) — Фаза 3: literal-monospace (pass:SPEC + удаление custom-macro catch-all)
+
+Запрос «продолжи». Ветка **`fix/inline-pass-spec-and-custom-macro-removal`** —
+НЕ закоммичена (рабочее дерево). Baseline: Identical 250, master `7f05b9d`
+(base-бинарь пересобран).
+
+### Выбор задачи
+nearmiss: revision-line-with-version-prefix (1 diff — `{docdate}`, скип) →
+stem (56 — 3-4 корня, снова отложен) → **literal-monospace (59 diff)**, один
+корень: `` `\pass:c[]` `` → у нас `\p` + мусорный `<span custom-macro macro-ass>`.
+
+### Семантика asciidoctor (пробы /tmp/p_ep1..5)
+- `pass:SPEC[content]` — SPEC: одночар-алиасы `a c m n p q r v` + полные имена
+  (`quotes`, `normal`…); перечисленные subs применяются к контенту
+  (`pass:c[<b>]` → escaped, `pass:q[*b*]` → bold БЕЗ экранирования, `pass:n` —
+  полный normal-набор). Без `[` после спека — НЕ макрос, литерал (`pass:c here`).
+- `\pass:SPEC[…]` — backslash дропается, `pass:SPEC[` литерал, контент и
+  хвостовой `]` идут через обычные subs (`\pass:c[*b*]` → `pass:c[<strong>b</strong>]`).
+- `\\pass:SPEC[…]` — в escape участвует только ОДИН backslash, первый остаётся
+  литералом (`\pass:c[abc]`).
+- **Неизвестные inline-макросы НЕ матчатся вовсе** — литеральный текст,
+  внутренность скобок идёт через обычные subs (`foo:bar[*b*]` →
+  `foo:bar[<strong>b</strong>]`; `chart:sales[Q1,Q2]` — литерал).
+
+### Что сделано (ПАРСЕР inline.rs + attributes.rs)
+- `try_pass_macro`: optional spec (`pass_spec_len` — [a-z,_-]-ран строго до `[`;
+  невалидный/без скобки → не макрос); `pass_spec_to_subs` (алиасы +
+  `attributes::sub_name_to_flags`, теперь pub(crate)); `push_pass_spec_content` —
+  ре-парс контента со спекнутым набором, Text→InlinePassthrough когда нет
+  SPECIALCHARS (рендерер экранирует Text безусловно).
+- Escape-армы: `\pass:SPEC[` (расширен с `pass:[`) + НОВЫЙ арм `\\pass:SPEC[`.
+- `pass_macro_span_len` spec-aware (скип границ в constrained-спанах);
+  `push_single_plus_content` — spec-aware границы, c-спек → Text (экранируется).
+- **Catch-all custom-macro УДАЛЁН** (try_custom_inline_macro + dispatch-арм +
+  scanner::is_known_inline_macro): был кошмарно жадный (target до `[` без
+  ограничений — «Mono with content: `+abc+` [x]» матчился как макрос `content:`!).
+  Tag::CustomInlineMacro остаётся в enum (API), блочный `name::` не тронут.
+- Тесты: 3 html-теста переписаны (фиксировали неверную семантику custom-macro),
+  +2 html (pass-spec 8 кейсов; escaped-pass 3 кейса), +1 parser (events).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (918: parser 477, html 350).
+- Пробы p_ep1/2/4/5 байт-в-байт, кроме двух документированных пределов (ниже).
+- **Корпус: Identical 250→253 (+3)**; blast (base 7f05b9d): 11 файлов — 3 флипа
+  (literal-monospace, attribute-entries, revision-line), **0 регрессий**,
+  8 changed-still-different — ВСЕ ближе: pass 133→18(!), footnote 260→101,
+  revision-information 96→24, align-by-column 637→617, format-column-content
+  218→198, apply-subs-to-text 119→115, syntax-quick-reference 2791→2735,
+  outline 8718→8664.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Известные пределы (задокументированы в коде, в корпусе нет)
+- `pass:c,q[…]`: asciidoctor гоняет q ПО уже экранированному тексту (`;` блокирует
+  constrained-открытие) — bitflag-модель только membership, у нас `*x*` болдится.
+- Spec'нутый pass внутри `+…+`: форматирующие subs не перегоняются (статик-хелпер),
+  чтится только membership SPECIALCHARS.
+- `foo:b\`ar[baz]`: наш eager-escape съедает backslash (asciidoctor хранит) —
+  pre-existing разница escape-модели, не от этого фикса.
+
+### Что дальше
+- nearmiss на 253: **pass (18 diff!)**, **revision-information (24!)**, stem (56 —
+  3-4 корня: `\$`-эскейп, `stem::`-макрос literal, `++++`+callout, `{n!}`),
+  source (63), customize-title-label (66), include (75), bibliography (77),
+  subs (89), subs-group-table/ordered (90), footnote (101);
+  revision-line-with-version-prefix (1 — `{docdate}`, скип).
+- Кандидат-кластер: xreflabel → reftext для xref-резолва (label в Tag::Anchor +
+  регистрация в XrefResolver; p_id1/2/3 + lexicon-остаток).
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, лишний `</div>` у standalone passthrough,
+  unknown-style в class на quote/sidebar, list-merge через continuation-attrlist.
+
+---
+
 ## Сессия (2026-06-12, двадцать вторая) — Фаза 3: block.adoc (`.Title` на списках)
 
 Запрос «продолжи». Ветка **`fix/list-block-title`** — НЕ закоммичена

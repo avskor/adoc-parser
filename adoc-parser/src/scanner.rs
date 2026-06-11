@@ -1056,16 +1056,6 @@ pub fn is_valid_macro_name(name: &str) -> bool {
     bytes[1..].iter().all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Returns true if the name is a known built-in inline macro (should not be captured as custom).
-pub fn is_known_inline_macro(name: &str) -> bool {
-    matches!(
-        name,
-        "kbd" | "btn" | "menu" | "icon" | "stem" | "latexmath" | "asciimath"
-            | "footnote" | "pass" | "link" | "mailto" | "image" | "xref"
-            | "indexterm" | "indexterm2" | "http" | "https"
-    )
-}
-
 /// Returns true if the name is a known built-in block macro (should not be captured as custom).
 fn is_known_block_macro(name: &str) -> bool {
     matches!(name, "image" | "video" | "audio" | "toc" | "include")

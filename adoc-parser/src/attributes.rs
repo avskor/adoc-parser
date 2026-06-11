@@ -677,7 +677,8 @@ pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSe
 
 /// Like [`sub_name_to_flag`], but also accepts the composite group names
 /// asciidoctor allows in incremental `subs=` tokens (`+verbatim`, `-normal`).
-fn sub_name_to_flags(name: &str) -> Option<u8> {
+/// Shared with the inline `pass:SPEC[…]` macro (full-name tokens).
+pub(crate) fn sub_name_to_flags(name: &str) -> Option<u8> {
     match name {
         "normal" => Some(
             SubstitutionSet::SPECIALCHARS
