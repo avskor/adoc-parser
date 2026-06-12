@@ -776,6 +776,20 @@ pub fn preprocess_with_attrs(
             None => Cow::Borrowed(line),
         };
 
+        // 5a'. Block-attribute lines (`[…]` spanning the whole line): Asciidoctor
+        //      substitutes attribute references in the attrlist at parse time,
+        //      in document order — `[source,java,subs="{markup-in-source}"]`
+        //      sees the current value. Only known attributes are replaced
+        //      (attribute-missing=skip leaves the reference intact).
+        let effective_line: Cow<'_, str> = if effective_line.starts_with('[')
+            && effective_line.trim_end().ends_with(']')
+            && let Some(expanded) = expand_attr_refs_in_attrlist(&effective_line, &attributes)
+        {
+            Cow::Owned(expanded)
+        } else {
+            effective_line
+        };
+
         // 5b. Attribute definitions (sees expanded counter values)
         if let Some((name, value)) = parse_attribute_entry(effective_line.trim()) {
             if locked_attrs.contains(name) {
@@ -1072,6 +1086,49 @@ fn compare(left: &str, op: &str, right: &str) -> bool {
 /// Returns `Some((name, Some(value)))` for definitions
 /// and `Some((name, None))` for unsets.
 /// Returns `None` if the line is not an attribute entry.
+/// Expand `{name}` attribute references in a block-attribute line against the
+/// currently-known document attributes. Returns `None` when nothing was
+/// replaced. Unknown references and escaped `\{name}` stay untouched.
+fn expand_attr_refs_in_attrlist(
+    line: &str,
+    attributes: &HashMap<String, String>,
+) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut out = String::new();
+    let mut copied = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{'
+            && (i == 0 || bytes[i - 1] != b'\\')
+            && let Some(end_rel) = line[i + 1..].find('}')
+        {
+            let name = &line[i + 1..i + 1 + end_rel];
+            let valid = !name.is_empty()
+                && name
+                    .bytes()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_')
+                && name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+            if valid && let Some(value) = attributes.get(name) {
+                out.push_str(&line[copied..i]);
+                out.push_str(value);
+                i += end_rel + 2;
+                copied = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if copied == 0 {
+        None
+    } else {
+        out.push_str(&line[copied..]);
+        Some(out)
+    }
+}
+
 fn parse_attribute_entry(line: &str) -> Option<(&str, Option<&str>)> {
     let rest = line.strip_prefix(':')?;
 
@@ -1972,6 +2029,39 @@ end::foo[]";
             preprocess(input),
             "-----\n{counter:x}\n----\n{counter:x}\n-----\n1\n"
         );
+    }
+
+    #[test]
+    fn test_attr_refs_expanded_in_block_attribute_lines() {
+        // Asciidoctor substitutes attribute references in block-attribute
+        // lines at parse time, in document order (probe /tmp/p_subs/p4):
+        // [source,subs="{markup}"] sees the current value.
+        let input = ":markup: +quotes\n\n[source,java,subs=\"{markup}\"]\n----\nx\n----\n";
+        assert_eq!(
+            preprocess(input),
+            ":markup: +quotes\n\n[source,java,subs=\"+quotes\"]\n----\nx\n----\n"
+        );
+
+        // Unknown references stay intact (attribute-missing=skip)
+        let input = "[source,subs=\"{nope}\"]\n----\nx\n----\n";
+        assert_eq!(preprocess(input), input);
+
+        // Definition AFTER use does not apply (document order)
+        let input = "[.{late}]\ntext\n\n:late: red\n";
+        assert_eq!(preprocess(input), input);
+
+        // Attrlist-shaped lines inside a verbatim fence are untouched
+        let input = ":markup: x\n\n----\n[source,subs=\"{markup}\"]\n----\n";
+        assert_eq!(preprocess(input), input);
+
+        // Non-attrlist lines (no [..] shape) keep their references for the
+        // inline parser
+        let input = ":v: 1\n\nversion {v} here\n";
+        assert_eq!(preprocess(input), input);
+
+        // Escaped reference stays untouched
+        let input = ":r: red\n\n[.\\{r}]\ntext\n";
+        assert_eq!(preprocess(input), input);
     }
 
     #[test]

@@ -553,21 +553,11 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Concealed index term (((primary, secondary, tertiary))) or flow index term ((term)) (MACROS)
-            b'(' if has_macros && self.peek_at(1) == Some(b'(') && self.peek_at(2) == Some(b'(') => {
-                if self.try_concealed_index_term(events, text_start) {
-                    return true;
-                }
-                if self.try_flow_index_term(events, text_start) {
-                    return true;
-                }
-                self.pos += 1;
-                true
-            }
-
-            // Flow index term ((term)) (MACROS)
+            // Index term: concealed (((primary, secondary))) or flow ((term)) (MACROS).
+            // One pattern, mirroring Asciidoctor's `\(\((.+?)\)\)(?!\))`: the
+            // matched content decides the form by its own enclosing parens.
             b'(' if has_macros && self.peek_at(1) == Some(b'(') => {
-                if self.try_flow_index_term(events, text_start) {
+                if self.try_index_term(events, text_start) {
                     return true;
                 }
                 self.pos += 1;
@@ -772,6 +762,78 @@ impl<'a> InlineState<'a> {
                 let macro_start = self.pos;
                 self.advance_by(macro_len);
                 events.push(Event::Text(Cow::Borrowed(&self.input[macro_start..self.pos])));
+                *text_start = self.pos;
+                true
+            }
+
+            // Escape an index term: \((…)) → the backslash drops and the match
+            // stays literal text; \(((…))) (escaped concealed) → literal parens
+            // around a VISIBLE flow term of the inner text (Asciidoctor
+            // substitutors.rb: "escape concealed index term, but process
+            // nested flow index term"). Without a would-be match (no closing
+            // `))` ahead) the backslash stays literal.
+            b'\\' if self.subs.has(SubstitutionSet::MACROS)
+                && self.peek_at(1) == Some(b'(')
+                && self.peek_at(2) == Some(b'(')
+                && Self::index_term_close(&self.input[self.pos + 3..]).is_some() =>
+            {
+                self.flush_text(*text_start, self.pos, events);
+                let content_start = self.pos + 3;
+                let close = Self::index_term_close(&self.input[content_start..])
+                    .expect("checked in guard");
+                let content = &self.input[content_start..content_start + close];
+                if content.starts_with('(') && content.ends_with(')') {
+                    events.push(Event::Text(Cow::Borrowed("(")));
+                    events.push(Event::IndexTerm {
+                        text: Cow::Borrowed(&content[1..content.len() - 1]),
+                    });
+                    events.push(Event::Text(Cow::Borrowed(")")));
+                } else {
+                    // whole match minus the backslash, literal
+                    events.push(Event::Text(Cow::Borrowed(
+                        &self.input[self.pos + 1..content_start + close + 2],
+                    )));
+                }
+                self.pos = content_start + close + 2;
+                *text_start = self.pos;
+                true
+            }
+
+            // `\\` before an unconstrained pair (`**`/`__`/`##`/<double
+            // backtick>): both backslashes are consumed and the marks stay
+            // literal, while the content between them still receives normal
+            // substitutions. Mirrors Asciidoctor's cascading gsub passes: the
+            // unconstrained pass matches `\MM…MM` and strips one backslash,
+            // then the constrained pass matches with the remaining `\` lead
+            // and strips the second (`\\__func__` → `__func__`,
+            // `\\__a*b*c__` → `__a<strong>b</strong>c__`).
+            b'\\' if has_quotes
+                && self.peek_at(1) == Some(b'\\')
+                && self
+                    .peek_at(2)
+                    .is_some_and(|c| matches!(c, b'*' | b'_' | b'#' | b'`'))
+                && self.peek_at(3) == self.peek_at(2)
+                && self
+                    .find_closing_unconstrained(self.input.as_bytes()[self.pos + 2], self.pos + 4)
+                    .is_some_and(|c| c > self.pos + 4) =>
+            {
+                self.flush_text(*text_start, self.pos, events);
+                let marker = self.input.as_bytes()[self.pos + 2];
+                let open_marks = self.pos + 2;
+                let content_start = self.pos + 4;
+                let close_pos = self
+                    .find_closing_unconstrained(marker, content_start)
+                    .expect("checked in guard");
+                events.push(Event::Text(Cow::Borrowed(
+                    &self.input[open_marks..content_start],
+                )));
+                let inner = &self.input[content_start..close_pos];
+                let mut inner_parser = InlineState::new(inner, self.subs, self.options);
+                inner_parser.parse_inline(events);
+                events.push(Event::Text(Cow::Borrowed(
+                    &self.input[close_pos..close_pos + 2],
+                )));
+                self.pos = close_pos + 2;
                 *text_start = self.pos;
                 true
             }
@@ -2565,75 +2627,67 @@ impl<'a> InlineState<'a> {
         true
     }
 
-    fn try_concealed_index_term(
-        &mut self,
-        events: &mut Vec<Event<'a>>,
-        text_start: &mut usize,
-    ) -> bool {
-        let start_pos = self.pos;
-        let after_open = start_pos + 3; // skip "((("
-
-        let rest = &self.input[after_open..];
-        let close = match rest.find(")))") {
-            Some(c) => c,
-            None => return false,
-        };
-
-        let content = &rest[..close];
-        if content.is_empty() {
-            return false;
+    /// Closing `))` position for an index term, relative to the content start
+    /// (the value is the content length). Mirrors Asciidoctor's non-greedy
+    /// `(.+?)\)\)(?!\))`: the first `))` whose follower is yet another `)`
+    /// slides forward by one, extending the content (`a)))` → content `a)`).
+    fn index_term_close(rest: &str) -> Option<usize> {
+        let bytes = rest.as_bytes();
+        let mut close = rest.find("))")?;
+        while bytes.get(close + 2) == Some(&b')') {
+            close += 1;
         }
-
-        self.flush_text(*text_start, start_pos, events);
-
-        let mut parts = content.splitn(3, ',');
-        let primary = parts.next().unwrap().trim();
-        let secondary = parts.next().map(|s| s.trim());
-        let tertiary = parts.next().map(|s| s.trim());
-
-        events.push(Event::ConcealedIndexTerm {
-            primary: Cow::Borrowed(primary),
-            secondary: secondary.map(Cow::Borrowed),
-            tertiary: tertiary.map(Cow::Borrowed),
-        });
-
-        self.pos = after_open + close + 3;
-        *text_start = self.pos;
-        true
+        if close == 0 { None } else { Some(close) }
     }
 
-    fn try_flow_index_term(
-        &mut self,
-        events: &mut Vec<Event<'a>>,
-        text_start: &mut usize,
-    ) -> bool {
+    /// Index term at `((`: the matched content decides the form
+    /// (Asciidoctor substitutors.rb, InlineIndextermMacroRx else-branch):
+    /// parens on both ends → concealed term (invisible, comma-split);
+    /// a paren on one end only stays literal text around a flow term;
+    /// otherwise a plain flow term rendering its text.
+    fn try_index_term(&mut self, events: &mut Vec<Event<'a>>, text_start: &mut usize) -> bool {
         let start_pos = self.pos;
         let after_open = start_pos + 2; // skip "(("
 
         let rest = &self.input[after_open..];
-        let close = match rest.find("))") {
+        let close = match Self::index_term_close(rest) {
             Some(c) => c,
             None => return false,
         };
-
         let content = &rest[..close];
-        if content.is_empty() {
-            return false;
-        }
-
-        // Make sure closing )) is not followed by another ) — that would be )))
-        let after_close = after_open + close + 2;
-        if after_close < self.input.len() && self.input.as_bytes()[after_close] == b')' {
-            return false;
-        }
 
         self.flush_text(*text_start, start_pos, events);
 
-        events.push(Event::IndexTerm {
-            text: Cow::Borrowed(content),
-        });
+        let starts = content.starts_with('(');
+        let ends = content.ends_with(')');
+        if starts && ends {
+            let inner = &content[1..content.len() - 1];
+            let mut parts = inner.splitn(3, ',');
+            let primary = parts.next().unwrap().trim();
+            let secondary = parts.next().map(|s| s.trim());
+            let tertiary = parts.next().map(|s| s.trim());
+            events.push(Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed(primary),
+                secondary: secondary.map(Cow::Borrowed),
+                tertiary: tertiary.map(Cow::Borrowed),
+            });
+        } else if starts {
+            events.push(Event::Text(Cow::Borrowed("(")));
+            events.push(Event::IndexTerm {
+                text: Cow::Borrowed(&content[1..]),
+            });
+        } else if ends {
+            events.push(Event::IndexTerm {
+                text: Cow::Borrowed(&content[..content.len() - 1]),
+            });
+            events.push(Event::Text(Cow::Borrowed(")")));
+        } else {
+            events.push(Event::IndexTerm {
+                text: Cow::Borrowed(content),
+            });
+        }
 
-        self.pos = after_close;
+        self.pos = after_open + close + 2;
         *text_start = self.pos;
         true
     }
@@ -4475,6 +4529,106 @@ mod tests {
                 secondary: Some(Cow::Borrowed("cats")),
                 tertiary: Some(Cow::Borrowed("tigers")),
             },
+        ]);
+    }
+
+    #[test]
+    fn test_index_term_sliding_close_and_partial_parens() {
+        // Probe-verified vs asciidoctor (/tmp/p_subs/p3): the non-greedy close
+        // slides past a `))` followed by another `)`.
+        // ((a))) → flow term "a" + literal ")"
+        let events = parse("((a))) here");
+        assert_eq!(events, vec![
+            Event::IndexTerm { text: Cow::Borrowed("a") },
+            Event::Text(Cow::Borrowed(")")),
+            Event::Text(Cow::Borrowed(" here")),
+        ]);
+        // ((((b)))) → concealed term "(b)" (inner parens are content)
+        let events = parse("((((b))))");
+        assert_eq!(events, vec![
+            Event::ConcealedIndexTerm {
+                primary: Cow::Borrowed("(b)"),
+                secondary: None,
+                tertiary: None,
+            },
+        ]);
+        // (((a)) → literal "(" + flow term "a"
+        let events = parse("(((a)) x");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(")),
+            Event::IndexTerm { text: Cow::Borrowed("a") },
+            Event::Text(Cow::Borrowed(" x")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_index_term() {
+        // Probe-verified vs asciidoctor (/tmp/p_subs/p1, p3).
+        // \((a)) → the whole match stays literal, backslash drops
+        let events = parse("\\((simple)) escaped");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("((simple))")),
+            Event::Text(Cow::Borrowed(" escaped")),
+        ]);
+        // \(((a))) → escaped concealed: literal parens around a VISIBLE flow term
+        let events = parse("\\(((concealed)))");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("(")),
+            Event::IndexTerm { text: Cow::Borrowed("concealed") },
+            Event::Text(Cow::Borrowed(")")),
+        ]);
+        // \((a))) → content "a)" has no enclosing parens → whole match literal
+        let events = parse("\\((a))) here");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("((a)))")),
+            Event::Text(Cow::Borrowed(" here")),
+        ]);
+        // no would-be match (no closing) → backslash stays literal
+        let events = parse("\\((open");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\\((open")),
+        ]);
+    }
+
+    #[test]
+    fn test_double_backslash_escapes_unconstrained() {
+        // Probe-verified vs asciidoctor (/tmp/p_subs/p2): `\\` before an
+        // unconstrained pair eats both backslashes, marks stay literal,
+        // content still gets normal substitutions.
+        let events = parse("The text \\\\__func__ stays");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("The text ")),
+            Event::Text(Cow::Borrowed("__")),
+            Event::Text(Cow::Borrowed("func")),
+            Event::Text(Cow::Borrowed("__")),
+            Event::Text(Cow::Borrowed(" stays")),
+        ]);
+        // inner content keeps formatting (probe /tmp/p_subs/p5):
+        // \\__a *b* c__ → __a <strong>b</strong> c__
+        let events = parse("\\\\__a *b* c__");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("__")),
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::Strong),
+            Event::Text(Cow::Borrowed(" c")),
+            Event::Text(Cow::Borrowed("__")),
+        ]);
+        // mid-word position works too: mid\\__word__ → mid__word__
+        let events = parse("mid\\\\__word__ inside");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("mid")),
+            Event::Text(Cow::Borrowed("__")),
+            Event::Text(Cow::Borrowed("word")),
+            Event::Text(Cow::Borrowed("__")),
+            Event::Text(Cow::Borrowed(" inside")),
+        ]);
+        // without a closing pair the generic `\\` escape applies as before
+        // (one backslash dropped, the rest literal)
+        let events = parse("\\\\__open");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\\__open")),
         ]);
     }
 
