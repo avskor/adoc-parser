@@ -698,10 +698,20 @@ pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
     let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
 
     for (i, part) in parts.iter().enumerate() {
-        // Parse next-cell specs from END: style, then span, then alignment
-        let (after_style, next_style) = parse_cell_style_suffix(part);
-        let (after_span, next_colspan, next_rowspan) = parse_span_spec(after_style);
-        let (content, next_halign, next_valign) = parse_cell_align_suffix(after_span);
+        // Parse next-cell specs from END: style, then span, then alignment.
+        // A spec only ever attaches to the `|` that follows it — for the last
+        // part of the line no delimiter follows, so trailing characters are
+        // plain cell content (`|a` is a cell "a", not an AsciiDoc style spec).
+        let is_last = i == parts.len() - 1;
+        let (content, next_style, next_colspan, next_rowspan, next_halign, next_valign) =
+            if is_last {
+                (*part, CellStyle::Default, 1, 1, HAlign::default(), VAlign::default())
+            } else {
+                let (after_style, style) = parse_cell_style_suffix(part);
+                let (after_span, cs, rs) = parse_span_spec(after_style);
+                let (content, halign, valign) = parse_cell_align_suffix(after_span);
+                (content, style, cs, rs, halign, valign)
+            };
         let content = content.trim();
 
         if !content.is_empty() {
@@ -1598,6 +1608,21 @@ mod tests {
         assert_eq!(
             parse_table_cells("| A e| B | C"),
             Some(vec![cell("A"), styled_cell("B", CellStyle::Emphasis), cell("C")])
+        );
+    }
+
+    #[test]
+    fn test_parse_table_cells_trailing_letter_is_content() {
+        // A spec only attaches to a following `|`; at end of line a single
+        // style letter (or span/align chars) is plain cell content.
+        assert_eq!(parse_table_cells("|a"), Some(vec![cell("a")]));
+        assert_eq!(parse_table_cells("|d |e"), Some(vec![cell("d"), cell("e")]));
+        assert_eq!(parse_table_cells("|text 2+"), Some(vec![cell("text 2+")]));
+        assert_eq!(parse_table_cells("|x ^"), Some(vec![cell("x ^")]));
+        // ...while mid-line the trailing letter is the NEXT cell's style
+        assert_eq!(
+            parse_table_cells("|one a|two"),
+            Some(vec![cell("one"), styled_cell("two", CellStyle::AsciiDoc)])
         );
     }
 

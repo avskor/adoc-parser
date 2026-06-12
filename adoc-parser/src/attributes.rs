@@ -293,6 +293,65 @@ impl BlockAttributes {
         attrs
     }
 
+    /// Merge a later block-attribute line into an earlier one, mirroring how
+    /// Asciidoctor accumulates stacked metadata lines above a block: named
+    /// attributes override by key, the id is last-wins, roles and options
+    /// accumulate, and positional slots override per raw slot (an empty slot
+    /// in the later line keeps the earlier value: `[source,ruby]` + `[,python]`
+    /// → language `python`, `[quote,Author]` + `[verse]` → verse with the
+    /// attribution kept).
+    pub fn merge(older: Self, newer: Self) -> Self {
+        let mut result = older;
+        if newer.id.is_some() {
+            result.id = newer.id;
+        }
+        result.roles.extend(newer.roles);
+        result.options.extend(newer.options);
+        result.named.extend(newer.named);
+        if newer.title.is_some() {
+            result.title = newer.title;
+        }
+
+        if newer.first_positional_is_style {
+            // The later line claims the style slot: its bare positionals
+            // override the earlier ones index by index; earlier tail slots
+            // beyond the later line's length are kept.
+            let older_implied = result.implied_source_lang.take();
+            let older_pos = std::mem::take(&mut result.positional);
+            let aligned_older: Vec<String> = if result.first_positional_is_style {
+                older_pos
+            } else {
+                // The earlier line had no style slot: its language token
+                // (if any) sits at raw slot 2, i.e. right after the style.
+                let mut v = vec![String::new()];
+                v.extend(older_implied);
+                v
+            };
+            let mut merged = newer.positional;
+            for (i, val) in aligned_older.into_iter().enumerate() {
+                if i >= merged.len() && !val.is_empty() {
+                    merged.push(val);
+                }
+            }
+            result.positional = merged;
+            result.first_positional_is_style = true;
+            result.implied_source_lang = newer.implied_source_lang;
+        } else if let Some(lang) = newer.implied_source_lang {
+            // Later line of shape `[,lang]`: raw slot 2 overrides the
+            // language slot of the merged attributes.
+            if result.first_positional_is_style {
+                if result.positional.len() >= 2 {
+                    result.positional[1] = lang;
+                } else {
+                    result.positional.push(lang);
+                }
+            } else {
+                result.implied_source_lang = Some(lang);
+            }
+        }
+        result
+    }
+
     fn parse_shorthand(s: &str, attrs: &mut Self) {
         let bytes = s.as_bytes();
         let mut i = 0;
@@ -916,6 +975,50 @@ mod tests {
         let attrs = BlockAttributes::parse("#myid%opt1%opt2");
         assert_eq!(attrs.id.as_deref(), Some("myid"));
         assert_eq!(attrs.options, vec!["opt1", "opt2"]);
+    }
+
+    #[test]
+    fn test_block_attributes_merge_stacked_lines() {
+        // Named attributes from both lines survive; later overrides by key
+        let merged = BlockAttributes::merge(
+            BlockAttributes::parse("caption=\"Table A. \""),
+            BlockAttributes::parse("cols=\"3*\""),
+        );
+        assert_eq!(merged.named.get("caption").map(String::as_str), Some("Table A. "));
+        assert_eq!(merged.named.get("cols").map(String::as_str), Some("3*"));
+
+        // id last-wins, roles accumulate (probe-verified vs asciidoctor)
+        let merged = BlockAttributes::merge(
+            BlockAttributes::parse("#id1.r1"),
+            BlockAttributes::parse("#id2.r2"),
+        );
+        assert_eq!(merged.id.as_deref(), Some("id2"));
+        assert_eq!(merged.roles, vec!["r1", "r2"]);
+
+        // Later style slot overrides, earlier tail positionals are kept:
+        // [quote,Author] + [verse] → verse with attribution
+        let merged = BlockAttributes::merge(
+            BlockAttributes::parse("quote,Author Name"),
+            BlockAttributes::parse("verse"),
+        );
+        assert_eq!(merged.positional, vec!["verse", "Author Name"]);
+        assert!(merged.first_positional_is_style);
+
+        // Empty slot 1 in the later line keeps the style, slot 2 overrides:
+        // [source,ruby] + [,python] → python
+        let merged = BlockAttributes::merge(
+            BlockAttributes::parse("source,ruby"),
+            BlockAttributes::parse(",python"),
+        );
+        assert_eq!(merged.source_language(), Some("python"));
+
+        // Options accumulate: [%header] + [cols="2*"]
+        let merged = BlockAttributes::merge(
+            BlockAttributes::parse("%header"),
+            BlockAttributes::parse("cols=\"2*\""),
+        );
+        assert!(merged.has_option("header"));
+        assert_eq!(merged.table_cols_count(), Some(2));
     }
 
     #[test]

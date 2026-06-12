@@ -435,6 +435,10 @@ impl HtmlRenderer {
                 output.push_str("</div>\n");
             }
 
+            if !self.footnote_registry.is_empty() {
+                self.render_footnotes(output);
+            }
+
             // Footer div
             if !self.nofooter {
                 output.push_str("<div id=\"footer\">\n");

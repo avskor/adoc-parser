@@ -722,8 +722,17 @@ impl HtmlRenderer {
         let parts: Vec<&str> = trimmed.split(',').collect();
         let mut weights: Vec<f64> = Vec::new();
         for part in &parts {
-            let part = part.trim();
+            let mut part = part.trim();
             if part.is_empty() { continue; }
+            // Repetition multiplier: `3*`, `2*1`, `2*<.^2` repeat the spec
+            let mut count = 1usize;
+            if let Some(star) = part.find('*') {
+                let before = &part[..star];
+                if !before.is_empty() && before.chars().all(|c| c.is_ascii_digit()) {
+                    count = before.parse::<usize>().map_or(1, |n: usize| n.max(1));
+                    part = &part[star + 1..];
+                }
+            }
             // Extract numeric weight from the spec (e.g., "1", "<2", "^.>1")
             // The weight is the trailing number, default is 1
             let weight = part.chars().rev()
@@ -732,7 +741,9 @@ impl HtmlRenderer {
                 .chars().rev().collect::<String>()
                 .parse::<f64>()
                 .unwrap_or(1.0);
-            weights.push(weight);
+            for _ in 0..count {
+                weights.push(weight);
+            }
         }
 
         if weights.is_empty() { return Vec::new(); }
