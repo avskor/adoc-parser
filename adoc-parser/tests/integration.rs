@@ -99,7 +99,7 @@ fn test_unordered_list() {
 fn test_ordered_list() {
     let events = parse(". Alpha\n. Beta\n. Gamma");
 
-    assert_eq!(events[0], Event::Start(Tag::OrderedList { start: None, reversed: false }));
+    assert_eq!(events[0], Event::Start(Tag::OrderedList { start: None, reversed: false, depth: 1 }));
     assert_eq!(events[1], Event::Start(Tag::ListItem { depth: 1, checked: None }));
     assert_eq!(events[2], Event::Text(Cow::Borrowed("Alpha")));
 }

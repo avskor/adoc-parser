@@ -13,7 +13,7 @@ pub enum BlockContext {
     DelimitedBlock { kind: scanner::DelimiterType, delimiter_len: usize, admonition_kind: Option<AdmonitionKind> },
     UnorderedList { depth: u8 },
     OrderedList { depth: u8 },
-    ListItem { depth: u8 },
+    ListItem,
     DescriptionList { depth: u8 },
     DescriptionListEntry { depth: u8 },
     CalloutList,
@@ -214,7 +214,7 @@ impl<'a> BlockScanner<'a> {
                 BlockContext::OrderedList { .. } => {
                     events.push(Event::End(TagEnd::OrderedList));
                 }
-                BlockContext::ListItem { .. } => {
+                BlockContext::ListItem => {
                     events.push(Event::End(TagEnd::ListItem));
                 }
                 BlockContext::DelimitedBlock { admonition_kind, .. } => {
@@ -402,7 +402,7 @@ impl<'a> BlockScanner<'a> {
 
     fn is_in_list_context(&self) -> bool {
         self.context_stack.iter().rev().any(|ctx| {
-            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
+            matches!(ctx, BlockContext::ListItem | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
         })
     }
 
@@ -412,7 +412,7 @@ impl<'a> BlockScanner<'a> {
         let mut events = Vec::new();
         while let Some(ctx) = self.context_stack.last() {
             match ctx {
-                BlockContext::ListItem { .. } => {
+                BlockContext::ListItem => {
                     events.push(Event::End(TagEnd::ListItem));
                     self.context_stack.pop();
                 }
@@ -451,7 +451,7 @@ impl<'a> BlockScanner<'a> {
     fn close_nested_list_items(&mut self) -> Vec<Event<'a>> {
         // Find the outermost (lowest-index) ListItem/DescriptionListEntry/CalloutListItem
         let outermost = self.context_stack.iter().position(|ctx| {
-            matches!(ctx, BlockContext::ListItem { .. } | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
+            matches!(ctx, BlockContext::ListItem | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
         });
         let outermost = match outermost {
             Some(idx) => idx,
@@ -462,7 +462,7 @@ impl<'a> BlockScanner<'a> {
         while self.context_stack.len() > outermost + 1 {
             if let Some(ctx) = self.context_stack.pop() {
                 match ctx {
-                    BlockContext::ListItem { .. } => {
+                    BlockContext::ListItem => {
                         events.push(Event::End(TagEnd::ListItem));
                     }
                     BlockContext::UnorderedList { .. } => {
@@ -511,7 +511,7 @@ impl<'a> BlockScanner<'a> {
         let mut events = Vec::new();
         while self.context_stack.len() > target_pos + 1 {
             match self.context_stack.pop() {
-                Some(BlockContext::ListItem { .. }) => events.push(Event::End(TagEnd::ListItem)),
+                Some(BlockContext::ListItem) => events.push(Event::End(TagEnd::ListItem)),
                 Some(BlockContext::UnorderedList { .. }) => events.push(Event::End(TagEnd::UnorderedList)),
                 Some(BlockContext::OrderedList { .. }) => events.push(Event::End(TagEnd::OrderedList)),
                 Some(BlockContext::DescriptionListEntry { .. }) => events.push(Event::End(TagEnd::DescriptionDescription)),
@@ -2806,28 +2806,6 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
-    fn close_list_items_for_depth(&mut self, target_depth: u8) -> Vec<Event<'a>> {
-        let mut events = Vec::new();
-        loop {
-            match self.context_stack.last() {
-                Some(BlockContext::ListItem { depth }) if *depth >= target_depth => {
-                    events.push(Event::End(TagEnd::ListItem));
-                    self.context_stack.pop();
-                }
-                Some(BlockContext::UnorderedList { depth }) if *depth > target_depth => {
-                    events.push(Event::End(TagEnd::UnorderedList));
-                    self.context_stack.pop();
-                }
-                Some(BlockContext::OrderedList { depth }) if *depth > target_depth => {
-                    events.push(Event::End(TagEnd::OrderedList));
-                    self.context_stack.pop();
-                }
-                _ => break,
-            }
-        }
-        events
-    }
-
     fn is_in_list_at_depth(&self, depth: u8, unordered: bool) -> bool {
         for ctx in self.context_stack.iter().rev() {
             match ctx {
@@ -2859,7 +2837,7 @@ impl<'a> BlockScanner<'a> {
                     self.context_stack.pop();
                 }
                 // When returning to parent DL, close interleaved list contexts
-                Some(BlockContext::ListItem { .. })
+                Some(BlockContext::ListItem)
                 | Some(BlockContext::UnorderedList { .. })
                 | Some(BlockContext::OrderedList { .. })
                 | Some(BlockContext::CalloutListItem)
@@ -2867,7 +2845,7 @@ impl<'a> BlockScanner<'a> {
                     if has_parent_dl =>
                 {
                     match self.context_stack.pop() {
-                        Some(BlockContext::ListItem { .. }) => events.push(Event::End(TagEnd::ListItem)),
+                        Some(BlockContext::ListItem) => events.push(Event::End(TagEnd::ListItem)),
                         Some(BlockContext::UnorderedList { .. }) => events.push(Event::End(TagEnd::UnorderedList)),
                         Some(BlockContext::OrderedList { .. }) => events.push(Event::End(TagEnd::OrderedList)),
                         Some(BlockContext::CalloutListItem) => events.push(Event::End(TagEnd::CalloutListItem)),
@@ -3110,12 +3088,17 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
-        // Use cross-type closing when there's an existing parent UL at the same depth
+        // Marker matching an open list (current or ancestor) → close up to it
+        // and continue as a sibling item. An UNMATCHED marker — deeper,
+        // shallower or different type — starts a list NESTED in the innermost
+        // open item, closing nothing (Asciidoctor matches markers against the
+        // list stack; probe /tmp/p_subs/p6: `. Linux` + `* Fedora` nests,
+        // and even `** b` + `* c` nests the shallower marker).
         let has_parent_list = self.is_in_list_at_depth(depth, true);
         let mut close_events = if has_parent_list {
             self.close_to_parent_list(depth, true)
         } else {
-            self.close_list_items_for_depth(depth)
+            Vec::new()
         };
 
         let mut need_new_list = !self.is_in_list_at_depth(depth, true);
@@ -3141,12 +3124,12 @@ impl<'a> BlockScanner<'a> {
 
         if need_new_list {
             self.context_stack.push(BlockContext::UnorderedList { depth });
-            self.context_stack.push(BlockContext::ListItem { depth });
+            self.context_stack.push(BlockContext::ListItem);
 
             self.push_event(Event::Start(Tag::ListItem { depth, checked }));
             self.push_event(Event::Start(Tag::UnorderedList { has_checklist: checked.is_some() }));
         } else {
-            self.context_stack.push(BlockContext::ListItem { depth });
+            self.context_stack.push(BlockContext::ListItem);
 
             self.push_event(Event::Start(Tag::ListItem { depth, checked }));
         }
@@ -3186,7 +3169,15 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
-        let mut close_events = self.close_list_items_for_depth(depth);
+        // Mirror of scan_unordered_list_item: a marker matching an open
+        // ordered list closes up to it (cross-type contexts included); an
+        // unmatched marker nests in the innermost open item.
+        let has_parent_list = self.is_in_list_at_depth(depth, false);
+        let mut close_events = if has_parent_list {
+            self.close_to_parent_list(depth, false)
+        } else {
+            Vec::new()
+        };
 
         let mut need_new_list = !self.is_in_list_at_depth(depth, false);
 
@@ -3213,12 +3204,12 @@ impl<'a> BlockScanner<'a> {
 
         if need_new_list {
             self.context_stack.push(BlockContext::OrderedList { depth });
-            self.context_stack.push(BlockContext::ListItem { depth });
+            self.context_stack.push(BlockContext::ListItem);
 
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
-            self.push_event(Event::Start(Tag::OrderedList { start: list_start, reversed: list_reversed }));
+            self.push_event(Event::Start(Tag::OrderedList { start: list_start, reversed: list_reversed, depth }));
         } else {
-            self.context_stack.push(BlockContext::ListItem { depth });
+            self.context_stack.push(BlockContext::ListItem);
 
             self.push_event(Event::Start(Tag::ListItem { depth, checked: None }));
         }
@@ -3334,7 +3325,7 @@ impl<'a> BlockScanner<'a> {
                                         BlockContext::OrderedList { .. } => {
                                             events.push(Event::End(TagEnd::OrderedList));
                                         }
-                                        BlockContext::ListItem { .. } => {
+                                        BlockContext::ListItem => {
                                             events.push(Event::End(TagEnd::ListItem));
                                         }
                                         BlockContext::DescriptionList { .. } => {
