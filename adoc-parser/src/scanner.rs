@@ -506,8 +506,40 @@ pub struct CellSpec<'a> {
 /// line (asciidoctor joins it to the cell content with a newline).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableLineCells<'a> {
-    pub continuation: Option<&'a str>,
+    pub continuation: Option<Cow<'a, str>>,
     pub cells: Vec<CellSpec<'a>>,
+}
+
+/// A `|` immediately preceded by `\` is an escaped cell separator: it does not
+/// split cells, and exactly one backslash is consumed (`\|` → `|`, `\\|` → `\|`
+/// in one cell — probe-verified).
+pub fn unescape_cell_pipes(s: &str) -> Cow<'_, str> {
+    if s.contains("\\|") {
+        Cow::Owned(s.replace("\\|", "|"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// Byte offset of the first unescaped `|` in `s`, if any.
+fn find_unescaped_pipe(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    (0..bytes.len()).find(|&i| bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\'))
+}
+
+/// Split `s` at unescaped `|` separators (escaped `\|` stays inside a part).
+fn split_unescaped_pipes(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
+            parts.push(&s[start..i]);
+            start = i + 1;
+        }
+    }
+    parts.push(&s[start..]);
+    parts
 }
 
 /// Parse alignment prefix from a cell specifier (prefix before first `|`).
@@ -750,9 +782,8 @@ pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
 }
 
 pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
-    // Find the first pipe — if none, not a table line
-    let indent = line.len() - line.trim_start().len();
-    let first_pipe = indent + line[indent..].find('|')?;
+    // Find the first unescaped pipe — if none, not a table line
+    let first_pipe = find_unescaped_pipe(line)?;
 
     // Before first pipe: a valid align+style+span spec (for the first cell on
     // this line), or content continuing the previous line's last cell —
@@ -761,7 +792,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
     // leading indentation (significant in literal and AsciiDoc cells).
     let prefix_raw = &line[..first_pipe];
     let prefix = prefix_raw.trim();
-    let mut continuation: Option<&str> = None;
+    let mut continuation: Option<Cow<'_, str>> = None;
     let mut pending = ExactCellSpec {
         duplication: 1,
         colspan: 1,
@@ -786,7 +817,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
                 text = before.trim_end();
             }
             if !text.trim().is_empty() {
-                continuation = Some(text);
+                continuation = Some(unescape_cell_pipes(text));
             }
         }
     }
@@ -801,7 +832,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         valign: VAlign::default(),
     };
     let mut cells = Vec::new();
-    let parts: Vec<&str> = line[first_pipe + 1..].split('|').collect();
+    let parts: Vec<&str> = split_unescaped_pipes(&line[first_pipe + 1..]);
 
     for (i, part) in parts.iter().enumerate() {
         // Parse next-cell specs from END of the part. A spec only ever
@@ -842,7 +873,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         // renders `|a |` as two cells, the second an empty <td>). A trailing
         // delimiter leaves the cell open: continuation lines fill it.
         cells.push(CellSpec {
-            content: Cow::Borrowed(content),
+            content: unescape_cell_pipes(content),
             duplication: pending.duplication.max(1),
             colspan: pending.colspan,
             rowspan: pending.rowspan,
@@ -1510,16 +1541,35 @@ mod tests {
         );
         // Text before the first `|` continues the previous line's last cell
         let t = parse_table_cells("mid |late").unwrap();
-        assert_eq!(t.continuation, Some("mid"));
+        assert_eq!(t.continuation.as_deref(), Some("mid"));
         assert_eq!(t.cells, vec![cell("late")]);
         // A span spec may sit between the continuation text and the `|`
         let t = parse_table_cells("tail 2+|wide").unwrap();
-        assert_eq!(t.continuation, Some("tail"));
+        assert_eq!(t.continuation.as_deref(), Some("tail"));
         assert_eq!(t.cells, vec![spanned_cell("wide", 2, 1)]);
         // A pure spec prefix is not a continuation
         let t = parse_table_cells("2+| x").unwrap();
         assert_eq!(t.continuation, None);
         assert_eq!(t.cells, vec![spanned_cell("x", 2, 1)]);
+    }
+
+    #[test]
+    fn test_parse_table_cells_escaped_pipe() {
+        // `\|` is an escaped separator: no split, one backslash consumed
+        assert_eq!(
+            line_cells("|a \\| b |c"),
+            Some(vec![cell("a | b"), cell("c")])
+        );
+        // Cell consisting of an escaped table delimiter (delimited.adoc)
+        assert_eq!(line_cells("|\\|==="), Some(vec![cell("|===")]));
+        // `\\|`: the pipe is still escaped, exactly one backslash consumed
+        assert_eq!(line_cells("|a \\\\| b"), Some(vec![cell("a \\| b")]));
+        // A line with only escaped pipes is not a table line (pure continuation)
+        assert_eq!(parse_table_cells("tail \\| more"), None);
+        // Escaped pipe in continuation text before an unescaped separator
+        let t = parse_table_cells("tail \\| more |next").unwrap();
+        assert_eq!(t.continuation.as_deref(), Some("tail | more"));
+        assert_eq!(t.cells, vec![cell("next")]);
     }
 
     #[test]

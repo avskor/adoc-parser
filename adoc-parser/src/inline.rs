@@ -1236,11 +1236,28 @@ impl<'a> InlineState<'a> {
     }
 
     fn find_closing_unconstrained(&self, marker: u8, search_start: usize) -> Option<usize> {
-        let bytes = self.input.as_bytes();
-        let mut i = search_start;
+        let s = &self.input[search_start..];
+        let bytes = s.as_bytes();
+        let mut i = 0;
         while i + 1 < bytes.len() {
+            // Passthroughs (`++…++`/`+++…+++`/`pass:[…]`) are extracted before
+            // quote substitution, so a marker pair inside them must not close
+            // the surrounding unconstrained span (mirror of
+            // find_closing_constrained; `**a+++**+++b**` → strong over a**b).
+            if bytes[i] == b'+'
+                && let Some(skip) = Self::passthrough_span_len(s, i)
+            {
+                i += skip;
+                continue;
+            }
+            if bytes[i] == b'p'
+                && let Some(skip) = Self::pass_macro_span_len(s, i)
+            {
+                i += skip;
+                continue;
+            }
             if bytes[i] == marker && bytes[i + 1] == marker {
-                return Some(i);
+                return Some(search_start + i);
             }
             i += 1;
         }
