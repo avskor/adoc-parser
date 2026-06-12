@@ -3147,6 +3147,40 @@ fn test_revnumber_version_label() {
 }
 
 #[test]
+fn test_revision_line_freeform_and_after_attr_entries() {
+    let opts = HtmlOptions { standalone: true, ..Default::default() };
+    // Probe-verified vs Asciidoctor (/tmp/p_meta): attribute entries between
+    // the author and revision lines are transparent (metadata.adoc corpus
+    // root) — the next non-attr line is still the revision line.
+    let html = to_html_with_options(
+        "= T\nAnne Bell\n:k: v\nv2.0, 2020-01-01\n\nbody",
+        opts.clone(),
+    );
+    assert!(html.contains("<span id=\"revnumber\">version 2.0,</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"revdate\">2020-01-01</span>"), "Got: {html}");
+    // A freeform line (no comma/colon/v-prefix) is consumed as the revdate.
+    let html = to_html_with_options("= T\nAnne Bell\njust some words\n\nbody", opts.clone());
+    assert!(html.contains("<span id=\"revdate\">just some words</span>"), "Got: {html}");
+    assert!(!html.contains("<p>just some words</p>"), "Got: {html}");
+    // A comma with no digits before it SETS an empty revnumber (`version ,`).
+    let html = to_html_with_options("= T\nAnne Bell\nhello, world\n\nbody", opts.clone());
+    assert!(html.contains("<span id=\"revnumber\">version ,</span>"), "Got: {html}");
+    assert!(html.contains("<span id=\"revdate\">world</span>"), "Got: {html}");
+    // A trailing bare colon sets an EMPTY revremark span.
+    let html = to_html_with_options("= T\nAnne Bell\n2020-01-01:\n\nbody", opts.clone());
+    assert!(html.contains("<br><span id=\"revremark\"></span>"), "Got: {html}");
+    // A line whose component starts with a colon is thrown back to the body.
+    let html = to_html_with_options("= T\nAnne Bell\n:weird\n\nbody", opts.clone());
+    assert!(html.contains("<p>:weird</p>"), "Got: {html}");
+    assert!(!html.contains("<span id=\"revremark\""), "Got: {html}");
+    // A section-marker-shaped line directly after the title is the AUTHOR
+    // (header runs to the first blank line) — probe p14.
+    let html = to_html_with_options("= T\n== Sec\n\nbody", opts);
+    assert!(html.contains("<span id=\"author\" class=\"author\">== Sec</span>"), "Got: {html}");
+    assert!(!html.contains("<h2"), "Got: {html}");
+}
+
+#[test]
 fn test_revision_attrs_from_attribute_entries() {
     let opts = HtmlOptions { standalone: true, ..Default::default() };
     // Revision spans are attribute-driven: header attribute entries alone produce
