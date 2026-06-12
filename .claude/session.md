@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать седьмая) — Фаза 3: stem (4 корня: stem-эскейпы, block-macro catch-all, ++++, {n!})
+
+Запрос «продолжи». Ветка **`fix/stem-block-macro-and-escapes`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 257, master `df05b5f`
+(base-бинарь /tmp/adoc_base пересобран через временный worktree).
+
+### Выбор задачи
+nearmiss: **stem.adoc (56 diff)** — давно откладывался как «3-4 корня», но все
+корни оказались малыми и хорошо локализуемыми.
+
+### Семантика asciidoctor (пробы /tmp/p_st/p1..p5, все после фикса байт-в-байт)
+- **A**: `stem:[…]` — `\]` НЕ закрывает макрос и unescape'ится в контенте
+  (`stem:[[[a,b\],[c,d\]\]((n),(k))]` → `\$[[a,b],[c,d]]((n),(k))\$`;
+  правило InlineStemMacroRx `(.*?[^\\])?\]`).
+- **B**: блочные макросы матчатся ТОЛЬКО по зарегистрированным именам —
+  `stem::[…]`, `foo::bar[baz]`, `chart::data.csv[w=100]` → литеральный параграф
+  (`.Title` прикрепляется к нему); зеркало inline-правила 23-й сессии.
+- **C**: `++++` в тексте = ПУСТОЙ `++`-passthrough (`++`+`++`) → рендерится в
+  ничто; regex asciidoctor `(\+\+\+?)(.*?)\1` бэктрекает с `+++` на `++` с той
+  же позиции.
+- **D**: имя attr-ref — строго `\w[\w-]*`: `{n!}`/`{x!}`/`{name!fallback}` —
+  НЕ референс, литерал (даже если `n` определён). Синтаксиса `!fallback` у
+  asciidoctor НЕТ — был самодельный.
+
+### Что сделано (ПАРСЕР, 4 точки)
+- inline.rs: `parse_bracket_macro_escaped` (скан `]` с пропуском `\]`, unescape
+  через Cow) — используется ТОЛЬКО в `try_stem_macro` (stem/latexmath/asciimath).
+- block.rs: арм `scanner::is_custom_block_macro` УДАЛЁН из scan_block_macros;
+  scanner.rs: `is_custom_block_macro`/`is_known_block_macro`/`is_valid_macro_name`
+  удалены. Tag::CustomBlockMacro в enum остаётся (API), армы рендерера/compat —
+  мёртвые, не тронуты.
+- inline.rs: triple-plus-арм при провале пробует double-plus с ТОЙ ЖЕ позиции;
+  в `try_double_plus_passthrough` close==0 разрешён (пустой → без события).
+  Попутно `+++x++` теперь матчится как `++`+`+x`+`++` (бэктрек как asciidoctor).
+- inline.rs: `!`-split в attr-ref удалён — content с `!` не парсится как реф;
+  поле `fallback` в Event::AttributeReference остаётся (API), парсер всегда
+  эмитит None; плюмбинг рендерера не тронут.
+- Тесты: 2 parser + 4 html переписаны (фиксировали самодельную семантику
+  fallback/custom-block-macro); +2 parser (stem-эскейпы; пустой `++++` +
+  литеральный `stem::[…]`), +3 html (unknown block macro + title;
+  stem-эскейпы; пустой `++++`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (924: parser 479, html 354).
+- Пробы p1..p5 байт-в-байт; stem.adoc 56→0 diff.
+- **Корпус: Identical 257→258 (+1)**; blast (base df05b5f): ровно 1 файл
+  изменился — 1 флип (stem.adoc), **0 регрессий** (удаление fallback и
+  block-catch-all больше нигде в корпусе не стреляло).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 258: **source (63** — include-«Unresolved directive»-параграфы?,
+  `----`→`—-` em-dash в callout-строке листинга), customize-title-label (66),
+  include (75), bibliography (77), subs (89), subs-group-table (90),
+  ordered (90), footnote (101), part-with-special-sections (103), metadata (108).
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, comment в середине dd-параграфа должен слить строки
+  в один `<p>`; label block-anchor `[[id,label]]` над блоком не побеждает
+  `.Title`.
+
+---
+
 ## Сессия (2026-06-12, двадцать шестая) — Фаза 3: lexicon (xreflabel/dt-терм → reftext)
 
 Запрос «продолжи». Ветка **`fix/xreflabel-reftext-resolution`** — НЕ закоммичена

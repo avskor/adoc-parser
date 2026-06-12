@@ -688,6 +688,12 @@ impl<'a> InlineState<'a> {
                 if self.try_triple_plus_passthrough(events, text_start) {
                     return true;
                 }
+                // `++++` is an empty double-plus passthrough (`++` + `++`),
+                // so a failed `+++` open retries as `++` from the same spot
+                // (Asciidoctor's `(\+\+\+?)(.*?)\1` backtracks the same way).
+                if self.try_double_plus_passthrough(events, text_start) {
+                    return true;
+                }
                 self.pos += 1;
                 true
             }
@@ -1254,14 +1260,13 @@ impl<'a> InlineState<'a> {
             None => return false,
         };
 
-        if close == 0 {
-            return false;
-        }
-
         let inner = &rest[..close];
 
         self.flush_text(*text_start, start_pos, events);
-        events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+        // `++++` → empty passthrough: renders as nothing (probe-verified).
+        if !inner.is_empty() {
+            events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+        }
 
         self.pos = after_open + close + 2;
         *text_start = self.pos;
@@ -1401,6 +1406,38 @@ impl<'a> InlineState<'a> {
         }
         let bracket_end = rest.find(']')?;
         Some((&rest[1..bracket_end], self.pos + prefix_len + bracket_end + 1))
+    }
+
+    /// Like `parse_bracket_macro`, but a `]` directly preceded by `\` does not
+    /// close the bracket, and every `\]` in the content is unescaped to `]`
+    /// (Asciidoctor's stem-macro content rule: `(.*?[^\\])?\]`).
+    fn parse_bracket_macro_escaped(&self, prefix_len: usize) -> Option<(Cow<'a, str>, usize)> {
+        let rest = &self.input[self.pos + prefix_len..];
+        if !rest.starts_with('[') {
+            return None;
+        }
+        let bytes = rest.as_bytes();
+        let mut i = 1;
+        let bracket_end = loop {
+            match bytes[i..].iter().position(|&b| b == b']') {
+                Some(off) => {
+                    let at = i + off;
+                    if bytes[at - 1] == b'\\' {
+                        i = at + 1;
+                    } else {
+                        break at;
+                    }
+                }
+                None => return None,
+            }
+        };
+        let inner = &rest[1..bracket_end];
+        let content = if inner.contains("\\]") {
+            Cow::Owned(inner.replace("\\]", "]"))
+        } else {
+            Cow::Borrowed(inner)
+        };
+        Some((content, self.pos + prefix_len + bracket_end + 1))
     }
 
     fn try_kbd_macro(
@@ -1543,7 +1580,9 @@ impl<'a> InlineState<'a> {
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
-        let Some((content, new_pos)) = self.parse_bracket_macro(prefix_len) else {
+        // Escaped `\]` does not close the macro and is unescaped in the content
+        // (`stem:[[[a,b\],[c,d\]\]]` → `[[a,b],[c,d]]`, probe-verified).
+        let Some((content, new_pos)) = self.parse_bracket_macro_escaped(prefix_len) else {
             return false;
         };
 
@@ -1552,7 +1591,7 @@ impl<'a> InlineState<'a> {
             variant: Cow::Borrowed(variant),
         }));
         if !content.is_empty() {
-            events.push(Event::Text(Cow::Borrowed(content)));
+            events.push(Event::Text(content));
         }
         events.push(Event::End(TagEnd::Stem));
 
@@ -2065,11 +2104,9 @@ impl<'a> InlineState<'a> {
             return self.try_inline_set(set_rest, events, text_start, start_pos, close);
         }
 
-        let (attr_name, fallback) = if let Some(bang) = content.find('!') {
-            (&content[..bang], Some(&content[bang + 1..]))
-        } else {
-            (content, None)
-        };
+        // Asciidoctor's reference name is `\w[\w-]*` — `{n!}` or any other
+        // content with `!` is not a reference and stays literal (probe-verified).
+        let attr_name = content;
 
         if attr_name.is_empty() {
             return false;
@@ -2115,7 +2152,7 @@ impl<'a> InlineState<'a> {
         self.flush_text(*text_start, start_pos, events);
         events.push(Event::AttributeReference {
             name: Cow::Borrowed(attr_name),
-            fallback: fallback.map(Cow::Borrowed),
+            fallback: None,
             trailing_brackets,
         });
 
@@ -3253,27 +3290,15 @@ mod tests {
     }
 
     #[test]
-    fn test_attribute_reference_with_fallback() {
+    fn test_attribute_reference_bang_is_literal() {
+        // Asciidoctor's reference name is `\w[\w-]*`: any `!` inside the braces
+        // means "not a reference" — the text stays literal (probe-verified),
+        // there is no fallback syntax.
         let events = parse("{name!default value}");
-        assert_eq!(events, vec![
-            Event::AttributeReference {
-                name: Cow::Borrowed("name"),
-                fallback: Some(Cow::Borrowed("default value")),
-                trailing_brackets: None,
-            },
-        ]);
-    }
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("{name!default value}"))]);
 
-    #[test]
-    fn test_attribute_reference_with_empty_fallback() {
         let events = parse("{name!}");
-        assert_eq!(events, vec![
-            Event::AttributeReference {
-                name: Cow::Borrowed("name"),
-                fallback: Some(Cow::Borrowed("")),
-                trailing_brackets: None,
-            },
-        ]);
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("{name!}"))]);
     }
 
     #[test]
@@ -4191,6 +4216,40 @@ mod tests {
             Event::Text(Cow::Borrowed("x^2")),
             Event::End(TagEnd::Stem),
         ]);
+    }
+
+    #[test]
+    fn test_stem_macro_escaped_brackets() {
+        // `\]` does not close the macro and is unescaped in the content
+        // (probe-verified: stem:[[[a,b\],[c,d\]\]((n),(k))] → [[a,b],[c,d]]((n),(k))).
+        let events = parse(r"stem:[[[a,b\],[c,d\]\]((n),(k))]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("stem") }),
+            Event::Text(Cow::Owned("[[a,b],[c,d]]((n),(k))".into())),
+            Event::End(TagEnd::Stem),
+        ]);
+
+        let events = parse(r"stem:[a\]b]");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Stem { variant: Cow::Borrowed("stem") }),
+            Event::Text(Cow::Owned("a]b".into())),
+            Event::End(TagEnd::Stem),
+        ]);
+    }
+
+    #[test]
+    fn test_empty_double_plus_passthrough() {
+        // `++++` inline = empty unconstrained passthrough → renders as nothing
+        // (probe-verified); `stem::[…]` block form falls to a paragraph whose
+        // text must stay literal (no inline stem match on `stem::[`).
+        let events = parse("a ++++ b");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Text(Cow::Borrowed(" b")),
+        ]);
+
+        let events = parse("stem::[x_0(1 + r)^2]");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("stem::[x_0(1 + r)^2]"))]);
     }
 
     #[test]
