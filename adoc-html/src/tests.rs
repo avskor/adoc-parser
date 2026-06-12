@@ -2258,6 +2258,62 @@ fn test_appendix_no_caption_without_style_html() {
 }
 
 #[test]
+fn test_appendix_numbering_html() {
+    // Probe-verified (/tmp/p_appx/p1): appendix subsections chain off the
+    // letter (`A.1.`, `A.1.1.`), the `appendix-caption` attribute customizes
+    // the label, and the appendix does NOT consume the parent's arabic
+    // ordinal — the next regular sibling continues from where it left off.
+    let html = to_html(
+        "= Article Title\n:appendix-caption: Exhibit\n:sectnums:\n\n== Section\n\n=== Subsection\n\n[appendix]\n== First Appendix\n\n=== First Subsection\n\n==== Deep\n\n=== Second Subsection\n\n[appendix]\n== Second Appendix\n\n== After Appendix",
+    );
+    assert!(html.contains(">1. Section</h2>"));
+    assert!(html.contains(">1.1. Subsection</h3>"));
+    assert!(html.contains(">Exhibit A: First Appendix</h2>"));
+    assert!(html.contains(">A.1. First Subsection</h3>"));
+    assert!(html.contains(">A.1.1. Deep</h4>"));
+    assert!(html.contains(">A.2. Second Subsection</h3>"));
+    assert!(html.contains(">Exhibit B: Second Appendix</h2>"));
+    assert!(html.contains(">2. After Appendix</h2>"));
+}
+
+#[test]
+fn test_appendix_caption_forms_html() {
+    // Unset `:appendix-caption!:` → bare numeral form "A. " (probe p2/p5);
+    // the letter shows even without :sectnums: (appendix is always numbered),
+    // but subsections are only numbered under :sectnums: (probe p4).
+    let html = to_html("= T\n:sectnums:\n:appendix-caption!:\n\n== Section\n\n[appendix]\n== First Appendix\n\n=== Sub");
+    assert!(html.contains(">A. First Appendix</h2>"));
+    assert!(html.contains(">A.1. Sub</h3>"));
+
+    let html = to_html("= T\n\n== Section\n\n[appendix]\n== First Appendix\n\n=== Sub");
+    assert!(html.contains(">Appendix A: First Appendix</h2>"));
+    assert!(html.contains(">Sub</h3>"));
+    assert!(!html.contains("A.1."));
+
+    // Nested appendix: caption replaces the sectnum on its own heading, but
+    // descendants keep the full ancestor chain (probe p7: "1.A.1.").
+    let html = to_html("= T\n:sectnums:\n\n== Section\n\n[appendix]\n=== Nested Appendix\n\n==== Sub\n\n== After");
+    assert!(html.contains(">Appendix A: Nested Appendix</h3>"));
+    assert!(html.contains(">1.A.1. Sub</h4>"));
+    assert!(html.contains(">2. After</h2>"));
+}
+
+#[test]
+fn test_sect0_resets_ordinals_article_not_book_html() {
+    // Probe-verified (appendix.adoc corpus file): in an article, a body
+    // sect0 restarts its children's per-parent ordinals at 1; in a book,
+    // chapters number sequentially across parts (global chapter-number).
+    let html = to_html("= T\n:sectnums:\n\n== One\n\n= Part Like\n\n== Chapter");
+    assert!(html.contains(">1. One</h2>"));
+    assert!(html.contains(">1. Chapter</h2>"));
+
+    let html = to_html("= T\n:doctype: book\n:sectnums:\n\n= First Part\n\n== Chapter\n\n== Second\n\n= Part Two\n\n== Third");
+    assert!(html.contains(">1. Chapter</h2>"));
+    assert!(html.contains(">2. Second</h2>"));
+    assert!(html.contains(">3. Third</h2>"));
+}
+
+#[test]
 fn test_glossary_section_html() {
     let html = to_html("[glossary]\n== Terms\n\nSome terms here.");
     assert!(html.contains("class=\"sect1\""));
