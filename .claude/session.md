@@ -1,5 +1,88 @@
 # Session context
 
+## Сессия (2026-06-13, тридцать шестая) — Фаза 3: level-0 спец-секции + partintro + части в TOC
+
+Запрос «продолжи». Ветка **`fix/part-special-sections`** — ЗАКОММИЧЕНА
+(`42fcbde`), смержена в master (`fd99bb7`), запушена, ветка удалена.
+Baseline: Identical 298, master `2c4a292`; base-бинарь /tmp/adoc_base
+пересобран с него (worktree).
+
+### Выбор задачи
+nearmiss на 298: replacements (4 — NCR, скип);
+**part-with-special-sections (103)** + **multipart-book (109)** — общие корни.
+
+### Семантика asciidoctor (пробы /tmp/p_part/p1..p13, m1 + ИСХОДНИК gem'а)
+- **initialize_section (parser.rb:1593-1626)**: стиль на секции (slot 1) =
+  спец-секция; `sect_level = 1 if sect_level == 0` (и в article — p8);
+  book+`[abstract]` → chapter, level=1 с ЛЮБОЙ глубины; `sect\d$`-стили —
+  не спец. КОЭРСИЯ DISPLAY-ONLY: вложенность/закрытие решается по СЫРОМУ
+  уровню ДО initialize_section (p12: `[appendix] = X` после части закрывает
+  часть, сиблинг; «Appendix A:» нумерация работает).
+- **partintro (next_section:400-440)**: первый не-секционный блок части —
+  если open-блок без стиля → рестайл partintro (intro НЕ открыт: следующие
+  блоки СНАРУЖИ, error «illegal block content...», p9); если `[partintro]`
+  параграф → конверсия в open-блок (одноблочный, p7/p10); иначе НОВЫЙ
+  open-блок partintro, intro открыт → все блоки до первой секции ВНУТРИ
+  (p2/p11); intro есть и у части без глав (p5, error в лог).
+- **TOC**: convert_outline — части видимы (level 0 → класс sectlevel1);
+  вложенность по ДЕРЕВУ, класс ul — по level ПЕРВОГО ребёнка (дети
+  appendix level 2 → sectlevel2, главы части level 1 → sectlevel1);
+  коэрснутый colophon (level 1) — СИБЛИНГ части в одном ul.
+- **Header order**: h1, `<div class="details">`, toc div (наш авто-TOC
+  вставлялся ДО details — Event::Toc ставил позицию в момент `:toc:`).
+- **dlist**: любой стиль кроме horizontal/qanda → `<div class="dlist X">` +
+  `<dt>` БЕЗ hdlist1 (p13, включая unknown `[foo]`).
+
+### Что сделано
+- **ПАРСЕР** block.rs: scan_section — sect_style/book/display_level
+  (закрытие по effective_level, эмиссия/контекст по display_level);
+  PartIntro закрывается на любом заголовке секции; part_awaiting_intro
+  взводится на голой level-0 секции в book. handle_part_intro (новый, в
+  диспетчере между scan_leaf_blocks и scan_block_macros): рестайл/обёртка;
+  BlockContext::PartIntro; армы в close_all_open_contexts и
+  check_close_delimited_block.
+- **RENDER-CORE**: TocEntry.depth (pub); toc_steps — стек depth, EnterLevel
+  несёт display-level ВХОДЯЩЕГО entry, ul только для встреченных уровней.
+- **РЕНДЕРЕР**: start_section_title — entry для всех body-секций
+  (depth = sect0_stack.len()); finish.rs sectlevel = max(level-1,1);
+  events.rs TagEnd::Header — перестановка toc_insert_position после
+  render_author_details; DlistStyle::Styled.
+- Тесты: +4 html, расширен core toc_structure_steps (+ book-сценарий).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (964).
+- Пробы p1..p13, m1 IDENTICAL (через normalize_html(get_body_content(..))!).
+- **Корпус: Identical 298→300 (+2 ФЛИПА)**. Blast (base 2c4a292): ровно
+  4 файла — 2 флипа, appendix.adoc 158→24 и outline.adoc 8681→6597 ближе,
+  **0 регрессий**.
+
+### ВАЖНО для методики
+- При ручном сравнении проб звать `normalize_html(get_body_content(html))` —
+  БЕЗ get_body_content токены ПУСТЫЕ (void-теги `<meta>` в head ломают
+  skip_depth) и сравнение тривиально «identical». Скрипты корпуса делают
+  это правильно; ошибка только при прямом вызове normalize_html.
+
+### Что дальше
+- nearmiss пересчитать на 300; кандидаты по прошлому списку: replacements
+  (4 — NCR, скип), **appendix.adoc (24!)** — почти флип после этой сессии,
+  metadata (111), apply-subs-to-text (115), image (125), ts-url-format (125),
+  sdr-007 (130), table-ref (135), counters (136), unordered (145).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table 431); syntax-quick-reference — file-level корень
+  (нет `<div id="content">`).
+- Pre-existing из прошлых сессий: пустой `<p></p>` в dd с вложенным
+  `:::`-dlist (description 298); `'''`/`<<<` после списка не закрывают
+  контексты; blank в DEFAULT-ячейке → второй `<p>`; footnotes-div внутри
+  a-ячейки; `[square]`-класс; компактный colist-`<li><p>`; `== heading` не
+  прерывает параграф; `[abstract]`-параграф → quoteblock; `:icons:`-colist;
+  unknown-style в class на quote/sidebar; list-merge через
+  continuation-attrlist; author-line после attr-entry в header; label
+  block-anchor `[[id,label]]` над блоком не побеждает `.Title`;
+  `\\https://…` двойной backslash; CSV drop incomplete row;
+  eager-`\\`-escape ест первый backslash.
+
+---
+
 ## Инструменты корпуса (2026-06-13): кэш эталонов asciidoctor
 
 `refcache.py` в `/mnt/c/tmp/adoc-test/` оборачивает `compare_full.run_cmd`:
