@@ -430,6 +430,12 @@ impl HtmlRenderer {
         // A level-0 section in the body (book part or article sect0) renders as a
         // standalone <h1 class="sect0"> with no wrapper div and no sectionbody.
         let is_sect0 = *level == 1 && !is_special;
+        // Per-parent ordinals: an article body sect0 restarts its children's
+        // numbering. Book parts don't — chapters number sequentially across
+        // parts (document-global chapter-number counter).
+        if is_sect0 && !self.doctype_book {
+            self.section_numberer.reset_descendant_ordinals();
+        }
         self.sect0_stack.push(is_sect0);
         self.sectionbody_stack.push(*level == 2 && !is_sect0);
         self.section_style_stack.push(
@@ -450,7 +456,16 @@ impl HtmlRenderer {
             output.push_str(">\n");
         }
         if style == Some("appendix") {
-            self.pending_section_caption = Some(self.section_numberer.appendix_caption());
+            // `:appendix-caption:` customizes the label; unset (`!`) drops it,
+            // leaving the bare letter numeral ("A. "). The attribute value is
+            // escaped here — the prefix goes raw into heading and TOC HTML.
+            let caption = self.document_attrs.get("appendix-caption").map(|v| {
+                let mut esc = String::new();
+                html_escape(&mut esc, v);
+                esc
+            });
+            self.pending_section_caption =
+                Some(self.section_numberer.appendix_prefix(*level, caption.as_deref()));
         } else if is_special {
             self.pending_section_caption = Some(String::new());
         }

@@ -682,6 +682,11 @@ impl HtmlRenderer {
         match tag_end {
             TagEnd::Header => {
                 self.in_header = false;
+                // Asciidoctor locks the doctype when the header ends; a
+                // `:doctype: book` entry in the body updates the attribute
+                // table but not the structural behavior (part numbering).
+                self.doctype_book =
+                    self.document_attrs.get("doctype").is_some_and(|d| d == "book");
                 self.finalize_header_authors();
                 if self.standalone {
                     self.render_author_details(output);

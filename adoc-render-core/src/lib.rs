@@ -368,6 +368,14 @@ impl TocBuilder {
 pub struct SectionNumberer {
     /// Per-level section counters; indices 2..=5 are used.
     counters: [u32; 6],
+    /// Letter numeral of an appendix open at that level. While set, it
+    /// stands in for the arabic counter in descendants' sectnum chains
+    /// (`A.1.`, `1.A.1.`); the level's own counter stays untouched, so a
+    /// regular sibling after the appendix continues the arabic sequence
+    /// (Asciidoctor: appendices don't consume the parent's ordinal).
+    appendix_letters: [Option<char>; 6],
+    /// Document-global appendix counter (`appendix-number`): letters keep
+    /// advancing across parts and nesting levels.
     appendix_counter: u8,
 }
 
@@ -379,32 +387,67 @@ impl SectionNumberer {
     /// Number prefix (`"1.2. "`, trailing space included) for the next
     /// section at `level`: bumps that level's counter and resets all deeper
     /// levels. Returns `None` outside the numbered range (levels 2 through
-    /// 5), leaving the counters untouched.
+    /// 5), leaving the counters untouched. Open-appendix levels in the
+    /// ancestor chain contribute their letter (`A.1. `).
     pub fn number_prefix(&mut self, level: u8) -> Option<String> {
         if !(2..=5).contains(&level) {
             return None;
         }
         let lvl = level as usize;
         self.counters[lvl] += 1;
+        self.appendix_letters[lvl] = None;
         for l in (lvl + 1)..6 {
             self.counters[l] = 0;
+            self.appendix_letters[l] = None;
         }
         let mut prefix = String::new();
         for l in 2..=lvl {
             if !prefix.is_empty() {
                 prefix.push('.');
             }
-            prefix.push_str(&self.counters[l].to_string());
+            match self.appendix_letters[l] {
+                Some(letter) => prefix.push(letter),
+                None => prefix.push_str(&self.counters[l].to_string()),
+            }
         }
         prefix.push_str(". ");
         Some(prefix)
     }
 
-    /// Caption prefix (`"Appendix A: "`) for the next appendix section.
-    pub fn appendix_caption(&mut self) -> String {
+    /// Caption prefix for the next appendix section at `level`. The letter
+    /// comes from the document-global counter; `caption` is the
+    /// `appendix-caption` attribute value (`Some` → `"{caption} {L}: "`,
+    /// even when empty; `None` (unset) → `"{L}. "` — both per Asciidoctor's
+    /// `assign_numeral`). The parent ordinal at `level` is not consumed;
+    /// deeper counters reset so subsections number `A.1.`, `A.2.`, …
+    pub fn appendix_prefix(&mut self, level: u8, caption: Option<&str>) -> String {
         self.appendix_counter += 1;
-        let letter = (b'A' + self.appendix_counter - 1) as char;
-        format!("Appendix {letter}: ")
+        let letter = (b'A' + (self.appendix_counter - 1).min(25)) as char;
+        let lvl = (level as usize).min(5);
+        if (2..=5).contains(&lvl) {
+            self.appendix_letters[lvl] = Some(letter);
+            for l in (lvl + 1)..6 {
+                self.counters[l] = 0;
+                self.appendix_letters[l] = None;
+            }
+        }
+        match caption {
+            Some(caption) => format!("{caption} {letter}: "),
+            None => format!("{letter}. "),
+        }
+    }
+
+    /// Reset all descendant ordinals (and open-appendix letters). Asciidoctor
+    /// numbers sections from a per-parent ordinal, so an article body sect0
+    /// starts its children at 1 again. Book parts must NOT call this: the
+    /// chapter numeral is a document-global counter (`chapter-number`),
+    /// sequential across parts. The appendix letter counter is likewise
+    /// document-global and survives the reset.
+    pub fn reset_descendant_ordinals(&mut self) {
+        for l in 2..6 {
+            self.counters[l] = 0;
+            self.appendix_letters[l] = None;
+        }
     }
 }
 
@@ -952,8 +995,25 @@ mod tests {
         assert_eq!(n.number_prefix(6), None);
         assert_eq!(n.number_prefix(3).as_deref(), Some("2.2. "));
 
-        assert_eq!(n.appendix_caption(), "Appendix A: ");
-        assert_eq!(n.appendix_caption(), "Appendix B: ");
+        // Appendix at level 2: caption forms, letter chain in subsections,
+        // and the level-2 arabic ordinal is NOT consumed.
+        assert_eq!(n.appendix_prefix(2, Some("Appendix")), "Appendix A: ");
+        assert_eq!(n.number_prefix(3).as_deref(), Some("A.1. "));
+        assert_eq!(n.number_prefix(4).as_deref(), Some("A.1.1. "));
+        assert_eq!(n.number_prefix(3).as_deref(), Some("A.2. "));
+        assert_eq!(n.appendix_prefix(2, Some("Exhibit")), "Exhibit B: ");
+        // Empty caption attribute keeps the format (leading space, Asciidoctor parity).
+        assert_eq!(n.appendix_prefix(2, Some("")), " C: ");
+        // Unset caption attribute → bare numeral form.
+        assert_eq!(n.appendix_prefix(2, None), "D. ");
+        // Regular sibling after the appendices continues from 2 (was "2.2.").
+        assert_eq!(n.number_prefix(2).as_deref(), Some("3. "));
+
+        // Nested appendix (level 3) keeps ancestors' numerals in descendants.
+        assert_eq!(n.appendix_prefix(3, Some("Appendix")), "Appendix E: ");
+        assert_eq!(n.number_prefix(4).as_deref(), Some("3.E.1. "));
+        // Sibling section at the appendix level clears the letter.
+        assert_eq!(n.number_prefix(3).as_deref(), Some("3.1. "));
     }
 
     #[test]

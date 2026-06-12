@@ -134,6 +134,9 @@ struct HtmlRenderer {
     toc_position: String,
     toc_title: String,
     toc_auto_seen: bool,
+    /// Doctype latched at the end of the document header (Asciidoctor locks
+    /// it there; body `:doctype:` entries don't change section semantics).
+    doctype_book: bool,
     in_section_title: bool,
     current_toc_entry: Option<TocEntry>,
     pending_block_meta: Option<BlockMeta>,
@@ -251,6 +254,7 @@ impl HtmlRenderer {
                 ("table-caption".to_string(), "Table".to_string()),
                 ("figure-caption".to_string(), "Figure".to_string()),
                 ("example-caption".to_string(), "Example".to_string()),
+                ("appendix-caption".to_string(), "Appendix".to_string()),
                 ("version-label".to_string(), "Version".to_string()),
             ]),
             delimited_block_stack: Vec::new(),
@@ -263,6 +267,7 @@ impl HtmlRenderer {
             toc_position: String::new(),
             toc_title: String::from(DEFAULT_TOC_TITLE),
             toc_auto_seen: false,
+            doctype_book: false,
             in_section_title: false,
             current_toc_entry: None,
             pending_block_meta: None,
