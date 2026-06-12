@@ -467,6 +467,11 @@ impl HtmlRenderer {
                     DlistStyle::Normal => {
                         output.push_str("<dt class=\"hdlist1\">");
                     }
+                    // A styled dlist (`[glossary]`, custom) drops the
+                    // hdlist1 class from its terms.
+                    DlistStyle::Styled => {
+                        output.push_str("<dt>");
+                    }
                 }
                 self.dt_term_start = Some(output.len());
             }
@@ -479,7 +484,7 @@ impl HtmlRenderer {
                         self.li_p_open.push(true);
                     }
                     DlistStyle::Qanda => {}
-                    DlistStyle::Normal => {
+                    DlistStyle::Normal | DlistStyle::Styled => {
                         self.dd_output_start = Some(output.len());
                         output.push_str("<dd>\n<p>");
                         self.li_p_open.push(true);
@@ -680,6 +685,14 @@ impl HtmlRenderer {
                 self.finalize_header_authors();
                 if self.standalone {
                     self.render_author_details(output);
+                    // An auto-TOC (`:toc:` in the header) sits AFTER the
+                    // author details: Asciidoctor's #header is h1, details,
+                    // then the toc div.
+                    if self.toc_auto_seen
+                        && !matches!(self.toc_position.as_str(), "preamble" | "macro")
+                    {
+                        self.toc_insert_position = Some(output.len());
+                    }
                     output.push_str("</div>\n");
                     self.content_start = Some(output.len());
                     if self.has_document_title {
@@ -891,7 +904,7 @@ impl HtmlRenderer {
                 match style {
                     DlistStyle::Horizontal => output.push_str("</table>\n</div>\n"),
                     DlistStyle::Qanda => output.push_str("</ol>\n</div>\n"),
-                    DlistStyle::Normal => output.push_str("</dl>\n</div>\n"),
+                    DlistStyle::Normal | DlistStyle::Styled => output.push_str("</dl>\n</div>\n"),
                 }
             }
             TagEnd::DescriptionTerm => {
@@ -905,7 +918,7 @@ impl HtmlRenderer {
                 match self.current_dlist_style() {
                     DlistStyle::Horizontal => {}
                     DlistStyle::Qanda => output.push_str("</em></p>\n"),
-                    DlistStyle::Normal => output.push_str("</dt>\n"),
+                    DlistStyle::Normal | DlistStyle::Styled => output.push_str("</dt>\n"),
                 }
             }
             TagEnd::DescriptionDescription => {
@@ -918,7 +931,7 @@ impl HtmlRenderer {
                         output.push_str("</td>\n</tr>\n");
                     }
                     DlistStyle::Qanda => output.push_str("</li>\n"),
-                    DlistStyle::Normal => {
+                    DlistStyle::Normal | DlistStyle::Styled => {
                         // Check if dd is empty (term-only) — if so, rollback
                         if let Some(start) = self.dd_output_start.take() {
                             let dd_content = &output[start..];

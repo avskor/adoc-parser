@@ -2103,6 +2103,80 @@ fn test_partintro_paragraph_masquerades_as_open_block() {
 }
 
 #[test]
+fn test_part_intro_implicit_wrap() {
+    // Leading body blocks of a book part are wrapped in an implicit
+    // [partintro] open block that closes at the first child section
+    // (Asciidoctor next_section). Multiple blocks share one wrapper.
+    let html = to_html("= Book\n:doctype: book\n\n= Part I\n\nFirst intro.\n\n* item\n\n== Chapter A\n\ntext");
+    assert!(html.contains(
+        "<div class=\"openblock partintro\">\n<div class=\"content\">\n<div class=\"paragraph\">\n<p>First intro.</p>\n</div>\n<div class=\"ulist\">"
+    ), "{html}");
+    // The wrapper closed before the chapter.
+    assert!(html.contains("</ul>\n</div>\n</div>\n</div>\n<div class=\"sect1\">\n<h2 id=\"_chapter_a\">"), "{html}");
+
+    // A bare open block as the first part block is restyled in place — no
+    // double wrapper; a following pre-section block renders OUTSIDE it
+    // (Asciidoctor: "illegal block content outside of partintro block").
+    let html = to_html("= Book\n:doctype: book\n\n= Part I\n\n--\nOpen intro.\n--\n\nOutside.\n\n== Chapter A\n\ntext");
+    assert_eq!(html.matches("openblock partintro").count(), 1, "{html}");
+    assert!(html.contains(
+        "</div>\n</div>\n</div>\n<div class=\"paragraph\">\n<p>Outside.</p>\n</div>\n<div class=\"sect1\">"
+    ), "{html}");
+
+    // No partintro without book doctype or for a non-part section.
+    let html = to_html("= Doc\n\n== Section\n\nText.");
+    assert!(!html.contains("partintro"), "{html}");
+}
+
+#[test]
+fn test_special_section_level_zero_coerced() {
+    // A special-styled level-0 section ([preface] = T) is displayed at
+    // level 1: sect1/h2 with a sectionbody; its subsection nests inside.
+    let html = to_html("= Book\n:doctype: book\n\n[preface]\n= Book Preface\n\nPreface text.\n\n=== Sub\n\nSub text.\n\n= Part 1\n\n== Chapter 1\n\nMud.");
+    assert!(html.contains(
+        "<div class=\"sect1\">\n<h2 id=\"_book_preface\">Book Preface</h2>\n<div class=\"sectionbody\">"
+    ), "{html}");
+    assert!(html.contains("<div class=\"sect2\">\n<h3 id=\"_sub\">Sub</h3>"), "{html}");
+    // The bare level-0 part stays a sect0 h1.
+    assert!(html.contains("<h1 id=\"_part_1\" class=\"sect0\">Part 1</h1>"), "{html}");
+
+    // [appendix] = X after a part closes the part (nesting is decided from
+    // the RAW level) and renders as a numbered sect1 sibling.
+    let html = to_html("= Book\n:doctype: book\n\n= Part 1\n\n== Chapter 1\n\nMud.\n\n[appendix]\n= The Appendix\n\nApp text.");
+    assert!(html.contains(
+        "<div class=\"sect1\">\n<h2 id=\"_the_appendix\">Appendix A: The Appendix</h2>"
+    ), "{html}");
+}
+
+#[test]
+fn test_toc_includes_book_parts() {
+    // Parts enter the TOC at depth 1 (ul class sectlevel1); chapters nest
+    // under them in their own sectlevel1 list; a coerced special section
+    // (level-0 [colophon] → level 1) is a TOC SIBLING of the parts.
+    let source = "= Book\nAuthor Name\n:doctype: book\n:toc:\n\n[colophon]\n= The Colophon\n\nText.\n\n= The First Part\n\n== The First Chapter\n\nText.\n\n[appendix]\n= The Appendix\n\n=== Basics\n\nText.";
+    // The header auto-TOC sits AFTER the author details div (standalone).
+    let full = to_html_with_options(source, HtmlOptions { standalone: true, ..Default::default() });
+    let details_pos = full.find("<div class=\"details\">").unwrap();
+    let toc_pos = full.find("<div id=\"toc\"").unwrap();
+    assert!(details_pos < toc_pos, "{full}");
+    let html = to_html(source);
+    assert!(html.contains(
+        "<ul class=\"sectlevel1\">\n<li><a href=\"#_the_colophon\">The Colophon</a></li>\n<li><a href=\"#_the_first_part\">The First Part</a>\n<ul class=\"sectlevel1\">\n<li><a href=\"#_the_first_chapter\">The First Chapter</a></li>\n</ul>\n</li>\n<li><a href=\"#_the_appendix\">Appendix A: The Appendix</a>\n<ul class=\"sectlevel2\">\n<li><a href=\"#_basics\">Basics</a></li>\n</ul>\n</li>\n</ul>"
+    ), "{html}");
+}
+
+#[test]
+fn test_styled_dlist_class_and_plain_dt() {
+    // Any dlist style other than horizontal/qanda joins the wrapper class
+    // and drops the hdlist1 class from <dt> (Asciidoctor convert_dlist).
+    let html = to_html("[glossary]\nmud:: wet dirt");
+    assert!(html.contains("<div class=\"dlist glossary\">\n<dl>\n<dt>mud</dt>"), "{html}");
+    // Unstyled dlists keep hdlist1.
+    let html = to_html("mud:: wet dirt");
+    assert!(html.contains("<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">mud</dt>"), "{html}");
+}
+
+#[test]
 fn test_style_masqueraded_paragraph_bare_content() {
     // A paragraph masqueraded by a block style carries its text bare —
     // no inner <div class="paragraph"><p> wrapper (unlike partintro above).

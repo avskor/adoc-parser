@@ -82,6 +82,9 @@ enum DlistStyle {
     Normal,
     Horizontal,
     Qanda,
+    /// Any other style (`[glossary]`, custom): the style joins the wrapper
+    /// class (`dlist glossary`) and `<dt>` loses the `hdlist1` class.
+    Styled,
 }
 
 #[derive(Clone)]

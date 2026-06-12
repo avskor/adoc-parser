@@ -204,7 +204,9 @@ impl HtmlRenderer {
                     if !toc.ends_with('\n') {
                         toc.push('\n');
                     }
-                    let sl = level - 1;
+                    // Level-1 entries (book parts / body sect0) display at
+                    // TOC depth 1, same as regular top-level sections.
+                    let sl = (level - 1).max(1);
                     writeln!(toc, "<ul class=\"sectlevel{sl}\">").unwrap();
                 }
                 TocStep::Item(entry) => {
