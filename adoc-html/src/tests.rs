@@ -134,6 +134,55 @@ fn test_ordered_list() {
 }
 
 #[test]
+fn test_mixed_marker_list_nesting() {
+    // Probe-verified vs asciidoctor (/tmp/p_subs/p6, p8): a marker that
+    // doesn't match any OPEN list nests inside the current item; a marker
+    // matching an open (ancestor) list closes back up to it.
+    // `. Linux` + `* Fedora` → ulist nested in the olist <li>
+    let html = to_html(". Linux\n* Fedora\n* Ubuntu\n. BSD\n* FreeBSD");
+    assert!(
+        html.contains("<p>Linux</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>Fedora</p>"),
+        "ulist must nest inside the olist item. Got:\n{html}"
+    );
+    assert!(
+        html.contains("</ul>\n</div>\n</li>\n<li>\n<p>BSD</p>"),
+        ".BSD returns to the parent olist as a sibling item. Got:\n{html}"
+    );
+    // reverse: olist nested in ulist item, return to ulist after
+    let html = to_html("* a\n. num\n. num2\n* b");
+    assert!(
+        html.contains("<p>a</p>\n<div class=\"olist arabic\">\n<ol class=\"arabic\">"),
+        "olist must nest inside the ulist item. Got:\n{html}"
+    );
+    assert!(
+        html.contains("</ol>\n</div>\n</li>\n<li>\n<p>b</p>"),
+        "* b returns to the parent ulist. Got:\n{html}"
+    );
+    // an unmatched SHALLOWER marker also nests (asciidoctor stack matching)
+    let html = to_html("** b\n* c");
+    assert!(
+        html.contains("<p>b</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>c</p>"),
+        "unmatched shallower marker nests. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_ordered_list_style_from_marker_depth() {
+    // Implicit olist style comes from the marker's dot count, not the
+    // ol-nesting count (probe /tmp/p_subs/p8, p9): `..` nested directly
+    // in a ulist item is loweralpha.
+    let html = to_html("* u1\n.. deep\n* u2");
+    assert!(
+        html.contains("<ol class=\"loweralpha\" type=\"a\""),
+        "`..` marker → loweralpha even as the first ol. Got:\n{html}"
+    );
+    let html = to_html(".. alone");
+    assert!(html.contains("<ol class=\"loweralpha\" type=\"a\""));
+    let html = to_html("... three");
+    assert!(html.contains("<ol class=\"lowerroman\" type=\"i\""));
+}
+
+#[test]
 fn test_ordered_list_loweralpha() {
     let html = to_html("[loweralpha]\n. a\n. b");
     assert!(html.contains("<ol class=\"loweralpha\" type=\"a\""), "expected ol with class and type. Got:\n{html}");

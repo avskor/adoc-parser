@@ -276,23 +276,18 @@ impl HtmlRenderer {
         }
     }
 
-    pub(crate) fn start_ordered_list(&mut self, output: &mut String, start: &Option<u32>, reversed: &bool, meta: &Option<BlockMeta>) {
+    pub(crate) fn start_ordered_list(&mut self, output: &mut String, start: &Option<u32>, reversed: &bool, depth: u8, meta: &Option<BlockMeta>) {
+        // Implicit style comes from the marker's dot count (Asciidoctor):
+        // `.` arabic, `..` loweralpha, `...` lowerroman, … — even when
+        // the list is nested inside another list type.
         let style_name = meta.as_ref()
             .and_then(|m| m.style.as_deref())
-            .unwrap_or_else(|| {
-                // Auto-assign style based on nesting depth (like Asciidoctor).
-                // tag_stack already contains the current OrderedList, so subtract 1.
-                let depth = self.tag_stack.iter()
-                    .filter(|t| matches!(t, TagEnd::OrderedList))
-                    .count()
-                    .saturating_sub(1);
-                match depth {
-                    0 => "arabic",
-                    1 => "loweralpha",
-                    2 => "lowerroman",
-                    3 => "upperalpha",
-                    _ => "upperroman",
-                }
+            .unwrap_or(match depth {
+                0 | 1 => "arabic",
+                2 => "loweralpha",
+                3 => "lowerroman",
+                4 => "upperalpha",
+                _ => "upperroman",
             });
         let wrapper_class = format!("olist {style_name}");
         if !self.is_inside_list_item() {

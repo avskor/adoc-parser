@@ -438,7 +438,7 @@ impl HtmlRenderer {
                 output.push_str("<div class=\"title\">");
             }
             Tag::UnorderedList { has_checklist } => self.start_unordered_list(output, has_checklist, &meta),
-            Tag::OrderedList { start, reversed } => self.start_ordered_list(output, start, reversed, &meta),
+            Tag::OrderedList { start, reversed, depth } => self.start_ordered_list(output, start, reversed, *depth, &meta),
             Tag::ListItem { checked, .. } => {
                 let interactive = self.interactive_ulist_stack.last().copied().unwrap_or(false);
                 output.push_str(match (checked, interactive) {
