@@ -36,6 +36,10 @@ pub struct BlockScanner<'a> {
     /// `scan_next_block` wrapper loops on this flag instead of recursing, so a
     /// long run of metadata lines runs in O(1) stack.
     rescan_requested: bool,
+    /// Markdown-blockquote nesting level of THIS scanner's content; nested
+    /// `> >` content is parsed by a child scanner with the level incremented.
+    /// Capped to keep pathological `> > > …` chains from recursing unboundedly.
+    md_quote_depth: u8,
     leveloffset: i32,
     idprefix: String,
     idseparator: String,
@@ -66,12 +70,24 @@ impl<'a> BlockScanner<'a> {
             in_continuation: false,
             had_blank_line: false,
             rescan_requested: false,
+            md_quote_depth: 0,
             leveloffset: 0,
             idprefix: "_".to_string(),
             idseparator: "_".to_string(),
             used_ids: std::collections::HashSet::new(),
             doc_attrs: std::collections::HashMap::new(),
         }
+    }
+
+    /// Scanner over pre-stripped lines in BODY context (no document-header
+    /// detection) — used for the compound content of markdown blockquotes.
+    fn new_nested(lines: Vec<&'a str>, md_quote_depth: u8) -> Self {
+        let mut scanner = Self::new("");
+        scanner.lines = lines;
+        scanner.header_emitted = true;
+        scanner.body_started = true;
+        scanner.md_quote_depth = md_quote_depth;
+        scanner
     }
 
     /// Register an explicit id (from `[#id]`/`[[id]]`) so later auto-generated
@@ -285,6 +301,15 @@ impl<'a> BlockScanner<'a> {
             .chain(attrs.positional.get(2).filter(|s| !s.is_empty())
                 .filter(|_| matches!(attrs.positional.first().map(|s| s.as_str()), Some("quote") | Some("verse")))
                 .map(|s| (Cow::Borrowed("citetitle"), Cow::Owned(s.clone()))))
+            // Single-quoted attribution/citetitle values get normal
+            // substitutions applied by the renderer — flagged via marker keys.
+            .chain(attrs.single_quoted_positionals.iter()
+                .filter(|_| matches!(attrs.positional.first().map(|s| s.as_str()), Some("quote") | Some("verse")))
+                .filter_map(|&i| match i {
+                    1 => Some((Cow::Borrowed("attribution-subs"), Cow::Borrowed(""))),
+                    2 => Some((Cow::Borrowed("citetitle-subs"), Cow::Borrowed(""))),
+                    _ => None,
+                }))
             .collect();
         named.sort_by(|(a, _), (b, _)| a.cmp(b));
         if style.is_some() || attrs.id.is_some() || !attrs.roles.is_empty()
@@ -2157,6 +2182,87 @@ impl<'a> BlockScanner<'a> {
                     }
                 }
             }
+        } else if para_lines.len() > 1
+            && para_lines[0].starts_with('"')
+            && para_lines[para_lines.len() - 1].starts_with("-- ")
+            && para_lines[para_lines.len() - 1].len() > 3
+            && para_lines[para_lines.len() - 2].ends_with('"')
+        {
+            // Quoted paragraph shorthand (asciidoctor parser.rb): a paragraph
+            // opening with `"`, whose second-to-last line ends with `"` and
+            // whose last line is `-- attribution[, citetitle]` becomes a
+            // quote block with BARE content (no paragraph wrapper).
+            let credit = &para_lines[para_lines.len() - 1][3..];
+            let mut lines: Vec<&'a str> = para_lines[..para_lines.len() - 1].to_vec();
+            lines[0] = &lines[0][1..]; // strip leading quote
+            let last = lines.len() - 1;
+            lines[last] = &lines[last][..lines[last].len() - 1]; // strip trailing quote
+            let mut attrs = block_attrs.unwrap_or_default();
+            attrs.positional = vec!["quote".to_string(), credit.to_string()];
+            if let Some((author, cite)) = credit.split_once(", ") {
+                attrs.positional = vec!["quote".to_string(), author.to_string(), cite.to_string()];
+            }
+            // asciidoctor applies subs to the credit line (apply_subs)
+            attrs.single_quoted_positionals = vec![1, 2];
+            self.push_event(Event::End(TagEnd::DelimitedBlock));
+            for (i, &pline) in lines.iter().enumerate().rev() {
+                if i < lines.len() - 1 {
+                    self.push_event(Event::SoftBreak);
+                }
+                self.push_event(Event::Text(Cow::Borrowed(pline)));
+            }
+            self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Quote }));
+            self.emit_block_metadata(&attrs, SubstitutionSet::NORMAL);
+        } else if para_lines[0].starts_with("> ") && self.md_quote_depth < 16 {
+            // Markdown-style blockquote (asciidoctor parser.rb): `>`-prefixed
+            // lines become a quote block with COMPOUND content — one `>` level
+            // is stripped and the rest is parsed as nested blocks (`> >` →
+            // nested quote, `> *` → list, a stripped bare `>` separates
+            // paragraphs); a trailing `-- attribution[, citetitle]` line
+            // supplies the attribution. Depth cap guards runaway recursion on
+            // pathological `> > > …` chains (beyond it: plain paragraph).
+            let mut lines: Vec<&'a str> = para_lines
+                .iter()
+                .map(|l| {
+                    if *l == ">" {
+                        &l[1..]
+                    } else if let Some(rest) = l.strip_prefix("> ") {
+                        rest
+                    } else {
+                        l
+                    }
+                })
+                .collect();
+            let mut credit: Option<&'a str> = None;
+            if let Some(last) = lines.pop_if(|l| l.starts_with("-- ") && l.len() > 3) {
+                credit = Some(&last[3..]);
+                while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                    lines.pop();
+                }
+            }
+            let mut attrs = block_attrs.unwrap_or_default();
+            attrs.positional = vec!["quote".to_string()];
+            if let Some(credit) = credit {
+                if let Some((author, cite)) = credit.split_once(", ") {
+                    attrs.positional = vec![
+                        "quote".to_string(),
+                        author.to_string(),
+                        cite.to_string(),
+                    ];
+                } else {
+                    attrs.positional.push(credit.to_string());
+                }
+                // asciidoctor applies subs to the credit line (apply_subs)
+                attrs.single_quoted_positionals = vec![1, 2];
+            }
+            let nested_events: Vec<Event<'a>> =
+                BlockScanner::new_nested(lines, self.md_quote_depth + 1).collect();
+            self.push_event(Event::End(TagEnd::DelimitedBlock));
+            for ev in nested_events.into_iter().rev() {
+                self.push_event(ev);
+            }
+            self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Quote }));
+            self.emit_block_metadata(&attrs, SubstitutionSet::NORMAL);
         } else {
             self.push_event(Event::End(TagEnd::Paragraph));
             for (i, &pline) in para_lines.iter().enumerate().rev() {

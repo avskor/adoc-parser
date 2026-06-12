@@ -796,48 +796,12 @@ impl HtmlRenderer {
                             output.push('\n');
                         }
                         output.push_str("</blockquote>\n");
-                        let attribution = self.quote_attribution.take();
-                        let citetitle = self.quote_citetitle.take();
-                        if attribution.is_some() || citetitle.is_some() {
-                            output.push_str("<div class=\"attribution\">\n");
-                            if let Some(ref attr) = attribution {
-                                output.push_str("&#8212; ");
-                                html_escape(output, attr);
-                            }
-                            if let Some(ref cite) = citetitle {
-                                if attribution.is_some() {
-                                    output.push_str("<br>\n");
-                                }
-                                output.push_str("<cite>");
-                                html_escape(output, cite);
-                                output.push_str("</cite>");
-                            }
-                            output.push('\n');
-                            output.push_str("</div>\n");
-                        }
+                        self.render_quote_attribution(output);
                         output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Verse, _)) => {
                         output.push_str("</pre>\n");
-                        let attribution = self.quote_attribution.take();
-                        let citetitle = self.quote_citetitle.take();
-                        if attribution.is_some() || citetitle.is_some() {
-                            output.push_str("<div class=\"attribution\">\n");
-                            if let Some(ref attr) = attribution {
-                                output.push_str("&#8212; ");
-                                html_escape(output, attr);
-                            }
-                            if let Some(ref cite) = citetitle {
-                                if attribution.is_some() {
-                                    output.push_str("<br>\n");
-                                }
-                                output.push_str("<cite>");
-                                html_escape(output, cite);
-                                output.push_str("</cite>");
-                            }
-                            output.push('\n');
-                            output.push_str("</div>\n");
-                        }
+                        self.render_quote_attribution(output);
                         output.push_str("</div>\n");
                     }
                     Some((DelimitedBlockKind::Example, true)) => {

@@ -533,12 +533,13 @@ impl HtmlRenderer {
                 self.delimited_block_stack.push((*kind, false));
                 // Capture attribution and citetitle from metadata
                 if let Some(m) = meta {
+                    let has = |key: &str| m.named.iter().any(|(k, _)| k == key);
                     self.quote_attribution = m.named.iter()
                         .find(|(k, _)| k == "attribution")
-                        .map(|(_, v)| v.clone());
+                        .map(|(_, v)| (v.clone(), has("attribution-subs")));
                     self.quote_citetitle = m.named.iter()
                         .find(|(k, _)| k == "citetitle")
-                        .map(|(_, v)| v.clone());
+                        .map(|(_, v)| (v.clone(), has("citetitle-subs")));
                 }
                 output.push_str("<div");
                 Self::write_meta_attrs(output, meta, "quoteblock");
@@ -564,12 +565,13 @@ impl HtmlRenderer {
                 self.delimited_block_stack.push((*kind, false));
                 // Capture attribution and citetitle from metadata
                 if let Some(m) = meta {
+                    let has = |key: &str| m.named.iter().any(|(k, _)| k == key);
                     self.quote_attribution = m.named.iter()
                         .find(|(k, _)| k == "attribution")
-                        .map(|(_, v)| v.clone());
+                        .map(|(_, v)| (v.clone(), has("attribution-subs")));
                     self.quote_citetitle = m.named.iter()
                         .find(|(k, _)| k == "citetitle")
-                        .map(|(_, v)| v.clone());
+                        .map(|(_, v)| (v.clone(), has("citetitle-subs")));
                 }
                 output.push_str("<div");
                 Self::write_meta_attrs(output, meta, "verseblock");
@@ -969,5 +971,41 @@ impl HtmlRenderer {
             }
         }
         false
+    }
+
+    /// Emit the `<div class="attribution">` trailer for a quote/verse block
+    /// from the captured attribution/citetitle. Values flagged for
+    /// substitution (single-quoted attrlist values, quoted-paragraph and
+    /// markdown-quote credit lines) are rendered with normal subs; others
+    /// are escaped verbatim.
+    pub(crate) fn render_quote_attribution(&mut self, output: &mut String) {
+        let attribution = self.quote_attribution.take();
+        let citetitle = self.quote_citetitle.take();
+        if attribution.is_none() && citetitle.is_none() {
+            return;
+        }
+        output.push_str("<div class=\"attribution\">\n");
+        if let Some((ref attr, subs)) = attribution {
+            output.push_str("&#8212; ");
+            if subs {
+                self.render_inline_value(output, attr);
+            } else {
+                html_escape(output, attr);
+            }
+        }
+        if let Some((ref cite, subs)) = citetitle {
+            if attribution.is_some() {
+                output.push_str("<br>\n");
+            }
+            output.push_str("<cite>");
+            if subs {
+                self.render_inline_value(output, cite);
+            } else {
+                html_escape(output, cite);
+            }
+            output.push_str("</cite>");
+        }
+        output.push('\n');
+        output.push_str("</div>\n");
     }
 }

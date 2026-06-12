@@ -22,16 +22,30 @@ fn is_bare_positional(seg: &str) -> bool {
 fn split_respecting_quotes(s: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
-    let mut in_quotes = false;
+    // Open quote char (`"` or `'`). A quote only OPENS at the start of a
+    // value — right after a comma (positional) or `=` (named) — so a
+    // mid-word apostrophe (`Dad's words`) is plain text, mirroring
+    // Asciidoctor's attrlist pattern that matches quoted values from the
+    // slot start.
+    let mut quote: Option<char> = None;
+    let mut at_value_start = true;
 
     for (i, ch) in s.char_indices() {
         match ch {
-            '"' => in_quotes = !in_quotes,
-            ',' if !in_quotes => {
-                parts.push(&s[start..i]);
-                start = i + 1;
+            _ if quote == Some(ch) => quote = None,
+            '"' | '\'' if quote.is_none() && at_value_start => {
+                quote = Some(ch);
+                at_value_start = false;
             }
-            _ => {}
+            ',' | '=' if quote.is_none() => {
+                if ch == ',' {
+                    parts.push(&s[start..i]);
+                    start = i + 1;
+                }
+                at_value_start = true;
+            }
+            c if c.is_whitespace() => {}
+            _ => at_value_start = false,
         }
     }
     parts.push(&s[start..]);
@@ -94,6 +108,10 @@ pub struct BlockAttributes {
     /// shifts the bare positionals: `[id=app, source, yaml]` puts `source` at
     /// slot 2 (the language) — not slot 1 (the style).
     pub first_positional_is_style: bool,
+    /// Indices into `positional` whose values were written in single quotes —
+    /// those get normal substitutions applied when used (attribution,
+    /// citetitle), unlike double-quoted/bare values.
+    pub single_quoted_positionals: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -253,7 +271,20 @@ impl BlockAttributes {
                 attrs.positional.push(part[..pos].to_string());
                 Self::parse_shorthand(&part[pos..], &mut attrs);
             } else {
-                attrs.positional.push(part.to_string());
+                // Quoted positional values lose their enclosing quotes;
+                // single-quoted ones additionally get normal substitutions
+                // applied when used (Asciidoctor: only `'…'` values are
+                // substituted — probe /tmp/p_subs/p12).
+                if part.len() >= 2 && part.starts_with('\'') && part.ends_with('\'') {
+                    attrs
+                        .single_quoted_positionals
+                        .push(attrs.positional.len());
+                    attrs.positional.push(part[1..part.len() - 1].to_string());
+                } else if part.len() >= 2 && part.starts_with('"') && part.ends_with('"') {
+                    attrs.positional.push(part[1..part.len() - 1].to_string());
+                } else {
+                    attrs.positional.push(part.to_string());
+                }
             }
         }
 
@@ -336,6 +367,10 @@ impl BlockAttributes {
             result.positional = merged;
             result.first_positional_is_style = true;
             result.implied_source_lang = newer.implied_source_lang;
+            // The later line's positionals replaced the slots, so its
+            // single-quote flags travel with them (older flags would point
+            // at overridden slots).
+            result.single_quoted_positionals = newer.single_quoted_positionals;
         } else if let Some(lang) = newer.implied_source_lang {
             // Later line of shape `[,lang]`: raw slot 2 overrides the
             // language slot of the merged attributes.
