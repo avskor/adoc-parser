@@ -3621,3 +3621,50 @@ fn test_comment_after_list_entry_keeps_single_list() {
     let html = to_html("a:: text a\n\n// comment\nb:: text b");
     assert_eq!(html.matches("<div class=\"dlist\">").count(), 2, "comment after blank splits. Got: {html}");
 }
+
+#[test]
+fn test_line_comment_mid_paragraph_merges_lines() {
+    // Asciidoctor reads paragraph-ish content with skip_line_comments: a `//`
+    // line inside the text is dropped and the lines merge (probe-verified).
+    let html = to_html("import foo\n// tag::classdef[]\nclass Bar {");
+    assert!(html.contains("<p>import foo\nclass Bar {</p>"), "paragraph merges. Got: {html}");
+    let html = to_html("NOTE: a\n// c\nb");
+    assert!(html.contains("a\nb"), "admonition merges. Got: {html}");
+    let html = to_html("t:: a\n// c\nb");
+    assert!(html.contains("<p>a\nb</p>"), "dd merges. Got: {html}");
+    let html = to_html(". a\n// c\nb");
+    assert!(html.contains("<p>a\nb</p>"), "olist item merges. Got: {html}");
+    // Verse paragraphs keep comment lines as content (verbatim).
+    let html = to_html("[verse]\na\n// c\nb");
+    assert!(html.contains("a\n// c\nb"), "verse keeps comment. Got: {html}");
+    // A comment followed by a blank line still ends the paragraph.
+    let html = to_html("a\n// c\n\nb");
+    assert!(html.contains("<p>a</p>") && html.contains("<p>b</p>"), "blank still splits. Got: {html}");
+}
+
+#[test]
+fn test_autolink_boundary_and_trailing_paren() {
+    // InlineLinkRx boundary: a bare URL only autolinks after start-of-text,
+    // whitespace, or one of `<>()[];` (probe-verified). A literal
+    // `include::https://…[]` line (from an escaped include) stays plain text.
+    let html = to_html("see https://x.example near");
+    assert!(html.contains("<a href=\"https://x.example\""), "after space links. Got: {html}");
+    let html = to_html("x include::https://x.example/a.adoc[] y");
+    assert!(!html.contains("<a "), "after colon stays literal. Got: {html}");
+    let html = to_html("word-https://x.example near");
+    assert!(!html.contains("<a "), "after dash stays literal. Got: {html}");
+    let html = to_html("a\"https://x.example\" near");
+    assert!(!html.contains("<a "), "after straight quote stays literal. Got: {html}");
+    // Trailing `)` is never part of a bare URL (all trailing ones strip).
+    let html = to_html("(https://x.example) near");
+    assert!(html.contains("<a href=\"https://x.example\""), "paren-wrapped links. Got: {html}");
+    assert!(!html.contains("x.example)"), "closing paren outside url. Got: {html}");
+    // Escaped bare autolink: backslash drops, URL stays literal — but only at
+    // a valid boundary; after a non-boundary char the backslash stays too.
+    let html = to_html("see \\https://x.example z");
+    assert!(html.contains("see https://x.example z") && !html.contains("<a "), "escape drops backslash. Got: {html}");
+    let html = to_html("code `\\https://x.example?a=b` z");
+    assert!(html.contains("<code>https://x.example?a=b</code>"), "escape inside monospace. Got: {html}");
+    let html = to_html("word-\\https://x.example z");
+    assert!(html.contains("word-\\https://x.example"), "no boundary keeps backslash. Got: {html}");
+}

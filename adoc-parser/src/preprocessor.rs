@@ -417,9 +417,13 @@ fn resolve_includes_rec(
                     write_unresolved_include(&mut output, source_file, path, attrs_str);
                 }
             }
-        } else if line.starts_with("\\include::") {
-            // Escaped include directive at start of line — strip the leading backslash
-            output.push_str(&line[1..]);
+        } else if let Some(rest) = line.strip_prefix('\\')
+            && crate::scanner::is_include_directive(rest).is_some()
+        {
+            // Escaped include directive — strip the leading backslash. A line
+            // that is not directive-shaped (e.g. trailing text after `]`) is
+            // not an escape: the backslash stays literal.
+            output.push_str(rest);
             output.push('\n');
         } else {
             output.push_str(line);
@@ -2173,6 +2177,24 @@ Value: {counter:x}";
         let input = "before\n\\include::file.adoc[]\nafter";
         let result = resolve_includes(input, &dir);
         assert_eq!(result, "before\ninclude::file.adoc[]\nafter");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_non_directive_shaped_include_lines_left_verbatim() {
+        let dir = std::env::temp_dir().join("adoc_test_nondirective_include");
+        let _ = std::fs::create_dir_all(&dir);
+
+        // Trailing remainder after `]` → not a directive: no resolution, and
+        // a backslash on such a line is not an escape (stays literal).
+        let input = "include::core.rb[tag=parse] <.>\n\\include::x.adoc[] tail";
+        let result = resolve_includes(input, &dir);
+        assert_eq!(result, input);
+
+        // Indented include is not a directive either.
+        let input2 = "  include::file.adoc[]";
+        assert_eq!(resolve_includes(input2, &dir), input2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

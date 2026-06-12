@@ -349,18 +349,22 @@ pub fn is_toc_macro(line: &str) -> bool {
 }
 
 pub fn is_include_directive(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("include::")?;
+    // Mirrors Asciidoctor's IncludeDirectiveRx
+    // (`^(\\)?include::([^\s\[](?:[^\[]*[^\s\[])?)\[(.+)?\]$`): the directive
+    // must start at column 0 and the closing `]` must end the line (reader
+    // lines are right-trimmed) — a trailing remainder makes the line plain
+    // text. The target cannot contain `[` or start/end with whitespace.
+    let rest = line.trim_end().strip_prefix("include::")?;
+    let rest = rest.strip_suffix(']')?;
     let bracket_start = rest.find('[')?;
-    let bracket_end = rest.rfind(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
     let path = &rest[..bracket_start];
-    if path.is_empty() {
+    if path.is_empty()
+        || path.starts_with(char::is_whitespace)
+        || path.ends_with(char::is_whitespace)
+    {
         return None;
     }
-    let attrs = &rest[bracket_start + 1..bracket_end];
+    let attrs = &rest[bracket_start + 1..];
     Some((path, attrs))
 }
 
@@ -1306,6 +1310,19 @@ mod tests {
         assert_eq!(is_include_directive("not include::file[]"), None); // not at start
         assert_eq!(is_include_directive("include::file.adoc]["), None); // malformed
         assert_eq!(is_include_directive(""), None);
+        // IncludeDirectiveRx is anchored: `]` must end the line; trailing
+        // remainder or leading indent makes the line plain text (probe-verified).
+        assert_eq!(is_include_directive("include::core.rb[tag=parse] <.>"), None);
+        assert_eq!(is_include_directive("  include::file.adoc[]"), None);
+        assert_eq!(
+            is_include_directive("include::file.adoc[]  "),
+            Some(("file.adoc", ""))
+        ); // reader lines are right-trimmed
+        assert_eq!(
+            is_include_directive("include::no pe.adoc[]"),
+            Some(("no pe.adoc", ""))
+        ); // interior whitespace in target is fine
+        assert_eq!(is_include_directive("include:: x.adoc[]"), None); // leading ws in target
     }
 
     #[test]

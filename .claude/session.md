@@ -1,5 +1,97 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать девятая) — Фаза 3: include.adoc examples + links.adoc (форма include-директивы + comment в параграфах + autolink-границы/escape)
+
+Запрос «продолжи». Ветка **`fix/include-directive-shape-and-mid-paragraph-comments`** —
+НЕ закоммичена (рабочее дерево). Baseline: Identical 259, master `248d240`
+(base-бинарь /tmp/adoc_base пересобран с master — тот же HEAD).
+
+### Выбор задачи
+nearmiss: **examples/include.adoc (52 diff)** — три корня (третий обнажился
+по ходу); после него добит links.adoc (оставался 1 diff — escaped autolink).
+
+### Семантика asciidoctor (пробы /tmp/p_inc: p1..p11, pA..pE, q1..q13, r1..r4)
+- **A (include-shape)**: IncludeDirectiveRx заякорен — `include::` с колонки 0
+  (индент → литерал/literal-блок, p9), `]` — ПОСЛЕДНИЙ символ строки (rstrip;
+  `include::core.rb[tag=parse] <.>` → НЕ директива: сырой текст + conum, p1/p2);
+  trailing-пробелы ок (p7); пробел ВНУТРИ target ок, на краях — нет.
+  `\include::…[] tail` — не directive-shaped → НЕ escape, backslash остаётся (p10).
+- **B (comment в параграфе)**: line-comment в середине параграфа дропается,
+  строки сливаются в один `<p>` (p3/p5) — то же в admonition (pA), ulist (pB),
+  dlist dd (pC), olist (pD); в verse/verbatim — контент (pE); comment+blank
+  завершает параграф (p4); `////` рвёт (p6); «comment после blank рвёт списки»
+  не затронуто.
+- **C (autolink-границы)**: bare-URL линкуется только после старта строки,
+  пробела или `<>()[];` — `:` (q1! — отсюда литеральная `include::https://…[]`
+  линковалась), `-`(q3), `=`(q5), `,`(q6), straight `"`(q8/q9) блокируют;
+  `'` у asciidoctor линкует НЕ из-за кавычки, а из-за `;` NCR `&#8217;` (q10).
+  Trailing `)` никогда не входит в bare-URL — стрипаются ВСЕ (r1/r4, даже от
+  `foo(bar)`), `;`/`:` тоже (r2/r3); но форма `URL[text]` — ДРУГОЙ альтернат
+  regex: URL до `[` целиком, `)` сохраняется.
+
+### Что сделано (ПАРСЕР, 4 файла)
+- scanner.rs `is_include_directive`: без leading-trim, `strip_suffix(']')` после
+  rstrip, path без краевых пробелов (по построению без `[`).
+- preprocessor.rs: escaped-ветка — `strip_prefix('\\')` +
+  `is_include_directive(rest)`-гейт (вместо безусловного starts_with).
+- block.rs: skip-арм `is_line_comment` (advance+continue) в scan_paragraph
+  (гейт `!verbatim_paragraph`, при пустом para_lines — break как раньше),
+  scan_admonition, 3 цикла wrapped-строк (ulist/olist/colist, replace_all),
+  dd-цикл dlist.
+- inline.rs `try_autolink`: boundary-check prev-символа (старт/whitespace/
+  `<>()[];`, хелперы `at_autolink_boundary`/`autolink_scheme_at`);
+  trailing-стрип получил `)` и гейтится `!bracket_follows`
+  (форма `URL[text]` идёт нестрипнутой — фикс регрессии key-concepts.adoc 0→3,
+  пойманной первым blast'ом).
+- inline.rs: НОВЫЙ escape-арм `\https://…` (handle_inline_escape) — backslash
+  дропается, URL литерален; гейт: MACROS + autolink_scheme_at + валидная
+  граница ПЕРЕД `\` (s-пробы: `word-\https` и `\\https` хранят backslash;
+  сам URL не линкуется, т.к. prev для него — оставшийся в input `\`).
+  Закрыл links.adoc (232→0, кейс `` `\https://…` `` в monospace).
+- Тесты: test_line_comment_skipped переписан (фиксировал разрыв параграфа);
+  +5 ассертов в test_is_include_directive; +1 preprocessor
+  (non-directive verbatim, indent); +1 parser (comment в ulist-item);
+  +2 html (merge параграф/admonition/dd/olist/verse/blank-негатив;
+  autolink-границы + trailing-paren + escaped-autolink 3 кейса).
+
+### Статус (верифицировано)
+- clippy --workspace 0 (после touch — не кэш); cargo test --workspace зелёное
+  (parser 480, html 356).
+- Все 20+ проб IDENTICAL (нормализация compare_full), кроме s5 — известный
+  pre-existing предел; examples/include.adoc 52→0.
+- **Корпус: Identical 259→262 (+3)**; blast (base 248d240): 11 файлов —
+  3 флипа (examples/include.adoc, document-attributes.adoc 284→0 — corpus-файл
+  с массой comment-в-параграфах, links.adoc 232→0), **0 регрессий**, 5 ближе:
+  pages/include.adoc 75→8, image-ref 686→659, subs.adoc 89→76, image 126→125,
+  sdr-005 377→372; metadata.adoc 108→111 и outline.adoc 8664→8681 — позиционный
+  сдвиговый шум, точечно сверено с эталоном (новый вывод = asciidoctor).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Известные пределы (вне корпуса)
+- `a'https://…`: asciidoctor линкует (boundary = `;` от NCR `&#8217;` после
+  replacements), мы — нет (сырой UTF-8 `'`).
+- URL сразу после inline-спана (`*b*https://…`): asciidoctor линкует (`>` от
+  `</strong>` в substituted-тексте), у нас prev=`*` → литерал (chunk-граница,
+  родственно em-dash-пределу 28-й сессии).
+- `\\https://…` (s5): asciidoctor хранит ОБА backslash; наш eager `\\`-escape
+  съедает первый (pre-existing escape-модель, упоминалась в 23-й сессии).
+
+### Что дальше
+- nearmiss на 262: **pages/include.adoc (8 diff!)** — почти флип, разведать
+  первым; customize-title-label (66), bibliography (77), subs (76),
+  subs-group-table (90), ordered (90), footnote (101),
+  part-with-special-sections (103), metadata (111 — позиционный шум, реально
+  ближе). Кандидат-корень quote.adoc: `-- Author` attribution не реализован.
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, label block-anchor `[[id,label]]` над блоком не
+  побеждает `.Title`. («comment в середине dd-параграфа» — ЗАКРЫТ этой сессией.)
+
+---
+
 ## Сессия (2026-06-12, двадцать восьмая) — Фаза 3: source.adoc (em-dash правила + include-строка = текст)
 
 Запрос «продолжи». Ветка **`fix/source-block-nearmiss`** — НЕ закоммичена

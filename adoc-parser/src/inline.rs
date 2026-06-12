@@ -814,6 +814,21 @@ impl<'a> InlineState<'a> {
                 true
             }
 
+            // `\https://…` — escaped bare autolink: the backslash drops and the
+            // URL stays literal text. LinkRx matches the backslash as part of
+            // the URL pattern, so this only applies where an unescaped autolink
+            // would match (valid boundary before the backslash); elsewhere —
+            // `word-\https://…`, `\\https://…` — the backslash stays literal.
+            b'\\' if self.subs.has(SubstitutionSet::MACROS)
+                && self.autolink_scheme_at(self.pos + 1)
+                && self.at_autolink_boundary(self.pos) =>
+            {
+                self.flush_text(*text_start, self.pos, events);
+                self.advance_by(1); // skip backslash; the URL itself is blocked
+                *text_start = self.pos; // from autolinking by the `\` before it
+                true
+            }
+
             // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
             b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'\'')) => {
                 self.flush_text(*text_start, self.pos, events);
@@ -2233,12 +2248,43 @@ impl<'a> InlineState<'a> {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
     }
 
+    /// Asciidoctor's InlineLinkRx matches a bare URL only after start-of-text,
+    /// whitespace, or one of `<>()[];` — any other preceding character blocks
+    /// the autolink (probe-verified: `see:https://…`, `word-https://…`, `a=…`,
+    /// `a,…`, and straight `"`/`'` stay literal, e.g. an escaped
+    /// `include::https://…[]` line).
+    fn at_autolink_boundary(&self, p: usize) -> bool {
+        match self.input[..p].chars().next_back() {
+            None => true,
+            Some(prev) => {
+                prev.is_whitespace()
+                    || matches!(prev, '<' | '>' | '(' | ')' | '[' | ']' | ';')
+            }
+        }
+    }
+
+    /// True when an autolink scheme (`http://`, `https://`, `ftp://`, `irc://`)
+    /// starts at byte offset `p`.
+    fn autolink_scheme_at(&self, p: usize) -> bool {
+        self.input.get(p..).is_some_and(|rest| {
+            rest.starts_with("http://")
+                || rest.starts_with("https://")
+                || rest.starts_with("ftp://")
+                || rest.starts_with("irc://")
+        })
+    }
+
     fn try_autolink(
         &mut self,
         events: &mut Vec<Event<'a>>,
         text_start: &mut usize,
     ) -> bool {
         let start_pos = self.pos;
+
+        if !self.at_autolink_boundary(start_pos) {
+            return false;
+        }
+
         let rest = &self.input[start_pos..];
 
         let url_end = rest
@@ -2250,9 +2296,14 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
-        // Strip trailing punctuation from bare URLs
-        while url.len() > 8 && matches!(url.as_bytes()[url.len() - 1], b'.' | b',' | b';' | b':' | b'!' | b'?') {
-            url = &url[..url.len() - 1];
+        // Trailing punctuation (incl. `)`) is stripped only from BARE urls —
+        // the `URL[text]` macro form keeps it (separate InlineLinkRx alternate),
+        // so check for an attrlist on the unstripped url first.
+        let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+        if !bracket_follows {
+            while url.len() > 8 && matches!(url.as_bytes()[url.len() - 1], b'.' | b',' | b';' | b':' | b'!' | b'?' | b')') {
+                url = &url[..url.len() - 1];
+            }
         }
         let url_end = url.len();
 
