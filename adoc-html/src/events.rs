@@ -210,30 +210,37 @@ impl HtmlRenderer {
                 }
             }
             Event::Footnote { id, text } => {
-                let num = self.footnote_registry.define(id.as_deref(), &text);
-                output.push_str("<sup class=\"footnote\"");
-                if let Some(ref id) = id {
-                    output.push_str(" id=\"_footnote_");
-                    html_escape(output, id);
-                    output.push('"');
-                }
-                output.push_str(">[<a class=\"footnote\" id=\"_footnoteref_");
-                output.push_str(&num.to_string());
-                output.push_str("\" href=\"#_footnotedef_");
-                output.push_str(&num.to_string());
-                output.push_str("\" title=\"View footnote.\">");
-                output.push_str(&num.to_string());
-                output.push_str("</a>]</sup>");
-            }
-            Event::FootnoteRef { id } => {
-                if let Some(num) = self.footnote_registry.lookup(id.as_ref()) {
-                    output.push_str("<sup class=\"footnote\">[<a class=\"footnote\" id=\"_footnoteref_");
+                // A footnote whose id is already registered is a reference to
+                // the existing definition — its text is ignored and the
+                // counter is not bumped.
+                if let Some(num) = id.as_deref().and_then(|i| self.footnote_registry.lookup(i)) {
+                    push_footnote_ref(output, num);
+                } else {
+                    let num = self.footnote_registry.define(id.as_deref(), &text);
+                    output.push_str("<sup class=\"footnote\"");
+                    if let Some(ref id) = id {
+                        output.push_str(" id=\"_footnote_");
+                        html_escape(output, id);
+                        output.push('"');
+                    }
+                    output.push_str(">[<a class=\"footnote\" id=\"_footnoteref_");
                     output.push_str(&num.to_string());
                     output.push_str("\" href=\"#_footnotedef_");
                     output.push_str(&num.to_string());
                     output.push_str("\" title=\"View footnote.\">");
                     output.push_str(&num.to_string());
                     output.push_str("</a>]</sup>");
+                }
+            }
+            Event::FootnoteRef { id } => {
+                if let Some(num) = self.footnote_registry.lookup(id.as_ref()) {
+                    push_footnote_ref(output, num);
+                } else {
+                    output.push_str(
+                        "<sup class=\"footnoteref red\" title=\"Unresolved footnote reference.\">[",
+                    );
+                    html_escape(output, &id);
+                    output.push_str("]</sup>");
                 }
             }
             Event::IndexTerm { text } => {
@@ -1092,4 +1099,14 @@ impl HtmlRenderer {
             }
         }
     }
+}
+
+/// Reference to an already-defined footnote: no anchor ids (those live on the
+/// definition), `footnoteref` class on the sup.
+fn push_footnote_ref(output: &mut String, num: usize) {
+    output.push_str("<sup class=\"footnoteref\">[<a class=\"footnote\" href=\"#_footnotedef_");
+    output.push_str(&num.to_string());
+    output.push_str("\" title=\"View footnote.\">");
+    output.push_str(&num.to_string());
+    output.push_str("</a>]</sup>");
 }

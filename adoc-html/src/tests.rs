@@ -622,9 +622,32 @@ fn test_footnote_named_html() {
     let html = to_html("First footnote:fn1[Named note] and again footnote:fn1[].");
     // Definition
     assert!(html.contains("<sup class=\"footnote\" id=\"_footnote_fn1\">[<a class=\"footnote\" id=\"_footnoteref_1\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
-    // Reference should use the same number
-    let refs: Vec<_> = html.match_indices("_footnoteref_1").collect();
-    assert!(refs.len() >= 2, "Expected at least 2 references to footnote 1, got {}", refs.len());
+    // Reference: footnoteref class, no anchor ids, same number
+    assert!(html.contains("<sup class=\"footnoteref\">[<a class=\"footnote\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
+    // Only one definition in the footnotes section
+    assert!(html.contains("<div class=\"footnote\" id=\"_footnotedef_1\">"));
+    assert!(!html.contains("_footnotedef_2"));
+}
+
+#[test]
+fn test_footnote_named_reuse_and_unresolved() {
+    // Reuse with text: id already defined wins — text ignored, counter not bumped
+    let html = to_html(
+        "Define.footnote:dis[Text A.]\n\nReuse.footnote:dis[Text B.]\n\nAnon.footnote:[anon two.]",
+    );
+    assert!(html.contains("<sup class=\"footnote\" id=\"_footnote_dis\">[<a class=\"footnote\" id=\"_footnoteref_1\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
+    assert!(html.contains("<sup class=\"footnoteref\">[<a class=\"footnote\" href=\"#_footnotedef_1\" title=\"View footnote.\">1</a>]</sup>"));
+    // The anonymous footnote gets number 2 (reuse did not bump)
+    assert!(html.contains(">2</a>. anon two."));
+    assert!(!html.contains(">2</a>. Text B."));
+    assert!(!html.contains("Text B.</"));
+
+    // Empty reference to an undefined id: unresolved marker, no definition
+    let html = to_html("Before def.footnote:nope[]");
+    assert!(html.contains(
+        "<sup class=\"footnoteref red\" title=\"Unresolved footnote reference.\">[nope]</sup>"
+    ));
+    assert!(!html.contains("footnotedef"));
 }
 
 #[test]
