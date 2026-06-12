@@ -1,5 +1,20 @@
 # Session context
 
+## Инструменты корпуса (2026-06-13): кэш эталонов asciidoctor
+
+`refcache.py` в `/mnt/c/tmp/adoc-test/` оборачивает `compare_full.run_cmd`:
+HTML asciidoctor кэшируется в `~/.cache/adoc-ref-cache/` (ключ: версия gem +
+аргументы + sha256 файла; наш бинарь не кэшируется, таймауты не кэшируются).
+Полный прогон корпуса 1м28с→22с, blast 37с. Все скрипты подхватывают кэш
+автоматически через импорт compare_full. Скрипты теперь ПЕРСИСТЕНТНО в
+каталоге корпуса (не в /tmp): `nearmiss.py`, `blast.py`,
+`diffone.py <rel-path> [limit]`. `ADOC_REF_REFRESH=1` — пересчитать кэш
+(после обновления gem'а или правки include-зависимостей — их нет в ключе).
+Верифицировано: hit/miss/инвалидация по содержимому; счётчики идентичны
+некэшированным (Identical 298).
+
+---
+
 ## Сессия (2026-06-12, тридцать пятая, часть 3) — Фаза 3: quoted paragraph + markdown blockquote + одиночные кавычки в attrlist
 
 Та же сессия, третья задача. Ветка **`fix/quoted-paragraph-and-md-blockquote`**
