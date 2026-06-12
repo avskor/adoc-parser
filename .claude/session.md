@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-13, тридцать восьмая) — Фаза 3: revision line после attr-entries + точная модель RevisionInfoLineRx
+
+Запрос «продолжи». Ветка **`fix/metadata-revision-line`** — ЗАКОММИЧЕНА
+(`e1f4275`), смержена в master (`d5d3f24`), запушена, ветка удалена.
+Baseline: Identical 301, master `06e6b03`; base-бинарь /tmp/adoc_base
+пересобран с него (worktree).
+
+### Выбор задачи
+nearmiss на 301: replacements (4 — NCR, скип); **metadata.adoc (111,
+len_delta=3)** — ОДИН корень: вся дельта — отсутствующий
+`<span id="revdate">` (позиционный сдвиг).
+
+### Семантика asciidoctor (пробы /tmp/p_meta/p1..p16 + parse_header_metadata
+parser.rb:1815-1866, RevisionInfoLineRx rx.rb:42)
+- **Структура header**: author line = первая непустая не-attr строка
+  (БЕЗ исключения section-маркеров: `= T`+`== Sec` без blank → author
+  «== Sec», p14; `v2.0, ...` первой строкой → тоже author, p11);
+  attr-entries/комментарии прозрачны и ДО author, и МЕЖДУ author и rev
+  (process_attribute_entries трижды). Rev line = следующая непустая
+  не-attr строка после author.
+- **RevisionInfoLineRx** (`^(?:[^\d{]*(.*?),)? *(?!:)(.*?)(?: *,?: *(.*))?$`)
+  матчит почти всё: freeform-строка → revdate (корпусный кейс: строка
+  `hazards...\` после `:description:` с callout `<.>`); запятая без цифр
+  до неё → revnumber SET-EMPTY (рендер `version ,`, p5/p16); хвостовое
+  голое `:` → revremark set-empty (пустой span); v-компонента — slice(1)
+  буквально (`version 5` → `ersion 5`!), только строчная v (V2.0 → date);
+  capture с запятой стартует с первой цифры/`{`; `:`-старт компоненты →
+  unshift (строка уходит в body, p9).
+- **КОНФЛИКТ эталонов**: author line ПОСЛЕ attr-entry (p2/p10) — asciidoctor
+  делает author, но parsing-lab (block/header/adjacent-to-body: `= T` +
+  `:toc:` + `first paragraph`) требует ПАРАГРАФ. Оставлен спек
+  (parsing-lab) — известная дивергенция, в pre-existing-списке.
+
+### Что сделано
+- **ПАРСЕР** scanner.rs parse_revision_line: переписан под регэксп;
+  `RevisionInfo { version: Option, date, remark: Option }` (Some("") =
+  set-empty ≠ None); тесты переписаны + freeform-кейсы.
+- **ПАРСЕР** block.rs: хелпер consume_header_attr_entries (комменты +
+  attr-entries с multiline, стоп на прочем) — зовётся между author и rev
+  и вместо хвостового цикла; author/rev-проверки БЕЗ
+  strip_any_section_marker; rev-арм эмитит Event::Attribute и для
+  set-empty version/remark (рендерер уже attribute-driven, set-empty
+  поддерживал).
+- Тесты: +1 html (7 кейсов), scanner-тесты на Option + 2 новых.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (969).
+- Пробы p1..p16 и v-формы IDENTICAL (кроме p2/p10 — спек-дивергенция
+  by design).
+- **Корпус: Identical 301→302 (+1 флип)**. Blast (base 06e6b03): ровно
+  1 файл — metadata.adoc 111→0, **0 регрессий**.
+
+### Что дальше
+- nearmiss на 302: replacements (4 — NCR, скип), apply-subs-to-text (115),
+  image (125), ts-url-format (125, len_delta=106), sdr-007 (130),
+  table-ref (135), counters (136), unordered (145), complex (152,
+  len_delta=143), sdr-001 (153), subs-symbol-repl (165).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table); syntax-quick-reference — file-level корень
+  (нет `<div id="content">`).
+- Pre-existing — см. сессию 36 + НОВОЕ: author line после attr-entry
+  (спек vs asciidoctor, осознанная дивергенция).
+
+---
+
 ## Сессия (2026-06-13, тридцать седьмая) — Фаза 3: нумерация appendix (буквенные цепочки + appendix-caption + per-parent ordinals)
 
 Запрос «продолжи». Ветка **`fix/appendix-numbering`** — ЗАКОММИЧЕНА
