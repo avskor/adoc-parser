@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-13, тридцать седьмая) — Фаза 3: нумерация appendix (буквенные цепочки + appendix-caption + per-parent ordinals)
+
+Запрос «продолжи». Ветка **`fix/appendix-numbering`** — ЗАКОММИЧЕНА
+(`9c6ebe0`), смержена в master (`be3044a`), запушена, ветка удалена.
+Baseline: Identical 300, master `18dab28`; base-бинарь /tmp/adoc_base
+пересобран с него (worktree).
+
+### Выбор задачи
+nearmiss на 300: replacements (4 — NCR, скип); **appendix.adoc (24)** —
+три корня: кастомный `:appendix-caption:`, нумерация подсекций `A.1.`,
+appendix бампил арабский счётчик.
+
+### Семантика asciidoctor (пробы /tmp/p_appx/p1..p9 + ИСХОДНИК gem'а)
+- **assign_numeral (abstract_block.rb:408-423)**: appendix → numeral =
+  документ-глобальный counter 'appendix-number' (буква A,B,…; через части
+  и уровни); caption = `"{appendix-caption} {numeral}: "` если атрибут ЕСТЬ
+  (даже пустой → " A: ", p8), иначе `"{numeral}. "` (p2/p5 — unset).
+  Appendix НЕ потребляет ordinal родителя (After Appendix = 2, p1).
+  Chapter — глобальный counter 'chapter-number' (сквозь части, p3);
+  прочие — per-parent ordinal.
+- **sectnum (section.rb:119-122)**: конкатенация numeral'ов предков
+  (parent level>1 asciidoctor) → подсекции appendix `A.1.`, `A.1.1.`;
+  вложенный appendix (p7): свой заголовок — ТОЛЬКО caption («Appendix A:»,
+  без префикса родителя), но потомки несут полную цепочку `1.A.1.`.
+- **numbered**: appendix — ВСЕГДА true (parser.rb:1619, независимо от
+  sectnums — caption виден и без него, p4); подсекции нумеруются только
+  при `:sectnums:`.
+- **per-parent ordinal**: article body-sect0 рестартит детей с 1 (p9);
+  book-части НЕ рестартят (chapter-number глобальный). Doctype ЗАПИРАЕТСЯ
+  в header: `:doctype: book` mid-body не меняет структурную семантику
+  (корпусный appendix.adoc).
+
+### Что сделано
+- **RENDER-CORE** SectionNumberer: appendix_letters[6] (буква занимает
+  уровень в цепочках потомков, counters уровня не трогаются);
+  appendix_prefix(level, caption: Option<&str>) вместо appendix_caption();
+  number_prefix строит цепочку из букв/цифр; reset_descendant_ordinals().
+- **РЕНДЕРЕР**: дефолт document_attrs «appendix-caption»→«Appendix»
+  (unset `!` удаляет ключ → форма «A. »; значение html_escape'ится);
+  blocks.rs appendix-арм читает атрибут; events.rs TagEnd::Header —
+  фиксация doctype_book; start_section_div: is_sect0 && !doctype_book →
+  reset_descendant_ordinals.
+- Тесты: +3 html (нумерация/caption-формы/sect0-reset article vs book),
+  расширен core section_numbering.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (967).
+- Пробы p1..p9 IDENTICAL (через normalize_html(get_body_content(..))).
+- **Корпус: Identical 300→301 (+1 флип)**. Blast (base 18dab28): ровно
+  1 файл — appendix.adoc 24→0, **0 регрессий**.
+
+### Что дальше
+- nearmiss на 301: replacements (4 — NCR, скип), metadata (111),
+  apply-subs-to-text (115), image (125), ts-url-format (125,
+  len_delta=106), sdr-007 (130), table-ref (135), counters (136),
+  unordered (145), complex (152, len_delta=143).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table); syntax-quick-reference — file-level корень
+  (нет `<div id="content">`).
+- Pre-existing-список — см. сессию 36 ниже (без изменений).
+
+---
+
 ## Сессия (2026-06-13, тридцать шестая) — Фаза 3: level-0 спец-секции + partintro + части в TOC
 
 Запрос «продолжи». Ветка **`fix/part-special-sections`** — ЗАКОММИЧЕНА
