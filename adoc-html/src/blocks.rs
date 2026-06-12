@@ -103,13 +103,44 @@ impl HtmlRenderer {
         // Collect extra CSS classes from options/named attrs
         let has_autowidth = meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "autowidth"));
         let stripes_value = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "stripes").map(|(_, v)| v.clone()));
+        let width_value = meta.as_ref().and_then(|m| m.named.iter().find(|(k, _)| k == "width").map(|(_, v)| v.clone()));
+
+        // Percentage table width (asciidoctor `tablepcwidth`): Ruby to_i on the
+        // raw value (leading integer, 0 if none); out-of-range values fall back
+        // to 100 except a literal "0"/"0%" (probe-verified: width=50% → inline
+        // style, width=100%/width=150/width=abc → stretch, width=0 → width: 0%).
+        let tablepcwidth = match width_value {
+            Some(ref raw) => {
+                let t = raw.trim_start();
+                let (sign, body) = match t.strip_prefix('-') {
+                    Some(rest) => (-1i64, rest),
+                    None => (1i64, t.strip_prefix('+').unwrap_or(t)),
+                };
+                let digits: &str = &body[..body
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(body.len())];
+                let intval = sign * digits.parse::<i64>().unwrap_or(0);
+                if !(1..=100).contains(&intval) && !(intval == 0 && (raw == "0" || raw == "0%")) {
+                    100
+                } else {
+                    intval
+                }
+            }
+            None => 100,
+        };
 
         // Base Asciidoctor table classes
         let mut classes = String::from("tableblock frame-all grid-all");
-        if !has_autowidth {
-            classes.push_str(" stretch");
+        let mut width_style = None;
+        if tablepcwidth == 100 {
+            // An explicit width suppresses fit-content even with %autowidth.
+            if has_autowidth && width_value.is_none() {
+                classes.push_str(" fit-content");
+            } else {
+                classes.push_str(" stretch");
+            }
         } else {
-            classes.push_str(" fit-content");
+            width_style = Some(format!("width: {}%;", tablepcwidth));
         }
         if let Some(ref sv) = stripes_value {
             classes.push_str(" stripes-");
@@ -122,6 +153,11 @@ impl HtmlRenderer {
 
         output.push_str("<table");
         Self::write_meta_attrs(output, meta, &classes);
+        if let Some(ref ws) = width_style {
+            output.push_str(" style=\"");
+            output.push_str(ws);
+            output.push('"');
+        }
         output.push_str(">\n");
 
         // Caption must come before colgroup per HTML5 spec
@@ -744,8 +780,10 @@ impl HtmlRenderer {
                     part = &part[star + 1..];
                 }
             }
-            // Extract numeric weight from the spec (e.g., "1", "<2", "^.>1")
-            // The weight is the trailing number, default is 1
+            // Extract numeric weight from the spec (e.g., "1", "<2", "^.>1").
+            // A trailing style letter (`1m`, `3e`) is not part of the weight —
+            // strip it first (cols="1m,3m" → 25%/75%, probe-verified).
+            let part = part.strip_suffix(['a', 'd', 'e', 'h', 'l', 'm', 's', 'v']).unwrap_or(part);
             let weight = part.chars().rev()
                 .take_while(|c| c.is_ascii_digit())
                 .collect::<String>()

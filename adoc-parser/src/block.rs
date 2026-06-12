@@ -1475,11 +1475,16 @@ impl<'a> BlockScanner<'a> {
             match parsed {
                 Some(t) => {
                     if let Some(text) = t.continuation {
-                        Self::append_cell_continuation(&mut all_cells, text);
+                        Self::append_cell_continuation(&mut all_cells, &text);
                     }
                     all_cells.extend(t.cells);
                 }
-                None => Self::append_cell_continuation(&mut all_cells, line.trim_end()),
+                // A line with no (unescaped) pipe continues the open cell;
+                // escaped `\|` separators in it are unescaped like cell content.
+                None => Self::append_cell_continuation(
+                    &mut all_cells,
+                    &scanner::unescape_cell_pipes(line.trim_end()),
+                ),
             }
             if first_data_idx.is_none() {
                 first_data_idx = Some(idx);
@@ -1714,7 +1719,7 @@ impl<'a> BlockScanner<'a> {
     /// Limitation: a continuation after a blank line should open a second
     /// `<p class="tableblock">` inside the cell (asciidoctor); we keep it in
     /// the same paragraph.
-    fn append_cell_continuation(cells: &mut Vec<scanner::CellSpec<'a>>, text: &'a str) {
+    fn append_cell_continuation(cells: &mut Vec<scanner::CellSpec<'a>>, text: &str) {
         if let Some(last) = cells.last_mut() {
             let content = last.content.to_mut();
             if !content.is_empty() {
@@ -1723,7 +1728,7 @@ impl<'a> BlockScanner<'a> {
             content.push_str(text);
         } else {
             cells.push(scanner::CellSpec {
-                content: Cow::Borrowed(text),
+                content: Cow::Owned(text.to_string()),
                 duplication: 1,
                 colspan: 1,
                 rowspan: 1,

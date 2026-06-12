@@ -3931,3 +3931,61 @@ fn test_autolink_boundary_and_trailing_paren() {
     let html = to_html("word-\\https://x.example z");
     assert!(html.contains("word-\\https://x.example"), "no boundary keeps backslash. Got: {html}");
 }
+
+#[test]
+fn test_table_width_attribute() {
+    // width != 100 → inline style instead of stretch (probe-verified)
+    let html = to_html("[cols=\"1,1\",width=50%]\n|===\n|a |b\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-all grid-all\" style=\"width: 50%;\">"), "explicit width → style. Got:\n{html}");
+    // width=100% → stretch class, no style
+    let html = to_html("[cols=\"1,1\",width=100%]\n|===\n|a |b\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"));
+    // bare number, Ruby to_i semantics (33 → 33%)
+    let html = to_html("[cols=\"1,1\",width=33]\n|===\n|a |b\n|===");
+    assert!(html.contains("style=\"width: 33%;\""));
+    // out-of-range / non-numeric fall back to 100 → stretch
+    let html = to_html("[cols=\"1,1\",width=150]\n|===\n|a |b\n|===");
+    assert!(html.contains("stretch"));
+    let html = to_html("[cols=\"1,1\",width=abc]\n|===\n|a |b\n|===");
+    assert!(html.contains("stretch"));
+    // %autowidth + explicit width → no fit-content, style wins; bare <col>
+    let html = to_html("[%autowidth,width=50%]\n|===\n|a |b\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-all grid-all\" style=\"width: 50%;\">"));
+    assert!(html.contains("<col>\n<col>"));
+    // %autowidth + width=100% → stretch (not fit-content)
+    let html = to_html("[%autowidth,width=100%]\n|===\n|a |b\n|===");
+    assert!(html.contains("stretch"));
+    // no width: autowidth → fit-content, otherwise stretch (unchanged)
+    let html = to_html("[%autowidth]\n|===\n|a |b\n|===");
+    assert!(html.contains("fit-content"));
+}
+
+#[test]
+fn test_table_col_widths_with_style_letters() {
+    // cols="1m,3m": trailing style letter is not part of the weight → 25%/75%
+    let html = to_html("[cols=\"1m,3m\"]\n|===\n|a |b\n|===");
+    assert!(html.contains("<col style=\"width: 25%;\">"), "1:3 ratio. Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 75%;\">"));
+}
+
+#[test]
+fn test_unconstrained_strong_skips_passthrough() {
+    // Passthroughs are extracted before quote subs: the `**` inside +++…+++
+    // must not close the surrounding span (pass-macro.adoc, probe-verified)
+    let html = to_html("**a+++**+++b**");
+    assert!(html.contains("<strong>a**b</strong>"), "Got:\n{html}");
+}
+
+#[test]
+fn test_table_escaped_pipe_cells() {
+    // `\|` in a cell is a literal pipe, not a separator
+    let html = to_html("|===\n|a \\| b |c\n|===");
+    assert!(html.contains("<p class=\"tableblock\">a | b</p>"), "Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">c</p>"));
+    // an entire cell of delimiters with a continuation line (delimited.adoc)
+    let html = to_html("|===\n|\\|===\n,===\n|===");
+    assert!(html.contains("<p class=\"tableblock\">|===\n,===</p>"), "Got:\n{html}");
+    // continuation line with only escaped pipes joins the open cell unescaped
+    let html = to_html("[cols=\"1,1\"]\n|===\n|a |b\ntail \\| more\n|c |d\n|===");
+    assert!(html.contains("<p class=\"tableblock\">b\ntail | more</p>"), "Got:\n{html}");
+}
