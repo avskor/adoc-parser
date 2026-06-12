@@ -149,6 +149,10 @@ struct HtmlRenderer {
     // None for cells that open without the plain paragraph wrapper. Used to
     // drop the wrapper for empty cells (asciidoctor: bare <td></td>).
     cell_p_start_stack: Vec<Option<usize>>,
+    // One entry per open AsciiDoc-style (`a`) table cell: raw cell text being
+    // captured. On TagEnd::TableCell the text gets a nested block parse whose
+    // events run through this same renderer (shared footnote/xref state).
+    acell_capture: Vec<String>,
     caption_counters: CaptionCounters,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
@@ -268,6 +272,7 @@ impl HtmlRenderer {
             stem_block_content: None,
             cell_style_stack: Vec::new(),
             cell_p_start_stack: Vec::new(),
+            acell_capture: Vec::new(),
             caption_counters: CaptionCounters::new(),
             block_title_output_start: None,
             block_title_inner_html: None,

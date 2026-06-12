@@ -1020,8 +1020,83 @@ fn test_table_cell_style_monospace_html() {
 
 #[test]
 fn test_table_cell_style_literal_html() {
-    let html = to_html("|===\nl| literal\n|===");
-    assert!(html.contains("<p class=\"tableblock\"><code>literal</code></p>"), "expected code in tableblock p. Got:\n{html}");
+    // Literal cell: <div class="literal"><pre> with verbatim subs — no inline
+    // formatting or attribute refs, special chars escaped (probe-verified).
+    let html = to_html("|===\nl|*not bold* <tag> {empty}\n|===");
+    assert!(
+        html.contains("<div class=\"literal\"><pre>*not bold* &lt;tag&gt; {empty}</pre></div>"),
+        "expected literal div cell. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_table_cell_style_asciidoc_html() {
+    // `a|` cell: nested block parse inside <div class="content"> (probe-verified).
+    let html = to_html("|===\na|\n* one\n* two\n|plain\n|===");
+    assert!(
+        html.contains("<td class=\"tableblock halign-left valign-top\"><div class=\"content\"><div class=\"ulist\">"),
+        "expected content div with nested ulist. Got:\n{html}"
+    );
+    assert!(html.contains("<li>\n<p>one</p>\n</li>"), "expected nested list items. Got:\n{html}");
+    // No newline before the closing </div></td>
+    assert!(html.contains("</div></div></td>"), "expected trimmed close. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">plain</p>"), "plain cell unaffected. Got:\n{html}");
+
+    // Simple text still becomes a nested paragraph (not a tableblock p)
+    let html = to_html("|===\na|Simple text.\n|===");
+    assert!(
+        html.contains("<div class=\"content\"><div class=\"paragraph\">\n<p>Simple text.</p>\n</div></div></td>"),
+        "expected nested paragraph. Got:\n{html}"
+    );
+
+    // Empty a-cell: empty content div (probe-verified)
+    let html = to_html("|===\na| |x\n|===");
+    assert!(html.contains("<div class=\"content\"></div></td>"), "expected empty content div. Got:\n{html}");
+
+    // Blank lines inside the cell are structural: two nested paragraphs
+    let html = to_html("|===\na|Para one.\n\nPara two.\n|===");
+    assert!(
+        html.contains("<p>Para one.</p>\n</div>\n<div class=\"paragraph\">\n<p>Para two.</p>"),
+        "expected two nested paragraphs. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_table_cell_literal_preserves_blank_and_indent() {
+    // Literal cell keeps inner blank lines and indentation; the edges of the
+    // whole cell text are stripped; a plain cell still collapses blank lines
+    // and trims continuation lines (probe-verified /tmp/p_acell/p12).
+    let html = to_html("|===\nl|line1\n  indented\nline3\n\nafter blank\n|===");
+    assert!(
+        html.contains("<div class=\"literal\"><pre>line1\n  indented\nline3\n\nafter blank</pre></div>"),
+        "expected preserved blank+indent in literal cell. Got:\n{html}"
+    );
+
+    let html = to_html("|===\n|one\n  two\n\nthree\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\">one\ntwo\nthree</p>"),
+        "expected collapsed plain cell. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_table_column_style_inheritance_html() {
+    // Column styles apply to cells without an explicit style; explicit styles
+    // (including `d` and `v` → default) win; header rows ignore column styles
+    // (probe-verified /tmp/p_acell/p7, p9, p10).
+    let html = to_html("[cols=\"1m,1s\"]\n|===\n|h1 |h2\n\nd|over |body\n|mono s|strong\n|===");
+    assert!(html.contains("<th class=\"tableblock halign-left valign-top\">h1</th>"), "header plain. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">over</p>"), "explicit d overrides m column. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\"><strong>body</strong></p>"), "s column inherited. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\"><code>mono</code></p>"), "m column inherited. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\"><strong>strong</strong></p>"), "explicit s. Got:\n{html}");
+
+    // AsciiDoc column style inherits too
+    let html = to_html("[cols=\"1a,1\"]\n|===\n|nested *bold*\n|plain\n|===");
+    assert!(
+        html.contains("<div class=\"content\"><div class=\"paragraph\">\n<p>nested <strong>bold</strong></p>\n</div></div></td>"),
+        "a column inherited. Got:\n{html}"
+    );
 }
 
 #[test]
