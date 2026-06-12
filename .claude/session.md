@@ -1,5 +1,113 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать третья) — Фаза 3: named-footnote reuse + a-ячейки (nested-парсинг) + наследование колоночных стилей + literal-ячейки + blank/indent в ячейках
+
+Запрос «продолжи». ДВЕ ветки, обе СМЕРЖЕНЫ в master и запушены:
+`fix/footnote-named-reuse` (`096bd8d`) и `fix/asciidoc-table-cell` (`b742c4b`),
+локальные ветки удалены. Baseline старта: Identical 284, master `8c95141`.
+
+### Задача 1: footnote examples (70 diff) — named-footnote reuse
+Семантика (пробы /tmp/p_fnr/p1..p3): повторное использование footnote с уже
+определённым id — ССЫЛКА (`<sup class="footnoteref">`, анкор БЕЗ id, номер
+первого определения), текст повтора игнорируется, счётчик не бампится — даже
+при `footnote:id[с текстом]`. Пустой `footnote:id[]` без определения —
+`<sup class="footnoteref red" title="Unresolved footnote reference.">[id]</sup>`
+(forward-ref НЕТ, строго document-order). Фикс: **РЕНДЕРЕР** events.rs — арм
+Event::Footnote сначала lookup (ref-форма через хелпер push_footnote_ref),
+арм FootnoteRef — ref-форма/unresolved-маркер. 1 тест переписан (фиксировал
+неверную ref-форму), +1 тест. **Корпус 284→285** (footnote examples 70→0),
+blast: ровно 1 файл, 0 регрессий.
+
+### Задача 2: a-ячейки + кластер табличных стилей (bibliography 72 → весь кластер)
+Семантика (пробы /tmp/p_acell/p1..p12):
+- `a|`-ячейка (или `a`-колонка): `<td ...><div class="content">` + ПОЛНЫЙ
+  nested block-парсинг контента (списки, listing, example...), trailing
+  newline отстрижен перед `</div></td>`; пустая a-ячейка —
+  `<div class="content"></div>`; в header-строке стили колонок ИГНОРИРУЮТСЯ
+  (плоский th). Footnote из a-ячейки делит СЧЁТЧИК с внешним документом,
+  xref на внешнюю секцию резолвится → nested-события надо гнать через ТОТ ЖЕ
+  рендерер, не отдельный экземпляр.
+- Колоночные стили наследуются ячейками без явного стиля: m/s/e-обёртки
+  (inline subs работают внутри), `l` → `<div class="literal"><pre>` с
+  VERBATIM-subs (`{empty}`/`*b*` литеральны, спецсимволы экранируются).
+- НОВЫЕ спек-чары `d` (explicit default, ПОБЕЖДАЕТ колоночный стиль) и `v`
+  (verse — рендерится как default). Без их распознавания `d|x` считался
+  continuation-текстом и ломал header-промоушн.
+- Blank-строки и отступы continuation-строк — ЧАСТЬ контента ячейки:
+  структурны для `a` (два параграфа!), сохраняются в `l` (pre), для
+  остальных стилей схлопываются (старое поведение). Края целого текста
+  ячейки стрипаются.
+
+### Что сделано (задача 2)
+- **ПАРСЕР** parser.rs: стек `cell_subs_pushed` — Start(TableCell):
+  AsciiDoc→subs NONE (сырой Text), Literal→VERBATIM; pop на End.
+- **ПАРСЕР** scanner.rs: `style_explicit: bool` в CellSpec/ExactCellSpec;
+  d/v в обоих style-парсерах; parse_cell_style_suffix возвращает 3-tuple;
+  parse_table_cells сохраняет отступ continuation-текста (prefix от сырой
+  строки, не trim_start).
+- **ПАРСЕР** block.rs: resolve_style наследует ЛЮБОЙ колоночный стиль при
+  `!style_explicit && style==Default`; blank-строка при открытых ячейках →
+  append_cell_continuation(""); строка без `|` — trim_end (не trim);
+  `cell_text(cell, style)` на эмиссии: a/l — trim краёв целиком, остальные —
+  lines().map(trim).filter(non-empty).join("\n").
+- **РЕНДЕРЕР** lib.rs: стек `acell_capture: Vec<String>`; blocks.rs
+  start_table_cell AsciiDoc-арм: `<div class="content">` + push капчура;
+  events.rs Text-арм: guard капчура (сырой текст в буфер, return);
+  TagEnd::TableCell AsciiDoc-арм: pop ДО рендера, nested
+  `adoc_parser::Parser::new(&raw)` события через self.push_event в тот же
+  output, pop trailing `\n`, `</div>`; Literal-армы: `<div class="literal">
+  <pre>`/`</pre></div>` (было `<p><code>`).
+- Тесты: literal-тест переписан (фиксировал `<p><code>`), +3 новых
+  (a-cell 4 кейса, column-inheritance 6 кейсов, literal blank/indent).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (946 passed).
+- Пробы p1..p12 IDENTICAL, кроме p6 — задокументированный предел: footnote,
+  ОПРЕДЕЛЁННАЯ в a-ячейке — asciidoctor эмитит nested footnotes-div ВНУТРИ
+  ячейки, у нас уходит во внешнюю секцию (счётчик общий — совпадает).
+- **Корпус: Identical 285→292 (+7)**: asciidoc-vs-markdown 988→0(!),
+  blocks/index, ordered 90→0, footnote pages 165→0, bibliography 72→0,
+  format-cell-content 154→0, format-column-content 195→0. Blast (base
+  096bd8d): 18 файлов — 7 флипов, **0 регрессий**, сильно ближе: pass-macro
+  241→3, table-ref 893→135, delimited 307→9, highlight-lines 286→185,
+  document-attributes-ref 6583→6363, character-replacement-ref 641→616;
+  рост syntax-quick-reference 2734→2828 / block-name-table 396→431 /
+  image-svg 263→282 — позиционный сдвиг поверх pre-existing корней
+  (сверено: syntax-quick-reference расходится с ПЕРВОГО токена — нет
+  `<div id="content">`; block-name-table — `++[<LABEL>]++`-корень ниже;
+  image-svg — frame/grid-атрибуты и SVG `<object>`).
+
+### Новые кандидаты-корни (вскрыты этой сессией)
+- **`++…++` double-plus pass НЕ экранирует спецсимволы** (pre-existing, НЕ от
+  этого фикса): asciidoctor `++[<LABEL>]++` → `[&lt;LABEL&gt;]`, у нас сырой
+  `[<LABEL>]`. Только `+++` (triple) пропускает без экранирования. Проба
+  /tmp/p_acell/p11. Закрыл бы block-name-table (431) и часть других.
+  Вероятный фикс: try_double_plus_passthrough → Event::Text вместо
+  InlinePassthrough (рендерер Text экранирует).
+- pass-macro остаток 3 diff: `stretch`-класс на таблице (ref без stretch) +
+  `+++…+++` внутри ячейки.
+- syntax-quick-reference: нет `<div id="content">` с первого токена —
+  file-level корень, ВЕСЬ счётчик 2828 — сдвиг.
+- table-ref остаток 135, cell.adoc 965 (blank в DEFAULT-ячейке → второй
+  `<p class="tableblock">` — предел остался), table.adoc 597 (`|=== <1>` в
+  параграфе → colist, корень прошлой сессии).
+
+### Что дальше
+- nearmiss пересчитать на 292; кандидаты: replacements (4 — NCR, скип),
+  pass-macro (3!), delimited (9!), subs (76), part-with-special-sections
+  (103), multipart-book (109), quote (109 — `-- Author` attribution),
+  metadata (111), apply-subs-to-text (115).
+- Pre-existing из прошлых сессий: blank в DEFAULT-ячейке → второй `<p>`,
+  footnotes-div внутри a-ячейки (новый предел), nested-список с другим
+  маркером в li, `[square]`-класс, компактный colist-`<li><p>`, `== heading`
+  не прерывает параграф, `[abstract]`-параграф → quoteblock, `:icons:`-colist,
+  unknown-style в class на quote/sidebar, list-merge через
+  continuation-attrlist, author-line после attr-entry в header, label
+  block-anchor `[[id,label]]` над блоком не побеждает `.Title`,
+  `\\https://…` двойной backslash, CSV drop incomplete row.
+
+---
+
 ## Сессия (2026-06-12, тридцать вторая) — Фаза 3: blank после `|===` гасит implicit header
 
 Запрос «продолжи». Ветка **`fix/add-columns-nearmiss`** — ЗАКОММИЧЕНА
