@@ -493,6 +493,10 @@ pub struct CellSpec<'a> {
     pub colspan: u8,
     pub rowspan: u8,
     pub style: CellStyle,
+    /// True when the style came from an explicit style char in the cell spec
+    /// (including `d`/`v`, which map to Default): an explicit style wins over
+    /// the column's style, an unspecified one inherits it.
+    pub style_explicit: bool,
     pub halign: HAlign,
     pub valign: VAlign,
 }
@@ -653,12 +657,15 @@ pub fn parse_span_spec(s: &str) -> (&str, u8, u8) {
 
 /// Parse a cell content style suffix from the end of a segment (before `|`).
 /// Valid style chars: `a` (AsciiDoc), `h` (Header), `e` (Emphasis),
-/// `m` (Monospace), `s` (Strong), `l` (Literal).
+/// `m` (Monospace), `s` (Strong), `l` (Literal), plus `d` (explicit
+/// default) and `v` (verse — rendered as a default paragraph).
 /// The style char is valid only if it is the last char and before it
 /// is either nothing or a `+` (part of span spec).
-pub fn parse_cell_style_suffix(s: &str) -> (&str, CellStyle) {
+/// The returned bool is true when a style char was consumed (explicit
+/// style: wins over the column's style).
+pub fn parse_cell_style_suffix(s: &str) -> (&str, CellStyle, bool) {
     if s.is_empty() {
-        return (s, CellStyle::Default);
+        return (s, CellStyle::Default, false);
     }
     let last_byte = s.as_bytes()[s.len() - 1];
     let style = match last_byte {
@@ -668,14 +675,15 @@ pub fn parse_cell_style_suffix(s: &str) -> (&str, CellStyle) {
         b'm' => CellStyle::Monospace,
         b's' => CellStyle::Strong,
         b'l' => CellStyle::Literal,
-        _ => return (s, CellStyle::Default),
+        b'd' | b'v' => CellStyle::Default,
+        _ => return (s, CellStyle::Default, false),
     };
     let before = &s[..s.len() - 1];
     let before_trimmed = before.trim();
     if before_trimmed.is_empty() || before_trimmed.ends_with('+') || before.ends_with(' ') {
-        (&s[..s.len() - 1], style)
+        (&s[..s.len() - 1], style, true)
     } else {
-        (s, CellStyle::Default)
+        (s, CellStyle::Default, false)
     }
 }
 
@@ -688,6 +696,8 @@ pub struct ExactCellSpec {
     pub halign: HAlign,
     pub valign: VAlign,
     pub style: CellStyle,
+    /// See [`CellSpec::style_explicit`].
+    pub style_explicit: bool,
 }
 
 /// Parse an entire string as a cell specifier (mirror of asciidoctor's
@@ -722,37 +732,42 @@ pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
     let (after_align, halign, valign) = parse_cell_align_prefix(rest);
     rest = after_align;
 
-    let style = match rest {
-        "" => CellStyle::Default,
-        "a" => CellStyle::AsciiDoc,
-        "h" => CellStyle::Header,
-        "e" => CellStyle::Emphasis,
-        "m" => CellStyle::Monospace,
-        "s" => CellStyle::Strong,
-        "l" => CellStyle::Literal,
+    let (style, style_explicit) = match rest {
+        "" => (CellStyle::Default, false),
+        // `d` (explicit default) and `v` (verse — rendered as a default
+        // paragraph by the html converter) consume the spec char.
+        "d" | "v" => (CellStyle::Default, true),
+        "a" => (CellStyle::AsciiDoc, true),
+        "h" => (CellStyle::Header, true),
+        "e" => (CellStyle::Emphasis, true),
+        "m" => (CellStyle::Monospace, true),
+        "s" => (CellStyle::Strong, true),
+        "l" => (CellStyle::Literal, true),
         _ => return None,
     };
 
-    Some(ExactCellSpec { duplication, colspan, rowspan, halign, valign, style })
+    Some(ExactCellSpec { duplication, colspan, rowspan, halign, valign, style, style_explicit })
 }
 
 pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
-    let trimmed = line.trim_start();
-
     // Find the first pipe — if none, not a table line
-    let first_pipe = trimmed.find('|')?;
+    let indent = line.len() - line.trim_start().len();
+    let first_pipe = indent + line[indent..].find('|')?;
 
     // Before first pipe: a valid align+style+span spec (for the first cell on
     // this line), or content continuing the previous line's last cell —
     // possibly with a spec at its end, attached to the `|` that follows
-    // (mirror of the non-last part parsing below).
-    let prefix = trimmed[..first_pipe].trim();
+    // (mirror of the non-last part parsing below). Continuation text keeps its
+    // leading indentation (significant in literal and AsciiDoc cells).
+    let prefix_raw = &line[..first_pipe];
+    let prefix = prefix_raw.trim();
     let mut continuation: Option<&str> = None;
     let mut pending = ExactCellSpec {
         duplication: 1,
         colspan: 1,
         rowspan: 1,
         style: CellStyle::Default,
+        style_explicit: false,
         halign: HAlign::default(),
         valign: VAlign::default(),
     };
@@ -763,14 +778,14 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         } else {
             // Continuation text; a spec for the first cell of this line may
             // still sit at its end, whitespace-separated (`tail 2+|wide`).
-            let mut text = prefix;
-            if let Some((before, token)) = prefix.rsplit_once([' ', '\t'])
+            let mut text = prefix_raw.trim_end();
+            if let Some((before, token)) = text.rsplit_once([' ', '\t'])
                 && let Some(spec) = parse_cell_spec_exact(token)
             {
                 pending = spec;
                 text = before.trim_end();
             }
-            if !text.is_empty() {
+            if !text.trim().is_empty() {
                 continuation = Some(text);
             }
         }
@@ -781,11 +796,12 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         colspan: 1,
         rowspan: 1,
         style: CellStyle::Default,
+        style_explicit: false,
         halign: HAlign::default(),
         valign: VAlign::default(),
     };
     let mut cells = Vec::new();
-    let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
+    let parts: Vec<&str> = line[first_pipe + 1..].split('|').collect();
 
     for (i, part) in parts.iter().enumerate() {
         // Parse next-cell specs from END of the part. A spec only ever
@@ -804,7 +820,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
             // like `2*>m` that the legacy suffix parsers below can't)
             (before, spec)
         } else {
-            let (after_style, style) = parse_cell_style_suffix(part);
+            let (after_style, style, style_explicit) = parse_cell_style_suffix(part);
             let (after_span, cs, rs) = parse_span_spec(after_style);
             let (content, halign, valign) = parse_cell_align_suffix(after_span);
             (
@@ -814,6 +830,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
                     colspan: cs,
                     rowspan: rs,
                     style,
+                    style_explicit,
                     halign,
                     valign,
                 },
@@ -830,6 +847,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
             colspan: pending.colspan,
             rowspan: pending.rowspan,
             style: pending.style,
+            style_explicit: pending.style_explicit,
             halign: pending.halign,
             valign: pending.valign,
         });
@@ -1449,23 +1467,23 @@ mod tests {
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn styled_cell(content: &str, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_styled_cell(content: &str, colspan: u8, rowspan: u8, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn aligned_cell(content: &str, halign: HAlign, valign: VAlign) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, halign, valign }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign, valign }
     }
 
     /// Cells of a parsed table line (continuation ignored), for assertions.
@@ -1683,26 +1701,29 @@ mod tests {
     #[test]
     fn test_parse_cell_style_suffix() {
         // Standalone style letter
-        assert_eq!(parse_cell_style_suffix("a"), ("", CellStyle::AsciiDoc));
-        assert_eq!(parse_cell_style_suffix("h"), ("", CellStyle::Header));
-        assert_eq!(parse_cell_style_suffix("e"), ("", CellStyle::Emphasis));
-        assert_eq!(parse_cell_style_suffix("m"), ("", CellStyle::Monospace));
-        assert_eq!(parse_cell_style_suffix("s"), ("", CellStyle::Strong));
-        assert_eq!(parse_cell_style_suffix("l"), ("", CellStyle::Literal));
+        assert_eq!(parse_cell_style_suffix("a"), ("", CellStyle::AsciiDoc, true));
+        assert_eq!(parse_cell_style_suffix("h"), ("", CellStyle::Header, true));
+        assert_eq!(parse_cell_style_suffix("e"), ("", CellStyle::Emphasis, true));
+        assert_eq!(parse_cell_style_suffix("m"), ("", CellStyle::Monospace, true));
+        assert_eq!(parse_cell_style_suffix("s"), ("", CellStyle::Strong, true));
+        assert_eq!(parse_cell_style_suffix("l"), ("", CellStyle::Literal, true));
+        // Explicit default (d) and verse (v) consume the spec char too
+        assert_eq!(parse_cell_style_suffix("d"), ("", CellStyle::Default, true));
+        assert_eq!(parse_cell_style_suffix("v"), ("", CellStyle::Default, true));
         // After span spec (ends with +)
-        assert_eq!(parse_cell_style_suffix("2+a"), ("2+", CellStyle::AsciiDoc));
-        assert_eq!(parse_cell_style_suffix("2.3+s"), ("2.3+", CellStyle::Strong));
+        assert_eq!(parse_cell_style_suffix("2+a"), ("2+", CellStyle::AsciiDoc, true));
+        assert_eq!(parse_cell_style_suffix("2.3+s"), ("2.3+", CellStyle::Strong, true));
         // Content ending with style letter — NOT a style
-        assert_eq!(parse_cell_style_suffix("data"), ("data", CellStyle::Default));
-        assert_eq!(parse_cell_style_suffix("date"), ("date", CellStyle::Default));
+        assert_eq!(parse_cell_style_suffix("data"), ("data", CellStyle::Default, false));
+        assert_eq!(parse_cell_style_suffix("date"), ("date", CellStyle::Default, false));
         // Empty
-        assert_eq!(parse_cell_style_suffix(""), ("", CellStyle::Default));
+        assert_eq!(parse_cell_style_suffix(""), ("", CellStyle::Default, false));
         // Trailing space — last char is space, not a style letter
-        assert_eq!(parse_cell_style_suffix(" a "), (" a ", CellStyle::Default));
-        assert_eq!(parse_cell_style_suffix(" data "), (" data ", CellStyle::Default));
+        assert_eq!(parse_cell_style_suffix(" a "), (" a ", CellStyle::Default, false));
+        assert_eq!(parse_cell_style_suffix(" data "), (" data ", CellStyle::Default, false));
         // Style letter preceded by space (content + space + style)
-        assert_eq!(parse_cell_style_suffix(" A e"), (" A ", CellStyle::Emphasis));
-        assert_eq!(parse_cell_style_suffix(" text s"), (" text ", CellStyle::Strong));
+        assert_eq!(parse_cell_style_suffix(" A e"), (" A ", CellStyle::Emphasis, true));
+        assert_eq!(parse_cell_style_suffix(" text s"), (" text ", CellStyle::Strong, true));
     }
 
     #[test]

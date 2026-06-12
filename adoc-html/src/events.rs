@@ -23,6 +23,12 @@ impl HtmlRenderer {
             Event::Start(tag) => self.start_tag(output, &tag),
             Event::End(tag_end) => self.end_tag(output, &tag_end),
             Event::Text(text) => {
+                // Raw content of an open AsciiDoc-style (`a`) table cell: collect
+                // for the nested block parse on TagEnd::TableCell.
+                if let Some(buf) = self.acell_capture.last_mut() {
+                    buf.push_str(&text);
+                    return;
+                }
                 if self.capturing_doctitle {
                     self.doctitle_buf.push_str(&text);
                 }
@@ -1004,8 +1010,26 @@ impl HtmlRenderer {
                 match style {
                     CellStyle::Emphasis => output.push_str("</em></p>"),
                     CellStyle::Strong => output.push_str("</strong></p>"),
-                    CellStyle::Monospace | CellStyle::Literal => output.push_str("</code></p>"),
-                    CellStyle::AsciiDoc => {}
+                    CellStyle::Monospace => output.push_str("</code></p>"),
+                    CellStyle::Literal => output.push_str("</pre></div>"),
+                    CellStyle::AsciiDoc => {
+                        // Nested block parse of the captured raw text, rendered
+                        // through this same renderer so footnotes, xrefs and
+                        // document attributes share the outer document's state.
+                        // Pop BEFORE rendering: nested Text must not be captured.
+                        let raw = self.acell_capture.pop().unwrap_or_default();
+                        if !raw.is_empty() {
+                            for ev in adoc_parser::Parser::new(&raw) {
+                                self.push_event(output, ev);
+                            }
+                            // Blocks end with '\n'; asciidoctor puts none before
+                            // the closing </div></td>.
+                            if output.ends_with('\n') {
+                                output.pop();
+                            }
+                        }
+                        output.push_str("</div>");
+                    }
                     _ => {
                         if p_start == Some(output.len()) {
                             // Empty cell: asciidoctor renders a bare <td></td>

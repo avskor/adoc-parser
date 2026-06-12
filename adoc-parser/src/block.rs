@@ -1455,6 +1455,12 @@ impl<'a> BlockScanner<'a> {
                         .sum();
                     awaiting_post_blank_line = true;
                 }
+                // A blank line is part of the open cell's content (structural
+                // for AsciiDoc cells, preserved in literal cells; collapsed
+                // for other styles at emission).
+                if first_data_idx.is_some() && !all_cells.is_empty() {
+                    Self::append_cell_continuation(&mut all_cells, "");
+                }
                 continue;
             }
             let parsed = scanner::parse_table_cells(line);
@@ -1473,7 +1479,7 @@ impl<'a> BlockScanner<'a> {
                     }
                     all_cells.extend(t.cells);
                 }
-                None => Self::append_cell_continuation(&mut all_cells, line.trim()),
+                None => Self::append_cell_continuation(&mut all_cells, line.trim_end()),
             }
             if first_data_idx.is_none() {
                 first_data_idx = Some(idx);
@@ -1577,20 +1583,43 @@ impl<'a> BlockScanner<'a> {
             (halign, valign)
         };
 
-        // Resolve a cell's effective style. An explicit cell style is kept as-is.
-        // A cell with no style sitting in a header (`h`) column inherits Header so
-        // its body cells render as <th> (e.g. `[cols="25h,~,~"]`). Other column
-        // styles (a/e/m/s/l) involve cell-content handling and are out of scope here.
+        // Resolve a cell's effective style: an explicit cell style wins,
+        // otherwise the cell inherits its column's style (header `h` → <th>,
+        // AsciiDoc `a` → nested block parse, e/s/m wrappers, literal `l`).
+        // Header-section rows ignore column styles (asciidoctor: plain <th>).
         let resolve_style = |cell: &scanner::CellSpec<'_>, col_idx: usize| -> CellStyle {
-            if cell.style == CellStyle::Default
+            if !cell.style_explicit
+                && cell.style == CellStyle::Default
                 && let Some(ref specs) = col_specs
                 && col_idx < specs.len()
-                && specs[col_idx].style == CellStyle::Header
             {
-                return CellStyle::Header;
+                return specs[col_idx].style;
             }
             cell.style
         };
+
+        // Cell text by resolved style: AsciiDoc/literal cells keep inner blank
+        // lines and indentation (only the edges of the whole text stripped);
+        // all other styles collapse to trimmed, non-empty lines joined by \n.
+        fn cell_text<'b>(cell: &scanner::CellSpec<'b>, style: CellStyle) -> Cow<'b, str> {
+            if matches!(style, CellStyle::AsciiDoc | CellStyle::Literal) {
+                match &cell.content {
+                    Cow::Borrowed(s) => Cow::Borrowed(s.trim()),
+                    Cow::Owned(s) => Cow::Owned(s.trim().to_string()),
+                }
+            } else if cell.content.contains('\n') {
+                Cow::Owned(
+                    cell.content
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            } else {
+                cell.content.clone()
+            }
+        }
 
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
@@ -1613,7 +1642,7 @@ impl<'a> BlockScanner<'a> {
                     if $is_header_section {
                         // Header-row cell (thead): <th> without a paragraph wrapper.
                         self.push_event(Event::End(TagEnd::TableHeaderCell));
-                        self.push_event(Event::Text(cell.content.clone()));
+                        self.push_event(Event::Text(cell_text(cell, CellStyle::Default)));
                         self.push_event(Event::Start(Tag::TableHeaderCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
@@ -1626,7 +1655,7 @@ impl<'a> BlockScanner<'a> {
                         // `h` column) renders as <th> but keeps the <p> wrapper; the
                         // renderer picks the tag from the resolved style.
                         self.push_event(Event::End(TagEnd::TableCell));
-                        self.push_event(Event::Text(cell.content.clone()));
+                        self.push_event(Event::Text(cell_text(cell, style)));
                         self.push_event(Event::Start(Tag::TableCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
@@ -1699,6 +1728,7 @@ impl<'a> BlockScanner<'a> {
                 colspan: 1,
                 rowspan: 1,
                 style: CellStyle::Default,
+                style_explicit: false,
                 halign: HAlign::default(),
                 valign: VAlign::default(),
             });

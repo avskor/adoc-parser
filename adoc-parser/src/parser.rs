@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::block::BlockScanner;
-use crate::event::{DelimitedBlockKind, Event, SubstitutionSet, Tag, TagEnd};
+use crate::event::{CellStyle, DelimitedBlockKind, Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{InlineOptions, InlineParser};
 
 /// A pull parser that turns AsciiDoc source into a stream of [`Event`]s.
@@ -25,6 +25,11 @@ pub struct Parser<'a> {
     /// `Event::Attribute` so body text reflects the attribute state up to
     /// that point.
     inline_options: InlineOptions,
+    /// One entry per open table body cell: true if the cell pushed onto
+    /// `subs_stack`. AsciiDoc (`a`) cells get NONE — content reaches the
+    /// consumer raw for a nested block parse; literal (`l`) cells get
+    /// VERBATIM — raw text, special chars escaped by the consumer.
+    cell_subs_pushed: Vec<bool>,
 }
 
 impl<'a> Parser<'a> {
@@ -36,6 +41,7 @@ impl<'a> Parser<'a> {
             subs_stack: Vec::new(),
             pending_subs: None,
             inline_options: InlineOptions::default(),
+            cell_subs_pushed: Vec::new(),
         }
     }
 
@@ -92,6 +98,22 @@ impl<'a> Iterator for Parser<'a> {
             }
             Event::End(TagEnd::Paragraph) => {
                 self.subs_stack.pop();
+            }
+            Event::Start(Tag::TableCell { style, .. }) => {
+                let cell_subs = match style {
+                    CellStyle::AsciiDoc => Some(SubstitutionSet::NONE),
+                    CellStyle::Literal => Some(SubstitutionSet::VERBATIM),
+                    _ => None,
+                };
+                self.cell_subs_pushed.push(cell_subs.is_some());
+                if let Some(subs) = cell_subs {
+                    self.subs_stack.push(subs);
+                }
+            }
+            Event::End(TagEnd::TableCell) => {
+                if self.cell_subs_pushed.pop().unwrap_or(false) {
+                    self.subs_stack.pop();
+                }
             }
             Event::Start(Tag::LiteralParagraph) => {
                 // A literal paragraph is verbatim by definition; without an explicit `[subs=…]`

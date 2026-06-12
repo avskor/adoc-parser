@@ -184,8 +184,14 @@ impl HtmlRenderer {
             match style {
                 CellStyle::Emphasis => output.push_str("<p class=\"tableblock\"><em>"),
                 CellStyle::Strong => output.push_str("<p class=\"tableblock\"><strong>"),
-                CellStyle::Monospace | CellStyle::Literal => output.push_str("<p class=\"tableblock\"><code>"),
-                CellStyle::AsciiDoc => {}
+                CellStyle::Monospace => output.push_str("<p class=\"tableblock\"><code>"),
+                CellStyle::Literal => output.push_str("<div class=\"literal\"><pre>"),
+                CellStyle::AsciiDoc => {
+                    // Nested-document cell: content is captured raw and block-
+                    // parsed on TagEnd::TableCell, inside a content wrapper.
+                    output.push_str("<div class=\"content\">");
+                    self.acell_capture.push(String::new());
+                }
                 _ => {
                     output.push_str("<p class=\"tableblock\">");
                     p_start = Some(output.len());
