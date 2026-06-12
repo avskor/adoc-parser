@@ -1,5 +1,80 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать четвёртая) — Фаза 3: escaped `\|` + table width + стилевые веса cols + passthrough-скип в unconstrained
+
+Запрос «продолжи». Ветка **`fix/pass-macro-and-delimited`** — ЗАКОММИЧЕНА
+(`8e9dbeb`), смержена в master (`dd7cf69`), запушена, локальная ветка удалена.
+Baseline: Identical 292, master `0a1e5fc` (base-бинарь /tmp/adoc_base
+пересобран с master через временный worktree).
+
+### Выбор задачи
+nearmiss на 292: **pass-macro (3 diff)** + **delimited (9 diff)**;
+replacements (4) — NCR-кластер, скип. По дороге flip'нулся data-format (615→0).
+
+### Семантика asciidoctor (пробы /tmp/p_pm/p1..p10, /tmp/p_dl/p1..p4)
+- **Table width**: `tablepcwidth` = Ruby `to_i` от width-атрибута (ведущие
+  цифры, иначе 0); вне (0..100] → 100, КРОМЕ literal `"0"`/`"0%"` (→ 0).
+  pcw==100 → класс `stretch`; иначе `style="width: N%;"` и НИКАКОГО
+  class-маркера. Явный width подавляет `fit-content` даже при `%autowidth`
+  (p3/p10: autowidth+width=50% → style; autowidth+width=100% → stretch);
+  colgroup при autowidth всегда голый `<col>`.
+- **Веса колонок**: trailing-стилевая буква не часть веса —
+  `cols="1m,3m"` → 25%/75% (у нас было 50/50: trailing-digits пуст → 1.0).
+- **Passthrough в unconstrained-спане**: `**a+++**+++b**` → strong над
+  `a**b` — passthrough извлекается ДО quotes; наш find_closing_unconstrained
+  не скипал спаны (constrained уже умел). Закрыл `+++**+++` внутри listing
+  с `subs="+quotes,+macros"` (pass-macro).
+- **Escaped pipe**: `|` сразу после `\` — НЕ разделитель ячеек, ровно один
+  `\` снимается (`\|`→`|`, `\\|`→`\|` в одной ячейке); работает и в
+  continuation-строках (`tail \| more` → `tail | more` в открытой ячейке).
+  Строка только с escaped-пайпами — чистая continuation.
+
+### Что сделано
+- **РЕНДЕРЕР** blocks.rs start_table: tablepcwidth (to_i-эмуляция со знаком),
+  width_style → ` style="…"` после class в `<table>`; fit-content гейтится
+  `width_value.is_none()`. parse_col_widths: strip_suffix [adehlmsv] перед
+  выделением веса.
+- **ПАРСЕР** inline.rs find_closing_unconstrained: скип passthrough_span_len
+  / pass_macro_span_len (зеркало constrained), возврат search_start+i.
+- **ПАРСЕР** scanner.rs: unescape_cell_pipes (Cow), find_unescaped_pipe,
+  split_unescaped_pipes; parse_table_cells сплитит по unescaped-пайпам,
+  unescape контента и continuation; `TableLineCells.continuation` →
+  `Option<Cow>`. block.rs: append_cell_continuation берёт `&str`
+  (else-ветка Owned), None-путь parse_table_cells → unescape_cell_pipes.
+- Тесты: +1 scanner (escaped pipe, 5 кейсов), +4 html (width 8 кейсов,
+  styled col weights, unconstrained-скип, escaped pipe 3 кейса);
+  2 ассерта continuation → as_deref().
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 486, html 374).
+- Пробы все IDENTICAL (p2-остаток `\\`→`\` — давний eager-`\\`-escape предел,
+  не от этого фикса).
+- **Корпус: Identical 292→295 (+3)**: pass-macro 3→0, delimited 9→0,
+  data-format 615→0. Blast (base 0a1e5fc): ровно 4 файла — 3 флипа,
+  character-replacement-ref 616→625 — позиционный сдвиг поверх pre-existing
+  корня (vbar-строка `|\|` теперь рендерится `|` как asciidoctor, BASE давал
+  `\`+пустую; первый diff-корень файла тот же), **0 регрессий**.
+
+### Что дальше
+- nearmiss пересчитать на 295; кандидаты по прошлому списку: replacements
+  (4 — NCR, скип), subs (76), ordered (90), part-with-special-sections (103),
+  multipart-book (109), quote (109 — `-- Author` attribution), metadata (111),
+  apply-subs-to-text (115), image (125), ts-url-format (125).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table 431, проба /tmp/p_acell/p11 прошлой сессии);
+  syntax-quick-reference — file-level корень (нет `<div id="content">`).
+- Pre-existing из прошлых сессий: blank в DEFAULT-ячейке → второй `<p>`,
+  footnotes-div внутри a-ячейки, nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `[abstract]`-параграф → quoteblock, `:icons:`-colist,
+  unknown-style в class на quote/sidebar, list-merge через
+  continuation-attrlist, author-line после attr-entry в header, label
+  block-anchor `[[id,label]]` над блоком не побеждает `.Title`,
+  `\\https://…` двойной backslash, CSV drop incomplete row,
+  eager-`\\`-escape ест первый backslash (`\\` в ячейке → `\`).
+
+---
+
 ## Сессия (2026-06-12, тридцать третья) — Фаза 3: named-footnote reuse + a-ячейки (nested-парсинг) + наследование колоночных стилей + literal-ячейки + blank/indent в ячейках
 
 Запрос «продолжи». ДВЕ ветки, обе СМЕРЖЕНЫ в master и запушены:
