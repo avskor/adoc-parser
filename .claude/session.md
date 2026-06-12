@@ -1,5 +1,60 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать вторая) — Фаза 3: blank после `|===` гасит implicit header
+
+Запрос «продолжи». Ветка **`fix/add-columns-nearmiss`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 282, master `43f7ab1`
+(base-бинарь /tmp/adoc_base пересобран с master).
+
+### Выбор задачи
+nearmiss: replacements.adoc (4 diff) — известный NCR-кластер, скип;
+**add-columns.adoc (40 diff)** — один корень.
+
+### Семантика asciidoctor (пробы /tmp/p_ac/p1..p8, t1 — все IDENTICAL)
+- Blank-строка (одна или несколько) МЕЖДУ `|===` и первой data-строкой
+  гасит implicit header promotion (p1/p3); явный `[%header]` всё равно
+  промоутит (p4); colcount по-прежнему из первой строки (p3, 2 колонки).
+- Comment-строка прозрачна: `|===`+comment+row+blank → header ЕСТЬ (p6);
+  но blank до/после comment (до первой data-строки) — гасит (p7/p8).
+
+### Что сделано (ПАРСЕР block.rs scan_table)
+- Флаг `blank_before_first_data` — взводится на blank при
+  `first_data_idx.is_none()`; добавлен в гейт `implicit_header` (`&& !…`).
+- +1 html-тест `test_table_leading_blank_suppresses_implicit_header_html`
+  (6 кейсов: blank/несколько blank/comment+blank/только comment/явный
+  %header/colcount).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 485, html 366).
+- Пробы p1..p8 и add-columns.adoc IDENTICAL.
+- **Корпус: Identical 282→284 (+2)**; blast (base 43f7ab1): 4 файла —
+  2 флипа (add-columns 40→0, column.adoc 172→0), cell.adoc 975→965 ближе,
+  table.adoc 556→597 — позиционный шум поверх pre-existing корня
+  (`|=== <1>` в параграфе → у нас colist; изолированная таблица из файла
+  сверена: thead у обоих 0, BASE был неправ), **0 семантических регрессий**.
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 284: replacements (4 — NCR-кластер, в одиночку бесполезен),
+  footnote examples (70), bibliography (72), subs (76), ordered (90),
+  part-with-special-sections (103), multipart-book (109), quote (109 —
+  `-- Author` attribution), metadata (111), apply-subs-to-text (115).
+- Кандидаты-корни прошлых сессий: `cols=2;2;3;3` `;`-разделитель
+  (image-ref, image-svg); `l|`-ячейка → `<div class="literal"><pre>`
+  (image-svg); `[frame=ends,grid=none]` (image-svg); НОВЫЙ: `|=== <1>` в
+  параграфе не должен открывать colist (table.adoc — крупный позиционный
+  корень).
+- Pre-existing из прошлых сессий: ячейка `a|` nested-парсинг, nested-список
+  с другим маркером в li, `[square]`-класс, компактный colist-`<li><p>`,
+  `== heading` не прерывает параграф, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, label block-anchor `[[id,label]]` над блоком не
+  побеждает `.Title`, `\\https://…` двойной backslash, blank в ячейке →
+  второй `<p>`, CSV drop incomplete row.
+
+---
+
 ## Сессия (2026-06-12, тридцать первая) — Фаза 3: таблицы — открытая модель ячейки (continuation/пустые/дупликация/спек-цепочки/drop-row/comments)
 
 Запрос «продолжи». Ветка **`fix/align-by-column`** — ЗАКОММИЧЕНА (`0fe6e49`),

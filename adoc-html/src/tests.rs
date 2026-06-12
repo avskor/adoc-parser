@@ -542,6 +542,28 @@ fn test_table_noheader_option_html() {
 }
 
 #[test]
+fn test_table_leading_blank_suppresses_implicit_header_html() {
+    // blank line directly after |=== cancels first-row header promotion
+    let html = to_html("|===\n\n|A |B\n\n|1 |2\n|===");
+    assert!(!html.contains("<thead>"), "leading blank must suppress header. Got:\n{html}");
+    // ...even several blanks
+    let html = to_html("|===\n\n\n|A |B\n\n|1 |2\n|===");
+    assert!(!html.contains("<thead>"));
+    // ...and a blank after a leading comment line still suppresses
+    let html = to_html("|===\n// c\n\n|A |B\n\n|1 |2\n|===");
+    assert!(!html.contains("<thead>"));
+    // a leading comment alone is invisible — header is still promoted
+    let html = to_html("|===\n// c\n|A |B\n\n|1 |2\n|===");
+    assert!(html.contains("<thead>"));
+    // explicit %header overrides the leading blank
+    let html = to_html("[%header]\n|===\n\n|A |B\n\n|1 |2\n|===");
+    assert!(html.contains("<thead>"));
+    // column count is still derived from the first row
+    let html = to_html("|===\n\n|a |b\n\n|c |d\n|===");
+    assert_eq!(html.matches("<col ").count(), 2);
+}
+
+#[test]
 fn test_table_with_header_html() {
     let html = to_html("|===\n| Header 1 | Header 2\n\n| Cell 1 | Cell 2\n| Cell 3 | Cell 4\n|===");
     assert!(html.contains("<thead>"));
