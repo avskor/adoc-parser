@@ -669,6 +669,15 @@ pub fn preprocess_with_attrs(
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut output = String::with_capacity(input.len());
     let mut lines_iter = input.lines();
+    // Open verbatim fence (listing/literal/passthrough/comment or markdown
+    // code fence): counters and attribute entries are substitution-/block-level
+    // concerns that Asciidoctor does not apply inside such blocks, while
+    // conditionals and includes are reader-level and still work there.
+    enum VerbatimFence {
+        Adoc(crate::scanner::DelimiterType, usize),
+        Markdown(usize),
+    }
+    let mut verbatim_fence: Option<VerbatimFence> = None;
 
     while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
@@ -723,6 +732,42 @@ pub fn preprocess_with_attrs(
         // If currently skipping, don't process or output the line
         if is_skipping(&skip_stack) {
             continue;
+        }
+
+        // 4b. Verbatim fence tracking — inside a listing/literal/passthrough/
+        //     comment block (or a markdown code fence) lines are emitted
+        //     untouched: no counter expansion, no attribute entries.
+        match &verbatim_fence {
+            Some(fence) => {
+                let closes = match fence {
+                    VerbatimFence::Adoc(dt, dl) => crate::scanner::is_delimiter(line)
+                        .is_some_and(|(t, l)| t == *dt && l == *dl),
+                    VerbatimFence::Markdown(n) => crate::scanner::is_markdown_code_fence(line)
+                        .is_some_and(|(c, lang)| c >= *n && lang.is_none()),
+                };
+                if closes {
+                    verbatim_fence = None;
+                }
+                output.push_str(line);
+                output.push('\n');
+                continue;
+            }
+            None => {
+                if let Some((dt, dl)) = crate::scanner::is_delimiter(line) {
+                    use crate::scanner::DelimiterType::*;
+                    if matches!(dt, Listing | Literal | Passthrough | Comment) {
+                        verbatim_fence = Some(VerbatimFence::Adoc(dt, dl));
+                        output.push_str(line);
+                        output.push('\n');
+                        continue;
+                    }
+                } else if let Some((c, _)) = crate::scanner::is_markdown_code_fence(line) {
+                    verbatim_fence = Some(VerbatimFence::Markdown(c));
+                    output.push_str(line);
+                    output.push('\n');
+                    continue;
+                }
+            }
         }
 
         // 5a. Expand counters
@@ -1899,6 +1944,34 @@ end::foo[]";
             Some("Item 2".to_string())
         );
         assert_eq!(attrs.get("item").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_counters_and_attr_entries_untouched_in_verbatim_blocks() {
+        // Counters are an attribute substitution — verbatim blocks (listing/
+        // literal/passthrough/comment, markdown fences) don't apply it, so the
+        // preprocessor must leave their lines untouched. Conditionals stay
+        // reader-level and still work inside (Asciidoctor semantics).
+        let input = "----\n{counter:n}\n:k: v\n----\n{counter:n}\n";
+        assert_eq!(preprocess(input), "----\n{counter:n}\n:k: v\n----\n1\n");
+
+        // Literal and markdown fences too; attr entry inside is not consumed
+        let input = "....\n{counter:m}\n....\n```\n{counter:m}\n```\n{counter:m}\n";
+        assert_eq!(
+            preprocess(input),
+            "....\n{counter:m}\n....\n```\n{counter:m}\n```\n1\n"
+        );
+
+        // Conditional directives still evaluate inside a listing block
+        let input = "----\nifdef::nope[]\nhidden\nendif::[]\nkept\n----\n";
+        assert_eq!(preprocess(input), "----\nkept\n----\n");
+
+        // Closing requires the same delimiter length
+        let input = "-----\n{counter:x}\n----\n{counter:x}\n-----\n{counter:x}\n";
+        assert_eq!(
+            preprocess(input),
+            "-----\n{counter:x}\n----\n{counter:x}\n-----\n1\n"
+        );
     }
 
     #[test]

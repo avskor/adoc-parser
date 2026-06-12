@@ -140,7 +140,9 @@ impl HtmlRenderer {
             *output = resolved;
         }
 
-        if !self.footnote_registry.is_empty() {
+        // In standalone mode footnotes belong after the closing </div> of
+        // <div id="content"> (before the footer), so `run` emits them there.
+        if !self.standalone && !self.footnote_registry.is_empty() {
             self.render_footnotes(output);
         }
 

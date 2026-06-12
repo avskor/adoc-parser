@@ -612,7 +612,13 @@ impl<'a> BlockScanner<'a> {
             }
             self.advance();
             self.had_blank_line = false;
-            self.pending_block_attrs = Some(BlockAttributes::parse(attr_str));
+            // Stacked metadata lines accumulate (Asciidoctor merges every
+            // `[...]` line above a block into one attribute set).
+            let parsed = BlockAttributes::parse(attr_str);
+            self.pending_block_attrs = Some(match self.pending_block_attrs.take() {
+                Some(prev) => BlockAttributes::merge(prev, parsed),
+                None => parsed,
+            });
             self.rescan_requested = true;
             return Some(None);
         }

@@ -620,6 +620,26 @@ fn test_footnote_multiple_html() {
 }
 
 #[test]
+fn test_footnotes_outside_content_div_standalone() {
+    let html = to_html_with_options(
+        "= Doc\n\nText.footnote:[Note here.]\n",
+        HtmlOptions { standalone: true, ..Default::default() },
+    );
+    let content = html.find("<div id=\"content\">").expect("content div");
+    let footnotes = html.find("<div id=\"footnotes\">").expect("footnotes div");
+    let footer = html.find("<div id=\"footer\">").expect("footer div");
+    assert!(footnotes < footer, "footnotes must precede the footer, got:\n{html}");
+    // <div id="content"> must already be closed when footnotes start: div
+    // opens and closes balance out across the content section.
+    let between = &html[content..footnotes];
+    assert_eq!(
+        between.matches("<div").count(),
+        between.matches("</div>").count(),
+        "footnotes div must sit outside <div id=\"content\">, got:\n{html}"
+    );
+}
+
+#[test]
 fn test_toc_html() {
     let input = "= Document Title\n:toc:\n\n== Section One\n\nContent.\n\n== Section Two\n\nMore content.";
     let html = to_html(input);
@@ -1480,6 +1500,58 @@ fn test_table_caption_empty_prefix_html() {
     let html = to_html("[caption=]\n.Results\n|===\n| A | B\n|===");
     assert!(html.contains("<caption class=\"title\">Results</caption>"));
     assert!(!html.contains("Table 1"));
+}
+
+#[test]
+fn test_table_stacked_attr_lines_merge_html() {
+    // Stacked metadata lines accumulate (probe-verified): [caption=...] above
+    // .Title above [cols=...] — the caption must not be lost, the custom
+    // label must not bump the counter, and the cols multiplier must expand.
+    let html = to_html(concat!(
+        "[caption=\"Table A. \"]\n.Custom\n[cols=\"3*\"]\n|===\n|Null\n|A mystery\n|See Appendix R\n|===\n",
+        "\n.Numbered\n|===\n| X\n|===",
+    ));
+    assert!(html.contains("<caption class=\"title\">Table A. Custom</caption>"), "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 33.3333%;\">"), "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 33.3334%;\">"), "Got:\n{html}");
+    // All three single-column cells in one row of three columns
+    assert!(html.contains("See Appendix R"), "Got:\n{html}");
+    assert!(html.contains("<caption class=\"title\">Table 1. Numbered</caption>"), "Got:\n{html}");
+}
+
+#[test]
+fn test_table_cols_multiplier_widths_html() {
+    // `2*1,3` → 20/20/60; trailing single-letter cell content survives
+    let html = to_html("[cols=\"2*1,3\"]\n|===\n|a |b |c\n|===");
+    assert!(html.contains("<col style=\"width: 20%;\">"), "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 60%;\">"), "Got:\n{html}");
+
+    // multiplier with full spec: 2*<.^2,>1 → 40/40/20
+    let html = to_html("[cols=\"2*<.^2,>1\"]\n|===\n|g |h |i\n|===");
+    assert!(html.contains("<col style=\"width: 40%;\">"), "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 20%;\">"), "Got:\n{html}");
+    assert!(html.contains("halign-left valign-middle"), "Got:\n{html}");
+    assert!(html.contains("halign-right valign-top"), "Got:\n{html}");
+}
+
+#[test]
+fn test_table_single_letter_cell_content_html() {
+    // `|a` at end of line is a cell "a", not an AsciiDoc-style spec
+    let html = to_html("|===\n|a\n|===");
+    assert!(html.contains("<p class=\"tableblock\">a</p>"), "Got:\n{html}");
+    let html = to_html("|===\n|d |e\n|===");
+    assert!(html.contains("<p class=\"tableblock\">d</p>"), "Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">e</p>"), "Got:\n{html}");
+}
+
+#[test]
+fn test_counter_literal_in_listing_block_html() {
+    // Counters expand in the preprocessor, but not inside verbatim blocks
+    // (listing content gets no attributes substitution)
+    let pre = adoc_parser::preprocess("----\n{counter:n}\n----\n\npara {counter:n}");
+    let html = to_html(&pre);
+    assert!(html.contains("<pre>{counter:n}</pre>"), "Got:\n{html}");
+    assert!(html.contains("<p>para 1</p>"), "Got:\n{html}");
 }
 
 #[test]

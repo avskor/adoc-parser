@@ -1,5 +1,94 @@
 # Session context
 
+## Сессия (2026-06-12, тридцатая) — Фаза 3: footnotes вне #content + merge стопки attrlist + cols-multiplier + trailing cell-spec + счётчики в verbatim
+
+Запрос «продолжи». Ветка **`fix/pages-include-nearmiss`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 262, master `313a275`
+(base-бинарь /tmp/adoc_base пересобран с master — ветка стартовала с него же).
+
+### Выбор задачи
+nearmiss: **pages/include.adoc (8 diff)** — один корень (footnotes); затем
+**customize-title-label.adoc (66 diff)** — три корня, по дороге вскрыт и закрыт
+четвёртый (pre-existing trailing cell-spec).
+
+### Семантика asciidoctor (пробы /tmp/p_fn/p1, /tmp/p_ctl/p1..p11, m*, n*)
+- **A (footnotes)**: `<div id="footnotes">` идёт ПОСЛЕ закрытия `</div>`
+  `#content`, ПЕРЕД `<div id="footer">` (p_fn/p1).
+- **B (стопка attrlist-строк)**: метаданные НАКАПЛИВАЮТСЯ, не заменяются:
+  named — override по ключу; id — последний побеждает; roles/options —
+  аккумулируются (`[#id1.r1]`+`[#id2.r2]` → id2, r1 r2, p8); позиционные —
+  послотно: `[quote,Author]`+`[verse]` → verse + attribution (p9); пустой
+  слот 1 не затирает стиль: `[source,ruby]`+`[,python]` → python (p10).
+- **C (cols multiplier)**: `3*` → 3 колонки (33.3333/33.3333/33.3334 —
+  последняя получает остаток), `2*1,3` → 20/20/60, `2*<.^2,>1` → 40/40/20
+  со спеком на обеих (p2). caption= на таблице: verbatim-префикс, счётчик НЕ
+  бампится (`Table A.`), пустой `[caption=]`/`[caption=""]` → голый title (p3).
+- **D (trailing cell-spec)**: спек ячейки привязан к СЛЕДУЮЩЕМУ `|` — в конце
+  строки это контент: `|a` → ячейка «a» (не AsciiDoc-style), `|d |e` хранит
+  «e»; в середине строки `|one a|two` — спек следующей (проба n4).
+- **E (счётчики в verbatim)**: include/conditionals — уровень READER (работают
+  в listing!), счётчики `{counter:}`/attr-entries — уровень substitutions/блоков
+  (в listing/literal/pass/comment/markdown-fence НЕ работают).
+
+### Что сделано (5 точек)
+- **РЕНДЕРЕР** finish.rs: render_footnotes гейтится `!standalone`; lib.rs run():
+  footnotes эмитятся после `</div>` content, перед footer.
+- **ПАРСЕР** attributes.rs: `BlockAttributes::merge(older, newer)` (id
+  last-wins, roles/options extend, named override, позиционные послотно,
+  выравнивание implied_source_lang при смешанных формах); block.rs ~615 —
+  attrlist-арм мержит вместо замены.
+- **РЕНДЕРЕР** blocks.rs `parse_col_widths`: multiplier `N*` раскрывается
+  (зеркало parse_col_spec парсера, который уже умел).
+- **ПАРСЕР** scanner.rs `parse_table_cells`: спек-суффиксы (style/span/align)
+  парсятся только для НЕ-последней части строки (pre-existing: `|a` терял
+  ячейку целиком, `|d |e` терял «e», `<.>` в конце строки ячейки съедался —
+  этим был сломан и ряд corpus-таблиц).
+- **ПАРСЕР** preprocessor.rs: трекинг verbatim-фенсов (`----`/`....`/`++++`/
+  `////` с точной длиной закрытия + markdown ```) — внутри: счётчики не
+  раскрываются, attr-entries не потребляются; conditionals/endif работают
+  по-прежнему (reader-level, обрабатываются до фенс-проверки).
+- Тесты: +1 html (footnotes вне content), +1 scanner (trailing cell-spec),
+  +1 attributes (merge, 5 сценариев), +1 preprocessor (verbatim-фенсы,
+  4 сценария), +3 html (стопка attrlist, multiplier-ширины, `|a`-контент),
+  +1 html (counter literal в listing через preprocess).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (935 passed).
+- Все пробы IDENTICAL кроме n4 — pre-existing предел: ячейка `a|` (AsciiDoc
+  style) не рендерится как вложенный content-div (требует nested-парсинга).
+- **Корпус: Identical 262→267 (+5)**; blast (base 313a275): 17 файлов —
+  5 флипов (pages/include 8→0, customize-title-label 66→0, subs-group-table
+  ×2, image-position), **0 регрессий**, 10 ближе (align-by-column 617→7!,
+  row 310→81, add-columns 211→40, footnote 101→70, image-svg 312→263,
+  pass-macro 249→241), column 168→172 и table 560→612 — позиционный шум,
+  точечно сверено с эталоном (новые фрагменты = asciidoctor: 50/50-колонки,
+  `<.>`-текст в ячейке сохранён).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Известные пределы (вне корпуса)
+- Ячейка `a|` (AsciiDoc style): спек парсится, но рендерер не оборачивает в
+  `<div class="content">` с nested-парсингом (давний архитектурный, n4).
+- `[subs="+attributes"]` на listing: asciidoctor раскрыл бы счётчик при
+  рендере — наш препроцессор внутрь фенса не заходит вовсе.
+- merge позиционных при экзотике (newer со слотами 3+ без стиля) — послотное
+  выравнивание приближённое (наша модель не хранит сырые слоты).
+
+### Что дальше
+- nearmiss на 267: **align-by-column (7 diff!)** — почти флип, разведать
+  первым; add-columns (40), footnote (70), subs (76), bibliography (77),
+  row (81), ordered (90), part-with-special-sections (103),
+  multipart-book/quote (109 — quote: `-- Author` attribution не реализован),
+  metadata (111 — позиционный шум).
+- Pre-existing из прошлых сессий: ячейка `a|` nested-парсинг, nested-список
+  с другим маркером в li, `[square]`-класс, компактный colist-`<li><p>`,
+  `== heading` не прерывает параграф, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, label block-anchor `[[id,label]]` над блоком не
+  побеждает `.Title`, `\\https://…` двойной backslash.
+
+---
+
 ## Сессия (2026-06-12, двадцать девятая) — Фаза 3: include.adoc examples + links.adoc (форма include-директивы + comment в параграфах + autolink-границы/escape)
 
 Запрос «продолжи». Ветка **`fix/include-directive-shape-and-mid-paragraph-comments`** —
