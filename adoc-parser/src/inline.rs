@@ -21,22 +21,26 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
 
     while i < len {
         let replacement: Option<(&str, usize)> = match bytes[i] {
-            b'-' if i + 2 < len && bytes[i + 1] == b'-' && bytes[i + 2] == b'-' => {
-                Some(("\u{2014}", 3)) // em-dash
-            }
             b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
-                // ` -- ` (space-dash-dash-space) → thin-space + em-dash + thin-space
-                if i > 0 && bytes[i - 1] == b' ' && i + 2 < len && bytes[i + 2] == b' ' {
-                    // Flush up to and including the space before --
+                // Spaced em-dash (Asciidoctor `(^|\n| |\\)--( |\n|$)`): `--` flanked by
+                // space/newline/line-edge on BOTH sides → thin-space + em-dash +
+                // thin-space; the flanking chars are consumed (adjacent lines merge).
+                // A flanking char already consumed by a previous replacement does not
+                // count (regex gsub semantics: `a -- -- b` replaces only the first).
+                let before_boundary = i == 0
+                    || (i > copied_up_to && matches!(bytes[i - 1], b' ' | b'\n'));
+                let after_boundary = i + 2 >= len || matches!(bytes[i + 2], b' ' | b'\n');
+                if before_boundary && after_boundary {
                     let buf = result.get_or_insert_with(|| String::from(&text[..copied_up_to]));
-                    buf.push_str(&text[copied_up_to..i - 1]);
+                    let copy_end = if i == 0 { 0 } else { i - 1 };
+                    buf.push_str(&text[copied_up_to..copy_end]);
                     buf.push_str("\u{2009}\u{2014}\u{2009}");
-                    i += 3; // skip `-- ` (the leading space was already consumed)
+                    i += if i + 2 < len { 3 } else { 2 };
                     copied_up_to = i;
                     continue;
                 }
                 // word--word → em-dash + zero-width space (Asciidoctor `(\w)--(?=\w)`).
-                // Anywhere else (` --flag`, trailing `S.S.T.--`, `--` at line edges)
+                // Anywhere else (` --flag`, trailing `S.S.T.--`, `a---b`, `----` runs)
                 // Asciidoctor does not form an em-dash; leave this `-` literal and advance
                 // one byte so the next `-` is reconsidered on its own (e.g. `-->` → `-→`).
                 let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
@@ -869,7 +873,17 @@ impl<'a> InlineState<'a> {
         }
         match bytes[p] {
             b'-' if p + 1 < bytes.len() && bytes[p + 1] == b'-' => {
-                if p + 2 < bytes.len() && bytes[p + 2] == b'-' { 3 } else { 2 }
+                // `\--` is an escape only where an unescaped `--` would be replaced
+                // (Asciidoctor `(\w)\\?--(?=\w)` / `(^|\n| |\\)--( |\n|$)`): there is
+                // no `---` rule, so in `\---` nothing matches and the backslash stays
+                // literal.
+                let after = bytes.get(p + 2).copied();
+                let spaced_ok = matches!(after, None | Some(b' ') | Some(b'\n'));
+                let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+                let word_ok = self.pos > 0
+                    && is_word(bytes[self.pos - 1])
+                    && matches!(after, Some(b) if is_word(b));
+                if spaced_ok || word_ok { 2 } else { 0 }
             }
             b'-' if p + 1 < bytes.len() && bytes[p + 1] == b'>' => 2, // \->
             b'=' if p + 1 < bytes.len() && bytes[p + 1] == b'>' => 2, // \=>
@@ -3605,10 +3619,16 @@ mod tests {
 
     #[test]
     fn test_typographic_em_dash() {
+        // Asciidoctor has no `---` rule: neither `(\w)--(?=\w)` nor the spaced
+        // form can match inside a longer dash run — the text stays literal.
         let events = parse("hello---world");
-        assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
-        ]);
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("hello---world"))]);
+        let events = parse("g --- h");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("g --- h"))]);
+        let events = parse("e----f");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("e----f"))]);
+        let events = parse("---- <.>\nplain");
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("---- <.>\nplain"))]);
     }
 
     #[test]
@@ -3675,9 +3695,10 @@ mod tests {
 
     #[test]
     fn test_typographic_mixed() {
+        // `---` stays literal (no Asciidoctor rule); (C) and ellipsis are replaced.
         let events = parse("(C) 2024---all rights...");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("\u{00A9} 2024\u{2014}all rights\u{2026}\u{200B}".to_string())),
+            Event::Text(Cow::Owned("\u{00A9} 2024---all rights\u{2026}\u{200B}".to_string())),
         ]);
     }
 
@@ -3686,6 +3707,30 @@ mod tests {
         let events = parse("hello -- world");
         assert_eq!(events, vec![
             Event::Text(Cow::Owned("hello\u{2009}\u{2014}\u{2009}world".to_string())),
+        ]);
+        // Line boundaries count as flanks and are consumed — adjacent lines merge
+        // (Asciidoctor `(^|\n| |\\)--( |\n|$)` replaces the `\n` with thin space).
+        let events = parse("a\n-- b");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("a\u{2009}\u{2014}\u{2009}b".to_string())),
+        ]);
+        let events = parse("c --\nd");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("c\u{2009}\u{2014}\u{2009}d".to_string())),
+        ]);
+        // Text start/end are boundaries too.
+        let events = parse("-- lead");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("\u{2009}\u{2014}\u{2009}lead".to_string())),
+        ]);
+        let events = parse("tail --");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("tail\u{2009}\u{2014}\u{2009}".to_string())),
+        ]);
+        // gsub semantics: a flank consumed by the previous match doesn't count.
+        let events = parse("a -- -- b");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("a\u{2009}\u{2014}\u{2009}-- b".to_string())),
         ]);
     }
 
@@ -3701,11 +3746,11 @@ mod tests {
 
     #[test]
     fn test_escaped_em_dash_no_replacement() {
+        // `\---` is not an escape: no replacement rule matches `---`, so the
+        // backslash itself stays literal (Asciidoctor keeps it).
         let events = parse("hello \\--- world");
         assert_eq!(events, vec![
-            Event::Text(Cow::Borrowed("hello ")),
-            Event::Text(Cow::Borrowed("---")),
-            Event::Text(Cow::Borrowed(" world")),
+            Event::Text(Cow::Borrowed("hello \\--- world")),
         ]);
     }
 
@@ -4604,9 +4649,10 @@ mod tests {
 
     #[test]
     fn test_apostrophe_with_dash_combo() {
+        // Apostrophe is replaced; `---` has no rule and stays literal.
         let events = parse("it's---done");
         assert_eq!(events, vec![
-            Event::Text(Cow::Owned("it\u{2019}s\u{2014}done".to_string())),
+            Event::Text(Cow::Owned("it\u{2019}s---done".to_string())),
         ]);
     }
 
@@ -5006,10 +5052,9 @@ mod tests {
 
     #[test]
     fn test_arrow_em_dash_still_works() {
+        // `---` has no replacement rule in Asciidoctor — stays literal.
         let events = parse("hello---world");
-        assert_eq!(events, vec![
-            Event::Text(Cow::Owned("hello\u{2014}world".to_string())),
-        ]);
+        assert_eq!(events, vec![Event::Text(Cow::Borrowed("hello---world"))]);
     }
 
     #[test]

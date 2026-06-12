@@ -665,14 +665,17 @@ fn test_toc_macro_html() {
 
 #[test]
 fn test_unresolved_include_html() {
+    // Includes are resolved by the preprocessor (reader); a line reaching the
+    // parser — e.g. from an escaped `\include::` — is plain paragraph text,
+    // matching Asciidoctor.
     let html = to_html("include::chapter.adoc[]");
-    assert_eq!(html, "<!-- include::chapter.adoc[] -->\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p>include::chapter.adoc[]</p>\n</div>\n");
 }
 
 #[test]
 fn test_unresolved_include_with_special_chars_html() {
     let html = to_html("include::path/to/<file>.adoc[]");
-    assert_eq!(html, "<!-- include::path/to/&lt;file&gt;.adoc[] -->\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p>include::path/to/&lt;file&gt;.adoc[]</p>\n</div>\n");
 }
 
 #[test]

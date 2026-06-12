@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-12, двадцать восьмая) — Фаза 3: source.adoc (em-dash правила + include-строка = текст)
+
+Запрос «продолжи». Ветка **`fix/source-block-nearmiss`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 258, master `6c5d1a3`
+(base-бинарь /tmp/adoc_base пересобран через временный worktree).
+
+### Выбор задачи
+nearmiss: **source.adoc (63 diff)** — два корня. В файле `---- <.>` — не
+делимитер → ВСЕ пары `----` смещены (asciidoctor так же! warning «unterminated
+listing block»); расходились только: (A) em-dash в параграфе `---- <.>`,
+(B) escaped-include строки.
+
+### Семантика asciidoctor (пробы /tmp/p_src/p1..p7, все IDENTICAL после фикса)
+- **A (em-dash)**: правила ровно `(\w)--(?=\w)` → em+ZWSP и
+  `(^|\n| |\\)--( |\n|$)` → thin+em+thin (граничный пробел/`\n` ПОГЛОЩАЕТСЯ —
+  строки сливаются; gsub: в `a -- -- b` второй `--` литерал). Правила `---`
+  НЕТ: `a---b`, `g --- h`, `e----f`, `----` — литералы. `\--` — escape только
+  там, где матчился бы unescaped (`\---` → backslash ОСТАЁТСЯ литералом).
+- **B (include)**: include резолвится ТОЛЬКО в reader (наш препроцессор);
+  строка `include::…[]`, дошедшая до парсера (от escaped `\include::`), —
+  обычный ТЕКСТ: параграф, не рвёт параграфы/списки (пробы p5/p6).
+
+### Что сделано (ПАРСЕР, 2 файла)
+- inline.rs `apply_typographic_replacements`: арм `---` УДАЛЁН; spaced-арм —
+  границы `^`/`\n`/пробел/конец с обеих сторон, граничный символ поглощается,
+  guard `i > copied_up_to` (gsub-семантика); word-арм без изменений.
+  `typographic_escape_len`: `\--` валиден только при (word-before+word-after)
+  или (пробел/`\n`/EOL после) — `\---` больше не эскейпится.
+  Пределы (вне корпуса): chunk-границы после inline-конструкций считаются
+  line-границами (`*b*-- x` заменили бы, asciidoctor нет); merge строк через
+  SoftBreak не делается (EOL `--` даёт em-dash, но `\n` остаётся).
+- block.rs: include-арм УДАЛЁН из scan_directives + 4 break-условия
+  (`is_include_directive`) из paragraph/list-сканов. Event::Include в enum
+  остаётся (API), арм рендерера `<!-- include:: -->` — мёртвый, не тронут.
+  scanner::is_include_directive жив (препроцессор).
+- Тесты: 5 переписаны (2 block include → plain-text/не-рвёт; inline
+  `hello---world`×2, mixed, `\---`-escape — фиксировали самодельную
+  семантику), +кейсы в test_typographic_em_dash/spaced (literals, границы
+  строк, gsub `a -- -- b` — probe-verified).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 478, html 354).
+- Пробы p1..p7 IDENTICAL (нормализованные токены); source.adoc 63→0 diff.
+- **Корпус: Identical 258→259 (+1)**; blast (base 6c5d1a3): 7 файлов —
+  1 флип (source.adoc), **0 регрессий**, include.adoc 124→52 (сильно ближе),
+  остальные 5 — равный счётчик (subs-symbol-repl/delimited: em-dash токены
+  стали INREF; quote/data — noref-шум, другие корни).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Что дальше
+- nearmiss на 259: **include.adoc examples (52** — Unresolved-directive
+  семантика?), customize-title-label (66), include pages (75),
+  bibliography (77), subs (89), subs-group-table (90), ordered (90),
+  footnote (101), part-with-special-sections (103), metadata (108).
+- Замечен кандидат-корень quote.adoc (109): строка `-- Author` после
+  кавычки-параграфа — attribution quote-блока не реализован.
+- Pre-existing из прошлых сессий: nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `cols="2*"` multiplier, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, comment в середине dd-параграфа, label block-anchor
+  `[[id,label]]` над блоком не побеждает `.Title`.
+
+---
+
 ## Сессия (2026-06-12, двадцать седьмая) — Фаза 3: stem (4 корня: stem-эскейпы, block-macro catch-all, ++++, {n!})
 
 Запрос «продолжи». Ветка **`fix/stem-block-macro-and-escapes`** — НЕ закоммичена
