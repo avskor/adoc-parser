@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать пятая, часть 2) — Фаза 3: вложенность списков по стеку маркеров + стиль olist от маркера
+
+Та же сессия, вторая задача. Ветка **`fix/mixed-marker-list-nesting`** —
+ЗАКОММИЧЕНА (`a091988`), смержена в master (`83c71e4`), запушена, ветка
+удалена. Baseline: Identical 296.
+
+### Выбор задачи
+nearmiss: **ordered.adoc (90 diff)** — давний pre-existing «nested-список с
+другим маркером в li», один корень + попутный (стиль olist).
+
+### Семантика asciidoctor (пробы /tmp/p_subs/p6, p8, p9 — все IDENTICAL)
+- Маркер, матчащий ОТКРЫТЫЙ список в стеке (текущий/предок) → закрыть всё
+  выше него (cross-type), sibling-item. НЕсматченный маркер — глубже, МЕЛЬЧЕ
+  или другого типа — НИЧЕГО не закрывает: новый список вкладывается в самый
+  внутренний открытый item. Quirk подтверждён: `** b` затем `* c` → `* c`
+  ВКЛАДЫВАЕТСЯ в li от `** b` (не «возврат на уровень»).
+- Стиль olist implicit — от числа ТОЧЕК маркера (`..` → loweralpha даже
+  первым ol в документе, внутри ulist-item), не от вложенности `<ol>`.
+- dlist+list interplay и indent-вариант (mix-alt) — не затронуты, совпадают.
+
+### Что сделано
+- **ПАРСЕР** block.rs: scan_ordered_list_item получил has_parent_list +
+  close_to_parent_list(depth, false) — зеркало unordered (была асимметрия);
+  else-ветки ОБОИХ сканов — Vec::new() (вложение, без закрытий);
+  close_list_items_for_depth УДАЛЁН (мёртвый); BlockContext::ListItem
+  потерял поле depth (не читалось).
+- **ПАРСЕР** event.rs: Tag::OrderedList + `depth: u8` (число точек).
+- **РЕНДЕРЕР** blocks.rs start_ordered_list: implicit-стиль от depth
+  (1→arabic, 2→loweralpha, 3→lowerroman, 4→upperalpha, 5+→upperroman)
+  вместо подсчёта открытых TagEnd::OrderedList в tag_stack.
+- Тесты: +2 html (mixed-marker nesting: olist↔ulist, shallower-quirk;
+  стиль от маркера), integration-тест обновлён (поле depth).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (957).
+- Пробы p6/p8/p9 IDENTICAL; ordered.adoc 90→0.
+- **Корпус: Identical 296→297 (+1)**. Blast: 2 файла — 1 флип (ordered),
+  description.adoc 295→298 — позиционный сдвиг поверх pre-existing корня
+  (пустой `<p></p>` в dd, держащем только вложенный `:::`-dlist);
+  изолят p10 сверен: структура вложенности new = asciidoctor,
+  **0 семантических регрессий**.
+
+### Новые вскрытые pre-existing (вне этого фикса)
+- Пустой dd с вложенным `:::`-dlist → лишний `<p></p>` в dd
+  (description.adoc 298 — главный корень файла).
+- `'''`/`<<<` после списка НЕ закрывают список-контексты (`<hr>` оказывается
+  внутри `<p>` item'а; в base так же — scan_leaf_blocks без close-pre-step,
+  в отличие от admonition/table/delimited/fence/comment).
+
+---
+
 ## Сессия (2026-06-12, тридцать пятая) — Фаза 3: точный index-term + `\\`-unconstrained escape + attr-refs в attrlist
 
 Запрос «продолжи». Ветка
