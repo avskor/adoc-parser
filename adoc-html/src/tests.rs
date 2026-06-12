@@ -2836,25 +2836,21 @@ fn test_builtin_attr_doctitle() {
 }
 
 #[test]
-fn test_attr_fallback() {
+fn test_attr_reference_with_bang_stays_literal() {
+    // `{name!…}` is not a reference in Asciidoctor (`!` is outside the name
+    // charset) — the braces stay literal even when the attribute is defined
+    // (probe-verified).
     let html = to_html("{undefined!fallback value}");
-    assert!(html.contains("fallback value"), "fallback should be used when attr undefined. Got: {html}");
-    assert!(!html.contains("{undefined}"), "should not show raw reference. Got: {html}");
-}
+    assert!(html.contains("<p>{undefined!fallback value}</p>"),
+        "bang reference should stay literal. Got: {html}");
 
-#[test]
-fn test_attr_fallback_not_used() {
     let html = to_html(":name: real\n\n{name!fallback}");
-    assert!(html.contains("real"), "defined attr should be used. Got: {html}");
-    assert!(!html.contains("fallback"), "fallback should not be used when attr defined. Got: {html}");
-}
+    assert!(html.contains("<p>{name!fallback}</p>"),
+        "bang reference stays literal even for a defined attr. Got: {html}");
 
-#[test]
-fn test_attr_fallback_empty() {
     let html = to_html("{undefined!}");
-    assert!(!html.contains("{undefined}"), "should not show raw reference. Got: {html}");
-    // Empty fallback means nothing is rendered for the attribute
-    assert!(!html.contains("undefined"), "empty fallback should render nothing for the attr. Got: {html}");
+    assert!(html.contains("<p>{undefined!}</p>"),
+        "bang reference should stay literal. Got: {html}");
 }
 
 // --- Markdown compatibility tests ---
@@ -3172,10 +3168,12 @@ fn test_env_attribute_missing_var() {
 }
 
 #[test]
-fn test_env_attribute_missing_var_with_fallback() {
+fn test_env_attribute_missing_var_with_bang_literal() {
+    // `!` is outside the reference-name charset, so this is not a reference
+    // at all — literal braces, no env lookup, no fallback.
     let html = to_html("Value: {env-ADOC_PARSER_TEST_VAR_12345!fallback}");
-    assert!(html.contains("Value: fallback"),
-        "missing env var with fallback should use fallback. Got: {html}");
+    assert!(html.contains("Value: {env-ADOC_PARSER_TEST_VAR_12345!fallback}"),
+        "bang form should stay literal. Got: {html}");
 }
 
 #[test]
@@ -3200,14 +3198,38 @@ fn test_unknown_inline_macro_stays_literal() {
 }
 
 #[test]
-fn test_custom_block_macro_with_attrs() {
+fn test_unknown_block_macro_stays_literal() {
+    // Asciidoctor matches only registered block macro names — an unknown
+    // `name::target[attrs]` line is a plain paragraph (probe-verified).
     let html = to_html("chart::sales-data[type=bar]");
-    assert!(html.contains("<div class=\"custom-macro macro-chart\">"),
-        "custom block macro should render div. Got: {html}");
-    assert!(html.contains("type=bar"),
-        "custom block macro should contain attrs text. Got: {html}");
-    assert!(html.contains("</div>"),
-        "custom block macro should close div. Got: {html}");
+    assert!(html.contains("<p>chart::sales-data[type=bar]</p>"),
+        "unknown block macro should stay a literal paragraph. Got: {html}");
+    assert!(!html.contains("custom-macro"),
+        "no custom-macro div for unknown block macro. Got: {html}");
+
+    // A preceding `.Title` attaches to the resulting paragraph.
+    let html = to_html(".Exponential growth\nstem::[x_0(1 + r)^2]");
+    assert!(html.contains("<div class=\"title\">Exponential growth</div>"),
+        "title should attach to the paragraph. Got: {html}");
+    assert!(html.contains("<p>stem::[x_0(1 + r)^2]</p>"),
+        "stem:: block form is not a macro. Got: {html}");
+}
+
+#[test]
+fn test_stem_inline_escaped_brackets_html() {
+    // `\]` inside stem:[…] does not close the macro and is unescaped
+    // (probe-verified: → \$[[a,b],[c,d]]((n),(k))\$).
+    let html = to_html(":stem:\n\nA matrix can be written as stem:[[[a,b\\],[c,d\\]\\]((n),(k))].");
+    assert!(html.contains(r"\$[[a,b],[c,d]]((n),(k))\$"),
+        "escaped brackets should be unescaped inside stem content. Got: {html}");
+}
+
+#[test]
+fn test_empty_double_plus_passthrough_html() {
+    // `++++` inline is an empty passthrough — renders as nothing (probe-verified).
+    let html = to_html("para with ++++ inline.");
+    assert!(html.contains("<p>para with  inline.</p>"),
+        "++++ should collapse to nothing. Got: {html}");
 }
 
 #[test]
