@@ -334,11 +334,16 @@ impl HtmlRenderer {
         let dlist_style = match style_str {
             Some("horizontal") => DlistStyle::Horizontal,
             Some("qanda") => DlistStyle::Qanda,
-            _ => DlistStyle::Normal,
+            Some(_) => DlistStyle::Styled,
+            None => DlistStyle::Normal,
         };
         self.dlist_stack.push(dlist_style);
         let mut adjusted_meta = meta.clone();
-        if let Some(ref mut m) = adjusted_meta {
+        if let Some(ref mut m) = adjusted_meta
+            && dlist_style != DlistStyle::Styled
+        {
+            // A custom style joins the wrapper class (`dlist glossary`);
+            // the dedicated layouts consume the style instead.
             m.style = None;
         }
         match dlist_style {
@@ -356,7 +361,7 @@ impl HtmlRenderer {
                 self.emit_pending_block_title(output);
                 output.push_str("<ol>\n");
             }
-            DlistStyle::Normal => {
+            DlistStyle::Normal | DlistStyle::Styled => {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &adjusted_meta, "dlist");
                 output.push_str(">\n");
@@ -367,10 +372,16 @@ impl HtmlRenderer {
     }
 
     pub(crate) fn start_section_title(&mut self, output: &mut String, level: &u8, id: &CowStr<'_>) {
-        if *level >= 2 {
+        // Every body section enters the TOC registry — including level 1
+        // (book parts / body sect0), which Asciidoctor shows at TOC depth 1.
+        if !self.in_header {
             self.in_section_title = true;
             self.current_toc_entry = Some(TocEntry {
                 level: *level,
+                // The enclosing Section is already on the stack (pushed by
+                // start_section_div), so the open-section count IS the tree
+                // depth of this section.
+                depth: self.sect0_stack.len() as u8,
                 id: id.to_string(),
                 title: String::new(),
             });

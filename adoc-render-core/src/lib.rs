@@ -262,9 +262,15 @@ pub fn interdoc_xref_href(target: &str) -> String {
 /// the source of TOC entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TocEntry {
-    /// Heading level as emitted by the parser (1 = document title,
-    /// 2 = top-level section).
+    /// Heading level as emitted by the parser (1 = book part / body sect0,
+    /// 2 = top-level section). Special sections are coerced (`[preface]` +
+    /// `= T` arrives as level 2), so this is the DISPLAY level — it drives
+    /// the `sectlevelN` class, not the nesting.
     pub level: u8,
+    /// Tree depth of the section (1 = child of the document). Drives the
+    /// TOC nesting: a coerced special section (level 2) is still a sibling
+    /// of a part (level 1) when both sit at depth 1.
+    pub depth: u8,
     /// Anchor id of the section.
     pub id: String,
     /// Title as plain text (unescaped), including any number prefix or
@@ -272,8 +278,8 @@ pub struct TocEntry {
     pub title: String,
 }
 
-/// Sections eligible for the TOC start at this heading level (level 1 is
-/// the document title).
+/// Depth math for `toclevels` is anchored at this heading level (level 1 in
+/// the body is a book part / article sect0, displayed at TOC depth 1 too).
 const TOC_MIN_LEVEL: u8 = 2;
 
 /// Asciidoctor's default `toc-title`.
@@ -318,40 +324,37 @@ impl TocBuilder {
     }
 
     /// Structural steps for a TOC limited to `toc_levels` levels of depth
-    /// (Asciidoctor's `toclevels`, default 2): section levels 2 through
-    /// `toc_levels + 1` are included. An empty result means no entry is in
-    /// range and no TOC should be emitted at all.
+    /// (Asciidoctor's `toclevels`, default 2): section levels 1 (book parts /
+    /// body sect0) through `toc_levels + 1` are included. Lists are opened
+    /// only for levels that actually occur — a skipped level nests its list
+    /// directly, mirroring Asciidoctor's `convert_outline` recursion over the
+    /// real section tree. An empty result means no entry is in range and no
+    /// TOC should be emitted at all.
     pub fn toc_steps(&self, toc_levels: u8) -> Vec<TocStep<'_>> {
         let max_level = TOC_MIN_LEVEL as u16 + toc_levels as u16 - 1;
         let mut steps = Vec::new();
-        let mut current_level = TOC_MIN_LEVEL - 1;
+        // Stack of tree depths with an open list.
+        let mut open: Vec<u8> = Vec::new();
         let visible = self
             .entries
             .iter()
-            .filter(|e| e.level >= TOC_MIN_LEVEL && (e.level as u16) <= max_level);
+            .filter(|e| (e.level as u16) <= max_level);
         for entry in visible {
-            if entry.level > current_level {
-                // Going deeper — open new list(s)
-                while current_level < entry.level {
-                    current_level += 1;
-                    steps.push(TocStep::EnterLevel(current_level));
-                }
-            } else if entry.level < current_level {
-                // Going shallower — close nested lists, then the sibling item
-                while current_level > entry.level {
-                    steps.push(TocStep::LeaveLevel);
-                    current_level -= 1;
-                }
+            while open.last().is_some_and(|&top| top > entry.depth) {
+                steps.push(TocStep::LeaveLevel);
+                open.pop();
+            }
+            if open.last() == Some(&entry.depth) {
                 steps.push(TocStep::CloseItem);
             } else {
-                steps.push(TocStep::CloseItem);
+                steps.push(TocStep::EnterLevel(entry.level));
+                open.push(entry.depth);
             }
             steps.push(TocStep::Item(entry));
         }
         // Close all levels left open
-        while current_level >= TOC_MIN_LEVEL {
+        for _ in open {
             steps.push(TocStep::LeaveLevel);
-            current_level -= 1;
         }
         steps
     }
@@ -859,13 +862,20 @@ mod tests {
     #[test]
     fn toc_structure_steps() {
         let mut b = TocBuilder::new();
-        for (level, id) in [(2, "a"), (3, "a1"), (3, "a2"), (5, "deep"), (2, "b")] {
-            b.push(TocEntry { level, id: id.to_string(), title: id.to_uppercase() });
+        for (level, depth, id) in [
+            (2, 1, "a"),
+            (3, 2, "a1"),
+            (3, 2, "a2"),
+            (5, 3, "deep"),
+            (2, 1, "b"),
+        ] {
+            b.push(TocEntry { level, depth, id: id.to_string(), title: id.to_uppercase() });
         }
         assert_eq!(b.entries().len(), 5);
 
-        // toclevels=4 → levels 2..=5 visible; level 5 under level 3 opens
-        // two lists at once, returning to level 2 closes three.
+        // toclevels=4 → levels 2..=5 visible; nesting follows tree depth —
+        // the level-5 child opens ONE list (labelled with its own level),
+        // returning to depth 1 closes two.
         let ids: Vec<String> = b
             .toc_steps(4)
             .iter()
@@ -878,8 +888,36 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            [">2", "a", ">3", "a1", "/i", "a2", ">4", ">5", "deep",
-             "<", "<", "<", "/i", "b", "<"]
+            [">2", "a", ">3", "a1", "/i", "a2", ">5", "deep",
+             "<", "<", "/i", "b", "<"]
+        );
+
+        // Book parts: a coerced special section (level 2, depth 1) is a
+        // SIBLING of a part (level 1, depth 1); the part's chapters nest.
+        let mut book = TocBuilder::new();
+        for (level, depth, id) in [
+            (2, 1, "colophon"),
+            (1, 1, "part1"),
+            (2, 2, "ch1"),
+            (2, 1, "appendix"),
+            (3, 2, "basics"),
+        ] {
+            book.push(TocEntry { level, depth, id: id.to_string(), title: id.to_uppercase() });
+        }
+        let ids: Vec<String> = book
+            .toc_steps(2)
+            .iter()
+            .map(|s| match s {
+                TocStep::EnterLevel(l) => format!(">{l}"),
+                TocStep::Item(e) => e.id.clone(),
+                TocStep::CloseItem => "/i".to_string(),
+                TocStep::LeaveLevel => "<".to_string(),
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [">2", "colophon", "/i", "part1", ">2", "ch1", "<", "/i",
+             "appendix", ">3", "basics", "<", "<"]
         );
 
         // Default toclevels=2 → only levels 2..=3.

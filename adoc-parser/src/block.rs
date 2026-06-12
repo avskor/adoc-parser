@@ -11,6 +11,9 @@ use crate::scanner;
 pub enum BlockContext {
     Section { level: u8 },
     DelimitedBlock { kind: scanner::DelimiterType, delimiter_len: usize, admonition_kind: Option<AdmonitionKind> },
+    /// Implicit `[partintro]` open block wrapped around the leading body
+    /// blocks of a book part; closes at the first child section heading.
+    PartIntro,
     UnorderedList { depth: u8 },
     OrderedList { depth: u8 },
     ListItem,
@@ -40,6 +43,10 @@ pub struct BlockScanner<'a> {
     /// `> >` content is parsed by a child scanner with the level incremented.
     /// Capped to keep pathological `> > > …` chains from recursing unboundedly.
     md_quote_depth: u8,
+    /// A book part (`= Title` in the body, doctype book, no style) was just
+    /// opened and its first child block hasn't been scanned yet — that block
+    /// gets wrapped in (or restyled as) a `[partintro]` open block.
+    part_awaiting_intro: bool,
     leveloffset: i32,
     idprefix: String,
     idseparator: String,
@@ -71,6 +78,7 @@ impl<'a> BlockScanner<'a> {
             had_blank_line: false,
             rescan_requested: false,
             md_quote_depth: 0,
+            part_awaiting_intro: false,
             leveloffset: 0,
             idprefix: "_".to_string(),
             idseparator: "_".to_string(),
@@ -223,6 +231,9 @@ impl<'a> BlockScanner<'a> {
             match ctx {
                 BlockContext::Section { level } => {
                     events.push(Event::End(TagEnd::Section { level }));
+                }
+                BlockContext::PartIntro => {
+                    events.push(Event::End(TagEnd::DelimitedBlock));
                 }
                 BlockContext::UnorderedList { .. } => {
                     events.push(Event::End(TagEnd::UnorderedList));
@@ -668,6 +679,59 @@ impl<'a> BlockScanner<'a> {
         None
     }
 
+    /// Book-part intro handling (Asciidoctor `next_section` REVIEW logic).
+    /// Returns `Some(..)` when an event was produced; `None` — continue the
+    /// normal block dispatch (possibly with restyled pending attributes).
+    ///
+    /// The first body block of a part is wrapped in an open block styled
+    /// `partintro`; the wrapper stays open until the first child section. A
+    /// bare open block is restyled in place instead of double-wrapping. An
+    /// explicitly `[partintro]`-styled block is left alone — the existing
+    /// paragraph masquerade / open-block style already renders it — and no
+    /// wrapper context is kept, so later pre-section blocks render OUTSIDE
+    /// it (Asciidoctor logs "illegal block content outside of partintro
+    /// block" and appends them to the part).
+    fn handle_part_intro(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
+        if !self.part_awaiting_intro {
+            return None;
+        }
+        // Comments are invisible — they don't start the intro.
+        if scanner::is_line_comment(line)
+            || matches!(scanner::is_delimiter(line), Some((scanner::DelimiterType::Comment, _)))
+        {
+            return None;
+        }
+        self.part_awaiting_intro = false;
+
+        let pending_style = self
+            .pending_block_attrs
+            .as_ref()
+            .filter(|a| a.first_positional_is_style)
+            .and_then(|a| a.positional.first())
+            .map(|s| s.as_str());
+        // Explicit [partintro]: the block renders as the intro by itself.
+        if pending_style == Some("partintro") {
+            return None;
+        }
+        if matches!(scanner::is_delimiter(line), Some((scanner::DelimiterType::Open, _)))
+            && matches!(pending_style, None | Some("" | "open"))
+        {
+            // Restyle the open block as the partintro itself; no wrapper.
+            let restyled = BlockAttributes::parse("partintro");
+            self.pending_block_attrs = Some(match self.pending_block_attrs.take() {
+                Some(prev) => BlockAttributes::merge(prev, restyled),
+                None => restyled,
+            });
+            return None;
+        }
+
+        // Wrap: open a partintro block around the leading part content.
+        self.push_event(Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Open }));
+        self.emit_block_metadata(&BlockAttributes::parse("partintro"), SubstitutionSet::NORMAL);
+        self.context_stack.push(BlockContext::PartIntro);
+        Some(self.event_buffer.pop())
+    }
+
     /// Leaf body constructs: attribute entry, thematic/page break, section
     /// heading, toc macro, include directive.
     fn scan_leaf_blocks(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
@@ -1031,6 +1095,10 @@ impl<'a> BlockScanner<'a> {
             return r;
         }
 
+        if let Some(ev) = self.handle_part_intro(line) {
+            return ev;
+        }
+
         if let Some(r) = self.scan_block_macros(line) {
             return r;
         }
@@ -1337,9 +1405,46 @@ impl<'a> BlockScanner<'a> {
         // Apply leveloffset to section level
         let effective_level = (level as i32 + self.leveloffset).max(1) as u8;
 
+        // Section style (positional slot 1). A styled section is a "special
+        // section" (Asciidoctor initialize_section): a level-0 special section
+        // is displayed at level 1 (`[preface]` + `= T` → sect1/h2), and in a
+        // book `[abstract]` becomes a chapter at level 1 regardless of its
+        // marker depth. The COERCED level is display-only: section closing
+        // uses the raw marker level (Asciidoctor decides nesting from the
+        // peeked raw level before initialize_section runs).
+        let sect_style: Option<String> = self
+            .pending_block_attrs
+            .as_ref()
+            .filter(|a| a.first_positional_is_style)
+            .and_then(|a| a.positional.first())
+            .filter(|s| !s.is_empty() && s.as_str() != "float")
+            .cloned();
+        let book = self.doc_attrs.get("doctype").map(String::as_str) == Some("book");
+        let is_sect_level_style = |s: &str| {
+            s.len() == 5 && s.starts_with("sect") && s.as_bytes()[4].is_ascii_digit()
+        };
+        let mut display_level = effective_level;
+        if let Some(style) = sect_style.as_deref()
+            // book abstract → chapter at level 1 regardless of marker depth;
+            // any other special style is lifted only from level 0.
+            && ((book && style == "abstract")
+                || (!is_sect_level_style(style) && effective_level == 1))
+        {
+            display_level = 2;
+        }
+
         self.advance();
         let list_close_events = self.close_list_contexts();
-        let close_events = self.close_sections_for_level(effective_level);
+        // Any section heading ends an open part intro before section closing.
+        let mut close_events = Vec::new();
+        if matches!(self.context_stack.last(), Some(BlockContext::PartIntro)) {
+            self.context_stack.pop();
+            close_events.push(Event::End(TagEnd::DelimitedBlock));
+        }
+        close_events.extend(self.close_sections_for_level(effective_level));
+        // A bare level-0 section in a book is a part: its leading body blocks
+        // (before the first child section) get wrapped in a partintro block.
+        self.part_awaiting_intro = book && sect_style.is_none() && effective_level == 1;
 
         let id = match self.pending_block_attrs.as_ref().and_then(|a| a.id.clone()) {
             Some(explicit) => {
@@ -1355,16 +1460,16 @@ impl<'a> BlockScanner<'a> {
         let block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
 
-        self.context_stack.push(BlockContext::Section { level: effective_level });
+        self.context_stack.push(BlockContext::Section { level: display_level });
 
         // Buffer (bottom to top): section content, then close events, then title
         self.push_event(Event::End(TagEnd::SectionTitle));
         self.push_event(Event::Text(Cow::Borrowed(title)));
         self.push_event(Event::Start(Tag::SectionTitle {
-            level: effective_level,
+            level: display_level,
             id: Cow::Owned(id),
         }));
-        self.push_event(Event::Start(Tag::Section { level: effective_level }));
+        self.push_event(Event::Start(Tag::Section { level: display_level }));
         if let Some(ref attrs) = block_attrs {
             self.emit_block_metadata(attrs, SubstitutionSet::NORMAL);
         }
@@ -3417,6 +3522,9 @@ impl<'a> BlockScanner<'a> {
                                     match ctx {
                                         BlockContext::Section { level } => {
                                             events.push(Event::End(TagEnd::Section { level }));
+                                        }
+                                        BlockContext::PartIntro => {
+                                            events.push(Event::End(TagEnd::DelimitedBlock));
                                         }
                                         BlockContext::DelimitedBlock { admonition_kind, .. } => {
                                             if admonition_kind.is_some() {
