@@ -1,5 +1,64 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать пятая, часть 3) — Фаза 3: quoted paragraph + markdown blockquote + одиночные кавычки в attrlist
+
+Та же сессия, третья задача. Ветка **`fix/quoted-paragraph-and-md-blockquote`**
+— ЗАКОММИЧЕНА (`48ace39`), смержена в master (`6426a5f`), запушена, ветка
+удалена. Baseline: Identical 297. **Итог сессии: 295→298 (+3 за три задачи).**
+
+### Выбор задачи
+nearmiss: **quote.adoc (109 diff)** — ожидался один корень (`-- Author`
+attribution), оказалось ТРИ.
+
+### Семантика asciidoctor (пробы /tmp/p_subs/p11, p12 + parser.rb:770-810)
+- **Quoted paragraph**: параграф, где строка 1 начинается `"`, предпоследняя
+  кончается `"`, последняя — `-- credit` → quote-блок с ГОЛЫМ контентом
+  (как [quote]-параграф, без `<p>`), кавычки стрипаются; credit =
+  attribution[, citetitle] (split ', ' 2), получает apply_subs. Негативы:
+  без `--`-строки — обычный параграф с кавычками; `-- ` пустой — НЕ credit
+  (это open-block делимитер у asciidoctor!).
+- **Markdown blockquote**: строки `> ...` (первая обязана `> `) — стрип
+  ОДНОГО уровня (`>` → пусто, `> x` → x, прочее как есть), остаток парсится
+  как COMPOUND (врапперы параграфов ЕСТЬ, в отличие от quoted paragraph!);
+  `> >` → вложенный quote, `> *` → список; trailing `-- credit` →
+  attribution.
+- **Кавычки в attrlist**: `'...'`-значение защищает запятую И получает
+  normal subs при использовании (link/strong в citetitle); `"..."` — только
+  защита запятой, литерал; кавычка открывается только в начале значения
+  (после `,`/`=`) — апостроф в `Dad's words` не кавычка (проба p12).
+
+### Что сделано
+- **ПАРСЕР** block.rs scan_paragraph: две новые ветки перед plain-para
+  (см. TODO.md); BlockScanner::new_nested(lines, depth) — скан по готовым
+  строкам в body-контексте; поле md_quote_depth (cap 16).
+- **ПАРСЕР** attributes.rs: quote-aware split (`'` и `"`, открытие только
+  после `,`/`=`), стрип кавычек позиционных, поле
+  single_quoted_positionals (merge: флаги newer при захвате style-слота).
+- **ПАРСЕР** block.rs emit_block_metadata: маркер-ключи
+  attribution-subs/citetitle-subs в named (только quote/verse).
+- **РЕНДЕРЕР**: quote_attribution/quote_citetitle → Option<(String,bool)>;
+  хелпер render_quote_attribution (дедуп двух армов TagEnd quote/verse);
+  флаг → render_inline_value, иначе html_escape.
+- Тесты: +3 html (quoted paragraph 4 кейса, md blockquote 4 кейса,
+  single-quoted subs 4 кейса).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (960).
+- Пробы p11, p12 IDENTICAL; quote.adoc 109→0.
+- **Корпус: Identical 297→298 (+1)**. Blast (base dd7cf69, вся сессия):
+  3 флипа (subs, ordered, quote), sdr-004 312→314 и description 295→298 —
+  позиционный сдвиг поверх pre-existing корней (sdr-004: наш md-quote
+  фрагмент сверен = asciidoctor; description: пустой `<p></p>` в dd),
+  **0 семантических регрессий**.
+
+### Ограничения/пределы новые
+- md-blockquote: вложенность глубже 16 уровней `>` — плоский параграф
+  (защита от рекурсии).
+- merge стопки attrlist: single-quoted флаги берутся от newer при захвате
+  style-слота (приближение).
+
+---
+
 ## Сессия (2026-06-12, тридцать пятая, часть 2) — Фаза 3: вложенность списков по стеку маркеров + стиль olist от маркера
 
 Та же сессия, вторая задача. Ветка **`fix/mixed-marker-list-nesting`** —
