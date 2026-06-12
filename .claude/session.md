@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-13, тридцать девятая) — Фаза 3: uriish include-таргет → link
+
+Запрос «продолжи». Ветка **`fix/uriish-include-link`** — ЗАКОММИЧЕНА
+(`a261d72`), смержена в master (`594d16a`), запушена, ветка удалена.
+Baseline: Identical 302, master `ca6a35e`; base-бинарь /tmp/adoc_base
+пересобран с него (worktree) — лежавший был от 06e6b03 (устарел).
+
+### Выбор задачи
+nearmiss на 302: replacements (4 — NCR, скип);
+**apply-subs-to-text.adoc (115, len_delta=6)** — ОДИН корень:
+`include::pass:example$pass.adoc[tag=in-macro]` (Antora resource-id)
+рендерился «Unresolved directive…», эталон — bare-ссылка.
+
+### Семантика asciidoctor (пробы /tmp/p_inc/p1..p3 + reader.rb)
+- **resolve_include_path (reader.rb:1240-1248)**: таргет uriish
+  (`UriSniffRx = \A\p{Alpha}[\p{Alnum}.+-]+:/{0,2}` — схема ≥2 символов
+  до `:`; однобуквенная `a:` — файловый путь, Windows-диски) и нет
+  `allow-uri-read` → строка заменяется на `link:<target>[role=include]`;
+  attrlist и opts=optional ОТБРАСЫВАЮТСЯ (optional работает только на
+  file-not-found ветке). Рендер: `<a href="…" class="bare include">`.
+- Таргет с пробелом asciidoctor оборачивает `pass:c[…]` — только чтобы
+  пройти СВОЙ link-regex; наш link-макрос принимает пробелы как есть и
+  даёт тот же HTML → эмитим БЕЗ обёртки (форму `link:pass:c[x][role=…]`
+  наш inline-парсер как раз НЕ понимает — проверено пробой l1).
+
+### Что сделано
+- **ПАРСЕР** preprocessor.rs resolve_includes_rec: is_uriish(path)
+  (зеркало UriSniffRx на char::is_alphabetic/is_alphanumeric) → эмиссия
+  `link:{target}[role=include]` до файловых операций/guard'ов.
+- +1 тест (5 кейсов: scheme-таргет, URL, optional-у-URI, пробел,
+  однобуквенная схема → unresolved).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (970).
+- Пробы p1..p3 IDENTICAL (наш рендер link-строки = asciidoctor байт-в-байт).
+- **Корпус: Identical 302→303 (+1 флип)**. Blast (base ca6a35e): ровно
+  2 файла — apply-subs-to-text 115→0 (флип),
+  syntax-quick-reference 2828→2788 (ближе), **0 регрессий**.
+
+### Что дальше
+- nearmiss на 303: replacements (4 — NCR, скип), image (125),
+  ts-url-format (125, len_delta=106), sdr-007 (130), table-ref (135),
+  counters (136), unordered (145), complex (152, len_delta=143),
+  sdr-001 (153), subs-symbol-repl (165), image-size (177, len_delta=92),
+  data (181, len_delta=77).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table); syntax-quick-reference — file-level корень
+  (нет `<div id="content">`).
+- Pre-existing — см. сессии 36/38 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, тридцать восьмая) — Фаза 3: revision line после attr-entries + точная модель RevisionInfoLineRx
 
 Запрос «продолжи». Ветка **`fix/metadata-revision-line`** — ЗАКОММИЧЕНА
