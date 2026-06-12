@@ -221,8 +221,11 @@ struct HtmlRenderer {
     linenums_start: usize,
     source_code_buffer: Option<String>,
     header_suppress_start: Option<usize>,
-    quote_attribution: Option<String>,
-    quote_citetitle: Option<String>,
+    /// Captured attribution/citetitle for the open quote/verse block;
+    /// the bool says whether normal substitutions apply (single-quoted
+    /// attrlist value or a quoted-paragraph/markdown credit line).
+    quote_attribution: Option<(String, bool)>,
+    quote_citetitle: Option<(String, bool)>,
     authors: AuthorRegistry,
     /// Attribute names whose values are being rendered right now
     /// (`Event::AttributeReference` → `render_inline_value` re-entrancy).

@@ -3288,6 +3288,62 @@ fn test_verse_style_on_paragraph() {
 }
 
 #[test]
+fn test_quoted_paragraph_shorthand() {
+    // Probe-verified vs asciidoctor (/tmp/p_subs/p11): a paragraph wrapped in
+    // quotes followed by `-- attribution, citetitle` becomes a quote block
+    // with BARE content (no paragraph wrapper) and an attribution trailer.
+    let html = to_html("\"Two line quote,\nsecond line.\"\n-- Thomas Jefferson, Papers Volume 11");
+    assert!(html.contains("<div class=\"quoteblock\">\n<blockquote>\nTwo line quote,\nsecond line.\n</blockquote>"),
+        "bare content in blockquote. Got: {html}");
+    assert!(html.contains("<div class=\"attribution\">\n&#8212; Thomas Jefferson<br>\n<cite>Papers Volume 11</cite>"),
+        "attribution + citetitle. Got: {html}");
+    // attribution without citetitle
+    let html = to_html("\"Q.\"\n-- Solo Author");
+    assert!(html.contains("&#8212; Solo Author\n</div>"), "no <br>/<cite>. Got: {html}");
+    // a quoted paragraph without the credit line stays a plain paragraph
+    let html = to_html("\"Just quoted text.\"");
+    assert!(html.contains("<p>\"Just quoted text.\"</p>"), "plain paragraph. Got: {html}");
+}
+
+#[test]
+fn test_markdown_blockquote() {
+    // Probe-verified vs asciidoctor (/tmp/p_subs/p11): `>`-prefixed lines are
+    // a quote block with COMPOUND content (paragraph wrappers kept); the
+    // trailing `-- ...` line becomes the attribution.
+    let html = to_html("> Md quote line one,\n> line two.\n> -- Author Name, Cite Source");
+    assert!(html.contains("<blockquote>\n<div class=\"paragraph\">\n<p>Md quote line one,\nline two.</p>\n</div>\n</blockquote>"),
+        "paragraph wrapper inside blockquote. Got: {html}");
+    assert!(html.contains("&#8212; Author Name<br>\n<cite>Cite Source</cite>"), "attribution. Got: {html}");
+    // without attribution
+    let html = to_html("> Bare md quote\n> no attribution.");
+    assert!(html.contains("quoteblock") && !html.contains("<div class=\"attribution\">"), "no attribution div. Got: {html}");
+    // a stripped bare `>` separates paragraphs; nested `> >` nests a quote
+    let html = to_html("> > Inner quote\n>\n> Outer para");
+    assert!(html.contains("<blockquote>\n<div class=\"quoteblock\">\n<blockquote>\n<div class=\"paragraph\">\n<p>Inner quote</p>"),
+        "nested quoteblock. Got: {html}");
+    assert!(html.contains("<p>Outer para</p>"), "second paragraph. Got: {html}");
+}
+
+#[test]
+fn test_single_quoted_attrlist_value_gets_subs() {
+    // Probe-verified vs asciidoctor (/tmp/p_subs/p12): only SINGLE-quoted
+    // attrlist values receive normal substitutions; double-quoted and bare
+    // values stay literal (escaped).
+    let html = to_html("[quote,Auth,'cite with https://e.org[L] and *b*']\n____\nq\n____");
+    assert!(html.contains("<cite>cite with <a href=\"https://e.org\">L</a> and <strong>b</strong></cite>"),
+        "single-quoted citetitle gets subs. Got: {html}");
+    let html = to_html("[quote,Auth,\"double https://e.org[L] and *b*\"]\n____\nq\n____");
+    assert!(html.contains("<cite>double https://e.org[L] and *b*</cite>"),
+        "double-quoted stays literal. Got: {html}");
+    // single-quoted value also protects its comma (one citetitle, not two slots)
+    let html = to_html("[quote,Auth,'one, two']\n____\nq\n____");
+    assert!(html.contains("<cite>one, two</cite>"), "comma protected. Got: {html}");
+    // mid-word apostrophe is not a quote opener
+    let html = to_html("[quote,Dad's words]\n____\nq\n____");
+    assert!(html.contains("&#8212; Dad's words"), "apostrophe is plain text (no subs on bare values). Got: {html}");
+}
+
+#[test]
 fn test_quote_style_on_paragraph() {
     let html = to_html("[quote]\nThis is a quote.");
     assert!(html.contains("quoteblock"), "should have quoteblock class. Got: {html}");
