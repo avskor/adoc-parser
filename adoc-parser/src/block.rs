@@ -1848,6 +1848,16 @@ impl<'a> BlockScanner<'a> {
             });
 
         while let Some(line) = self.current_line() {
+            // A line comment inside a paragraph is dropped and the paragraph
+            // continues (Asciidoctor reads paragraph lines with
+            // skip_line_comments); verbatim paragraph styles keep it as content.
+            if !verbatim_paragraph && scanner::is_line_comment(line) {
+                if para_lines.is_empty() {
+                    break;
+                }
+                self.advance();
+                continue;
+            }
             if scanner::is_blank(line)
                 || scanner::strip_any_section_marker(line).is_some()
                 || scanner::is_delimiter(line).is_some()
@@ -1862,7 +1872,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || (!verbatim_paragraph && scanner::is_line_comment(line))
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_callout_list_item(line).is_some()
                 || scanner::is_list_continuation(line)
@@ -2151,6 +2160,12 @@ impl<'a> BlockScanner<'a> {
         // Collect continuation lines (same break conditions as scan_paragraph)
         let mut continuation_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
+            // Line comments inside the admonition paragraph are dropped and
+            // the paragraph continues (skip_line_comments, as in scan_paragraph).
+            if scanner::is_line_comment(line) {
+                self.advance();
+                continue;
+            }
             if scanner::is_blank(line)
                 || scanner::strip_any_section_marker(line).is_some()
                 || scanner::is_delimiter(line).is_some()
@@ -2165,7 +2180,6 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_thematic_break(line)
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || scanner::is_line_comment(line)
                 || scanner::is_description_list_marker(line).is_some()
                 || scanner::is_callout_list_item(line).is_some()
                 || scanner::is_list_continuation(line)
@@ -2868,6 +2882,12 @@ impl<'a> BlockScanner<'a> {
                     self.advance();
                     continue;
                 }
+                // Line comments inside the description text are dropped and the
+                // text continues on the next line (skip_line_comments).
+                if scanner::is_line_comment(line) {
+                    self.advance();
+                    continue;
+                }
                 if self.is_dlist_continuation_line(line)
                     && !line.starts_with(' ') && !line.starts_with('\t')
                 {
@@ -2948,6 +2968,12 @@ impl<'a> BlockScanner<'a> {
         // Collect wrapped continuation lines
         let mut continuation_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
+            // Line comments inside the item's wrapped text are dropped and the
+            // text continues on the next line (skip_line_comments).
+            if scanner::is_line_comment(line) {
+                self.advance();
+                continue;
+            }
             if self.is_list_continuation_line(line) {
                 continuation_lines.push(line);
                 self.advance();
@@ -3018,6 +3044,12 @@ impl<'a> BlockScanner<'a> {
         // Collect wrapped continuation lines
         let mut continuation_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
+            // Line comments inside the item's wrapped text are dropped and the
+            // text continues on the next line (skip_line_comments).
+            if scanner::is_line_comment(line) {
+                self.advance();
+                continue;
+            }
             if self.is_list_continuation_line(line) {
                 continuation_lines.push(line);
                 self.advance();
@@ -3087,6 +3119,12 @@ impl<'a> BlockScanner<'a> {
         // Collect wrapped continuation lines
         let mut continuation_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
+            // Line comments inside the item's wrapped text are dropped and the
+            // text continues on the next line (skip_line_comments).
+            if scanner::is_line_comment(line) {
+                self.advance();
+                continue;
+            }
             if self.is_list_continuation_line(line) {
                 continuation_lines.push(line);
                 self.advance();
@@ -3414,15 +3452,33 @@ mod tests {
 
     #[test]
     fn test_line_comment_skipped() {
+        // A line comment inside a paragraph is dropped and the lines merge
+        // into one paragraph (Asciidoctor skip_line_comments; probe-verified).
         let input = "First.\n// this is a comment\nSecond.";
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert_eq!(events, vec![
             Event::Start(Tag::Paragraph),
             Event::Text(Cow::Borrowed("First.")),
-            Event::End(TagEnd::Paragraph),
-            Event::Start(Tag::Paragraph),
+            Event::SoftBreak,
             Event::Text(Cow::Borrowed("Second.")),
             Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_line_comment_mid_list_item_merges_text() {
+        // A comment between an item's wrapped lines is dropped and the text
+        // continues in the same paragraph (probe-verified: `* a\n//c\nb`).
+        let input = "* a\n// c\nb";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("a")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("b")),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
         ]);
     }
 
