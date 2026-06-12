@@ -1,5 +1,83 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать пятая) — Фаза 3: точный index-term + `\\`-unconstrained escape + attr-refs в attrlist
+
+Запрос «продолжи». Ветка
+**`fix/escaped-index-term-and-double-backslash-unconstrained`** —
+ЗАКОММИЧЕНА (`2c80fb2`), смержена в master (`4b66e7a`), запушена, локальная
+ветка удалена. Baseline: Identical 295, master `dd7cf69` (base-бинарь
+/tmp/adoc_base пересобран с master через временный worktree).
+
+### Выбор задачи
+nearmiss на 295: replacements (4 — NCR, скип); **subs.adoc (76 diff)** —
+оказалось ТРИ корня (третий обнажился после сдвига).
+
+### Семантика asciidoctor (пробы /tmp/p_subs/p1..p5 + ИСХОДНИК gem'а)
+Ключевой приём: модель не сходилась на 4-скобочном кейсе — вскрыл
+`/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/`
+(substitutors.rb:439-514, rx.rb InlineIndextermMacroRx) — снимает все догадки.
+- **Index term**: ОДИН regex `\\?\(\((.+?)\)\)(?!\))` — non-greedy закрытие
+  «скользит» мимо `)))`-хвостов; скобки самого контента решают форму:
+  `(..)` с обеих сторон → concealed (невидимый, comma-split), слева →
+  литеральная `(` + flow-term, справа → flow-term + `)`, иначе flow.
+  Эскейп: контент в скобках → `(` + ВИДИМЫЙ flow + `)` («escape concealed,
+  but process nested flow»); иначе весь матч литерально минус `\`.
+- **`\\` + unconstrained-пара**: НЕТ спец-правила — каскад gsub-пассов:
+  unconstrained-pass матчит `\MM..MM`, снимает один `\`; constrained-pass
+  матчит с lead `\`, снимает второй → `\\__func__` → литерал `__func__`,
+  контент с обычными subs (`\\__a *b* c__` → `__a <strong>b</strong> c__`;
+  mid-word `a*b*c` — литерал, у constrained нет границы).
+- **attr-refs в attrlist**: `[source,subs="{markup}"]` — asciidoctor
+  подставляет атрибуты в block-attrlist строках на парсинге (document-order);
+  unknown — intact (attribute-missing=skip), определение ПОСЛЕ — не работает,
+  внутри verbatim — не трогается (проба p4 все кейсы IDENTICAL).
+
+### Что сделано
+- **ПАРСЕР** inline.rs: index_term_close (скользящее закрытие) +
+  try_index_term (формы по скобкам контента); try_concealed_index_term /
+  try_flow_index_term УДАЛЕНЫ, арм `(((`+`((` схлопнут в один. Escape-арм
+  `\((` в handle_inline_escape (формы по asciidoctor). Арм `\\`+`MM` (марки
+  `* _ #` и backtick): оба `\` съедены, Text(марки) + inner-парсер контента +
+  Text(марки).
+- **ПАРСЕР** preprocessor.rs: шаг 5a' в preprocess_with_attrs —
+  строка-«[..]» целиком → expand_attr_refs_in_attrlist (известные атрибуты,
+  `\{`-escape скип); после verbatim-fence гейта (внутри фенсов не работает).
+- Тесты: +3 parser (sliding/partial parens, escaped index term,
+  double-backslash unconstrained), +1 preprocessor (6 сценариев).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 490, html 374).
+- Пробы p1, p3, p4 IDENTICAL; p2 — корпусные кейсы ✓, остатки = пределы ниже.
+- **Корпус: Identical 295→296 (+1)** (subs.adoc 76→0). Blast (base dd7cf69):
+  ровно 1 файл изменился — 1 флип, **0 регрессий**.
+
+### Новые известные пределы (вне корпуса)
+- `\__one__` (одиночный `\` + unconstrained): asciidoctor → `<em>_one_</em>`
+  (каскад: unconstrained снял `\`, constrained-em сматчил `_`+`_one_`+`_`);
+  у нас литерал `__one__`. Аналогично `\**bold**` → `<strong>*bold</strong>*`.
+- `` \\`mono` ``: asciidoctor хранит один `\` и НЕ форматирует (у code только
+  constrained-pass); у нас `\`+`<code>mono</code>` (eager-`\\`-модель).
+
+### Что дальше
+- nearmiss пересчитать на 296; кандидаты по прошлому списку: replacements
+  (4 — NCR, скип), ordered (90), part-with-special-sections (103),
+  multipart-book (109), quote (109 — `-- Author` attribution), metadata (111),
+  apply-subs-to-text (115), image (125), ts-url-format (125).
+- Кандидаты-корни: `++…++` double-plus НЕ экранирует спецсимволы
+  (block-name-table 431); syntax-quick-reference — file-level корень
+  (нет `<div id="content">`).
+- Pre-existing из прошлых сессий: blank в DEFAULT-ячейке → второй `<p>`,
+  footnotes-div внутри a-ячейки, nested-список с другим маркером в li,
+  `[square]`-класс, компактный colist-`<li><p>`, `== heading` не прерывает
+  параграф, `[abstract]`-параграф → quoteblock, `:icons:`-colist,
+  unknown-style в class на quote/sidebar, list-merge через
+  continuation-attrlist, author-line после attr-entry в header, label
+  block-anchor `[[id,label]]` над блоком не побеждает `.Title`,
+  `\\https://…` двойной backslash, CSV drop incomplete row,
+  eager-`\\`-escape ест первый backslash (`\\` в ячейке → `\`).
+
+---
+
 ## Сессия (2026-06-12, тридцать четвёртая) — Фаза 3: escaped `\|` + table width + стилевые веса cols + passthrough-скип в unconstrained
 
 Запрос «продолжи». Ветка **`fix/pass-macro-and-delimited`** — ЗАКОММИЧЕНА
