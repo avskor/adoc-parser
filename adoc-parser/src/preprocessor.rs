@@ -363,6 +363,21 @@ fn resolve_includes_rec(
     for line in input.lines() {
         if let Some((path, attrs_str)) = crate::scanner::is_include_directive(line) {
             let attrs = parse_include_attrs(attrs_str);
+
+            // URI target (and no allow-uri-read support): Asciidoctor replaces
+            // the directive with a bare link — `link:<target>[role=include]` —
+            // regardless of the attrlist or the optional option
+            // (reader.rb resolve_include_path). It wraps targets containing
+            // spaces in `pass:c[…]` to get them past its own link regex; our
+            // link macro accepts spaces in the target, so the plain form
+            // renders the same HTML.
+            if is_uriish(path) {
+                output.push_str("link:");
+                output.push_str(path);
+                output.push_str("[role=include]\n");
+                continue;
+            }
+
             let file_path = base_dir.join(path);
             let canonical = file_path
                 .canonicalize()
@@ -437,6 +452,26 @@ fn resolve_includes_rec(
     }
 
     output
+}
+
+/// Mirror of Asciidoctor's `UriSniffRx` (`\A\p{Alpha}[\p{Alnum}.+-]+:/{0,2}`):
+/// a scheme of at least two characters followed by a colon marks the target
+/// as a URI rather than a file path. The two-character minimum deliberately
+/// lets Windows drive letters (`c:/…`) through as file paths.
+fn is_uriish(target: &str) -> bool {
+    let mut chars = target.chars();
+    if !chars.next().is_some_and(char::is_alphabetic) {
+        return false;
+    }
+    let mut middle = 0usize;
+    for c in chars {
+        match c {
+            ':' => return middle >= 1,
+            c if c.is_alphanumeric() || matches!(c, '.' | '+' | '-') => middle += 1,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Emit the Asciidoctor-style `Unresolved directive in <file> - include::path[attrs]`
@@ -1910,6 +1945,38 @@ end::foo[]";
         assert!(
             result.contains("Unresolved directive in myfile.adoc - include::missing.adoc[]"),
             "placeholder should include source filename. Got: {result}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_includes_uriish_target_becomes_link() {
+        let dir = std::env::temp_dir().join("adoc_test_uriish_include");
+        let _ = std::fs::create_dir_all(&dir);
+
+        // Scheme-like target (UriSniffRx) → bare link, attrlist discarded.
+        let result = resolve_includes("include::pass:example$pass.adoc[tag=in-macro]", &dir);
+        assert_eq!(result, "link:pass:example$pass.adoc[role=include]");
+
+        // Classic URL, with and without optional — optional does not matter
+        // on the URI branch.
+        let result = resolve_includes("include::http://example.com/x.adoc[]", &dir);
+        assert_eq!(result, "link:http://example.com/x.adoc[role=include]");
+        let result = resolve_includes("include::http://example.com/x.adoc[opts=optional]", &dir);
+        assert_eq!(result, "link:http://example.com/x.adoc[role=include]");
+
+        // Space in the target stays in the link target (Asciidoctor wraps it
+        // in pass:c[…]; our link macro takes it as-is — same rendered HTML).
+        let result = resolve_includes("include::myscheme:with space.adoc[]", &dir);
+        assert_eq!(result, "link:myscheme:with space.adoc[role=include]");
+
+        // Single-character scheme (e.g. Windows drive letter) is a file path,
+        // not a URI → unresolved placeholder.
+        let result = resolve_includes("include::a:b.adoc[]", &dir);
+        assert!(
+            result.contains("Unresolved directive in <stdin> - include::a:b.adoc[]"),
+            "single-char scheme must stay a file path. Got: {result}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
