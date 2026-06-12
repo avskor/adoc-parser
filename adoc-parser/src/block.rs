@@ -1432,6 +1432,9 @@ impl<'a> BlockScanner<'a> {
         // itself start a new cell (a continuation line cancels the header).
         let mut awaiting_post_blank_line = false;
         let mut post_blank_line_starts_cell = false;
+        // A blank line before the first data line (comments are invisible)
+        // suppresses implicit header promotion entirely
+        let mut blank_before_first_data = false;
 
         for (idx, &line) in content_lines.iter().enumerate() {
             // Line comments are invisible inside tables — dropped from cell
@@ -1440,6 +1443,9 @@ impl<'a> BlockScanner<'a> {
                 continue;
             }
             if scanner::is_blank(line) {
+                if first_data_idx.is_none() {
+                    blank_before_first_data = true;
+                }
                 if first_data_idx.is_some() && first_blank_idx.is_none() {
                     first_blank_idx = Some(idx);
                     // Sum of colspan values for cells before blank
@@ -1507,7 +1513,8 @@ impl<'a> BlockScanner<'a> {
             (first_data_idx, first_blank_idx),
             (Some(d), Some(b)) if b == d + 1
         ) && post_blank_line_starts_cell
-            && cells_before_blank_col_width == num_cols;
+            && cells_before_blank_col_width == num_cols
+            && !blank_before_first_data;
         let has_header = block_attrs.has_option("header")
             || (implicit_header && !block_attrs.has_option("noheader"));
 
