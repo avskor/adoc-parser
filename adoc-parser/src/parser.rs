@@ -172,6 +172,18 @@ impl<'a> Iterator for Parser<'a> {
                     }
                 }
             }
+            Event::Text(Cow::Owned(s)) if self.current_subs().needs_inline_parsing() => {
+                // Owned text (e.g. merged multi-line table cells) goes through
+                // inline parsing too; results borrow from the local string, so
+                // they are detached via into_static.
+                let subs = self.current_subs();
+                let events = InlineParser::parse_str_with_subs_options(&s, subs, self.inline_options);
+                for ev in events.into_iter().rev() {
+                    self.inline_buffer.push(ev.into_static());
+                }
+                // See above (D6): don't end iteration on an empty result.
+                self.inline_buffer.pop().or_else(|| self.next())
+            }
             other => Some(other),
         }
     }

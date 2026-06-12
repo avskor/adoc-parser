@@ -1416,27 +1416,67 @@ impl<'a> BlockScanner<'a> {
             return self.scan_delimited_format_table(&content_lines, block_attrs, format, title_events);
         }
 
-        // Parse cells from content lines, tracking blank line positions
+        // Parse cells from content lines. Text before the first `|` of a line
+        // (or a line with no `|` at all) continues the previous cell — the
+        // lines are joined with a newline inside the same cell paragraph.
         let mut all_cells: Vec<scanner::CellSpec<'a>> = Vec::new();
-        let mut first_blank_after_first_row = false;
+        let mut first_data_idx: Option<usize> = None;
+        // Implicit column count: cells of the first row, which stays open
+        // across continuation lines (cells opened there count too) and closes
+        // at the first subsequent line that starts with a cell delimiter.
+        let mut first_row_open = true;
+        let mut first_row_width: usize = 0;
+        let mut first_blank_idx: Option<usize> = None;
         let mut cells_before_blank_col_width: usize = 0;
-        let mut found_first_data = false;
+        // For implicit header promotion the line after the first blank must
+        // itself start a new cell (a continuation line cancels the header).
+        let mut awaiting_post_blank_line = false;
+        let mut post_blank_line_starts_cell = false;
 
-        for &line in &content_lines {
+        for (idx, &line) in content_lines.iter().enumerate() {
+            // Line comments are invisible inside tables — dropped from cell
+            // content and ignored by the header/colcount bookkeeping
+            if scanner::is_line_comment(line) {
+                continue;
+            }
             if scanner::is_blank(line) {
-                if found_first_data && !first_blank_after_first_row {
-                    first_blank_after_first_row = true;
+                if first_data_idx.is_some() && first_blank_idx.is_none() {
+                    first_blank_idx = Some(idx);
                     // Sum of colspan values for cells before blank
                     cells_before_blank_col_width = all_cells
                         .iter()
-                        .map(|c| c.colspan as usize)
+                        .map(|c| c.colspan as usize * c.duplication as usize)
                         .sum();
+                    awaiting_post_blank_line = true;
                 }
                 continue;
             }
-            found_first_data = true;
-            if let Some(cells) = scanner::parse_table_cells(line) {
-                all_cells.extend(cells);
+            let parsed = scanner::parse_table_cells(line);
+            let starts_fresh = matches!(&parsed, Some(t) if t.continuation.is_none());
+            if awaiting_post_blank_line {
+                awaiting_post_blank_line = false;
+                post_blank_line_starts_cell = starts_fresh;
+            }
+            if first_data_idx.is_some() && starts_fresh {
+                first_row_open = false;
+            }
+            match parsed {
+                Some(t) => {
+                    if let Some(text) = t.continuation {
+                        Self::append_cell_continuation(&mut all_cells, text);
+                    }
+                    all_cells.extend(t.cells);
+                }
+                None => Self::append_cell_continuation(&mut all_cells, line.trim()),
+            }
+            if first_data_idx.is_none() {
+                first_data_idx = Some(idx);
+            }
+            if first_row_open {
+                first_row_width = all_cells
+                    .iter()
+                    .map(|c| c.colspan as usize * c.duplication as usize)
+                    .sum();
             }
         }
 
@@ -1445,22 +1485,13 @@ impl<'a> BlockScanner<'a> {
             return self.event_buffer.pop().or_else(|| self.scan_next_block());
         }
 
-        // Determine number of columns: from cols attribute or first data line
+        // Determine number of columns: from cols attribute or the first row
         let num_cols = if let Some(n) = block_attrs.table_cols_count() {
             n
+        } else if first_row_width == 0 {
+            1
         } else {
-            // Sum colspan of first row's cells
-            let mut cols = 0;
-            for &line in &content_lines {
-                if scanner::is_blank(line) {
-                    continue;
-                }
-                if let Some(cells) = scanner::parse_table_cells(line) {
-                    cols = cells.iter().map(|c| c.colspan as usize).sum();
-                    break;
-                }
-            }
-            if cols == 0 { 1 } else { cols }
+            first_row_width
         };
 
         // Synthesize cols attribute for tables without explicit cols=
@@ -1469,18 +1500,33 @@ impl<'a> BlockScanner<'a> {
             block_attrs.named.insert("cols".to_string(), num_cols.to_string());
         }
 
-        // Determine header: %header option OR blank line after first row;
+        // Determine header: %header option OR a blank line directly after the
+        // first content line, with the next line starting a fresh cell;
         // %noheader suppresses the implicit promotion (explicit header wins)
+        let implicit_header = matches!(
+            (first_data_idx, first_blank_idx),
+            (Some(d), Some(b)) if b == d + 1
+        ) && post_blank_line_starts_cell
+            && cells_before_blank_col_width == num_cols;
         let has_header = block_attrs.has_option("header")
-            || (first_blank_after_first_row
-                && cells_before_blank_col_width == num_cols
-                && !block_attrs.has_option("noheader"));
+            || (implicit_header && !block_attrs.has_option("noheader"));
 
         // Determine footer: %footer option
         let has_footer = block_attrs.has_option("footer");
 
         // Get column specs for alignment defaults
         let col_specs = block_attrs.table_col_specs();
+
+        // Expand duplication factors (`3*|x` → three copies) now that every
+        // cell's content is complete — copies carry the full content,
+        // including continuation lines (asciidoctor copies the closed cell)
+        let all_cells: Vec<scanner::CellSpec<'a>> = all_cells
+            .into_iter()
+            .flat_map(|c| {
+                let n = c.duplication.max(1) as usize;
+                std::iter::repeat_n(c, n)
+            })
+            .collect();
 
         // Build rows using grid-aware placement (respects colspan/rowspan)
         let rows = Self::build_table_rows(&all_cells, num_cols);
@@ -1560,7 +1606,7 @@ impl<'a> BlockScanner<'a> {
                     if $is_header_section {
                         // Header-row cell (thead): <th> without a paragraph wrapper.
                         self.push_event(Event::End(TagEnd::TableHeaderCell));
-                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Text(cell.content.clone()));
                         self.push_event(Event::Start(Tag::TableHeaderCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
@@ -1573,7 +1619,7 @@ impl<'a> BlockScanner<'a> {
                         // `h` column) renders as <th> but keeps the <p> wrapper; the
                         // renderer picks the tag from the resolved style.
                         self.push_event(Event::End(TagEnd::TableCell));
-                        self.push_event(Event::Text(Cow::Borrowed(cell.content)));
+                        self.push_event(Event::Text(cell.content.clone()));
                         self.push_event(Event::Start(Tag::TableCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
@@ -1626,6 +1672,32 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
+    /// Append a table-line continuation (text before the first `|`, or a line
+    /// with no `|`) to the last open cell, joined with a newline. With no cell
+    /// open yet (start of table), the text starts a cell of its own.
+    /// Limitation: a continuation after a blank line should open a second
+    /// `<p class="tableblock">` inside the cell (asciidoctor); we keep it in
+    /// the same paragraph.
+    fn append_cell_continuation(cells: &mut Vec<scanner::CellSpec<'a>>, text: &'a str) {
+        if let Some(last) = cells.last_mut() {
+            let content = last.content.to_mut();
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(text);
+        } else {
+            cells.push(scanner::CellSpec {
+                content: Cow::Borrowed(text),
+                duplication: 1,
+                colspan: 1,
+                rowspan: 1,
+                style: CellStyle::Default,
+                halign: HAlign::default(),
+                valign: VAlign::default(),
+            });
+        }
+    }
+
     /// Build table rows from a flat list of CellSpecs, respecting colspan/rowspan.
     fn build_table_rows(
         cells: &[scanner::CellSpec<'a>],
@@ -1671,9 +1743,17 @@ impl<'a> BlockScanner<'a> {
             col += span;
         }
 
-        // Push the last row if it has any cells
+        // Push the last row only if it completes the grid — asciidoctor drops
+        // cells from an incomplete row at the end of the table. Columns held
+        // by a rowspan after the last cell count toward completeness.
         if !current_row.is_empty() {
-            rows.push(current_row);
+            while col < num_cols && col_remaining[col] > 0 {
+                col_remaining[col] -= 1;
+                col += 1;
+            }
+            if col >= num_cols {
+                rows.push(current_row);
+            }
         }
 
         rows

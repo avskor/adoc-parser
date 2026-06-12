@@ -145,6 +145,10 @@ struct HtmlRenderer {
     stem_block_variant: Option<String>,
     stem_block_content: Option<String>,
     cell_style_stack: Vec<CellStyle>,
+    // Position in output right after a cell's opening <p class="tableblock">;
+    // None for cells that open without the plain paragraph wrapper. Used to
+    // drop the wrapper for empty cells (asciidoctor: bare <td></td>).
+    cell_p_start_stack: Vec<Option<usize>>,
     caption_counters: CaptionCounters,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
@@ -263,6 +267,7 @@ impl HtmlRenderer {
             stem_block_variant: None,
             stem_block_content: None,
             cell_style_stack: Vec::new(),
+            cell_p_start_stack: Vec::new(),
             caption_counters: CaptionCounters::new(),
             block_title_output_start: None,
             block_title_inner_html: None,
