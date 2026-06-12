@@ -1002,60 +1002,71 @@ pub fn generate_id(title: &str, prefix: &str, separator: &str) -> String {
 }
 
 pub struct RevisionInfo<'a> {
-    pub version: &'a str,
+    /// `None` — the version group did not participate; `Some("")` — it matched
+    /// empty (a comma with no digits before it), which still SETS `revnumber`
+    /// (Asciidoctor renders `version ,` in the header details).
+    pub version: Option<&'a str>,
     pub date: &'a str,
-    pub remark: &'a str,
+    /// `Some("")` when the line ends with a bare `:` — `revremark` is set
+    /// empty (renders an empty span), distinct from no colon at all (`None`).
+    pub remark: Option<&'a str>,
 }
 
+/// Mirror of Asciidoctor's RevisionInfoLineRx
+/// (`^(?:[^\d{]*(.*?),)? *(?!:)(.*?)(?: *,?: *(.*))?$`) applied to the line
+/// following the author line. The regex matches nearly every line; `None`
+/// (= Asciidoctor's unshift, the line falls through to the body) only happens
+/// for lines whose date component would start with a colon.
 pub fn parse_revision_line(line: &str) -> Option<RevisionInfo<'_>> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    // Asciidoctor's revision number is the segment before the first comma with
-    // its leading non-digit run stripped (the `\D*` in RevisionInfoLineRx):
-    // `v8.3`→`8.3`, `LPR55`→`55`, `Version 2.5 RC1`→`2.5 RC1`.
-    fn strip_nondigit_prefix(s: &str) -> &str {
-        match s.find(|c: char| c.is_ascii_digit()) {
-            Some(pos) => &s[pos..],
-            None => s,
-        }
+    // Version group `[^\d{]*(.*?),`: the greedy non-digit prefix puts the
+    // capture start at the first digit/`{`; the lazy capture ends at the first
+    // comma at-or-after it. With no such comma the engine backtracks to an
+    // EMPTY capture ending at the last comma before the first digit (or the
+    // last comma of a digit-free line) — `hello, world` → revnumber set "".
+    let m0 = trimmed
+        .find(|c: char| c.is_ascii_digit() || c == '{')
+        .unwrap_or(trimmed.len());
+    let (version, rest) = match trimmed[m0..].find(',') {
+        Some(c) => (Some(trimmed[m0..m0 + c].trim_end()), &trimmed[m0 + c + 1..]),
+        None => match trimmed[..m0].rfind(',') {
+            Some(c) => (Some(""), &trimmed[c + 1..]),
+            None => (None, trimmed),
+        },
+    };
+
+    // ` *(?!:)` — the component after the version part must not start with a
+    // colon; Asciidoctor throws such a line back to the reader.
+    let rest = rest.trim_start();
+    if rest.starts_with(':') {
+        return None;
     }
 
-    let mut version = "";
-    let mut date = "";
-    let mut remark = "";
+    // `(?: *,?: *(.*))?$` — remark split at the first colon (one optional
+    // trailing comma before it is consumed by the spec).
+    let (component, remark) = match rest.find(':') {
+        Some(colon) => {
+            let head = rest[..colon].trim_end();
+            let head = head.strip_suffix(',').map(str::trim_end).unwrap_or(head);
+            (head, Some(rest[colon + 1..].trim()))
+        }
+        None => (rest.trim_end(), None),
+    };
 
-    if let Some(comma) = trimmed.find(',') {
-        // `revnumber, revdate[: revremark]` — the first comma delimits the
-        // version; the remainder splits on the first colon (the date itself may
-        // contain commas, e.g. `July 29, 2025`).
-        version = strip_nondigit_prefix(trimmed[..comma].trim());
-        let rest = trimmed[comma + 1..].trim();
-        if let Some(colon) = rest.find(':') {
-            date = rest[..colon].trim();
-            remark = rest[colon + 1..].trim();
-        } else {
-            date = rest;
-        }
-    } else {
-        // No comma: the head is a version only when prefixed with `v`/`V`
-        // (`v1.0`); otherwise it is a date (`2024-01-01`). A colon introduces
-        // the remark.
-        let (head, rem) = match trimmed.find(':') {
-            Some(colon) => (trimmed[..colon].trim(), Some(trimmed[colon + 1..].trim())),
-            None => (trimmed, None),
-        };
-        if head.starts_with('v') || head.starts_with('V') {
-            version = strip_nondigit_prefix(head);
-        } else {
-            date = head;
-        }
-        if let Some(r) = rem {
-            remark = r;
-        }
-    }
+    // No version group: a component with a lowercase `v` head is the version
+    // with that single char sliced off (`version 5` → `ersion 5` — faithful to
+    // `component.slice 1`); anything else (incl. uppercase `V`) is the date.
+    let (version, date) = match version {
+        Some(v) => (Some(v), component),
+        None => match component.strip_prefix('v') {
+            Some(sliced) if !component.is_empty() => (Some(sliced), ""),
+            _ => (None, component),
+        },
+    };
 
     Some(RevisionInfo { version, date, remark })
 }
@@ -1941,74 +1952,104 @@ mod tests {
     #[test]
     fn test_parse_revision_line_all_fields() {
         let rev = parse_revision_line("v1.0, 2024-01-01: Initial release").unwrap();
-        assert_eq!(rev.version, "1.0");
+        assert_eq!(rev.version, Some("1.0"));
         assert_eq!(rev.date, "2024-01-01");
-        assert_eq!(rev.remark, "Initial release");
+        assert_eq!(rev.remark, Some("Initial release"));
     }
 
     #[test]
     fn test_parse_revision_line_version_and_date() {
         let rev = parse_revision_line("v1.0, 2024-01-01").unwrap();
-        assert_eq!(rev.version, "1.0");
+        assert_eq!(rev.version, Some("1.0"));
         assert_eq!(rev.date, "2024-01-01");
-        assert_eq!(rev.remark, "");
+        assert_eq!(rev.remark, None);
     }
 
     #[test]
     fn test_parse_revision_line_version_only() {
         let rev = parse_revision_line("v1.0").unwrap();
-        assert_eq!(rev.version, "1.0");
+        assert_eq!(rev.version, Some("1.0"));
         assert_eq!(rev.date, "");
-        assert_eq!(rev.remark, "");
+        assert_eq!(rev.remark, None);
     }
 
     #[test]
     fn test_parse_revision_line_date_and_remark() {
         let rev = parse_revision_line("2024-01-01: Initial release").unwrap();
-        assert_eq!(rev.version, "");
+        assert_eq!(rev.version, None);
         assert_eq!(rev.date, "2024-01-01");
-        assert_eq!(rev.remark, "Initial release");
+        assert_eq!(rev.remark, Some("Initial release"));
     }
 
     #[test]
     fn test_parse_revision_line_date_only() {
         let rev = parse_revision_line("2024-01-01").unwrap();
-        assert_eq!(rev.version, "");
+        assert_eq!(rev.version, None);
         assert_eq!(rev.date, "2024-01-01");
-        assert_eq!(rev.remark, "");
+        assert_eq!(rev.remark, None);
     }
 
     #[test]
     fn test_parse_revision_line_version_and_remark() {
         let rev = parse_revision_line("v1.0: Some remark").unwrap();
-        assert_eq!(rev.version, "1.0");
+        assert_eq!(rev.version, Some("1.0"));
         assert_eq!(rev.date, "");
-        assert_eq!(rev.remark, "Some remark");
+        assert_eq!(rev.remark, Some("Some remark"));
     }
 
     #[test]
     fn test_parse_revision_line_uppercase_v() {
+        // With a comma the capture starts at the first digit, so `V2.5` still
+        // yields `2.5`…
         let rev = parse_revision_line("V2.5, 2024-06-15: Release notes").unwrap();
-        assert_eq!(rev.version, "2.5");
+        assert_eq!(rev.version, Some("2.5"));
         assert_eq!(rev.date, "2024-06-15");
-        assert_eq!(rev.remark, "Release notes");
+        assert_eq!(rev.remark, Some("Release notes"));
+        // …but without one only a lowercase `v` head marks a version
+        // (`component.start_with? 'v'`); uppercase falls through to the date.
+        let rev = parse_revision_line("V2.0").unwrap();
+        assert_eq!(rev.version, None);
+        assert_eq!(rev.date, "V2.0");
     }
 
     #[test]
     fn test_parse_revision_line_nondigit_prefix() {
         // Leading non-digit run is stripped from the revision number (`\D*`).
         let rev = parse_revision_line("LPR55, 2024: rem").unwrap();
-        assert_eq!(rev.version, "55");
+        assert_eq!(rev.version, Some("55"));
         assert_eq!(rev.date, "2024");
-        assert_eq!(rev.remark, "rem");
+        assert_eq!(rev.remark, Some("rem"));
         // Internal letters/spaces are kept; only the leading run is stripped.
         let rev = parse_revision_line("Version 2.5 RC1, 2024: x").unwrap();
-        assert_eq!(rev.version, "2.5 RC1");
+        assert_eq!(rev.version, Some("2.5 RC1"));
         // A date with an internal comma survives (only the first comma splits).
         let rev = parse_revision_line("v8.3, July 29, 2025: Summertime!").unwrap();
-        assert_eq!(rev.version, "8.3");
+        assert_eq!(rev.version, Some("8.3"));
         assert_eq!(rev.date, "July 29, 2025");
-        assert_eq!(rev.remark, "Summertime!");
+        assert_eq!(rev.remark, Some("Summertime!"));
+    }
+
+    #[test]
+    fn test_parse_revision_line_freeform() {
+        // Probe-verified against Asciidoctor: a freeform line is the revdate.
+        let rev = parse_revision_line("hazards a team must vanquish \\").unwrap();
+        assert_eq!(rev.version, None);
+        assert_eq!(rev.date, "hazards a team must vanquish \\");
+        assert_eq!(rev.remark, None);
+        // A comma with no digits before it SETS an empty version (`version ,`).
+        let rev = parse_revision_line("hello, world").unwrap();
+        assert_eq!(rev.version, Some(""));
+        assert_eq!(rev.date, "world");
+        // `component.slice 1` is taken literally: `version 5` → `ersion 5`.
+        let rev = parse_revision_line("version 5").unwrap();
+        assert_eq!(rev.version, Some("ersion 5"));
+        assert_eq!(rev.date, "");
+        // A trailing bare colon sets an EMPTY remark (renders an empty span).
+        let rev = parse_revision_line("2020-01-01:").unwrap();
+        assert_eq!(rev.date, "2020-01-01");
+        assert_eq!(rev.remark, Some(""));
+        // A line whose component starts with a colon is thrown back.
+        assert!(parse_revision_line(":weird").is_none());
     }
 
     #[test]

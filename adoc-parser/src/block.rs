@@ -1144,6 +1144,35 @@ impl<'a> BlockScanner<'a> {
         self.scan_paragraph()
     }
 
+    /// Consumes consecutive comment and attribute-entry lines in the document
+    /// header (multiline values included), pushing Attribute events and
+    /// recording the entries; stops at the first blank or other line without
+    /// consuming it. Mirror of Asciidoctor's process_attribute_entries, which
+    /// runs before the author line, between author and revision lines, and
+    /// after the revision line.
+    fn consume_header_attr_entries(&mut self, header_events: &mut Vec<Event<'a>>) {
+        loop {
+            if self.skip_header_comments() {
+                continue;
+            }
+            let Some(line) = self.current_line() else { break };
+            let Some((name, value)) = scanner::is_attribute_entry(line) else {
+                break;
+            };
+            self.advance();
+            let value = self.read_multiline_attribute_value(value);
+            self.record_attribute_entry(name, &value);
+            if name == "leveloffset" {
+                self.update_leveloffset(&value);
+            }
+            self.update_id_settings(name, &value);
+            header_events.push(Event::Attribute {
+                name: Cow::Borrowed(name),
+                value,
+            });
+        }
+    }
+
     fn scan_document_header(&mut self, title: &'a str) -> Option<Event<'a>> {
         self.header_emitted = true;
         self.advance();
@@ -1153,12 +1182,17 @@ impl<'a> BlockScanner<'a> {
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
 
-        // Check for author line: next line that is not blank, not attribute entry, not section marker
+        // Author line: the non-blank, non-attribute-entry line DIRECTLY after
+        // the title — ANY line, even one shaped like a section marker (`== Sec`
+        // right after the title becomes the author in Asciidoctor). NOTE:
+        // Asciidoctor 2.0.23 also accepts an author line after attribute
+        // entries (process_attribute_entries runs first), but the AsciiDoc
+        // spec (parsing-lab block/header/adjacent-to-body) mandates a
+        // paragraph there — we follow the spec; known divergence.
         self.skip_header_comments();
         if let Some(line) = self.current_line()
             && !scanner::is_blank(line)
             && scanner::is_attribute_entry(line).is_none()
-            && scanner::strip_any_section_marker(line).is_none()
         {
             // Parse as author line
             let authors = scanner::parse_authors(line);
@@ -1189,24 +1223,30 @@ impl<'a> BlockScanner<'a> {
             }
             self.advance();
 
-            // Check for revision line after author line
-            self.skip_header_comments();
+            // Attribute entries between the author and revision lines are
+            // transparent too (process_attribute_entries runs again).
+            self.consume_header_attr_entries(&mut header_events);
+
+            // Revision line: the next non-blank, non-attribute-entry line is
+            // run through RevisionInfoLineRx, which matches nearly anything
+            // (a freeform line becomes the revdate); set-but-empty version and
+            // remark still set their attribute (renders `version ,` / an empty
+            // remark span). A non-match falls through to the body.
             if let Some(rev_line) = self.current_line()
                 && !scanner::is_blank(rev_line)
                 && scanner::is_attribute_entry(rev_line).is_none()
-                && scanner::strip_any_section_marker(rev_line).is_none()
                 && let Some(rev_info) = scanner::parse_revision_line(rev_line)
             {
                 header_events.push(Event::Revision {
-                    version: Cow::Borrowed(rev_info.version),
+                    version: Cow::Borrowed(rev_info.version.unwrap_or("")),
                     date: Cow::Borrowed(rev_info.date),
-                    remark: Cow::Borrowed(rev_info.remark),
+                    remark: Cow::Borrowed(rev_info.remark.unwrap_or("")),
                 });
-                if !rev_info.version.is_empty() {
-                    self.record_attribute_entry("revnumber", rev_info.version);
+                if let Some(version) = rev_info.version {
+                    self.record_attribute_entry("revnumber", version);
                     header_events.push(Event::Attribute {
                         name: Cow::Borrowed("revnumber"),
-                        value: Cow::Borrowed(rev_info.version),
+                        value: Cow::Borrowed(version),
                     });
                 }
                 if !rev_info.date.is_empty() {
@@ -1216,41 +1256,24 @@ impl<'a> BlockScanner<'a> {
                         value: Cow::Borrowed(rev_info.date),
                     });
                 }
-                if !rev_info.remark.is_empty() {
-                    self.record_attribute_entry("revremark", rev_info.remark);
+                if let Some(remark) = rev_info.remark {
+                    self.record_attribute_entry("revremark", remark);
                     header_events.push(Event::Attribute {
                         name: Cow::Borrowed("revremark"),
-                        value: Cow::Borrowed(rev_info.remark),
+                        value: Cow::Borrowed(remark),
                     });
                 }
                 self.advance();
             }
         }
 
-        while let Some(line) = self.current_line() {
-            if self.skip_header_comments() {
-                continue;
-            }
-            if scanner::is_blank(line) {
-                self.advance();
-                break;
-            }
-            if let Some((name, value)) = scanner::is_attribute_entry(line) {
-                self.advance();
-                let value = self.read_multiline_attribute_value(value);
-                self.record_attribute_entry(name, &value);
-                if name == "leveloffset" {
-                    self.update_leveloffset(&value);
-                }
-                self.update_id_settings(name, &value);
-                header_events.push(Event::Attribute {
-                    name: Cow::Borrowed(name),
-                    value,
-                });
-            } else {
-                // Non-attribute, non-blank line ends the header
-                break;
-            }
+        // Remaining attribute entries; a blank line (consumed) or any other
+        // line (left in place) ends the header.
+        self.consume_header_attr_entries(&mut header_events);
+        if let Some(line) = self.current_line()
+            && scanner::is_blank(line)
+        {
+            self.advance();
         }
 
         // Check if :toc: attribute is present in header events
