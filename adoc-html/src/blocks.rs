@@ -172,6 +172,7 @@ impl HtmlRenderer {
             output.push_str(&format!(" rowspan=\"{}\"", rowspan));
         }
         output.push('>');
+        let mut p_start = None;
         if is_header {
             match style {
                 CellStyle::Emphasis => output.push_str("<em>"),
@@ -185,9 +186,13 @@ impl HtmlRenderer {
                 CellStyle::Strong => output.push_str("<p class=\"tableblock\"><strong>"),
                 CellStyle::Monospace | CellStyle::Literal => output.push_str("<p class=\"tableblock\"><code>"),
                 CellStyle::AsciiDoc => {}
-                _ => output.push_str("<p class=\"tableblock\">"),
+                _ => {
+                    output.push_str("<p class=\"tableblock\">");
+                    p_start = Some(output.len());
+                }
             }
         }
+        self.cell_p_start_stack.push(p_start);
     }
 
     pub(crate) fn start_unordered_list(&mut self, output: &mut String, has_checklist: &bool, meta: &Option<BlockMeta>) {

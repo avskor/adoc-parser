@@ -485,12 +485,25 @@ use crate::event::{CellStyle, HAlign, VAlign};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellSpec<'a> {
-    pub content: &'a str,
+    pub content: Cow<'a, str>,
+    /// Duplication factor (`3*|x` → the cell repeated 3 times). Kept
+    /// unexpanded while the cell may still receive continuation lines —
+    /// asciidoctor copies a duplicated cell with its complete content.
+    pub duplication: u8,
     pub colspan: u8,
     pub rowspan: u8,
     pub style: CellStyle,
     pub halign: HAlign,
     pub valign: VAlign,
+}
+
+/// Cells parsed from one line of a psv table, plus any text that appeared
+/// before the first `|` — that text continues the last cell of the previous
+/// line (asciidoctor joins it to the cell content with a newline).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableLineCells<'a> {
+    pub continuation: Option<&'a str>,
+    pub cells: Vec<CellSpec<'a>>,
 }
 
 /// Parse alignment prefix from a cell specifier (prefix before first `|`).
@@ -666,75 +679,165 @@ pub fn parse_cell_style_suffix(s: &str) -> (&str, CellStyle) {
     }
 }
 
-pub fn parse_table_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
+/// A cell specifier parsed in full: `[N*|C.R+][align][style]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExactCellSpec {
+    pub duplication: u8,
+    pub colspan: u8,
+    pub rowspan: u8,
+    pub halign: HAlign,
+    pub valign: VAlign,
+    pub style: CellStyle,
+}
+
+/// Parse an entire string as a cell specifier (mirror of asciidoctor's
+/// CellSpecRx): optional span factor (`2+`, `.3+`, `2.3+`) or duplication
+/// factor (`3*`), then optional alignment (`<^>` for halign and/or `.<^>`
+/// for valign), then optional style char. Returns None unless the whole
+/// string is consumed — partial matches are not specs.
+pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut rest = s;
+    let mut duplication: u8 = 1;
+    let mut colspan: u8 = 1;
+    let mut rowspan: u8 = 1;
+
+    if let Some(op_idx) = rest.find(['+', '*']) {
+        let factor = &rest[..op_idx];
+        if !factor.is_empty() && factor.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            if rest.as_bytes()[op_idx] == b'*' {
+                duplication = factor.parse::<u8>().ok()?.max(1);
+            } else if let Some((c, r)) = factor.split_once('.') {
+                colspan = if c.is_empty() { 1 } else { c.parse::<u8>().ok()?.max(1) };
+                rowspan = r.parse::<u8>().ok()?.max(1);
+            } else {
+                colspan = factor.parse::<u8>().ok()?.max(1);
+            }
+            rest = &rest[op_idx + 1..];
+        }
+    }
+
+    let (after_align, halign, valign) = parse_cell_align_prefix(rest);
+    rest = after_align;
+
+    let style = match rest {
+        "" => CellStyle::Default,
+        "a" => CellStyle::AsciiDoc,
+        "h" => CellStyle::Header,
+        "e" => CellStyle::Emphasis,
+        "m" => CellStyle::Monospace,
+        "s" => CellStyle::Strong,
+        "l" => CellStyle::Literal,
+        _ => return None,
+    };
+
+    Some(ExactCellSpec { duplication, colspan, rowspan, halign, valign, style })
+}
+
+pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
     let trimmed = line.trim_start();
 
     // Find the first pipe — if none, not a table line
     let first_pipe = trimmed.find('|')?;
 
-    // Before first pipe: must be empty or a valid align+style+span spec (for the first cell)
+    // Before first pipe: a valid align+style+span spec (for the first cell on
+    // this line), or content continuing the previous line's last cell —
+    // possibly with a spec at its end, attached to the `|` that follows
+    // (mirror of the non-last part parsing below).
     let prefix = trimmed[..first_pipe].trim();
-    let mut pending_colspan: u8 = 1;
-    let mut pending_rowspan: u8 = 1;
-    let mut pending_style = CellStyle::Default;
-    let mut pending_halign = HAlign::default();
-    let mut pending_valign = VAlign::default();
+    let mut continuation: Option<&str> = None;
+    let mut pending = ExactCellSpec {
+        duplication: 1,
+        colspan: 1,
+        rowspan: 1,
+        style: CellStyle::Default,
+        halign: HAlign::default(),
+        valign: VAlign::default(),
+    };
 
     if !prefix.is_empty() {
-        let (after_align, halign, valign) = parse_cell_align_prefix(prefix);
-        let (after_style, style) = parse_cell_style_suffix(after_align);
-        let (remaining, cs, rs) = parse_span_spec(after_style);
-        if !remaining.trim().is_empty() {
-            return None; // Not a table line — non-spec content before first pipe
+        if let Some(spec) = parse_cell_spec_exact(prefix) {
+            pending = spec;
+        } else {
+            // Continuation text; a spec for the first cell of this line may
+            // still sit at its end, whitespace-separated (`tail 2+|wide`).
+            let mut text = prefix;
+            if let Some((before, token)) = prefix.rsplit_once([' ', '\t'])
+                && let Some(spec) = parse_cell_spec_exact(token)
+            {
+                pending = spec;
+                text = before.trim_end();
+            }
+            if !text.is_empty() {
+                continuation = Some(text);
+            }
         }
-        pending_colspan = cs;
-        pending_rowspan = rs;
-        pending_style = style;
-        pending_halign = halign;
-        pending_valign = valign;
     }
 
+    let default_spec = ExactCellSpec {
+        duplication: 1,
+        colspan: 1,
+        rowspan: 1,
+        style: CellStyle::Default,
+        halign: HAlign::default(),
+        valign: VAlign::default(),
+    };
     let mut cells = Vec::new();
     let parts: Vec<&str> = trimmed[first_pipe + 1..].split('|').collect();
 
     for (i, part) in parts.iter().enumerate() {
-        // Parse next-cell specs from END: style, then span, then alignment.
-        // A spec only ever attaches to the `|` that follows it — for the last
-        // part of the line no delimiter follows, so trailing characters are
-        // plain cell content (`|a` is a cell "a", not an AsciiDoc style spec).
+        // Parse next-cell specs from END of the part. A spec only ever
+        // attaches to the `|` that follows it — for the last part of the line
+        // no delimiter follows, so trailing characters are plain cell content
+        // (`|a` is a cell "a", not an AsciiDoc style spec).
         let is_last = i == parts.len() - 1;
-        let (content, next_style, next_colspan, next_rowspan, next_halign, next_valign) =
-            if is_last {
-                (*part, CellStyle::Default, 1, 1, HAlign::default(), VAlign::default())
-            } else {
-                let (after_style, style) = parse_cell_style_suffix(part);
-                let (after_span, cs, rs) = parse_span_spec(after_style);
-                let (content, halign, valign) = parse_cell_align_suffix(after_span);
-                (content, style, cs, rs, halign, valign)
-            };
+        let (content, next) = if is_last {
+            (*part, default_spec)
+        } else if let Some((before, spec)) = part
+            .trim_end()
+            .rsplit_once([' ', '\t'])
+            .and_then(|(b, token)| parse_cell_spec_exact(token).map(|sp| (b, sp)))
+        {
+            // Whitespace-separated full spec token (handles chained specs
+            // like `2*>m` that the legacy suffix parsers below can't)
+            (before, spec)
+        } else {
+            let (after_style, style) = parse_cell_style_suffix(part);
+            let (after_span, cs, rs) = parse_span_spec(after_style);
+            let (content, halign, valign) = parse_cell_align_suffix(after_span);
+            (
+                content,
+                ExactCellSpec {
+                    duplication: 1,
+                    colspan: cs,
+                    rowspan: rs,
+                    style,
+                    halign,
+                    valign,
+                },
+            )
+        };
         let content = content.trim();
 
-        if !content.is_empty() {
-            cells.push(CellSpec {
-                content,
-                colspan: pending_colspan,
-                rowspan: pending_rowspan,
-                style: pending_style,
-                halign: pending_halign,
-                valign: pending_valign,
-            });
-        } else if i < parts.len() - 1 {
-            // Empty cell between pipes — skip (preserving old behavior)
-        }
+        // An empty part is still a cell — every `|` opens one (asciidoctor
+        // renders `|a |` as two cells, the second an empty <td>). A trailing
+        // delimiter leaves the cell open: continuation lines fill it.
+        cells.push(CellSpec {
+            content: Cow::Borrowed(content),
+            duplication: pending.duplication.max(1),
+            colspan: pending.colspan,
+            rowspan: pending.rowspan,
+            style: pending.style,
+            halign: pending.halign,
+            valign: pending.valign,
+        });
 
-        pending_colspan = next_colspan;
-        pending_rowspan = next_rowspan;
-        pending_style = next_style;
-        pending_halign = next_halign;
-        pending_valign = next_valign;
+        pending = next;
     }
 
-    Some(cells)
+    Some(TableLineCells { continuation, cells })
 }
 
 pub fn strip_markdown_heading(line: &str) -> Option<(u8, &str)> {
@@ -1346,40 +1449,85 @@ mod tests {
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
-        CellSpec { content, colspan, rowspan, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style: CellStyle::Default, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn styled_cell(content: &str, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1, style, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn spanned_styled_cell(content: &str, colspan: u8, rowspan: u8, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content, colspan, rowspan, style, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style, halign: HAlign::default(), valign: VAlign::default() }
     }
 
     fn aligned_cell(content: &str, halign: HAlign, valign: VAlign) -> CellSpec<'_> {
-        CellSpec { content, colspan: 1, rowspan: 1, style: CellStyle::Default, halign, valign }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, halign, valign }
+    }
+
+    /// Cells of a parsed table line (continuation ignored), for assertions.
+    fn line_cells(line: &str) -> Option<Vec<CellSpec<'_>>> {
+        parse_table_cells(line).map(|t| t.cells)
     }
 
     #[test]
     fn test_parse_table_cells() {
         assert_eq!(
-            parse_table_cells("| A | B | C"),
+            line_cells("| A | B | C"),
             Some(vec![cell("A"), cell("B"), cell("C")])
         );
+        // A trailing `|` opens an (empty) cell — asciidoctor renders it as
+        // a bare <td></td>
         assert_eq!(
-            parse_table_cells("| A | B |"),
-            Some(vec![cell("A"), cell("B")])
+            line_cells("| A | B |"),
+            Some(vec![cell("A"), cell("B"), cell("")])
         );
-        assert_eq!(parse_table_cells("no pipe"), None);
+        assert_eq!(line_cells("no pipe"), None);
         assert_eq!(
-            parse_table_cells("| single"),
+            line_cells("| single"),
             Some(vec![cell("single")])
         );
+        // Text before the first `|` continues the previous line's last cell
+        let t = parse_table_cells("mid |late").unwrap();
+        assert_eq!(t.continuation, Some("mid"));
+        assert_eq!(t.cells, vec![cell("late")]);
+        // A span spec may sit between the continuation text and the `|`
+        let t = parse_table_cells("tail 2+|wide").unwrap();
+        assert_eq!(t.continuation, Some("tail"));
+        assert_eq!(t.cells, vec![spanned_cell("wide", 2, 1)]);
+        // A pure spec prefix is not a continuation
+        let t = parse_table_cells("2+| x").unwrap();
+        assert_eq!(t.continuation, None);
+        assert_eq!(t.cells, vec![spanned_cell("x", 2, 1)]);
+    }
+
+    #[test]
+    fn test_parse_cell_spec_exact() {
+        let sp = parse_cell_spec_exact("2*>m").unwrap();
+        assert_eq!((sp.duplication, sp.halign, sp.style), (2, HAlign::Right, CellStyle::Monospace));
+        let sp = parse_cell_spec_exact(".3+^.>s").unwrap();
+        assert_eq!((sp.colspan, sp.rowspan, sp.halign, sp.valign, sp.style),
+                   (1, 3, HAlign::Center, VAlign::Bottom, CellStyle::Strong));
+        let sp = parse_cell_spec_exact("2.3+").unwrap();
+        assert_eq!((sp.colspan, sp.rowspan), (2, 3));
+        // Partial matches are not specs
+        assert!(parse_cell_spec_exact("mid").is_none());
+        assert!(parse_cell_spec_exact("x2+").is_none());
+        assert!(parse_cell_spec_exact("").is_none());
+    }
+
+    #[test]
+    fn test_parse_table_cells_duplication() {
+        // `2*|x` keeps the factor unexpanded (the cell may still grow via
+        // continuation lines; the block scanner expands copies later)
+        let t = parse_table_cells("2*>m|dup").unwrap();
+        assert_eq!(t.cells.len(), 1);
+        let c = &t.cells[0];
+        assert_eq!((c.content.as_ref(), c.duplication, c.halign, c.style),
+                   ("dup", 2, HAlign::Right, CellStyle::Monospace));
     }
 
     #[test]
@@ -1401,7 +1549,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_colspan() {
         assert_eq!(
-            parse_table_cells("| A 2+| B spans"),
+            line_cells("| A 2+| B spans"),
             Some(vec![cell("A"), spanned_cell("B spans", 2, 1)])
         );
     }
@@ -1409,7 +1557,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_rowspan() {
         assert_eq!(
-            parse_table_cells(".2+| C spans | D"),
+            line_cells(".2+| C spans | D"),
             Some(vec![spanned_cell("C spans", 1, 2), cell("D")])
         );
     }
@@ -1417,7 +1565,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_both_spans() {
         assert_eq!(
-            parse_table_cells("2.3+| cell"),
+            line_cells("2.3+| cell"),
             Some(vec![spanned_cell("cell", 2, 3)])
         );
     }
@@ -1560,27 +1708,27 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_style() {
         assert_eq!(
-            parse_table_cells("e| italic text"),
+            line_cells("e| italic text"),
             Some(vec![styled_cell("italic text", CellStyle::Emphasis)])
         );
         assert_eq!(
-            parse_table_cells("s| bold text"),
+            line_cells("s| bold text"),
             Some(vec![styled_cell("bold text", CellStyle::Strong)])
         );
         assert_eq!(
-            parse_table_cells("h| header text"),
+            line_cells("h| header text"),
             Some(vec![styled_cell("header text", CellStyle::Header)])
         );
         assert_eq!(
-            parse_table_cells("m| mono text"),
+            line_cells("m| mono text"),
             Some(vec![styled_cell("mono text", CellStyle::Monospace)])
         );
         assert_eq!(
-            parse_table_cells("l| literal text"),
+            line_cells("l| literal text"),
             Some(vec![styled_cell("literal text", CellStyle::Literal)])
         );
         assert_eq!(
-            parse_table_cells("a| asciidoc text"),
+            line_cells("a| asciidoc text"),
             Some(vec![styled_cell("asciidoc text", CellStyle::AsciiDoc)])
         );
     }
@@ -1588,11 +1736,11 @@ mod tests {
     #[test]
     fn test_parse_table_cells_span_plus_style() {
         assert_eq!(
-            parse_table_cells("2+e| wide italic"),
+            line_cells("2+e| wide italic"),
             Some(vec![spanned_styled_cell("wide italic", 2, 1, CellStyle::Emphasis)])
         );
         assert_eq!(
-            parse_table_cells("2.3+s| big bold"),
+            line_cells("2.3+s| big bold"),
             Some(vec![spanned_styled_cell("big bold", 2, 3, CellStyle::Strong)])
         );
     }
@@ -1601,12 +1749,12 @@ mod tests {
     fn test_parse_table_cells_style_disambiguation() {
         // Content that ends with a style letter should NOT be treated as styled
         assert_eq!(
-            parse_table_cells("| data | more"),
+            line_cells("| data | more"),
             Some(vec![cell("data"), cell("more")])
         );
         // Inline style between cells
         assert_eq!(
-            parse_table_cells("| A e| B | C"),
+            line_cells("| A e| B | C"),
             Some(vec![cell("A"), styled_cell("B", CellStyle::Emphasis), cell("C")])
         );
     }
@@ -1615,13 +1763,13 @@ mod tests {
     fn test_parse_table_cells_trailing_letter_is_content() {
         // A spec only attaches to a following `|`; at end of line a single
         // style letter (or span/align chars) is plain cell content.
-        assert_eq!(parse_table_cells("|a"), Some(vec![cell("a")]));
-        assert_eq!(parse_table_cells("|d |e"), Some(vec![cell("d"), cell("e")]));
-        assert_eq!(parse_table_cells("|text 2+"), Some(vec![cell("text 2+")]));
-        assert_eq!(parse_table_cells("|x ^"), Some(vec![cell("x ^")]));
+        assert_eq!(line_cells("|a"), Some(vec![cell("a")]));
+        assert_eq!(line_cells("|d |e"), Some(vec![cell("d"), cell("e")]));
+        assert_eq!(line_cells("|text 2+"), Some(vec![cell("text 2+")]));
+        assert_eq!(line_cells("|x ^"), Some(vec![cell("x ^")]));
         // ...while mid-line the trailing letter is the NEXT cell's style
         assert_eq!(
-            parse_table_cells("|one a|two"),
+            line_cells("|one a|two"),
             Some(vec![cell("one"), styled_cell("two", CellStyle::AsciiDoc)])
         );
     }
@@ -1655,11 +1803,11 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_halign() {
         assert_eq!(
-            parse_table_cells("^| centered"),
+            line_cells("^| centered"),
             Some(vec![aligned_cell("centered", HAlign::Center, VAlign::Top)])
         );
         assert_eq!(
-            parse_table_cells(">| right"),
+            line_cells(">| right"),
             Some(vec![aligned_cell("right", HAlign::Right, VAlign::Top)])
         );
     }
@@ -1667,7 +1815,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_valign() {
         assert_eq!(
-            parse_table_cells(".^| middle"),
+            line_cells(".^| middle"),
             Some(vec![aligned_cell("middle", HAlign::Left, VAlign::Middle)])
         );
     }
@@ -1675,7 +1823,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_with_combined_align() {
         assert_eq!(
-            parse_table_cells(">.^| right-middle"),
+            line_cells(">.^| right-middle"),
             Some(vec![aligned_cell("right-middle", HAlign::Right, VAlign::Middle)])
         );
     }
@@ -1683,7 +1831,7 @@ mod tests {
     #[test]
     fn test_parse_table_cells_align_between_pipes() {
         assert_eq!(
-            parse_table_cells("| A ^| B | C"),
+            line_cells("| A ^| B | C"),
             Some(vec![
                 cell("A"),
                 aligned_cell("B", HAlign::Center, VAlign::Top),

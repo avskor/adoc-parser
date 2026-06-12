@@ -1,5 +1,112 @@
 # Session context
 
+## Сессия (2026-06-12, тридцать первая) — Фаза 3: таблицы — открытая модель ячейки (continuation/пустые/дупликация/спек-цепочки/drop-row/comments)
+
+Запрос «продолжи». Ветка **`fix/align-by-column`** — НЕ закоммичена
+(рабочее дерево). Baseline: Identical 267, master `4099d62` (прошлая ветка
+смержена; base-бинарь /tmp/adoc_base пересобран с master).
+
+### Выбор задачи
+nearmiss: **align-by-column.adoc (7 diff)** — один видимый корень
+(continuation-строки ячеек), но фикс вскрыл кластер psv-семантики, добит
+целиком (6 подкорней).
+
+### Семантика asciidoctor (пробы /tmp/p_abc/p1..p17)
+- **Continuation**: текст до первого `|` строки (или строка без `|` вовсе) —
+  продолжение последней ячейки предыдущей строки, join `\n` в ОДНОМ
+  `<p class="tableblock">` (p1/p2/p6); спек между текстом и `|` — спек
+  следующей ячейки (`tail 2+|wide`, p8); без предыдущей ячейки текст
+  открывает собственную (p3/p7).
+- **Header**: implicit header ТОЛЬКО если blank сразу после первой строки И
+  следующая non-blank строка начинается с ячейки — continuation до (p5) или
+  после (p9) blank гасит промоушн.
+- **Colcount**: имплицитное число колонок = ячейки первой строки, пока та
+  «открыта»: ячейка, открытая mid-line на continuation-строке, считается
+  (p6: `|a` + `mid |late` → 2 колонки; p1: `|cell two` с новой строки → 1).
+- **Drop incomplete row**: ячейки неполной последней строки дропаются
+  («dropping cells from incomplete row detected end of table», p7/p10);
+  CSV-путь у asciidoctor тоже дропает (p11) — у нас НЕТ (предел).
+- **Пустые ячейки**: `|a |` → 2 ячейки, `|a | |c` → mid-пустая; рендер —
+  голый `<td></td>` без `<p>` (p12/p13).
+- **Дупликация/цепочки**: `2*>m|x` → ячейка ×2 right+mono; `.2+^.>s|` —
+  span+align+style цепочкой (CellSpecRx: factor, align, style; спек требует
+  пробельной границы слева); копии дупликации несут ПОЛНЫЙ контент включая
+  continuation-строки (p15, cell.adoc).
+- **Comments**: line-comment в таблице невидим — дроп из контента ячейки, не
+  влияет на header/colcount (p17; закрыл style-operators 1 diff и section-ref).
+- Blank внутри ячейки → ВТОРОЙ `<p>` в той же ячейке (p9/p16) — НЕ сделано
+  (у нас join `\n`), задокументированный предел.
+
+### Что сделано
+- **ПАРСЕР** scanner.rs: `parse_table_cells` → `Option<TableLineCells
+  { continuation: Option<&str>, cells }>`; `CellSpec.content: Cow<str>`
+  (+ поле `duplication: u8`, раскрывается потребителем); НОВЫЙ
+  `parse_cell_spec_exact(s) -> Option<ExactCellSpec>` (вся строка = спек;
+  префикс и whitespace-отделённый токен в non-last частях); пустые части
+  всегда пушатся как ячейки; legacy-суффикс-цепочка осталась fallback'ом
+  (квирк `x2+` без пробела сохранён).
+- **ПАРСЕР** block.rs scan_table: цикл сбора — скип comment-строк,
+  `append_cell_continuation` (join `\n`, в пустую — без `\n`, без ячеек —
+  новая), first_row_width пока строка открыта (×duplication), header-гейт
+  (blank at first+1 && post_blank_line_starts_cell && width==num_cols);
+  экспансия дупликации ПОСЛЕ сбора (`repeat_n`); build_table_rows: последняя
+  строка пушится только если заполняет грид (trailing rowspan-occupancy
+  учитывается).
+- **ПАРСЕР** parser.rs: арм `Event::Text(Cow::Owned)` → inline-парсинг с
+  into_static (раньше Owned-текст шёл сырым: слитые ячейки и CSV-поля не
+  получали typographic/quotes — отсюда флипы subs-файлов).
+- **РЕНДЕРЕР** lib.rs/blocks.rs/events.rs: `cell_p_start_stack` — позиция
+  после открывающего `<p class="tableblock">`; на TagEnd::TableCell пустая
+  ячейка → truncate `<p>` → `<td></td>` (как asciidoctor).
+- Тесты: +2 scanner (exact-spec, duplication unexpanded), +3 html
+  (continuation 6 кейсов + comments, пустые ячейки, дупликация/цепочки),
+  обновлены `| A | B |` (теперь пустая 3-я ячейка) и trailing-spec ассерты;
+  тестовые вызовы переведены на хелпер `line_cells`.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (941 passed).
+- Пробы p1..p17 IDENTICAL, кроме пределов: p9/p16 (второй `<p>` после blank
+  в ячейке), p11 (CSV drop incomplete row), p14 (`a|` nested-рендер — давний).
+- **Корпус: Identical 267→282 (+15)**; blast (base 4099d62): 37 файлов —
+  15 флипов (align-by-column 7→0, build-a-basic-table, add-cells-and-rows,
+  row, style-operators 126→0, section-ref 626→0, header-ref, audio-and-video,
+  link-macro-ref, unresolved-references, toc-ref, subs/attributes,
+  post-replacements, quotes, special-characters), **0 регрессий**, остальные
+  в основном ближе (table 612→556, subs-symbol-repl 226→165, replacements
+  148→4 — остаток NCR-кластер, document-attributes-ref 6672→6538, ordered
+  232→227); рост image-ref 659→746 / image-svg / cell / table-ref —
+  позиционный шум поверх pre-existing корней, новые фрагменты сверены с
+  эталоном (слитые ячейки = asciidoctor).
+- НЕ закоммичено — коммит/мерж по запросу пользователя.
+
+### Известные пределы (вне корпуса)
+- Blank в ячейке → второй `<p class="tableblock">` (у нас один `<p>` с `\n`).
+- CSV: неполная последняя строка не дропается (отдельный путь
+  scan_delimited_format_table).
+- `a|`-ячейка: нет nested-парсинга в `<div class="content">` (давний).
+- `|e|x` без пробела: у нас `e` — спек (asciidoctor: контент, нужен
+  whitespace перед спеком) — legacy-квирк, сохранён сознательно.
+
+### Что дальше
+- nearmiss на 282: **add-columns (40)**, footnote examples (70),
+  bibliography (72), subs (76), ordered (90), part-with-special-sections
+  (103), multipart-book (109), quote (109 — `-- Author` attribution),
+  metadata (111), apply-subs-to-text (115).
+- Новые кандидаты-корни из этой сессии: `cols=2;2;3;3` — `;`-разделитель
+  cols не парсится (image-ref, image-svg); `l|`-ячейка должна рендериться
+  `<div class="literal"><pre>` (image-svg); `[frame=ends,grid=none]` на
+  таблице (image-svg); NCR-в-monospace кластер (replacements 4 diff —
+  по памяти бесполезен в одиночку).
+- Pre-existing из прошлых сессий: ячейка `a|` nested-парсинг, nested-список
+  с другим маркером в li, `[square]`-класс, компактный colist-`<li><p>`,
+  `== heading` не прерывает параграф, `[abstract]`-параграф → quoteblock,
+  `:icons:`-colist, m/e/s-стили колонок, unknown-style в class на
+  quote/sidebar, list-merge через continuation-attrlist, author-line после
+  attr-entry в header, label block-anchor `[[id,label]]` над блоком не
+  побеждает `.Title`, `\\https://…` двойной backslash.
+
+---
+
 ## Сессия (2026-06-12, тридцатая) — Фаза 3: footnotes вне #content + merge стопки attrlist + cols-multiplier + trailing cell-spec + счётчики в verbatim
 
 Запрос «продолжи». Ветка **`fix/pages-include-nearmiss`** — НЕ закоммичена

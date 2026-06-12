@@ -1012,6 +1012,77 @@ fn test_table_cell_style_no_false_positive_html() {
 }
 
 #[test]
+fn test_table_cell_continuation_lines_html() {
+    // A line without `|` continues the previous cell, joined with a newline
+    // inside the same tableblock paragraph (probe-verified vs asciidoctor)
+    let html = to_html("|===\n|first line\nsecond line\n|cell two\n|===");
+    assert!(html.contains("<p class=\"tableblock\">first line\nsecond line</p>"), "expected joined cell content. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">cell two</p>"));
+
+    // Text before a mid-line `|` continues the previous cell; the cell opened
+    // on the continuation line still counts toward the implicit column count
+    let html = to_html("|===\n|a\nmid |late\n|b |c\n|===");
+    assert!(html.contains("<p class=\"tableblock\">a\nmid</p>"), "expected continuation before pipe. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">late</p>"));
+    assert!(html.contains("<p class=\"tableblock\">b</p>"));
+
+    // A continuation line cancels implicit header promotion: the row is not
+    // a single line followed by a blank
+    let html = to_html("|===\n|h\ncont\n\n|body\n|===");
+    assert!(!html.contains("<thead>"), "continuation must cancel implicit header. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">h\ncont</p>"));
+
+    // A continuation line directly after the implicit-header blank also
+    // cancels the promotion (the cell of the first row continues)
+    let html = to_html("|===\n|a\n\ncont after blank\n|b\n|===");
+    assert!(!html.contains("<thead>"), "post-blank continuation must cancel header. Got:\n{html}");
+
+    // Normal substitutions apply to merged (owned) cell content
+    let html = to_html("|===\n|isn't done\nsecond *bold* line\n|===");
+    assert!(html.contains("isn’t"), "expected curly apostrophe in merged cell. Got:\n{html}");
+    assert!(html.contains("<strong>bold</strong>"));
+
+    // Line comments are invisible inside tables: dropped from cell content,
+    // and a standalone comment doesn't cancel the implicit header
+    let html = to_html("|===\n|h\n\n// note\n|a\ncont\n// mid-cell\nmore\n|===");
+    assert!(html.contains("<thead>"), "comment must not cancel header. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">a\ncont\nmore</p>"), "expected comment dropped from cell. Got:\n{html}");
+}
+
+#[test]
+fn test_table_empty_cell_html() {
+    // An empty cell renders as a bare <td></td> without the tableblock
+    // paragraph (probe-verified vs asciidoctor: `|a |` and `|a | |c`)
+    let html = to_html("|===\n|a |\n|b |c\n|===");
+    assert!(html.contains("<td class=\"tableblock halign-left valign-top\"></td>"), "expected bare empty td. Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">a</p>"));
+    assert!(html.contains("<p class=\"tableblock\">c</p>"));
+}
+
+#[test]
+fn test_table_cell_duplication_and_chained_specs_html() {
+    // `2*>m|x` duplicates the cell across two columns, right-aligned mono;
+    // copies carry the full content including continuation lines
+    let html = to_html("|===\n|h1 |h2\n\n2*>m|dup\nmore\n|===");
+    let needle = "<td class=\"tableblock halign-right valign-top\"><p class=\"tableblock\"><code>dup\nmore</code></p></td>";
+    assert_eq!(html.matches(needle).count(), 2, "expected two duplicated cells. Got:\n{html}");
+    assert!(html.contains("<thead>"), "implicit header must survive a spec line. Got:\n{html}");
+
+    // Chained span+align+style spec `.2+^.>s|`
+    let html = to_html("|===\n|a |b\n.2+^.>s|tall |x\n|y |z\n|===");
+    assert!(html.contains("rowspan=\"2\"><p class=\"tableblock\"><strong>tall</strong></p>"), "expected chained spec parsed. Got:\n{html}");
+}
+
+#[test]
+fn test_table_incomplete_last_row_dropped_html() {
+    // asciidoctor drops cells from an incomplete row at the end of the table
+    let html = to_html("|===\n|a |b\n|c\n|===");
+    assert!(html.contains("<p class=\"tableblock\">a</p>"));
+    assert!(html.contains("<p class=\"tableblock\">b</p>"));
+    assert!(!html.contains("<p class=\"tableblock\">c</p>"), "incomplete trailing row must be dropped. Got:\n{html}");
+}
+
+#[test]
 fn test_table_cols_alignment_html() {
     let html = to_html("[cols=\"<,^,>\"]\n|===\n| A | B | C\n|===");
     assert!(html.contains("halign-left"), "Left-aligned should have halign-left class");

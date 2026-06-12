@@ -993,18 +993,28 @@ impl HtmlRenderer {
             }
             TagEnd::TableCell => {
                 let style = self.cell_style_stack.pop().unwrap_or_default();
+                let p_start = self.cell_p_start_stack.pop().unwrap_or(None);
                 match style {
                     CellStyle::Emphasis => output.push_str("</em></p>"),
                     CellStyle::Strong => output.push_str("</strong></p>"),
                     CellStyle::Monospace | CellStyle::Literal => output.push_str("</code></p>"),
                     CellStyle::AsciiDoc => {}
-                    _ => output.push_str("</p>"),
+                    _ => {
+                        if p_start == Some(output.len()) {
+                            // Empty cell: asciidoctor renders a bare <td></td>
+                            // without the tableblock paragraph wrapper.
+                            output.truncate(output.len() - "<p class=\"tableblock\">".len());
+                        } else {
+                            output.push_str("</p>");
+                        }
+                    }
                 }
                 // A body cell in a header (`h`) column closes with </th>.
                 output.push_str(if matches!(style, CellStyle::Header) { "</th>\n" } else { "</td>\n" });
             }
             TagEnd::TableHeaderCell => {
                 let style = self.cell_style_stack.pop().unwrap_or_default();
+                self.cell_p_start_stack.pop();
                 match style {
                     CellStyle::Emphasis => output.push_str("</em>"),
                     CellStyle::Strong => output.push_str("</strong>"),
