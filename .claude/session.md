@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-13, сорок третья) — Фаза 3: явный оператор выравнивания ячейки побеждает дефолт колонки
+
+Запрос «продолжи». Ветка **`fix/table-cell-explicit-alignment`** — ЗАКОММИЧЕНА
+(`a3f2667`), смержена в master (`b1f52f2`), запушена, ветка удалена.
+Baseline: Identical 317, master `5b5d958`; base-бинарь /tmp/adoc_base уже был
+на 317, после мержа обновлён до 318.
+
+### Выбор задачи
+Заметки 42-й сессии рекомендовали **cell.adoc 965→1** (ОДИН diff @574:
+`halign-left` эталон vs `halign-right` наш на rowspan=3 ячейке) и предполагали
+корень в col_idx (rowspan-сдвиг). **Гипотеза ОПРОВЕРГНУТА разбором грида** —
+для этой ячейки col_idx уже верный.
+
+### Реальная семантика (разбор таблицы `[cols="e,m,^,>s"]` строки 120-126)
+- Ячейка `7` (`.3+<.>m|7`): rowspan 3, `<`=halign **Left**, `.>`=valign Bottom,
+  m-стиль. Грид: Row1 `5`(col0), `6`(2.2+,col1-2), `7`(col **3**). col_idx=3 —
+  и наивный счёт emit_row_cells, и occupancy-aware дают **одно и то же** (rowspan
+  стартует в этой строке, ведущих занятых колонок нет). col_idx НЕ виноват.
+- Колонка col3 = `>` (Right). Ячейка ставит явный `<` (Left), НО старый
+  resolve_align не мог отличить явный Left от дефолтного Left
+  (`halign==Left && cell.halign==Left` — условия идентичны) → всегда накрывал
+  дефолтом колонки. Asciidoctor уважает явный оператор → halign-left.
+- valign совпадал (Bottom — недефолт, явный `.>` отличался от дефолта Top, не
+  накрывался). Только halign ломался.
+
+### Что сделано
+- **ПАРСЕР** scanner.rs: `CellSpec` + `ExactCellSpec` получили поля
+  `halign_explicit`/`valign_explicit` (по образцу `style_explicit`).
+  `parse_cell_align_prefix`/`parse_cell_align_suffix` возвращают флаги
+  (`(&str, HAlign, VAlign, bool, bool)`) — true когда оператор реально присутствует
+  (suffix: бывший единый `found` разбит на halign/valign). Протянуто через
+  parse_cell_spec_exact, оба литерала pending/default_spec, суффиксный путь,
+  push CellSpec; конструктор в block.rs append_cell_continuation → false/false.
+- **ПАРСЕР** block.rs resolve_align: эвристика `value==default` заменена на
+  `if !cell.halign_explicit { halign = col_default }` (и valign). Строго более
+  корректно: меняет поведение ТОЛЬКО для явного `<`/`.<` поверх недефолтной
+  колонки (раньше — баг, теперь — Left/Top как у asciidoctor); все остальные
+  комбинации байт-в-байт прежние.
+- Тесты: +1 html `test_table_cell_explicit_left_overrides_cols_align_html`
+  (явный `<` поверх `>`-колонки, явный `.<` поверх `.>`-колонки, негатив-
+  наследование); scanner-тесты parse_cell_align_prefix (10 assertions с флагами),
+  parse_cell_spec_exact (+ `.3+<.>m` явные флаги). aligned_cell helper выводит
+  флаги из value!=default (все его кейсы — недефолтные операторы).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 492, html 396);
+  compat parsing-lab 233/233.
+- cell.adoc diffone: **0 diffs** (был 1).
+- **Корпус: Identical 317→318 (+1 ФЛИП)**. Blast (base 5b5d958): РОВНО 1 файл —
+  cell.adoc 1→0, **0 регрессий** (ни одного позиционного сдвига в других файлах).
+
+### Что дальше
+- nearmiss на 318 (26 Different): replacements (4 — NCR, скип), ts-url-format
+  (110, len_delta=108 — обрезка open-блока в dd-continuation), table-ref (135,
+  len_delta=-8), counters (136, len_delta=9 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`),
+  unordered (145, len_delta=4 — вложенность списка), complex (152, len_delta=143),
+  image-size (177, len_delta=92), data (181, len_delta=77), architecture/index
+  (189, len_delta=4), admonition (197, len_delta=-10).
+- **Латентный (НЕ исправлен, нет корпусного кейса)**: emit_row_cells col_idx
+  всё ещё наивный (не occupancy-aware) — баг проявился бы при ячейке ПОСЛЕ
+  ведущей rowspan-занятой колонки с отличающимся col-spec. В корпусе не
+  манифестируется (см. align-by-cell 371, table.adoc 597 — другие корни).
+- Pre-existing — см. сессии 36/38/40/42 (без изменений) + continuation-отступ
+  в table-ячейке тримится.
+
+---
+
 ## Сессия (2026-06-13, сорок вторая) — Фаза 3: blank-строка в DEFAULT/стилевой table-ячейке → несколько `<p class="tableblock">`
 
 Запрос «продолжи». Ветка **`fix/table-cell-multi-paragraph`** — ЗАКОММИЧЕНА
