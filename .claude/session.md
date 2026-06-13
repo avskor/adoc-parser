@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-13, сорок седьмая) — Фаза 3: пустая стилевая (m/e/s) ячейка таблицы → голый `<td></td>`
+
+Запрос «продолжи». Ветка **`fix/empty-styled-table-cell`** — ЗАКОММИЧЕНА
+(`2fdf54a`), смержена в master (merge-commit, --no-ff). base-бинарь /tmp/adoc_base
+обновлён до 325. **ОЖИДАЕТ: явная авторизация пользователя на `git push origin
+master` + удаление ветки** (пуш — outward-facing). Состояние на старте: git чист,
+origin/master == master == b743936 (пуш 46-й сессии прошёл).
+
+### Выбор задачи
+nearmiss на 324 (20 Different): replacements (4 — NCR, скип). Топ single-root по
+малому |len_delta|: **table-ref (135, Δ−8)** — рекомендация 46-й сессии, корень
+@848 известен. diffone подтвердил: эталон `</td>` (пустая ячейка), наш
+`<p class="tableblock"><code></code></p>`. Таблица `[cols="1m,2,1m,2,2"]`, col2 (m)
+пустая в нескольких строках.
+
+### Реальная семантика (пробы /tmp/p_emptym, p_empty2, p_empty3, p_nonempty)
+- **Пустая ячейка → `[]`** (table.rb Cell#content: empty text → нет параграфов):
+  - default empty → `<td></td>` (УЖЕ корректно, через `p_start`-откат)
+  - **m/e/s empty → `<td></td>`** (НАШ БАГ: эмитили `<p class="tableblock"><code></code></p>`)
+  - header empty → `<th></th>` (УЖЕ корректно)
+  - **literal empty → `<div class="literal"><pre></pre></div>`** (СОВПАДАЕТ, обёртка
+    сохраняется даже пустой)
+  - **AsciiDoc empty → `<div class="content"></div>`** (СОВПАДАЕТ, обёртка сохраняется)
+- Непустые/мультипараграфные m/e/s — без изменений (проба p_nonempty IDENTICAL).
+
+### Что сделано
+- **РЕНДЕРЕР** blocks.rs `start_table_cell`: arm'ы Emphasis/Strong/Monospace теперь
+  тоже записывают `p_start = Some(output.len())` после обёртки (раньше — только
+  default `_`-arm). Literal/AsciiDoc маркер НЕ ставят (их обёртка сохраняется пустой).
+- **РЕНДЕРЕР** events.rs `TagEnd::TableCell`: единый `let is_empty = p_start ==
+  Some(output.len())`; arm'ы e/s/m откатывают ПОЛНУЮ обёртку (`<p class="tableblock"><em>`
+  и т.п.) при is_empty, иначе закрывают как раньше; default `_`-arm переведён на
+  `is_empty`. Мультипараграфные ячейки не триггерят (p_start указывает после ПЕРВОЙ
+  обёртки, далеко ниже финальной длины; каждый para непуст).
+- Тест: +1 html (`test_table_cell_empty_styled_no_wrapper_html`: m/e/s empty →
+  `<td></td>` без пустого inline-враппера, default/header empty без регрессии,
+  непустая m сохраняет обёртку).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 495, html 399);
+  compat parsing-lab 233/233 (1 тест зелёный).
+- table-ref diffone: **0 diffs** (был 135).
+- **Корпус: Identical 324→325 (+1 ФЛИП)**. Blast (base 324): РОВНО 1 файл —
+  table-ref.adoc 135→0, **0 регрессий**, 0 затронутых других файлов.
+
+### Что дальше
+- nearmiss на 325 (пересчитать; было 20 Different, минус table-ref → 19):
+  replacements (4 — NCR, скип), ts-url-format (110, Δ108 — обрезка open-блока в
+  dd-continuation), counters (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex
+  (152, Δ143), image-size (177, Δ92), data (181, Δ77), admonition (197, Δ−10),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — nested/double-backtick →
+  литерал, архитектурно), text (249, Δ−5 — то же), image-svg (259, Δ8),
+  section (347, Δ−40), align-by-cell (371, Δ−16), block-name-table (431, Δ−2 —
+  `++…++` double-plus escape, архитектурно/рискованно), table (597, Δ1).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок шестая) — Фаза 3: cols-спек таблицы бьётся по `;` так же, как по `,`
 
 Запрос «продолжи». Ветка **`fix/table-cols-semicolon-separator`** — ЗАКОММИЧЕНА
