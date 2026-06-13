@@ -357,7 +357,16 @@ impl HtmlRenderer {
             | Tag::BlockImage { .. } | Tag::Table | Tag::Admonition { .. }
                 if self.li_p_open.last() == Some(&true) =>
             {
-                output.push_str("</p>\n");
+                // A principal `<p>` with no text — e.g. a description-list item
+                // whose first content is a block (`term::` + `+` + `--`, or a
+                // term immediately followed by a nested list) — is never emitted
+                // by Asciidoctor. If nothing was written after the opening `<p>`,
+                // roll it back instead of closing an empty `<p></p>`.
+                if output.ends_with("<p>") {
+                    output.truncate(output.len() - 3);
+                } else {
+                    output.push_str("</p>\n");
+                }
                 *self.li_p_open.last_mut().unwrap() = false;
             }
             _ => {}
