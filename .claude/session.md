@@ -1,5 +1,91 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят третья) — Фаза 3: table-делимитер 3+ `=` + директивы на колонке 0 + verbatim `indent`
+
+Запрос «продолжи». Ветка **`fix/table-delim-length-verbatim-indent`** —
+ЗАКОММИЧЕНА (`a791b55`). **MERGE в master ОТКЛОНЁН авто-классификатором** (коммит
+на master без явной авторизации) — master ЛОКАЛЬНО на 2607545 (нетронут), ветка
+СОХРАНЕНА, base-бинарь /tmp/adoc_base обновлён до 331. **ОЖИДАЕТ: явная
+авторизация на `git merge --no-ff` в master + `git push origin master` + удаление
+ветки.** Старт: housekeeping 52-й закрыт сам (origin/master == master == 2607545,
+дерево чисто, ветки fix/* удалены — пуш 52-й прошёл).
+
+### Выбор задачи
+nearmiss на 330 (14 Different): replacements (4 — NCR, скип). Выбран **image-size
+(177, Δ92)** — заметки 52-й ОШИБОЧНО называли «контекстный корень выше строки 99,
+изолированно OK». Перепроверка: таблица `|====` (строки 99-125) НЕ парсится даже в
+ПОЛНОЙ изоляции (и без title). Заметка была неверна.
+
+### Реальная семантика (исходник parser.rb is_delimited_block?/adjust_indentation! + пробы)
+ТРИ независимых корня, все в verbatim/table-парсинге:
+- **Table-делимитер = `|` + 3+ `=`** (не ровно `|===`). `is_delimited_block?`:
+  tip=первые 4 символа, `uniform?` проверяет что весь хвост после `|` = `=`.
+  Минимум `|===` (3 `=`), `|==` (2) НЕ делимитер. Закрытие — по ТОЧНОЙ строке
+  открытия (не любой делимитер): `|====` внутри `|===`-таблицы = ячейка `====`
+  (delimited.adoc — иначе таблица рвётся преждевременно; это и была мгновенная
+  регрессия при наивном расширении). `open 4 close 3` у asciidoctor «работает»
+  лишь дочитыванием до EOF.
+- **Условные директивы (`ifdef`/`ifndef`/`ifeval`/`endif`) — только колонка 0.**
+  Отступленная ` ifdef::...` = литерал (так авторы держат директивы verbatim
+  в listing). Колонка-0 директива ВНУТРИ listing ВСЁ ЕЩЁ обрабатывается
+  (reader-level, проба `:x: 1` выживает). [Пре-существующее, НЕ чинил: наш парсер
+  не определяет `backend-html5` как атрибут по умолчанию → col-0 `ifdef::backend-html5[]`
+  ложно-false; image-size не затронут, т.к. там все директивы с пробелом.]
+- **`indent` атрибут verbatim-блоков** (`adjust_indentation!`): `indent=0` срезает
+  общий ведущий отступ (min по НЕпустым строкам; отменяется если хоть одна непустая
+  строка flush-left), `indent=N` заменяет на N пробелов, отсутствие/негатив —
+  preserve. `indent=0` — zero-copy суффиксный срез; только N>0 аллоцирует.
+
+### Что сделано
+- **ПАРСЕР** scanner.rs `is_table_delimiter`: `== "|==="` → `strip_prefix('|')` +
+  `len>=3 && all(=='=')`. Тест обновлён (`|====`/`|==========` valid, `|==`/`|`
+  /`|=== x` нет).
+- **ПАРСЕР** block.rs `scan_table`: захват `opening_delim`, закрытие по
+  `line.trim() == opening_delim` (не `is_table_delimiter`).
+- **ПАРСЕР** preprocessor.rs: гейт `at_column_0 = !line.starts_with([' ','\t'])`
+  на endif-чек и `parse_conditional`. +2 теста.
+- **ПАРСЕР** attributes.rs: `verbatim_indent() -> Option<i32>` (Ruby-to_i: знак +
+  ведущие цифры).
+- **ПАРСЕР** block.rs: свободные fn `reindent_verbatim_lines` (алгоритм
+  adjust_indentation) + `resolve_callouts_in_lines` (общий callout-strip+resolve,
+  принимает/возвращает `Cow`); `push_callout_events_resolved` теперь берёт
+  `Cow<'a,str>`. Обе verbatim-функции (scan_source_block + ветка is_verbatim)
+  переведены на reindent+helper (дедупликация callout-логики).
+- Тесты: +4 html (table 4+ `=`, exact-match терминатор, verbatim indent
+  0/3/preserve/flush-left, listing+indented-ifdef-литерал).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 496, html 413 +4);
+  compat parsing-lab 233/233.
+- image-size diffone: **0 diffs** (был 177). Все indent/делимитер/директива-пробы
+  совпали с asciidoctor.
+- **Корпус: Identical 330→331 (+1 ФЛИП)**. Blast (base 330): РОВНО 1 файл —
+  image-size 177→0, **0 регрессий, 0 затронутых других** (промежуточная регрессия
+  delimited.adoc 0→296 от наивного расширения делимитера устранена exact-match
+  терминатором).
+
+### Что дальше
+- nearmiss на 331 (13 Different): replacements (4 — NCR, скип), **complex (120,
+  Δ4 — ДВА корня в lists/examples: (A) literal-параграф ` $ cmd` присоединён к
+  list-item БЕЗ `+` — `</p>` держим открытым через literalblock, asciidoctor
+  закрывает ДО; (B) `. {empty}` ordered-элемент с пустым принципалом → asciidoctor
+  эмитит `<p></p>`, мы опускаем (каскад −2 токена через хвост). Оба нишевые, нужны
+  ОБА для флипа)**, counters (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), data
+  (181, Δ77 — CSV/DSV `,===`/`:===`/`!===` НЕ парсятся, мульти-root),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — nested-backtick, архитектурно),
+  text (249, Δ−5 — `+ +` hard-break в monospace + apostrophe NCR), align-by-cell
+  (371, Δ−16 — inline `<n>`/`^+` в backtick), block-name-table (431, Δ−2 —
+  `++…++` escape), table (597, Δ1 — ДВА корня), character-replacement-ref (625,
+  Δ113), syntax-quick-reference (2788, Δ−31 — мульти-root), document-attributes-ref
+  (6363, Δ73 — мульти-root), outline (6587, Δ1 — МУЛЬТИ-root).
+- **Пре-существующее (всплыло, НЕ чинил)**: `backend-html5`/`backend-pdf`/etc. не
+  заданы как doc-атрибуты по умолчанию → col-0 `ifdef::backend-html5[]` оценивается
+  ложно-false (asciidoctor задаёт их по backend). Кандидат если найдётся корпусный
+  кейс.
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, пятьдесят вторая) — Фаза 3: table frame/grid классы + interactive SVG → `<object>`
 
 Запрос «продолжи». Ветка **`fix/image-svg-frame-grid-and-interactive-svg`**
