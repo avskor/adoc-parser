@@ -2165,6 +2165,46 @@ fn test_discrete_heading_with_id_and_role() {
     assert!(html.contains("class=\"discrete special\""), "should have discrete + role class. Got: {html}");
 }
 
+#[test]
+fn test_float_heading_alias_of_discrete() {
+    // `[float]` is the legacy alias of `[discrete]`: a standalone heading
+    // (no section wrapper), with the literal style name as the class. The
+    // level maps to hN the same way sections do (level 0 → h1, …).
+    let html = to_html("para\n\n[float]\n= Level 0\n\n[float]\n== Level 1\n\n[float]\n=== Level 2");
+    assert!(html.contains("<h1 id=\"_level_0\" class=\"float\">Level 0</h1>"), "{html}");
+    assert!(html.contains("<h2 id=\"_level_1\" class=\"float\">Level 1</h2>"), "{html}");
+    assert!(html.contains("<h3 id=\"_level_2\" class=\"float\">Level 2</h3>"), "{html}");
+    // No section wrapper div around a float heading.
+    assert!(!html.contains("class=\"sect0\""), "{html}");
+    // `[float.role]` carries the role; explicit id honored.
+    let html = to_html("[float.myrole]\n== Styled");
+    assert!(html.contains("class=\"float myrole\""), "{html}");
+    // float heading is not numbered and not in the TOC.
+    let html = to_html("= D\n:toc:\n:sectnums:\n\n== Real One\n\n[float]\n== Floating\n\n== Real Two");
+    assert!(html.contains("<h2 id=\"_floating\" class=\"float\">Floating</h2>"), "{html}");
+    assert!(!html.contains(">Floating</a>"), "float must not be in TOC: {html}");
+    assert!(html.contains("<a href=\"#_real_two\">2. Real Two</a>"), "float must not consume a number: {html}");
+}
+
+#[test]
+fn test_sectnumlevels_caps_numbering_depth() {
+    // Default sectnumlevels=3: Asciidoctor levels 1..3 (display 2..4) are
+    // numbered, deeper ones are not.
+    let html = to_html("= D\n:sectnums:\n\n== L1\n\n=== L2\n\n==== L3\n\n===== L4");
+    assert!(html.contains("<h2 id=\"_l1\">1. L1</h2>"), "{html}");
+    assert!(html.contains("<h4 id=\"_l3\">1.1.1. L3</h4>"), "{html}");
+    assert!(html.contains("<h5 id=\"_l4\">L4</h5>"), "level 4 unnumbered by default: {html}");
+
+    // sectnumlevels=2 → only levels 1..2 numbered.
+    let html = to_html("= D\n:sectnums:\n:sectnumlevels: 2\n\n== L1\n\n=== L2\n\n==== L3");
+    assert!(html.contains("<h3 id=\"_l2\">1.1. L2</h3>"), "{html}");
+    assert!(html.contains("<h4 id=\"_l3\">L3</h4>"), "level 3 unnumbered when sectnumlevels=2: {html}");
+
+    // Value parsed Ruby-to_i style: leading digits, trailing junk ignored.
+    let html = to_html("= D\n:sectnums:\n:sectnumlevels: 2 <.>\n\n== L1\n\n=== L2\n\n==== L3");
+    assert!(html.contains("<h4 id=\"_l3\">L3</h4>"), "'2 <.>' must parse as 2: {html}");
+}
+
 // Inline span tests
 
 #[test]

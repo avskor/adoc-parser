@@ -63,6 +63,15 @@ pub struct BlockScanner<'a> {
     doc_attrs: std::collections::HashMap<String, String>,
 }
 
+/// A section marker carrying this style (positional slot 1) is a standalone
+/// (non-section) heading, not a section. Asciidoctor treats `float` as an
+/// alias of `discrete` (the modern name); the emitted class is the literal
+/// style name, so `[float]` → `class="float"` and `[discrete]` →
+/// `class="discrete"`.
+fn is_discrete_style(style: &str) -> bool {
+    matches!(style, "discrete" | "float")
+}
+
 impl<'a> BlockScanner<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
@@ -623,7 +632,7 @@ impl<'a> BlockScanner<'a> {
         if !self.header_emitted && !self.body_started
             && let Some((1, title)) = scanner::strip_any_section_marker(line)
             && !self.pending_block_attrs.as_ref().is_some_and(|a| {
-                a.positional.first().is_some_and(|s| s == "discrete")
+                a.positional.first().is_some_and(|s| is_discrete_style(s))
             })
         {
                 return Some(self.scan_document_header(title));
@@ -1424,7 +1433,7 @@ impl<'a> BlockScanner<'a> {
 
     fn scan_section(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
         let is_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
-            a.positional.first().is_some_and(|s| s == "discrete")
+            a.positional.first().is_some_and(|s| is_discrete_style(s))
         });
         let inside_delimited = self.is_inside_delimited_block();
 
@@ -1531,7 +1540,7 @@ impl<'a> BlockScanner<'a> {
         // Auto-generate id for discrete headings if not explicitly set;
         // register/de-duplicate against the shared section-id registry.
         if let Some(ref mut attrs) = block_attrs
-            && attrs.positional.first().is_some_and(|s| s == "discrete")
+            && attrs.positional.first().is_some_and(|s| is_discrete_style(s))
         {
             match attrs.id.clone() {
                 Some(explicit) => self.register_explicit_id(&explicit),
@@ -5094,6 +5103,24 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, vec!["_added", "_added_2"]);
+    }
+
+    #[test]
+    fn test_float_marker_emits_discrete_heading() {
+        // `[float]` (alias of `[discrete]`) emits a standalone Heading, not a
+        // Section, and auto-generates/registers an id like discrete does.
+        let input = "[float]\n== Floating Heading";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Start(Tag::Heading { level: 2 }))),
+            "float must emit a Heading: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Start(Tag::Section { .. }))),
+            "float must NOT emit a Section: {events:?}"
+        );
+        assert!(is_discrete_style("float") && is_discrete_style("discrete"));
+        assert!(!is_discrete_style("preface"));
     }
 
     #[test]
