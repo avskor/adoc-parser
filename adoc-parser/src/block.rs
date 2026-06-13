@@ -824,13 +824,20 @@ impl<'a> BlockScanner<'a> {
             } else {
                 title_events
             };
+            // `link=` may sit either in the macro attrlist or on the preceding
+            // block attribute line (`[#id,link=…]`); the macro attrlist wins,
+            // mirroring how Asciidoctor layers macro attrs over block-line attrs.
+            let link = img_attrs
+                .link
+                .map(Cow::Borrowed)
+                .or_else(|| block_attrs.named.get("link").map(|v| Cow::Owned(v.clone())));
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),
                 alt: Cow::Borrowed(img_attrs.alt),
                 width: img_attrs.width.map(Cow::Borrowed),
                 height: img_attrs.height.map(Cow::Borrowed),
-                link: img_attrs.link.map(Cow::Borrowed),
+                link,
             }));
             self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
             self.push_title_then_events(title_events);
