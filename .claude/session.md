@@ -1,5 +1,64 @@
 # Session context
 
+## Сессия (2026-06-13, сорок шестая) — Фаза 3: cols-спек таблицы бьётся по `;` так же, как по `,`
+
+Запрос «продолжи». Ветка **`fix/table-cols-semicolon-separator`** — ЗАКОММИЧЕНА
+(`c516f33`), смержена в master (`1745038`, --no-ff). base-бинарь /tmp/adoc_base
+обновлён до 324. **ОЖИДАЕТ: явная авторизация пользователя на `git push origin
+master` + удаление ветки** (пуш — outward-facing). Хвост 45-й сессии разрешён:
+push фактически прошёл (origin/master был на 9040a04, дерево чистое, ветка
+удалена).
+
+### Выбор задачи
+nearmiss на 322 (22 Different): replacements (4 — NCR, скип). Топ single-root
+по малому |len_delta| при многих diff'ах: **add-title (252, Δ−6)**. diffone @303:
+эталон `<col><col></colgroup>` (3 колонки), наш пустой `<colgroup>` (1 `<col>`)
++ `<tbody>` вместо `<thead>`. Таблица `[cols=1;m;m]`.
+
+### Реальная семантика (пробы /tmp/p_semi, p_sep смешанные разделители)
+- **Разделитель cols = `,` ИЛИ `;`, ВЗАИМОИСКЛЮЧАЮЩЕ**: есть запятая → split по
+  `,`; иначе → по `;`. `1;m;m`→3, `2*;m`→3, `1; m; m`→3 (trim); смешанные
+  `1,m;m`→1, `1;m,m`→1 (split по `,`, не-сплитнутый `;`-кусок = невалидный спек,
+  отбрасывается/ленивый default). `;` используют БЕЗ кавычек: attrlist-сплиттер
+  сам режет запятые, поэтому `[cols=1,m,m]` требует кавычек, а `[cols=1;m;m]`
+  выживает голым.
+- При 1 колонке (вместо 3) три ячейки первой строки `|A | B | C` становятся 3
+  СТРОКАМИ → ломается и colgroup (1 `<col width:100%>`), и header-детекция
+  (`cells_before_blank_col_width == num_cols`: 3 ≠ 1 → нет thead).
+
+### Что сделано
+- **ПАРСЕР** attributes.rs `table_col_specs`: `let sep = if trimmed.contains(',')
+  { ',' } else { ';' };` вместо `split(',')`. Док-коммент про attrlist-сплиттер.
+- **РЕНДЕРЕР** blocks.rs `parse_col_widths`: то же правило разделителя (рендерер
+  ДУБЛИРУЕТ парсинг cols для colgroup-ширин — зеркалю правило, ссылка на парсер
+  в комментарии).
+- Тесты: +1 parser (`test_table_col_specs_semicolon_separator`: `1;m;m`→3 +
+  стили m/m, `2*;m`→3, смешанный `1,m;m`→2), +1 html
+  (`test_table_cols_semicolon_separator_html`: 3×`<col>` 33.3333/33.3334, thead,
+  `<code>` в m-ячейках).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 495, html 398);
+  compat parsing-lab 233/233.
+- add-title diffone: **0 diffs** (был 252).
+- **Корпус: Identical 322→324 (+2 ФЛИПА)**. Blast (base 322): РОВНО 2 файла —
+  add-title 252→0 И image-ref 748→0 (бонус — `[cols=2;2;3;3]`, тот самый
+  pre-existing colgroup/thead-корень из сессий 41/42!), **0 регрессий**, 0
+  затронутых других файлов.
+
+### Что дальше
+- nearmiss на 324 (пересчитать; было 22 Different, минус add-title/image-ref →
+  20): replacements (4 — NCR, скип), ts-url-format (110, Δ108 — обрезка
+  open-блока в dd-continuation), table-ref (135, Δ−8 — лишний пустой
+  `<p class="tableblock"><code></code>` в пустой m-ячейке @848), counters (136 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex (152, Δ143), image-size (177,
+  Δ92), data (181, Δ77), admonition (197, Δ−10), troubleshoot-unconstrained-
+  formatting (212, Δ−4 — nested/double-backtick → литерал, архитектурно),
+  text (249, Δ−5 — то же), image-svg (259, Δ8).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок пятая) — Фаза 3: `-`-маркер вкладывается под `*` + класс стиля маркера на `<ul>`
 
 Запрос «продолжи». Ветка **`fix/unordered-dash-marker-nesting`** — ЗАКОММИЧЕНА
