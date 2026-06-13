@@ -1,5 +1,73 @@
 # Session context
 
+## Сессия (2026-06-13, сорок восьмая) — Фаза 3: section-маркер НЕ прерывает открытый параграф
+
+Запрос «продолжи». Ветка **`fix/section-marker-no-interrupt-paragraph`** —
+ЗАКОММИЧЕНА (`99ff0f6`), смержена в master (`a827d7a`, --no-ff). base-бинарь
+/tmp/adoc_base обновлён до 326. **ОЖИДАЕТ: явная авторизация пользователя на
+`git push origin master` + удаление ветки** (пуш — outward-facing). Старт:
+push 47-й сессии УЖЕ прошёл (origin/master == master == 0eca83a, дерево чисто,
+ветки fix/* удалены — housekeeping 47-й закрыт сам).
+
+### Выбор задачи
+nearmiss на 325 (19 Different): replacements (4 — NCR, скип). Сильнейшие
+single-token кандидаты: **admonition (197, Δ−10)**, table (597, Δ1), image-svg
+(259, Δ8). diffone admonition @74: эталон держит `[IMPORTANT] <.>\n.Feeding\n====
+<.>\n…` как ОДИН параграф, мы рвём на `==== <.>` в секцию `<div class="sect3">
+<h4>`. Выбран admonition — чистое single-root правило.
+
+### Реальная семантика (пробы /tmp/p_sec1..4, pb_{list,olist,thematic,image,admon,mdfence,delim,battr,pagebreak,dlist})
+- **Section-заголовок НЕ прерывает открытый параграф**: `para\n== Heading\nmore`
+  → ОДИН параграф (p_sec1). admonition `bl-c`: `[IMPORTANT] <.>` не оканчивается
+  на `]` → не attr-строка → параграф; `.Feeding` (точка-title) и `==== <.>`
+  (section-маркер с хвостом) — строки-продолжения, литеральный текст (p_sec2).
+- **На границе блока (после blank)** `==== <.>` ВАЛИДНАЯ секция level-3 (p_sec3) —
+  дело именно в мид-параграфном контексте. Голый `====` → example block (p_sec4).
+- **Полное правило asciidoctor** (`read_paragraph_lines`/`StartOfBlockProc`,
+  block_terminates_paragraph=true): открытый параграф рвётся ТОЛЬКО на делимитере
+  блока (`----`, markdown-fence) и block-attr-строке `[...]`. НЕ рвут (пробы pb_*):
+  section-заголовок, `*`/`.` list-маркеры, thematic break `'''`, `image::`,
+  `NOTE:`-admonition, page break `<<<`, dlist `term::`. **Наш break-список
+  СЛИШКОМ агрессивен** — но это НЕСКОЛЬКО отдельных корней.
+
+### Что сделано
+- **ПАРСЕР** block.rs: убран `scanner::strip_any_section_marker(line).is_some()`
+  из break-условий в ДВУХ местах — `scan_paragraph` (@2194) и `scan_admonition`
+  (@2583, принципиальный параграф admonition). Док-комментарии. Section на границе
+  блока по-прежнему ловит диспетчер scan_leaf_blocks (@774) после blank.
+- Тест: +1 html `test_section_marker_does_not_interrupt_paragraph` (мид-параграф
+  `==`/`====` не рвут; негатив — секция после blank работает).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 495, html 400);
+  compat parsing-lab 233/233 (1 тест зелёный).
+- admonition diffone: **0 diffs** (был 197). Пробы p_sec1..4 совпали с asciidoctor.
+- **Корпус: Identical 325→326 (+1 ФЛИП)**. Blast (base 325): РОВНО 1 файл —
+  admonition.adoc 197→0, **0 регрессий, 0 closer/FARTHER** (затронут лишь 1 файл —
+  редкая конструкция «параграф+section без blank» в корпусе только тут).
+
+### Что дальше
+- nearmiss на 326 (было 19 Different, минус admonition → 18): replacements (4 —
+  NCR, скип), ts-url-format (110, Δ108 — обрезка open-блока в dd-continuation),
+  counters (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex (152, Δ143),
+  image-size (177, Δ92), data (181, Δ77), troubleshoot-unconstrained-formatting
+  (212, Δ−4 — nested/double-backtick → литерал, архитектурно), text (249, Δ−5 —
+  то же), image-svg (259, Δ8 — ДВА корня: table `frame-ends grid-none` И
+  `opts=interactive` SVG → `<object>`), description (299, Δ7), section (347,
+  Δ−40), align-by-cell (371, Δ−16), block-name-table (431, Δ−2 — `++…++`
+  double-plus escape, архитектурно), table (597, Δ1 — `|=== <1>` не точный
+  делимитер + `<2>` callout-list-item рвёт параграф; ТОТ ЖЕ over-eager
+  break-список, отдельный корень).
+- **Кандидат-родственник этой сессии**: table.adoc — убрать callout-list-item/
+  прочие из break-списка + сделать table-делимитер точным. НО общий over-fix
+  (list/image/thematic/admonition/dlist не должны рвать параграф) РИСКОВАН — много
+  файлов в корпусе кладут список/образ сразу после строки параграфа БЕЗ blank,
+  рассчитывая на текущее (наше) поведение → проверять blast пошагово, по одному
+  break-условию.
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок седьмая) — Фаза 3: пустая стилевая (m/e/s) ячейка таблицы → голый `<td></td>`
 
 Запрос «продолжи». Ветка **`fix/empty-styled-table-cell`** — ЗАКОММИЧЕНА
