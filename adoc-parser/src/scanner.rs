@@ -160,13 +160,19 @@ pub fn is_attribute_entry(line: &str) -> Option<(&str, &str)> {
 
 pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
-    // Hyphen marker: `- text` (depth 1)
+    // The returned number is a MARKER IDENTITY, not a nesting level: Asciidoctor
+    // nests unordered lists by matching the literal marker against the open list
+    // stack (a marker that matches an ancestor is a sibling; an unmatched one
+    // nests). Star markers use their `*`-count as identity (`*`→1, `**`→2, …).
+    // The hyphen `-` is a SEPARATE marker family, so it gets identity 0 (out of
+    // band below the star counts) — otherwise `- x` under `* y` would collide
+    // with `*` at 1 and render flat instead of nesting (probes /tmp/p_un*).
     if let Some(rest) = trimmed.strip_prefix("- ") {
         let text = rest.trim_start();
         if text.is_empty() {
             return None;
         }
-        return Some((1, text));
+        return Some((0, text));
     }
     let stars = count_leading(trimmed, '*');
     if stars == 0 {
@@ -1301,6 +1307,10 @@ mod tests {
         assert_eq!(is_list_marker_unordered("* item"), Some((1, "item")));
         assert_eq!(is_list_marker_unordered("** nested"), Some((2, "nested")));
         assert_eq!(is_list_marker_unordered("*bold*"), None);
+        // Hyphen is a distinct marker family → identity 0 (never collides with
+        // the `*`-count identities, so `- x` nests under `* y`).
+        assert_eq!(is_list_marker_unordered("- item"), Some((0, "item")));
+        assert_eq!(is_list_marker_unordered("-no-space"), None);
     }
 
     #[test]

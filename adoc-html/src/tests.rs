@@ -167,6 +167,74 @@ fn test_mixed_marker_list_nesting() {
 }
 
 #[test]
+fn test_unordered_dash_marker_nests_under_star() {
+    // `-` is a SEPARATE marker family from `*` (identity 0 vs the `*`-count),
+    // so `- x` under `* y` nests instead of rendering as a flat sibling, and a
+    // following `*` matches the outer star list as a sibling (probe
+    // /tmp/p_un1 = corpus unordered.adoc `nest-alt` tag).
+    let html = to_html("* Level 1\n- Level 2\n* Level 1 again");
+    assert!(
+        html.contains("<p>Level 1</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>Level 2</p>\n</li>\n</ul>\n</div>\n</li>"),
+        "`- ` must nest inside the `* ` item. Got:\n{html}"
+    );
+    assert!(
+        html.contains("</div>\n</li>\n<li>\n<p>Level 1 again</p>"),
+        "the second `* ` is a sibling of the first. Got:\n{html}"
+    );
+    // `-` outer, `*` nested, `-` matches outer → sibling (probe /tmp/p_un2)
+    let html = to_html("- a\n* b\n- c");
+    assert!(
+        html.contains("<p>a</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>b</p>\n</li>\n</ul>\n</div>\n</li>\n<li>\n<p>c</p>"),
+        "`* ` nests in `- a`, second `- ` is its sibling. Got:\n{html}"
+    );
+    // `*` after `**` still nests deeper — count is identity, not level
+    // (probe /tmp/p_un5: `- a` / `** b` / `* c`)
+    let html = to_html("- a\n** b\n* c");
+    assert!(
+        html.contains("<p>b</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>c</p>"),
+        "`* ` after `** ` nests deeper, not back to a level. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_unordered_list_marker_style_class() {
+    // An explicit block style on a `*`/`-` list (`[square]`, `[circle]`, or any
+    // keyword) is the marker class on BOTH the wrapper div (`ulist {style}
+    // {roles}`) and the `<ul>` (style only — roles/id stay on the div). Probes
+    // /tmp/p_sq, p_sqr, p_role, p_ov.
+    let html = to_html("[square]\n* one\n* two");
+    assert!(
+        html.contains("<div class=\"ulist square\">\n<ul class=\"square\">"),
+        "[square] → class on div and ul. Got:\n{html}"
+    );
+    // A role lands only on the div, never the `<ul>`.
+    let html = to_html("[.myrole]\n* a");
+    assert!(
+        html.contains("<div class=\"ulist myrole\">\n<ul>\n"),
+        "role goes on the div only, ul stays plain. Got:\n{html}"
+    );
+    // Style + role: div gets both (style first), ul only the style.
+    let html = to_html("[square.myrole]\n* a");
+    assert!(
+        html.contains("<div class=\"ulist square myrole\">\n<ul class=\"square\">"),
+        "style+role: div `ulist square myrole`, ul `square`. Got:\n{html}"
+    );
+    // A nested list carries its own style (marker-override, probe /tmp/p_ov):
+    // the inner `[circle]` list gets the class on its div and ul.
+    let html = to_html("[square]\n* squares\n** up top\n[circle]\n*** circles\n**** down below");
+    assert!(
+        html.contains("<div class=\"ulist circle\">\n<ul class=\"circle\">"),
+        "nested [circle] list must carry its own style. Got:\n{html}"
+    );
+    // The style does NOT propagate to unstyled nested lists (the `**` list
+    // under `* squares` stays plain even though its parent is `[square]`).
+    assert!(
+        html.contains("<p>squares</p>\n<div class=\"ulist\">\n<ul>\n"),
+        "unstyled nested list stays plain. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_ordered_list_style_from_marker_depth() {
     // Implicit olist style comes from the marker's dot count, not the
     // ol-nesting count (probe /tmp/p_subs/p8, p9): `..` nested directly

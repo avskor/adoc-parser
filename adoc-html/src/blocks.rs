@@ -241,39 +241,36 @@ impl HtmlRenderer {
         let interactive = meta.as_ref()
             .is_some_and(|m| m.options.iter().any(|o| o == "interactive"));
         self.interactive_ulist_stack.push(interactive);
-        let is_bibliography = self.section_style_stack.last()
-            .and_then(|s| s.as_deref()) == Some("bibliography");
-        if !self.is_inside_list_item() {
-            let wrapper_class = if *has_checklist {
-                "ulist checklist"
-            } else if is_bibliography {
-                "ulist bibliography"
-            } else {
-                "ulist"
-            };
-            output.push_str("<div");
-            Self::write_meta_attrs(output, meta, wrapper_class);
-            output.push_str(">\n");
-            self.emit_pending_block_title(output);
-            output.push_str("<ul");
-            if *has_checklist {
-                output.push_str(" class=\"checklist\"");
-            } else if is_bibliography {
-                output.push_str(" class=\"bibliography\"");
-            }
-            output.push_str(">\n");
+        // Bibliography is derived from the enclosing section style and only
+        // applies to the top-level list of that section, never a nested one.
+        let is_bibliography = !self.is_inside_list_item()
+            && self.section_style_stack.last().and_then(|s| s.as_deref()) == Some("bibliography");
+
+        // The explicit block style (`[square]`/`[circle]`/`[disc]`/`[none]`/
+        // `[no-bullet]`, or any keyword) is the marker class. Asciidoctor puts
+        // it — and id/roles — on the wrapper div (`ulist {style} {roles}`, via
+        // write_meta_attrs), but ONLY the style on the `<ul>` (roles/id stay on
+        // the div). checklist/bibliography are derived classes filling the same
+        // `<ul>` slot when no explicit style is set. Both top-level and nested
+        // styled lists carry the class (probe /tmp/p_ov marker-override).
+        let style = meta.as_ref().and_then(|m| m.style.as_deref());
+        let (base_class, ul_class) = if *has_checklist {
+            ("ulist checklist", Some("checklist"))
+        } else if is_bibliography {
+            ("ulist bibliography", Some("bibliography"))
         } else {
-            let wrapper_class = if *has_checklist { "ulist checklist" } else { "ulist" };
-            output.push_str("<div class=\"");
-            output.push_str(wrapper_class);
-            output.push_str("\">\n");
-            self.emit_pending_block_title(output);
-            output.push_str("<ul");
-            if *has_checklist {
-                output.push_str(" class=\"checklist\"");
-            }
-            output.push_str(">\n");
+            ("ulist", style)
+        };
+
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, base_class);
+        output.push_str(">\n");
+        self.emit_pending_block_title(output);
+        output.push_str("<ul");
+        if let Some(class) = ul_class {
+            write_attr(output, "class", class);
         }
+        output.push_str(">\n");
     }
 
     pub(crate) fn start_ordered_list(&mut self, output: &mut String, start: &Option<u32>, reversed: &bool, depth: u8, meta: &Option<BlockMeta>) {
