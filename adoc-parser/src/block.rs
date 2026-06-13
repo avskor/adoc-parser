@@ -451,6 +451,33 @@ impl<'a> BlockScanner<'a> {
         })
     }
 
+    /// True when the innermost open container is a list item — i.e. we are
+    /// scanning directly in list-item content, not inside a delimited block
+    /// (open `--`, example `====`, etc.) nested within the list.
+    ///
+    /// A blank line ends a list only in the former case. Inside a nested
+    /// delimited block the blank line is just a block separator owned by that
+    /// block, which closes only at its matching delimiter (handled earlier by
+    /// `check_close_delimited_block`). The blank-line-driven list-closing
+    /// guards must therefore use THIS check, not `is_in_list_context`: when a
+    /// delimited block sits above the list item on the stack, firing the guard
+    /// runs `close_list_contexts` (which finds no list at the stack top and
+    /// returns nothing) and then pops an empty buffer — silently truncating the
+    /// rest of the delimited block. Scanning from the top, a delimited-block /
+    /// part-intro container is a barrier: it owns its blank lines.
+    fn is_directly_in_list_context(&self) -> bool {
+        for ctx in self.context_stack.iter().rev() {
+            match ctx {
+                BlockContext::ListItem
+                | BlockContext::DescriptionListEntry { .. }
+                | BlockContext::CalloutListItem => return true,
+                BlockContext::DelimitedBlock { .. } | BlockContext::PartIntro => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Close all list-related contexts from the top of the stack.
     /// Returns close events in emission order.
     fn close_list_contexts(&mut self) -> Vec<Event<'a>> {
@@ -648,7 +675,7 @@ impl<'a> BlockScanner<'a> {
         // Block attribute `[...]` — checked before body_started to allow metadata before header
         if let Some(attr_str) = scanner::is_block_attribute(line) {
             // If in list context with preceding blank line (not via continuation), close list
-            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+            if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -672,7 +699,7 @@ impl<'a> BlockScanner<'a> {
         if let Some(title) = scanner::is_block_title(line) {
             // If in list context with preceding blank line (not via continuation),
             // close list: a title line between lists keeps them separate
-            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+            if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -900,7 +927,7 @@ impl<'a> BlockScanner<'a> {
         // Admonition `NOTE: text`
         if let Some((label, text)) = scanner::is_admonition(line) {
             // If in list context with blank line (not continuation), close list first
-            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+            if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -913,7 +940,7 @@ impl<'a> BlockScanner<'a> {
         // Table `|===`
         if scanner::is_table_delimiter(line) {
             // If in list context with blank line (not continuation), close list first
-            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+            if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -926,7 +953,7 @@ impl<'a> BlockScanner<'a> {
         // Delimited block
         if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
             // If in list context (and not via list continuation), close list first
-            if self.is_in_list_context() && !self.in_continuation {
+            if self.is_directly_in_list_context() && !self.in_continuation {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -940,7 +967,7 @@ impl<'a> BlockScanner<'a> {
         // Markdown code fence ``` or ```lang
         if let Some((backtick_count, language)) = scanner::is_markdown_code_fence(line) {
             // If in list context (and not via list continuation), close list first
-            if self.is_in_list_context() && !self.in_continuation {
+            if self.is_directly_in_list_context() && !self.in_continuation {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -957,7 +984,7 @@ impl<'a> BlockScanner<'a> {
         if scanner::is_line_comment(line) {
             // A comment after a blank line forces adjacent lists apart
             // (Asciidoctor: line comment between lists keeps them separate).
-            if self.is_in_list_context() && !self.in_continuation && self.had_blank_line {
+            if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -1148,7 +1175,7 @@ impl<'a> BlockScanner<'a> {
         // Regular paragraph
         // If in list context with preceding blank line or pending block attrs (not continuation),
         // close list first — a blank line followed by non-list content ends the list
-        if self.is_in_list_context() && !self.in_continuation
+        if self.is_directly_in_list_context() && !self.in_continuation
             && (self.pending_block_attrs.is_some() || self.had_blank_line)
         {
             let close_events = self.close_list_contexts();
