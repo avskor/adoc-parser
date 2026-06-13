@@ -280,8 +280,13 @@ pub fn apply_level_offset(content: &str, offset: i8) -> String {
     for line in content.lines() {
         let trimmed = line.trim_start();
         let eq_count = trimmed.chars().take_while(|&c| c == '=').count();
-        if eq_count >= 2 && trimmed[eq_count..].starts_with(' ') {
-            let new_level = (eq_count as i8 + offset).clamp(2, 6) as usize;
+        if (1..=6).contains(&eq_count) && trimmed[eq_count..].starts_with(' ') {
+            // A heading with N `=` chars is section level N-1. leveloffset shifts
+            // that level, including level 0 (`= Title`), which becomes a level-1
+            // section under `leveloffset=+1` (verified against Asciidoctor). The
+            // resulting marker is clamped to 1..=6 `=` chars (level 0..=5): a
+            // negative offset can demote `==` down to a level-0 `=` heading.
+            let new_level = (eq_count as i8 + offset).clamp(1, 6) as usize;
             for _ in 0..new_level {
                 result.push('=');
             }
@@ -2343,8 +2348,24 @@ Value: {counter:x}";
 
     #[test]
     fn test_level_offset_clamp_min() {
-        // Cannot go below 2 '=' signs
-        assert_eq!(apply_level_offset("== Title", -5), "== Title");
+        // Cannot go below 1 '=' sign (section level 0). A large negative offset
+        // demotes any heading down to a level-0 `= Title` (verified against
+        // Asciidoctor: `==` under leveloffset=-1 renders `<h1 class="sect0">`).
+        assert_eq!(apply_level_offset("== Title", -5), "= Title");
+    }
+
+    #[test]
+    fn test_level_offset_level0_promoted() {
+        // A level-0 heading (`= Title`) is offset too: leveloffset=+1 makes it a
+        // level-1 section (`== Title`). This is the include-with-leveloffset case.
+        assert_eq!(apply_level_offset("= Title", 1), "== Title");
+        assert_eq!(apply_level_offset("= Title", 2), "=== Title");
+    }
+
+    #[test]
+    fn test_level_offset_level0_clamped_at_zero() {
+        // Level 0 cannot go lower; a negative offset leaves `= Title` unchanged.
+        assert_eq!(apply_level_offset("= Title", -1), "= Title");
     }
 
     #[test]
