@@ -1909,6 +1909,22 @@ fn test_table_stacked_attr_lines_merge_html() {
 }
 
 #[test]
+fn test_table_cols_semicolon_separator_html() {
+    // Unquoted `[cols=1;m;m]` uses the semicolon separator → 3 columns with
+    // equal weight (33.3333/33.3333/33.3334). The first single-line row of
+    // three cells followed by a blank line becomes a header row (thead).
+    let html = to_html(concat!(
+        "[cols=1;m;m]\n|===\n|H1 | H2 | H3\n\n|a\n|b\n|c\n|===",
+    ));
+    assert_eq!(html.matches("<col ").count(), 3, "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 33.3333%;\">"), "Got:\n{html}");
+    assert!(html.contains("<col style=\"width: 33.3334%;\">"), "Got:\n{html}");
+    assert!(html.contains("<thead>"), "Got:\n{html}");
+    // The m-styled body columns wrap their cells in <code>
+    assert!(html.contains("<code>b</code>"), "Got:\n{html}");
+}
+
+#[test]
 fn test_table_cols_multiplier_widths_html() {
     // `2*1,3` → 20/20/60; trailing single-letter cell content survives
     let html = to_html("[cols=\"2*1,3\"]\n|===\n|a |b |c\n|===");

@@ -785,8 +785,12 @@ impl HtmlRenderer {
             return Self::distribute_widths(&vec![1.0; n]);
         }
 
-        // Comma-separated: parse each part for weight
-        let parts: Vec<&str> = trimmed.split(',').collect();
+        // Comma- or semicolon-separated: parse each part for weight. Match the
+        // parser's separator rule (attributes.rs table_col_specs): a comma
+        // forces comma-splitting, otherwise split on semicolon — so unquoted
+        // `[cols=1;m;m]` yields three columns here too.
+        let sep = if trimmed.contains(',') { ',' } else { ';' };
+        let parts: Vec<&str> = trimmed.split(sep).collect();
         let mut weights: Vec<f64> = Vec::new();
         for part in &parts {
             let mut part = part.trim();
