@@ -2964,6 +2964,23 @@ fn test_block_image_dimensions_html() {
 }
 
 #[test]
+fn test_block_image_interactive_svg_html() {
+    // SVG (.svg target) + opts=interactive → <object> with <span class="alt"> fallback
+    let html = to_html("image::sample.svg[Interactive,300,opts=interactive]");
+    assert!(html.contains("<object type=\"image/svg+xml\" data=\"sample.svg\" width=\"300\"><span class=\"alt\">Interactive</span></object>"), "interactive svg → object. Got:\n{html}");
+    // fallback= attribute → <img> fallback (object + fallback both carry width/height)
+    let html = to_html("image::sample.svg[Big,300,200,opts=interactive,fallback=alt.png]");
+    assert!(html.contains("<object type=\"image/svg+xml\" data=\"sample.svg\" width=\"300\" height=\"200\"><img src=\"alt.png\" alt=\"Big\" width=\"300\" height=\"200\"></object>"), "fallback img. Got:\n{html}");
+    // format=svg with a non-.svg target also selects the object path
+    let html = to_html("image::diagram[Diag,opts=interactive,format=svg]");
+    assert!(html.contains("<object type=\"image/svg+xml\" data=\"diagram\"><span class=\"alt\">Diag</span></object>"), "format=svg → object. Got:\n{html}");
+    // a raster image with opts=interactive stays an <img> (object is SVG-only)
+    let html = to_html("image::photo.png[Raster,300,opts=interactive]");
+    assert!(html.contains("<img src=\"photo.png\" alt=\"Raster\" width=\"300\">"), "raster stays img. Got:\n{html}");
+    assert!(!html.contains("<object"), "no object for raster. Got:\n{html}");
+}
+
+#[test]
 fn test_block_image_named_dimensions_html() {
     let html = to_html("image::photo.jpg[alt=Photo,width=800,height=600]");
     assert!(html.contains("src=\"photo.jpg\""));
@@ -4724,6 +4741,26 @@ fn test_table_width_attribute() {
     // no width: autowidth → fit-content, otherwise stretch (unchanged)
     let html = to_html("[%autowidth]\n|===\n|a |b\n|===");
     assert!(html.contains("fit-content"));
+}
+
+#[test]
+fn test_table_frame_grid_classes_html() {
+    // frame/grid named attrs emit frame-{val} grid-{val} (html5.rb:859-860)
+    let html = to_html("[frame=ends,grid=none]\n|===\n|a\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-ends grid-none stretch\">"), "frame=ends grid=none. Got:\n{html}");
+    // topbot is aliased to ends
+    let html = to_html("[frame=topbot]\n|===\n|a\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-ends grid-all stretch\">"), "topbot→ends. Got:\n{html}");
+    // sides/cols emitted verbatim
+    let html = to_html("[frame=sides,grid=cols]\n|===\n|a\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-sides grid-cols stretch\">"), "frame=sides grid=cols. Got:\n{html}");
+    // default unchanged
+    let html = to_html("|===\n|a\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"), "default. Got:\n{html}");
+    // document attrs table-frame/table-grid as fallback; named attr overrides frame only
+    let html = to_html(":table-frame: sides\n:table-grid: cols\n\n|===\n|a\n|===\n\n[frame=none]\n|===\n|b\n|===");
+    assert!(html.contains("<table class=\"tableblock frame-sides grid-cols stretch\">"), "doc-attr fallback. Got:\n{html}");
+    assert!(html.contains("<table class=\"tableblock frame-none grid-cols stretch\">"), "named frame overrides doc-attr, grid inherited. Got:\n{html}");
 }
 
 #[test]

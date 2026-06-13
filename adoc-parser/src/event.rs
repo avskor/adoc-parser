@@ -322,7 +322,7 @@ pub enum Tag<'a> {
     TableHeaderCell { colspan: u8, rowspan: u8, style: CellStyle, halign: HAlign, valign: VAlign },
 
     // Media
-    BlockImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, link: Option<CowStr<'a>> },
+    BlockImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, link: Option<CowStr<'a>>, interactive: bool, fallback: Option<CowStr<'a>> },
     BlockVideo { target: CowStr<'a>, attrs: CowStr<'a> },
     BlockAudio { target: CowStr<'a>, attrs: CowStr<'a> },
     InlineImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, align: Option<CowStr<'a>>, float: Option<CowStr<'a>>, link: Option<CowStr<'a>>, role: Option<CowStr<'a>>, title: Option<CowStr<'a>> },
@@ -458,12 +458,14 @@ impl<'a> Tag<'a> {
             Tag::TableRow => Tag::TableRow,
             Tag::TableCell { colspan, rowspan, style, halign, valign } => Tag::TableCell { colspan, rowspan, style, halign, valign },
             Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } => Tag::TableHeaderCell { colspan, rowspan, style, halign, valign },
-            Tag::BlockImage { target, alt, width, height, link } => Tag::BlockImage {
+            Tag::BlockImage { target, alt, width, height, link, interactive, fallback } => Tag::BlockImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
                 width: width.map(|w| Cow::Owned(w.into_owned())),
                 height: height.map(|h| Cow::Owned(h.into_owned())),
                 link: link.map(cow_owned),
+                interactive,
+                fallback: fallback.map(cow_owned),
             },
             Tag::BlockVideo { target, attrs } => Tag::BlockVideo {
                 target: Cow::Owned(target.into_owned()),
