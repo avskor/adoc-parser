@@ -69,6 +69,12 @@ pub enum Event<'a> {
     HardBreak,
     ThematicBreak,
     PageBreak,
+    /// Paragraph boundary inside a non-AsciiDoc table cell. A default/styled
+    /// cell whose text contains a blank line is split into multiple
+    /// `<p class="tableblock">` paragraphs (asciidoctor `Cell#content`); this
+    /// marker sits between consecutive paragraphs so the renderer can close the
+    /// current paragraph wrapper and open the next.
+    TableCellParagraphBreak,
     Attribute {
         name: CowStr<'a>,
         value: CowStr<'a>,
@@ -145,6 +151,7 @@ impl<'a> Event<'a> {
             Event::HardBreak => Event::HardBreak,
             Event::ThematicBreak => Event::ThematicBreak,
             Event::PageBreak => Event::PageBreak,
+            Event::TableCellParagraphBreak => Event::TableCellParagraphBreak,
             Event::Attribute { name, value } => Event::Attribute {
                 name: cow_owned(name),
                 value: cow_owned(value),

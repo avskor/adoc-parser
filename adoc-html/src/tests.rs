@@ -1121,10 +1121,63 @@ fn test_table_cell_literal_preserves_blank_and_indent() {
         "expected preserved blank+indent in literal cell. Got:\n{html}"
     );
 
+    // A blank line splits a default cell into two <p class="tableblock">
+    // paragraphs (asciidoctor Cell#content; probe /tmp/p_cellp/p6). Within a
+    // paragraph the lines stay joined by '\n'; continuation-line indentation is
+    // trimmed (pre-existing — asciidoctor preserves it, a separate limitation).
     let html = to_html("|===\n|one\n  two\n\nthree\n|===");
     assert!(
-        html.contains("<p class=\"tableblock\">one\ntwo\nthree</p>"),
-        "expected collapsed plain cell. Got:\n{html}"
+        html.contains("<p class=\"tableblock\">one\ntwo</p><p class=\"tableblock\">three</p>"),
+        "expected split plain cell. Got:\n{html}"
+    );
+}
+
+#[test]
+fn test_table_cell_multi_paragraph_html() {
+    // A default/styled body cell whose text has a blank line becomes several
+    // <p class="tableblock"> paragraphs, each carrying the style wrapper; inline
+    // subs still apply within each (probe-verified /tmp/p_cellp/p1..p6).
+
+    // Default cell: two paragraphs, second carries inline formatting.
+    let html = to_html("|===\n|Not applicable.\n\n*emphasized line*\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\">Not applicable.</p><p class=\"tableblock\"><strong>emphasized line</strong></p>"),
+        "expected two default paragraphs. Got:\n{html}"
+    );
+
+    // Three paragraphs.
+    let html = to_html("|===\n|one\n\ntwo\n\nthree\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\">one</p><p class=\"tableblock\">two</p><p class=\"tableblock\">three</p>"),
+        "expected three paragraphs. Got:\n{html}"
+    );
+
+    // Monospace column: the <code> wrapper repeats per paragraph.
+    let html = to_html("[cols=\"m\"]\n|===\n|first para\n\nsecond para\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\"><code>first para</code></p><p class=\"tableblock\"><code>second para</code></p>"),
+        "expected per-paragraph <code> wrappers. Got:\n{html}"
+    );
+
+    // Explicit emphasis cell: per-paragraph <em>.
+    let html = to_html("|===\ne|alpha\n\nbeta\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\"><em>alpha</em></p><p class=\"tableblock\"><em>beta</em></p>"),
+        "expected per-paragraph <em> wrappers. Got:\n{html}"
+    );
+
+    // Several consecutive blank lines collapse to a single split.
+    let html = to_html("|===\n|first\n\n\nlast\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\">first</p><p class=\"tableblock\">last</p>"),
+        "expected one split for multiple blanks. Got:\n{html}"
+    );
+
+    // Single-paragraph cell is unaffected (no extra paragraph wrapper).
+    let html = to_html("|===\n|just one line\n|===");
+    assert!(
+        html.contains("<td class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">just one line</p></td>"),
+        "single-paragraph cell unchanged. Got:\n{html}"
     );
 }
 

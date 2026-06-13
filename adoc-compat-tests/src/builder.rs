@@ -309,6 +309,11 @@ pub fn build_asg<'a>(
                 push_block_to_current(&mut stack, AsgNode::PageBreak);
             }
 
+            // HTML-rendering hint (splits a default table cell into multiple
+            // <p class="tableblock"> paragraphs); the ASG keeps the cell text
+            // flat, so there is nothing to record here.
+            Event::TableCellParagraphBreak => {}
+
             Event::InlinePassthrough(text) => {
                 push_inline_to_current(
                     &mut stack,
