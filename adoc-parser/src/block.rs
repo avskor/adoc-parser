@@ -1727,21 +1727,20 @@ impl<'a> BlockScanner<'a> {
             (remaining_rows, &[][..])
         };
 
-        // Resolve alignment for a cell: cell-level overrides column-level defaults.
-        // A cell's alignment is "default" if not explicitly set by the cell spec.
+        // Resolve alignment for a cell: an explicit cell-level operator
+        // (`<`/`^`/`>` or `.<`/`.^`/`.>`) wins; otherwise the cell inherits the
+        // column's default. The `*_explicit` flags let us distinguish an
+        // explicit `<` (Left) / `.<` (Top) from the indistinguishable defaults.
         let resolve_align = |cell: &scanner::CellSpec<'_>, col_idx: usize| -> (HAlign, VAlign) {
             let mut halign = cell.halign;
             let mut valign = cell.valign;
             if let Some(ref specs) = col_specs
                 && col_idx < specs.len()
             {
-                if halign == HAlign::Left && cell.halign == HAlign::Left {
-                    // Only use column default if cell didn't explicitly set alignment.
-                    // We can't distinguish "explicitly set to Left" from "default Left",
-                    // so we always apply column default when cell is Left (the default).
+                if !cell.halign_explicit {
                     halign = specs[col_idx].halign;
                 }
-                if valign == VAlign::Top && cell.valign == VAlign::Top {
+                if !cell.valign_explicit {
                     valign = specs[col_idx].valign;
                 }
             }
@@ -1939,6 +1938,8 @@ impl<'a> BlockScanner<'a> {
                 style_explicit: false,
                 halign: HAlign::default(),
                 valign: VAlign::default(),
+                halign_explicit: false,
+                valign_explicit: false,
             });
         }
     }

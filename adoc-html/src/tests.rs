@@ -1339,6 +1339,34 @@ fn test_table_cell_override_cols_align_html() {
 }
 
 #[test]
+fn test_table_cell_explicit_left_overrides_cols_align_html() {
+    // An explicit `<` (Left) / `.<` (Top) operator must win over the column
+    // default, even though Left/Top are also the implicit defaults. Without
+    // tracking explicitness the cell would inherit the column's right/bottom.
+    let html = to_html("[cols=\">\"]\n|===\n<| left\n|===");
+    assert!(
+        html.contains("halign-left"),
+        "explicit `<` must override the column's right default. Got:\n{html}"
+    );
+    assert!(!html.contains("halign-right"), "Got:\n{html}");
+
+    let html = to_html("[cols=\".>\"]\n|===\n.<| top\n|===");
+    assert!(
+        html.contains("valign-top"),
+        "explicit `.<` must override the column's bottom default. Got:\n{html}"
+    );
+    assert!(!html.contains("valign-bottom"), "Got:\n{html}");
+
+    // Negative: a cell without an alignment operator still inherits the
+    // column's right default (no spurious explicit flag).
+    let html = to_html("[cols=\">\"]\n|===\n| plain\n|===");
+    assert!(
+        html.contains("halign-right"),
+        "an unaligned cell inherits the column default. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_table_valign_only_html() {
     let html = to_html("|===\n.>| bottom\n|===");
     assert!(html.contains("valign-bottom"), "expected valign-bottom class. Got:\n{html}");
