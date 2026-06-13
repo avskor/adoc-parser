@@ -4792,3 +4792,52 @@ fn test_table_escaped_pipe_cells() {
     let html = to_html("[cols=\"1,1\"]\n|===\n|a |b\ntail \\| more\n|c |d\n|===");
     assert!(html.contains("<p class=\"tableblock\">b\ntail | more</p>"), "Got:\n{html}");
 }
+
+#[test]
+fn test_table_delimiter_four_plus_equals() {
+    // Asciidoctor accepts a pipe followed by THREE OR MORE `=` as a table
+    // delimiter (`|====`, `|=====`, …) — not just exactly `|===` (image-size.adoc).
+    let html = to_html("|====\n|A |B\n|c |d\n|====");
+    assert!(html.contains("<table class=\"tableblock"), "|==== should open a table: {html}");
+    assert!(html.contains("<p class=\"tableblock\">A</p>"), "Got:\n{html}");
+    assert!(html.contains("<p class=\"tableblock\">d</p>"), "Got:\n{html}");
+}
+
+#[test]
+fn test_table_terminator_matches_opening_delimiter_exactly() {
+    // The table is closed only by a line equal to the OPENING delimiter. A
+    // table delimiter of a different length inside is cell content, not a
+    // terminator (delimited.adoc: a `|====` cell inside a `|===` table).
+    let html = to_html("|===\n|A\n|====\n|B\n|===");
+    // The inner `|====` becomes a cell whose content is `====`, not a closer.
+    assert!(html.contains("<p class=\"tableblock\">====</p>"), "inner |==== must be a cell: {html}");
+    // Exactly one table is produced (the inner line did not close it early).
+    assert_eq!(html.matches("<table").count(), 1, "exactly one table expected: {html}");
+    assert!(html.contains("<p class=\"tableblock\">A</p>") && html.contains("<p class=\"tableblock\">B</p>"));
+}
+
+#[test]
+fn test_verbatim_block_indent_attribute() {
+    // `indent=0` strips the common leading indentation (min over non-blank
+    // lines); `indent=N` replaces it with N spaces; absent preserves it.
+    let stripped = to_html("[indent=0]\n----\n  a\n   b\n----");
+    assert!(stripped.contains("<pre>a\n b</pre>"), "indent=0 strip min: {stripped}");
+    let padded = to_html("[indent=3]\n----\n a\n  b\n----");
+    assert!(padded.contains("<pre>   a\n    b</pre>"), "indent=3 strip+pad: {padded}");
+    let preserved = to_html("----\n a\n  b\n----");
+    assert!(preserved.contains("<pre> a\n  b</pre>"), "no indent preserves: {preserved}");
+    // A flush-left non-blank line cancels stripping entirely.
+    let flush = to_html("[indent=0]\n----\nflush\n  in\n----");
+    assert!(flush.contains("<pre>flush\n  in</pre>"), "flush-left cancels: {flush}");
+}
+
+#[test]
+fn test_listing_indented_conditional_directive_is_literal() {
+    // An INDENTED `ifdef`/`endif` inside a verbatim block is literal text
+    // (directives are only recognized at column 0); `indent=0` then strips the
+    // guard space, yielding the directive verbatim (image-size.adoc pattern).
+    let html = to_html("[source,indent=0]\n----\n ifdef::backend-html5[]\n :x: 1\n endif::[]\n----");
+    assert!(html.contains("ifdef::backend-html5[]"), "directive kept literal: {html}");
+    assert!(html.contains(":x: 1"), "guarded content survives: {html}");
+    assert!(!html.contains(" ifdef::backend-html5[]"), "indent should be stripped: {html}");
+}

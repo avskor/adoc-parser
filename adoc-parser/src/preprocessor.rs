@@ -721,6 +721,13 @@ pub fn preprocess_with_attrs(
 
     while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
+        // Conditional directives (`ifdef`/`ifndef`/`ifeval`/`endif`) are only
+        // recognized at column 0. An INDENTED directive is literal text — this
+        // is how authors keep `ifdef::`/`endif::` lines verbatim inside a
+        // listing block (each line prefixed with a space). A column-0 directive
+        // IS still processed inside a verbatim block (it is reader-level), so
+        // this gate keys on leading whitespace only, not on block context.
+        let at_column_0 = !line.starts_with([' ', '\t']);
 
         // 0. Escaped conditional directive at column 0: \ifdef:: \ifndef:: \ifeval:: \endif::
         //    → strip the leading backslash and emit the rest literally WITHOUT evaluating it.
@@ -738,13 +745,15 @@ pub fn preprocess_with_attrs(
         }
 
         // 1. endif::[] — always processed regardless of skip state
-        if trimmed == "endif::[]" {
+        if at_column_0 && trimmed == "endif::[]" {
             skip_stack.pop();
             continue;
         }
 
         // 2–4. Conditional directives
-        if let Some(cond) = parse_conditional(trimmed) {
+        if at_column_0
+            && let Some(cond) = parse_conditional(trimmed)
+        {
             let condition_met = match cond.kind {
                 ConditionalKind::Ifdef => evaluate_condition(cond.attrs, &attributes),
                 ConditionalKind::Ifndef => !evaluate_condition(cond.attrs, &attributes),
@@ -1282,6 +1291,24 @@ endif::[]");
         let input = " \\ifdef::just-an-example[]";
         let result = preprocess(input);
         assert_eq!(result, " \\ifdef::just-an-example[]");
+    }
+
+    #[test]
+    fn test_indented_conditional_directive_kept_literal() {
+        // A non-escaped but INDENTED conditional directive is literal text, not
+        // a directive (Asciidoctor only recognizes them at column 0). This is
+        // how authors keep `ifdef`/`endif` lines verbatim inside a listing.
+        let input = " ifdef::flag[]\n content\n endif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, " ifdef::flag[]\n content\n endif::[]");
+    }
+
+    #[test]
+    fn test_column0_conditional_still_processed_with_indented_siblings() {
+        // A column-0 directive is still evaluated normally.
+        let input = ":flag:\nifdef::flag[]\nkept\nendif::[]";
+        let result = preprocess(input);
+        assert_eq!(result, ":flag:\nkept");
     }
 
     #[test]

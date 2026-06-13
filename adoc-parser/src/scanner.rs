@@ -469,7 +469,14 @@ pub fn parse_checklist_marker(text: &str) -> (Option<bool>, &str) {
 }
 
 pub fn is_table_delimiter(line: &str) -> bool {
-    line.trim() == "|==="
+    // Asciidoctor accepts a pipe followed by THREE OR MORE `=` (`|===`, `|====`, …);
+    // the rest of the line after the pipe must be all `=` (no trailing content).
+    // Open and close delimiters need not be the same length. Only the pipe separator
+    // is supported here — CSV/DSV tables (`,===`/`:===`/`!===`) are not parsed.
+    match line.trim().strip_prefix('|') {
+        Some(rest) => rest.len() >= 3 && rest.bytes().all(|b| b == b'='),
+        None => false,
+    }
 }
 
 use crate::event::{CellStyle, HAlign, VAlign};
@@ -1560,9 +1567,12 @@ mod tests {
     fn test_is_table_delimiter() {
         assert!(is_table_delimiter("|==="));
         assert!(is_table_delimiter("  |===  "));
-        assert!(!is_table_delimiter("|===="));
+        assert!(is_table_delimiter("|====")); // 4+ equals also valid (asciidoctor)
+        assert!(is_table_delimiter("|=========="));
         assert!(!is_table_delimiter("===="));
-        assert!(!is_table_delimiter("|== "));
+        assert!(!is_table_delimiter("|==")); // need at least 3 equals
+        assert!(!is_table_delimiter("|")); // pipe alone is not a delimiter
+        assert!(!is_table_delimiter("|=== x")); // trailing content disqualifies
         assert!(!is_table_delimiter(""));
     }
 

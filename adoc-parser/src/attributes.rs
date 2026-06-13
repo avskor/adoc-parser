@@ -517,6 +517,25 @@ impl BlockAttributes {
         self.named.get("subs").map(|v| parse_subs_value(v, default))
     }
 
+    /// The `indent` attribute that reindents verbatim block content
+    /// (Asciidoctor `adjust_indentation!`). Parsed like Ruby `String#to_i`
+    /// (optional sign + leading digits; non-numeric → 0). `None` when the
+    /// attribute is absent — in that case the content indentation is preserved.
+    pub fn verbatim_indent(&self) -> Option<i32> {
+        let raw = self.named.get("indent")?.trim();
+        let (neg, digits) = match raw.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, raw.strip_prefix('+').unwrap_or(raw)),
+        };
+        let n: i32 = digits
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0);
+        Some(if neg { -n } else { n })
+    }
+
     pub fn table_format(&self) -> TableFormat {
         // Check named attribute: format=csv / format=dsv / format=tsv
         if let Some(fmt) = self.named.get("format") {
