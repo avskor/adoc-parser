@@ -72,6 +72,108 @@ fn is_discrete_style(style: &str) -> bool {
     matches!(style, "discrete" | "float")
 }
 
+/// Reindent verbatim block content per the `indent` attribute, mirroring
+/// Asciidoctor's `adjust_indentation!`: with `indent == 0` the common leading
+/// indentation is stripped; with `indent > 0` it is replaced by `indent`
+/// spaces; a negative value preserves the content. The common block indent is
+/// the minimum leading whitespace over non-empty lines, or nothing if any
+/// non-empty line is flush left. Empty lines pass through untouched. Stripping
+/// is a zero-copy suffix slice (`indent == 0`); only `indent > 0` allocates.
+/// Tabs are not expanded (rare; `tabsize` unsupported).
+fn reindent_verbatim_lines<'a>(lines: Vec<&'a str>, indent: i32) -> Vec<Cow<'a, str>> {
+    if indent < 0 {
+        return lines.into_iter().map(Cow::Borrowed).collect();
+    }
+    // Common block indent = min leading whitespace over non-empty lines; a
+    // flush-left non-empty line cancels stripping entirely (block_indent None).
+    let mut block_indent: Option<usize> = None;
+    for &line in &lines {
+        if line.is_empty() {
+            continue;
+        }
+        let line_indent = line.len() - line.trim_start().len();
+        if line_indent == 0 {
+            block_indent = None;
+            break;
+        }
+        block_indent = Some(block_indent.map_or(line_indent, |b| b.min(line_indent)));
+    }
+    if indent == 0 {
+        match block_indent {
+            Some(bi) => lines
+                .into_iter()
+                .map(|l| if l.is_empty() { Cow::Borrowed(l) } else { Cow::Borrowed(&l[bi..]) })
+                .collect(),
+            None => lines.into_iter().map(Cow::Borrowed).collect(),
+        }
+    } else {
+        let pad = " ".repeat(indent as usize);
+        let strip = block_indent.unwrap_or(0);
+        lines
+            .into_iter()
+            .map(|l| {
+                if l.is_empty() {
+                    Cow::Borrowed(l)
+                } else {
+                    Cow::Owned(format!("{pad}{}", &l[strip..]))
+                }
+            })
+            .collect()
+    }
+}
+
+/// Strip and resolve callout markers across verbatim content lines, returning
+/// each line's stripped text paired with its resolved markers. Autonumber
+/// markers (`<>`) are assigned sequential numbers in document order. Borrowed
+/// lines stay zero-copy; owned lines (reindented) stay owned.
+fn resolve_callouts_in_lines<'a>(
+    content: Vec<Cow<'a, str>>,
+    process_callouts: bool,
+) -> Vec<(Cow<'a, str>, Vec<scanner::CalloutMarker>)> {
+    if !process_callouts {
+        return content.into_iter().map(|c| (c, Vec::new())).collect();
+    }
+    let mut auto_num: u32 = 0;
+    content
+        .into_iter()
+        .map(|cow| {
+            let (text, markers) = match cow {
+                Cow::Borrowed(s) => {
+                    let (stripped, markers) = scanner::strip_callout_markers(s);
+                    (Cow::Borrowed(stripped), markers)
+                }
+                Cow::Owned(s) => {
+                    let (stripped, markers) = scanner::strip_callout_markers(&s);
+                    if markers.is_empty() {
+                        (Cow::Owned(s), markers)
+                    } else {
+                        (Cow::Owned(stripped.to_string()), markers)
+                    }
+                }
+            };
+            if markers.is_empty() {
+                (text, Vec::new())
+            } else {
+                let resolved = markers
+                    .into_iter()
+                    .map(|m| match m {
+                        scanner::CalloutMarker::Standard(0) => {
+                            auto_num += 1;
+                            scanner::CalloutMarker::Standard(auto_num)
+                        }
+                        scanner::CalloutMarker::XmlComment(0) => {
+                            auto_num += 1;
+                            scanner::CalloutMarker::XmlComment(auto_num)
+                        }
+                        other => other,
+                    })
+                    .collect();
+                (text, resolved)
+            }
+        })
+        .collect()
+}
+
 impl<'a> BlockScanner<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
@@ -148,7 +250,7 @@ impl<'a> BlockScanner<'a> {
     fn push_callout_events_resolved(
         &mut self,
         markers: &[scanner::CalloutMarker],
-        stripped: &'a str,
+        stripped: Cow<'a, str>,
     ) {
         // Push in reverse order (last marker first) for FIFO via pop.
         // Space separators are pushed AFTER the callout ref so they appear
@@ -167,7 +269,7 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::Text(Cow::Borrowed(" ")));
             }
         }
-        self.push_event(Event::Text(Cow::Borrowed(stripped)));
+        self.push_event(Event::Text(stripped));
     }
 
     fn current_line(&self) -> Option<&'a str> {
@@ -1600,14 +1702,19 @@ impl<'a> BlockScanner<'a> {
     }
 
     fn scan_table(&mut self) -> Option<Event<'a>> {
-        self.advance(); // skip opening |===
+        // The table is terminated only by a line equal to the OPENING delimiter
+        // (trimmed). A table delimiter of a different length appearing inside
+        // (e.g. a `|====` cell inside a `|===` table) is cell content, not a
+        // terminator — asciidoctor matches the exact opening delimiter string.
+        let opening_delim = self.current_line().map_or("", str::trim);
+        self.advance(); // skip opening delimiter
         let title_events = self.take_pending_block_title();
         let mut block_attrs = self.pending_block_attrs.take().unwrap_or_default();
 
-        // Collect lines until closing |=== or EOF
+        // Collect lines until a line equal to the opening delimiter, or EOF
         let mut content_lines: Vec<&'a str> = Vec::new();
         while let Some(line) = self.current_line() {
-            if scanner::is_table_delimiter(line) {
+            if line.trim() == opening_delim {
                 self.advance();
                 break;
             }
@@ -2855,35 +2962,23 @@ impl<'a> BlockScanner<'a> {
                 .unwrap_or(SubstitutionSet::VERBATIM);
             let process_callouts = matches!(kind, DelimitedBlockKind::Listing)
                 || resolved_subs.has(SubstitutionSet::CALLOUTS);
-            // Pre-parse callout markers in forward order to resolve autonumbers
-            let parsed_lines: Vec<(&str, Vec<scanner::CalloutMarker>)> = if process_callouts {
-                let mut auto_num: u32 = 0;
-                content_lines.iter().map(|&cline| {
-                    let (stripped, markers) = scanner::strip_callout_markers(cline);
-                    if markers.is_empty() {
-                        (cline, Vec::new())
-                    } else {
-                        let resolved: Vec<_> = markers.into_iter().map(|m| match m {
-                            scanner::CalloutMarker::Standard(0) => { auto_num += 1; scanner::CalloutMarker::Standard(auto_num) }
-                            scanner::CalloutMarker::XmlComment(0) => { auto_num += 1; scanner::CalloutMarker::XmlComment(auto_num) }
-                            other => other,
-                        }).collect();
-                        (stripped, resolved)
-                    }
-                }).collect()
-            } else {
-                content_lines.iter().map(|&cline| (cline, Vec::new())).collect()
+            // Reindent per the `indent` attribute, then resolve callout markers.
+            let content = match block_attrs.verbatim_indent() {
+                Some(indent) => reindent_verbatim_lines(content_lines, indent),
+                None => content_lines.into_iter().map(Cow::Borrowed).collect(),
             };
+            let parsed_lines = resolve_callouts_in_lines(content, process_callouts);
 
             self.push_event(Event::End(TagEnd::DelimitedBlock));
-            for (i, (text, markers)) in parsed_lines.iter().enumerate().rev() {
-                if i < parsed_lines.len() - 1 {
+            let line_count = parsed_lines.len();
+            for (i, (text, markers)) in parsed_lines.into_iter().enumerate().rev() {
+                if i < line_count - 1 {
                     self.push_event(Event::SoftBreak);
                 }
                 if markers.is_empty() {
-                    self.push_event(Event::Text(Cow::Borrowed(text)));
+                    self.push_event(Event::Text(text));
                 } else {
-                    self.push_callout_events_resolved(markers, text);
+                    self.push_callout_events_resolved(&markers, text);
                 }
             }
             // Push Start on top of content
@@ -2949,35 +3044,23 @@ impl<'a> BlockScanner<'a> {
             .unwrap_or(SubstitutionSet::VERBATIM);
         let process_callouts = resolved_subs.has(SubstitutionSet::CALLOUTS);
 
-        // Pre-parse callout markers in forward order to resolve autonumbers
-        let parsed_lines: Vec<(&str, Vec<scanner::CalloutMarker>)> = if process_callouts {
-            let mut auto_num: u32 = 0;
-            content_lines.iter().map(|&cline| {
-                let (stripped, markers) = scanner::strip_callout_markers(cline);
-                if markers.is_empty() {
-                    (cline, Vec::new())
-                } else {
-                    let resolved: Vec<_> = markers.into_iter().map(|m| match m {
-                        scanner::CalloutMarker::Standard(0) => { auto_num += 1; scanner::CalloutMarker::Standard(auto_num) }
-                        scanner::CalloutMarker::XmlComment(0) => { auto_num += 1; scanner::CalloutMarker::XmlComment(auto_num) }
-                        other => other,
-                    }).collect();
-                    (stripped, resolved)
-                }
-            }).collect()
-        } else {
-            content_lines.iter().map(|&cline| (cline, Vec::new())).collect()
+        // Reindent per the `indent` attribute, then resolve callout markers.
+        let content = match block_attrs.verbatim_indent() {
+            Some(indent) => reindent_verbatim_lines(content_lines, indent),
+            None => content_lines.into_iter().map(Cow::Borrowed).collect(),
         };
+        let parsed_lines = resolve_callouts_in_lines(content, process_callouts);
 
         self.push_event(Event::End(TagEnd::SourceBlock));
-        for (i, (text, markers)) in parsed_lines.iter().enumerate().rev() {
-            if i < parsed_lines.len() - 1 {
+        let line_count = parsed_lines.len();
+        for (i, (text, markers)) in parsed_lines.into_iter().enumerate().rev() {
+            if i < line_count - 1 {
                 self.push_event(Event::SoftBreak);
             }
             if markers.is_empty() {
-                self.push_event(Event::Text(Cow::Borrowed(text)));
+                self.push_event(Event::Text(text));
             } else {
-                self.push_callout_events_resolved(markers, text);
+                self.push_callout_events_resolved(&markers, text);
             }
         }
         self.push_event(Event::Start(Tag::SourceBlock { language }));
