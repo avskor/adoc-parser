@@ -2191,7 +2191,13 @@ impl<'a> BlockScanner<'a> {
                 continue;
             }
             if scanner::is_blank(line)
-                || scanner::strip_any_section_marker(line).is_some()
+                // NOTE: a section marker (`== Title`) mid-paragraph does NOT
+                // interrupt an open paragraph — Asciidoctor's StartOfBlockProc
+                // (read_paragraph_lines) breaks only on a block delimiter or a
+                // block-attribute line, never a section title. Section titles
+                // are recognized only at a block boundary (after a blank line),
+                // by the scan_leaf_blocks dispatcher. So `==== <.>` written as a
+                // continuation line is plain paragraph text.
                 || scanner::is_delimiter(line).is_some()
                 || scanner::is_markdown_code_fence(line).is_some()
                 || scanner::is_list_marker_unordered(line).is_some()
@@ -2580,7 +2586,9 @@ impl<'a> BlockScanner<'a> {
                 continue;
             }
             if scanner::is_blank(line)
-                || scanner::strip_any_section_marker(line).is_some()
+                // Section markers do not interrupt an open paragraph (see the
+                // note in scan_paragraph) — the admonition's principal paragraph
+                // follows the same Asciidoctor rule.
                 || scanner::is_delimiter(line).is_some()
                 || scanner::is_markdown_code_fence(line).is_some()
                 || scanner::is_list_marker_unordered(line).is_some()
