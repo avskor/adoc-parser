@@ -1,5 +1,87 @@
 # Session context
 
+## Сессия (2026-06-13, пятьдесят вторая) — Фаза 3: table frame/grid классы + interactive SVG → `<object>`
+
+Запрос «продолжи». Ветка **`fix/image-svg-frame-grid-and-interactive-svg`**
+(переименована из `fix/table-frame-grid-classes` после расширения скоупа) —
+ЗАКОММИЧЕНА (`5b9da4f`), смержена в master (`533d12e`, --no-ff). base-бинарь
+/tmp/adoc_base обновлён до 330. **ОЖИДАЕТ: явная авторизация на `git push origin
+master` + удаление ветки** (пуш — outward-facing). Старт: housekeeping 51-й
+закрыт сам (origin/master == master == 88599d1, дерево чисто, ветки fix/* удалены
+— пуш 51-й прошёл).
+
+### Выбор задачи
+nearmiss на 329 (15 Different): replacements (4 — NCR, скип). Прогнал diffone по
+кандидатам: complex (120, Δ4 — МУЛЬТИ-root: literal-параграф в list-item `</p>`-
+перестановка + `{empty}`-принципал + `+`-continuation к предку, 3 корня, не флип),
+text/troubleshoot/align-by-cell — архитектурные inline. **image-svg (259, Δ8)** —
+ДВА корня, оба про этот файл, len_delta=-8 = ровно 2×4 пропущенных токена → флипнет
+закрытием ОБОИХ.
+
+### Реальная семантика (исходник html5.rb + пробы /tmp/p_fg,p_fg2,p_isvg)
+- **Table frame/grid** (convert_table:859-860): `frame = 'ends' if (frame = attr
+  'frame','all','table-frame') == 'topbot'; classes = ['tableblock',
+  "frame-#{frame}", "grid-#{attr 'grid','all','table-grid'}"]`. Значение verbatim,
+  без валидации; default «all»; `topbot`→`ends`; fallback на doc-attr
+  table-frame/table-grid. Наш рендерер ХАРДКОДИЛ `frame-all grid-all`.
+- **Interactive SVG** (convert_image): для SVG (format=svg ИЛИ target содержит
+  `.svg`) при safe<SECURE и `opts=interactive` → `<object type="image/svg+xml"
+  data="{image_uri}"{width}{height}>{fallback}</object>`, fallback = `<img
+  src="{image_uri(fallback)}" alt{width}{height}>` при `fallback=` attr, иначе
+  `<span class="alt">{alt}</span>`. Object И fallback-img оба несут width/height.
+  Raster+interactive → `<img>` (object только для SVG). `opts=inline` (встроить
+  SVG-исходник) НЕ поддержан — нужно читать файл, падаем в `<img>`. (Нормализатор
+  diffone сортирует атрибуты — `data` перед `type` в эталоне.)
+
+### Что сделано
+- **РЕНДЕРЕР** blocks.rs `start_table`: захардкоженный `frame-all grid-all` заменён
+  чтением `frame`/`grid` из meta.named с fallback на document_attrs
+  table-frame/table-grid, мапа `topbot`→`ends`, default «all».
+- **ПАРСЕР** attributes.rs `ImageAttrs`: +поля `format`/`fallback`/`interactive`
+  (парсинг `format=`, `fallback=`, `opts`/`options` split-comma на `interactive`).
+- **ПАРСЕР** event.rs `Tag::BlockImage`: +поля `interactive: bool`/`fallback:
+  Option<CowStr>` (+ into_static). block.rs scan_block_macros: `is_svg = format==svg
+  || target.contains(".svg")`, `interactive = is_svg && img_attrs.interactive`.
+  (Путь через meta НЕ годился — emit_block_metadata @315 фильтрует "format".)
+- **РЕНДЕРЕР** media.rs `start_block_image`: +параметры interactive/fallback;
+  выделена ветка построения внутреннего элемента (object vs img), link-обёртка и
+  title сохранены.
+- Тесты: +2 html (`test_table_frame_grid_classes_html`,
+  `test_block_image_interactive_svg_html`); 1 обновлён (integration
+  test_block_image — деструктуризация Tag::BlockImage с новыми полями).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 496, html 409 +2);
+  compat parsing-lab 233/233.
+- image-svg diffone: **0 diffs** (был 259). Пробы p_fg/p_fg2 (frame/grid: ends/none,
+  topbot→ends, sides/cols, rows, default, doc-attr fallback+override) и p_isvg
+  (interactive, fallback-img, raster→img, format=svg) совпали с asciidoctor.
+- **Корпус: Identical 329→330 (+1 ФЛИП)**. Blast (base 329): РОВНО 1 файл —
+  image-svg 259→0, **0 регрессий, 0 затронутых других файлов** (frame/grid-фикс в
+  одиночку давал image-svg 259→258 closer — оба корня нужны для флипа).
+
+### Что дальше
+- nearmiss на 330 (14 Different): replacements (4 — NCR, скип), **complex (120,
+  Δ4 — МУЛЬТИ-root, 3 корня: (1) literal-параграф ` $ cmd` в list-item без `+` —
+  `</p>` должен закрываться ДО literalblock, мы держим `<p>` открытым; (2) `.
+  {empty}` ordered list-item с пустым принципалом → asciidoctor эмитит `<p></p>`,
+  мы опускаем; (3) `+`-continuation после blank к ПРЕДКУ-list-item)**, counters
+  (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), image-size (177, Δ92 — КОНТЕКСТНЫЙ
+  корень выше строки 99), data (181, Δ77 — CSV/DSV таблицы, мульти-root),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — архитектурно nested-backtick),
+  text (249, Δ−5 — `+ +` hard-break в monospace + apostrophe NCR), align-by-cell
+  (371, Δ−16 — inline `<n>`/`^+` в backtick, архитектурно), block-name-table (431,
+  Δ−2 — `++…++` escape, архитектурно), table (597, Δ1 — ДВА корня),
+  character-replacement-ref (625, Δ113), syntax-quick-reference (2788, Δ−31 —
+  мульти-root), document-attributes-ref (6363, Δ73 — мульти-root), outline (6587,
+  Δ1 — МУЛЬТИ-root).
+- **complex кластер 1** (literal-параграф `</p>`-перестановка) — самостоятельный,
+  хорошо определённый; стоит проверить blast (может флипать другой файл, где это
+  единственное расхождение). Но complex сам не флипнет (3 корня).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, пятьдесят первая) — Фаза 3: blank-строка в open-блоке dlist-continuation обрывала вывод
 
 Запрос «продолжи». Ветка **`fix/dlist-continuation-openblock-truncation`** —
