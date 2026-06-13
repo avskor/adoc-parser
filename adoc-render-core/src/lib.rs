@@ -377,6 +377,10 @@ pub struct SectionNumberer {
     /// Document-global appendix counter (`appendix-number`): letters keep
     /// advancing across parts and nesting levels.
     appendix_counter: u8,
+    /// Document-global part counter (book `:partnums:`): the roman numeral of
+    /// each top-level part (`Part I`, `Part II`, …), sequential across the
+    /// whole document. Independent of `sectnums` (chapter/section numbering).
+    part_counter: u32,
 }
 
 impl SectionNumberer {
@@ -437,6 +441,24 @@ impl SectionNumberer {
         }
     }
 
+    /// Title prefix for the next book part under `:partnums:` (e.g.
+    /// `"Part I: "` / `"I: "`, trailing space included). Bumps the
+    /// document-global part counter and renders its value as an uppercase
+    /// roman numeral. `signifier` is the `part-signifier` attribute value
+    /// (`Some` → `"{signifier} {roman}: "`, even when empty; `None` (unset) →
+    /// `"{roman}: "`), mirroring Asciidoctor's html5 `convert_section`
+    /// (`#{signifier ? "#{signifier} " : ''}#{sectnum nil, ':'} `). Parts do
+    /// not touch the section counters: chapters number sequentially across
+    /// parts (the document-global `chapter-number`).
+    pub fn part_prefix(&mut self, signifier: Option<&str>) -> String {
+        self.part_counter += 1;
+        let roman = to_roman(self.part_counter);
+        match signifier {
+            Some(signifier) => format!("{signifier} {roman}: "),
+            None => format!("{roman}: "),
+        }
+    }
+
     /// Reset all descendant ordinals (and open-appendix letters). Asciidoctor
     /// numbers sections from a per-parent ordinal, so an article body sect0
     /// starts its children at 1 again. Book parts must NOT call this: the
@@ -449,6 +471,24 @@ impl SectionNumberer {
             self.appendix_letters[l] = None;
         }
     }
+}
+
+/// Render a positive integer as an uppercase roman numeral (1 → `I`,
+/// 4 → `IV`, 14 → `XIV`). Used for book part numbering (`:partnums:`).
+fn to_roman(mut n: u32) -> String {
+    const NUMERALS: [(u32, &str); 13] = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+        (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+        (5, "V"), (4, "IV"), (1, "I"),
+    ];
+    let mut out = String::new();
+    for (value, sym) in NUMERALS {
+        while n >= value {
+            out.push_str(sym);
+            n -= value;
+        }
+    }
+    out
 }
 
 /// Kinds of titled blocks that carry a numbered caption.
@@ -1014,6 +1054,34 @@ mod tests {
         assert_eq!(n.number_prefix(4).as_deref(), Some("3.E.1. "));
         // Sibling section at the appendix level clears the letter.
         assert_eq!(n.number_prefix(3).as_deref(), Some("3.1. "));
+    }
+
+    #[test]
+    fn part_numbering() {
+        let mut n = SectionNumberer::new();
+        // Roman numeral, sequential and document-global; signifier set →
+        // "{signifier} {roman}: ".
+        assert_eq!(n.part_prefix(Some("Part")), "Part I: ");
+        assert_eq!(n.part_prefix(Some("Part")), "Part II: ");
+        // Chapter numbering between parts is NOT reset by part_prefix
+        // (document-global chapter counter).
+        assert_eq!(n.number_prefix(2).as_deref(), Some("1. "));
+        assert_eq!(n.part_prefix(Some("Part")), "Part III: ");
+        assert_eq!(n.number_prefix(2).as_deref(), Some("2. "));
+        // Unset signifier → bare numeral form; empty signifier → leading space.
+        assert_eq!(n.part_prefix(None), "IV: ");
+        assert_eq!(n.part_prefix(Some("")), " V: ");
+    }
+
+    #[test]
+    fn roman_numerals() {
+        assert_eq!(to_roman(1), "I");
+        assert_eq!(to_roman(4), "IV");
+        assert_eq!(to_roman(9), "IX");
+        assert_eq!(to_roman(14), "XIV");
+        assert_eq!(to_roman(40), "XL");
+        assert_eq!(to_roman(90), "XC");
+        assert_eq!(to_roman(2024), "MMXXIV");
     }
 
     #[test]

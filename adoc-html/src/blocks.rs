@@ -504,6 +504,20 @@ impl HtmlRenderer {
             });
             self.pending_section_caption =
                 Some(self.section_numberer.appendix_prefix(*level, caption.as_deref()));
+        } else if is_sect0 && self.doctype_book && self.document_attrs.contains_key("partnums") {
+            // Book part under `:partnums:` → "Part I: " / "I: " prefix
+            // (roman numeral, document-global). `part-signifier` set (even
+            // empty) contributes "{signifier} "; unset drops it — mirroring
+            // Asciidoctor's html5 convert_section. The signifier is escaped
+            // here (it goes raw into heading and TOC HTML, like appendix);
+            // the roman numeral is plain ASCII.
+            let signifier = self.document_attrs.get("part-signifier").map(|v| {
+                let mut esc = String::new();
+                html_escape(&mut esc, v);
+                esc
+            });
+            self.pending_section_caption =
+                Some(self.section_numberer.part_prefix(signifier.as_deref()));
         } else if is_special {
             self.pending_section_caption = Some(String::new());
         }

@@ -204,9 +204,11 @@ impl HtmlRenderer {
                     if !toc.ends_with('\n') {
                         toc.push('\n');
                     }
-                    // Level-1 entries (book parts / body sect0) display at
-                    // TOC depth 1, same as regular top-level sections.
-                    let sl = (level - 1).max(1);
+                    // The list class is the section's real Asciidoctor level
+                    // (parser level − 1): book parts / body sect0 (level 1) →
+                    // `sectlevel0`, regular top-level sections (level 2) →
+                    // `sectlevel1`.
+                    let sl = level.saturating_sub(1);
                     writeln!(toc, "<ul class=\"sectlevel{sl}\">").unwrap();
                 }
                 TocStep::Item(entry) => {
