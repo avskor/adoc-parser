@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-13, сорок девятая) — Фаза 3: горизонтальный dlist colgroup-ширины + qanda `<p>`-обёртка ответа и группировка термов
+
+Запрос «продолжи». Ветка **`fix/horizontal-dlist-colgroup-widths`** —
+ЗАКОММИЧЕНА (`3e39dbc`), смержена в master (`10b2174`, --no-ff). base-бинарь
+/tmp/adoc_base обновлён до 327. **ОЖИДАЕТ: явная авторизация пользователя на
+`git push origin master` + удаление ветки** (пуш — outward-facing). Старт:
+push 48-й сессии УЖЕ прошёл (origin/master == master == 6eeb22f, дерево чисто,
+ветки fix/* удалены — housekeeping 48-й закрыт сам).
+
+### Выбор задачи
+nearmiss на 326 (18 Different): replacements (4 — NCR, скип). Кандидаты с малой
+|len_delta| (один структурный корень + позиционный каскад): table (597, Δ1 — два
+корня, рискованно), **description (299, Δ7)**, image-svg (259, Δ8 — два корня).
+diffone description @92: эталон `<colgroup><col><col></colgroup>`, мы `<tr>` сразу
+— ДВА корня в одном файле, оба про description-list.
+
+### Реальная семантика (исходник html5.rb convert_dlist + пробы /tmp/p_hl1,p_hl2,p_hlx,p_qa,p_qa2,p_qa3,p_dl2)
+- **Горизонтальный dlist + labelwidth/itemwidth → `<colgroup>`** (html5.rb:550-557):
+  colgroup эмитится ⟺ есть labelwidth ИЛИ itemwidth; первый `<col>` несёт
+  `style="width: {labelwidth без хвостового %}%;"` при наличии labelwidth, иначе
+  голый `<col>`; второй — то же для itemwidth. `.chomp '%'` (значение `25` и `25%`
+  дают `25%`). Плоский `[horizontal]` (без ширин) — БЕЗ colgroup (совпадал).
+- **qanda dlist** (html5.rb:533-546): каждый ответ оборачивается `<p>{dd.text}</p>`
+  (если dd.text есть; пустой ответ — без `<p>`); смежные термы (несколько `term::`
+  подряд, один ответ) группируются в ОДИН `<li>` с `<p><em>…</em></p>` на каждый
+  терм. Наш парсер термы группирует верно (нормальный dlist p_dl2 — два `<dt>`,
+  один `<dd>`); баг был ТОЛЬКО в qanda-рендерере: каждый терм открывал новый `<li>`,
+  ответ шёл голым текстом без `<p>`.
+
+### Что сделано
+- **РЕНДЕРЕР** blocks.rs `start_description_list`, ветка Horizontal: после
+  `<table>\n` эмитит `<colgroup>` из meta.named labelwidth/itemwidth (strip_suffix
+  '%').
+- **РЕНДЕРЕР** events.rs qanda: `DescriptionTerm` — первый терм группы открывает
+  `<li>\n<p><em>`, последующие только `<p><em>` (через общий флаг
+  `hdlist_in_term_group`; qanda и horizontal не сосуществуют в одном списке);
+  `DescriptionDescription` start — `<p>` + push li_p_open + dd_output_start (для
+  отката пустого); end — откат голого `<p>` (пустой ответ) либо `</p>`, затем
+  `</li>`. Присоединённый блок в ответе закрывает принципиальный `<p>` через
+  существующий style-agnostic guard (`li_p_open.last()`).
+- Тесты: +2 html (`test_qanda_adjacent_terms_grouped_html`,
+  `test_horizontal_dlist_colgroup_widths_html`), 1 обновлён
+  (`test_qanda_description_list_html` кодировал баг — ответ без `<p>`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 495, html 402);
+  compat parsing-lab 233/233.
+- description diffone: **0 diffs** (был 299). Пробы qanda (inline/empty/grouped)
+  и colgroup (both/label-only/item-only/percent) совпали с asciidoctor.
+- **Корпус: Identical 326→327 (+1 ФЛИП)**. Blast (base 326): РОВНО 1 файл —
+  description.adoc 299→0, **0 регрессий, 0 closer/FARTHER**. Оба корня
+  (colgroup + qanda) встречаются вместе только в description.adoc; colgroup-корень
+  есть ещё в horizontal/paragraph/CHANGELOG, но там labelwidth внутри listing-блоков
+  (документация синтаксиса) → не рендерится как dlist, файлы уже Identical.
+
+### Что дальше
+- nearmiss на 327 (было 18 Different, минус description → 17): replacements (4 —
+  NCR, скип), ts-url-format (110, Δ108 — обрезка open-блока в dd-continuation),
+  counters (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex (152, Δ143),
+  image-size (177, Δ92), data (181, Δ77), troubleshoot-unconstrained-formatting
+  (212, Δ−4 — nested/double-backtick → литерал, архитектурно), text (249, Δ−5 — то
+  же), image-svg (259, Δ8 — ДВА корня: table `frame-ends grid-none` И
+  `opts=interactive` SVG → `<object>`), section (347, Δ−40), align-by-cell (371,
+  Δ−16), block-name-table (431, Δ−2 — `++…++` double-plus escape, архитектурно),
+  table (597, Δ1 — `|=== <1>` не точный делимитер + `<2>` callout-list-item рвёт
+  параграф; тот же over-eager break-список из 48-й сессии, отдельный корень),
+  character-replacement-ref (625, Δ113), syntax-quick-reference (2788),
+  document-attributes-ref (6363), outline (6597, Δ1).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок восьмая) — Фаза 3: section-маркер НЕ прерывает открытый параграф
 
 Запрос «продолжи». Ветка **`fix/section-marker-no-interrupt-paragraph`** —
