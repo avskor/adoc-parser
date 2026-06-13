@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-13, сорок четвёртая) — Фаза 3: include `leveloffset` сдвигает level-0 заголовки
+
+Запрос «продолжи». Ветка **`fix/include-leveloffset-level0`** — ЗАКОММИЧЕНА
+(`7f1b7da`), смержена в master (`e5ff3b1`), запушена, ветка удалена.
+Baseline: Identical 318, master `91d4e24`; base-бинарь /tmp/adoc_base был на
+318, после мержа обновлён до 321.
+
+### Выбор задачи
+nearmiss на 318 (26 Different): replacements (4 — NCR, скип). Сильнейший
+single-root сигнал = малая |len_delta|. **architecture/index (189,
+len_delta=4)** — diffone @21 показал ПЕРВЫЙ же diff структурным: эталон
+`<div class="sect1"><h2 id="_мониторинг">`, наш `<h1 class="sect0">`. Каскад
+189 diff'ов — от одного структурного расхождения.
+
+### Реальная семантика (исходник + пробы /tmp/p_lo/p1..p5)
+- Файл: `= Архитектура` + plantuml + `include::monitoring.adoc[leveloffset=+1]`;
+  monitoring.adoc = `= Мониторинг` (L0) + три `== ...` (L1).
+- **leveloffset сдвигает И level-0**: `= Section Zero` под `leveloffset=+1` →
+  `<div class="sect1"><h2>` (L1), `== Sub` → `<div class="sect2"><h3>` (L2)
+  (p1). Заголовок с N `=` = секция уровня N−1; offset сдвигает уровень.
+- **Отрицательный offset демоутит** до level-0: `== Level One` под `-1` →
+  `<h1 class="sect0">` (p2/p3/p5). Минимум — один `=` (level 0): `= Zero` под
+  `-1` остаётся `<h1 class="sect0">` (p5). Клампинг `1..=6` `=`.
+- Латентный предел (нет корпуса): `======` (L5) под `+1` у asciidoctor вообще
+  НЕ рендерит секцию (p4 — заголовок исчезает); мы клампим в 6 `=` (остаётся L5).
+
+### Что сделано
+- **ПАРСЕР** preprocessor.rs `apply_level_offset`: guard `eq_count >= 2` →
+  `(1..=6).contains(&eq_count)` (пускает level-0 `= Title`); `clamp(2, 6)` →
+  `clamp(1, 6)` (минимум — один `=`, level 0). Док-коммент.
+- Тесты: +2 (`test_level_offset_level0_promoted` `= X`+1→`== X`,
+  `test_level_offset_level0_clamped_at_zero` `= X`−1→`= X`); 1 обновлён
+  (`test_level_offset_clamp_min`: `== Title` −5 → `= Title`, старый ассерт
+  `== Title` кодировал баговый минимум 2).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 494, html 395);
+  compat parsing-lab 233/233.
+- architecture/index diffone: **0 diffs** (был 189).
+- **Корпус: Identical 318→321 (+3 ФЛИПА)**. Blast (base 91d4e24): РОВНО 3 файла —
+  architecture/index 189→0, software-development-cookbook 2481→0, java/index
+  2313→0 (все включают суб-доки с `leveloffset=+1` — один корень ломал всю
+  секционную вложенность), **0 регрессий**.
+
+### Что дальше
+- nearmiss на 321 (пересчитать; было 23 Different после флипов): replacements
+  (4 — NCR, скип), ts-url-format (110, len_delta=108 — обрезка open-блока в
+  dd-continuation, теряем `====` example-блоки после первого параграфа;
+  отдельный корень), table-ref (135, len_delta=−8 — table-cell `<code>`-ячейка,
+  смотрел @848: лишний пустой `<p class="tableblock"><code></code>`), counters
+  (136 — АРХИТЕКТУРНЫЙ verbatim `{counter:}`), unordered (145, len_delta=4 —
+  Level-2 list item не создаёт вложенный `<div class="ulist"><ul>`, держим
+  плоско @271), complex (152, len_delta=143), image-size (177, len_delta=92),
+  data (181, len_delta=77), admonition (197, len_delta=−10),
+  troubleshoot-unconstrained-formatting (212, len_delta=−4), text (249),
+  add-title (252, len_delta=−6).
+- **unordered (145, Δ4)** — хороший single-root кандидат: вложенный список
+  не открывается (разведан @271). Смотреть исходник unordered.adoc.
+- Pre-existing — см. сессии 36/38/40/42/43 (без изменений) + continuation-отступ
+  в table-ячейке тримится; emit_row_cells col_idx наивный (латентный).
+
+---
+
 ## Сессия (2026-06-13, сорок третья) — Фаза 3: явный оператор выравнивания ячейки побеждает дефолт колонки
 
 Запрос «продолжи». Ветка **`fix/table-cell-explicit-alignment`** — ЗАКОММИЧЕНА
