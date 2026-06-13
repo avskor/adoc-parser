@@ -2640,15 +2640,65 @@ fn test_inline_image_float_left() {
 }
 
 #[test]
-fn test_inline_image_align_center() {
+fn test_inline_image_align_ignored() {
+    // Asciidoctor's convert_inline_image emits only float and role in the span
+    // class — `align` is not rendered for inline images.
     let html = to_html("text image:icon.png[Icon,align=center] more");
-    assert!(html.contains("class=\"image text-center\""));
+    assert!(html.contains("class=\"image\""));
+    assert!(!html.contains("text-center"));
+}
+
+#[test]
+fn test_inline_image_role_and_title() {
+    // role appends to the span class (`image` + float + role); title becomes
+    // an attribute on the <img>.
+    let html = to_html("image:logo.png[role=\"related thumb right\"]");
+    assert!(html.contains("<span class=\"image related thumb right\">"));
+    let titled = to_html("image:pause.png[title=Pause]");
+    assert!(titled.contains("title=\"Pause\""));
+    // float precedes role: `image` + float + role.
+    let both = to_html("image:i.png[Icon,float=right,role=screenshot]");
+    assert!(both.contains("<span class=\"image right screenshot\">"));
 }
 
 #[test]
 fn test_block_image_with_link() {
     let html = to_html("image::thumb.jpg[Alt,link=fullsize.jpg]");
     assert!(html.contains("<a class=\"image\" href=\"fullsize.jpg\"><img src=\"thumb.jpg\" alt=\"Alt\"></a>"));
+}
+
+#[test]
+fn test_block_image_link_from_block_attr_line() {
+    // `link=` on the preceding block attribute line wraps the <img> in an anchor.
+    let html = to_html("[#img-sunset,link=https://example.com/photo]\nimage::sunset.jpg[Sunset,200,100]");
+    assert!(html.contains("<div id=\"img-sunset\" class=\"imageblock\">"));
+    assert!(html.contains("<a class=\"image\" href=\"https://example.com/photo\"><img src=\"sunset.jpg\" alt=\"Sunset\" width=\"200\" height=\"100\"></a>"));
+}
+
+#[test]
+fn test_block_image_trailing_content_is_paragraph() {
+    // Trailing content after `]` demotes the block image to a paragraph.
+    let html = to_html("image::sunset.jpg[] <.> <.>");
+    assert!(html.contains("class=\"paragraph\""));
+    assert!(!html.contains("class=\"imageblock\""));
+}
+
+#[test]
+fn test_block_image_float_align_order() {
+    // Class order is fixed: imageblock, float, text-align (then role).
+    let html = to_html("image::tiger.png[Tiger,200,200,float=\"right\",align=\"center\"]");
+    assert!(html.contains("<div class=\"imageblock right text-center\">"));
+}
+
+#[test]
+fn test_block_image_imagesdir_prefix() {
+    // A non-empty imagesdir is prefixed to a non-URI target; a URI target and a
+    // subsequent reset are honored live (mid-document attribute state).
+    let html = to_html(":imagesdir: https://cdn.example.com/img\n\nimage::a/b.svg[Pic,10,10]");
+    assert!(html.contains("src=\"https://cdn.example.com/img/a/b.svg\""));
+    // URI targets ignore imagesdir.
+    let uri = to_html(":imagesdir: https://cdn.example.com/img\n\nimage::https://other.example.com/x.png[X]");
+    assert!(uri.contains("src=\"https://other.example.com/x.png\""));
 }
 
 #[test]

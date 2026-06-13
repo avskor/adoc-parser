@@ -2185,6 +2185,8 @@ impl<'a> InlineState<'a> {
             align: img_attrs.align.map(Cow::Borrowed),
             float: img_attrs.float.map(Cow::Borrowed),
             link: img_attrs.link.map(Cow::Borrowed),
+            role: img_attrs.role.map(Cow::Borrowed),
+            title: img_attrs.title.map(Cow::Borrowed),
         }));
         events.push(Event::End(TagEnd::InlineImage));
 
@@ -3407,6 +3409,8 @@ mod tests {
                 align: None,
                 float: None,
                 link: None,
+                role: None,
+                title: None,
             }),
             Event::End(TagEnd::InlineImage),
         ]);

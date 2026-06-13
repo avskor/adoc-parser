@@ -532,8 +532,8 @@ impl HtmlRenderer {
                 self.open_block_with_title(output, &meta, "audioblock");
                 render_audio_tag(output, target, attrs);
             }
-            Tag::InlineImage { target, alt, width, height, align, float, link } =>
-                Self::start_inline_image(output, target, alt, width, height, align, float, link),
+            Tag::InlineImage { target, alt, width, height, align: _, float, link, role, title } =>
+                self.start_inline_image(output, target, alt, width, height, float, link, role, title),
             Tag::Strong { id, roles } => {
                 output.push_str("<strong");
                 Self::push_inline_id_class(output, id, roles);

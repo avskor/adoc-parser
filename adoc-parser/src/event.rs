@@ -318,7 +318,7 @@ pub enum Tag<'a> {
     BlockImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, link: Option<CowStr<'a>> },
     BlockVideo { target: CowStr<'a>, attrs: CowStr<'a> },
     BlockAudio { target: CowStr<'a>, attrs: CowStr<'a> },
-    InlineImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, align: Option<CowStr<'a>>, float: Option<CowStr<'a>>, link: Option<CowStr<'a>> },
+    InlineImage { target: CowStr<'a>, alt: CowStr<'a>, width: Option<CowStr<'a>>, height: Option<CowStr<'a>>, align: Option<CowStr<'a>>, float: Option<CowStr<'a>>, link: Option<CowStr<'a>>, role: Option<CowStr<'a>>, title: Option<CowStr<'a>> },
 
     // Inline formatting
     Strong { id: Option<CowStr<'a>>, roles: Vec<CowStr<'a>> },
@@ -466,7 +466,7 @@ impl<'a> Tag<'a> {
                 target: Cow::Owned(target.into_owned()),
                 attrs: Cow::Owned(attrs.into_owned()),
             },
-            Tag::InlineImage { target, alt, width, height, align, float, link } => Tag::InlineImage {
+            Tag::InlineImage { target, alt, width, height, align, float, link, role, title } => Tag::InlineImage {
                 target: Cow::Owned(target.into_owned()),
                 alt: Cow::Owned(alt.into_owned()),
                 width: width.map(|w| Cow::Owned(w.into_owned())),
@@ -474,6 +474,8 @@ impl<'a> Tag<'a> {
                 align: align.map(cow_owned),
                 float: float.map(cow_owned),
                 link: link.map(cow_owned),
+                role: role.map(cow_owned),
+                title: title.map(cow_owned),
             },
             Tag::Strong { id, roles } => Tag::Strong {
                 id: id.map(cow_owned),

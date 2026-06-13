@@ -256,6 +256,26 @@ pub(crate) fn auto_alt_from_target(target: &str) -> String {
     stem.replace(['-', '_'], " ")
 }
 
+/// Mirror of Asciidoctor's `UriSniffRx` (`\A\p{Alpha}[\p{Alnum}.+-]+:/{0,2}`):
+/// a scheme of at least two characters followed by `:` marks a URI (so a
+/// single-letter Windows drive prefix stays a file path). Kept in sync with the
+/// parser's `preprocessor::is_uriish`.
+fn is_uriish(target: &str) -> bool {
+    let mut chars = target.chars();
+    if !chars.next().is_some_and(char::is_alphabetic) {
+        return false;
+    }
+    let mut middle = 0usize;
+    for c in chars {
+        match c {
+            ':' => return middle >= 1,
+            c if c.is_alphanumeric() || matches!(c, '.' | '+' | '-') => middle += 1,
+            _ => return false,
+        }
+    }
+    false
+}
+
 impl HtmlRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_block_image(&mut self, output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
@@ -271,7 +291,7 @@ impl HtmlRenderer {
             output.push_str("\">");
         }
         output.push_str("<img");
-        write_attr(output, "src", &target.as_ref().replace(' ', "%20"));
+        write_attr(output, "src", &self.image_uri(target));
         // Auto-generate alt from filename if empty
         let effective_alt = if alt.as_ref().is_empty() {
             auto_alt_from_target(target)
@@ -302,21 +322,17 @@ impl HtmlRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn start_inline_image(output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, align: &Option<CowStr<'_>>, float: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>) {
+    pub(crate) fn start_inline_image(&self, output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, float: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, role: &Option<CowStr<'_>>, title: &Option<CowStr<'_>>) {
+        // Inline image span class = `image` + float + role (Asciidoctor's
+        // convert_inline_image; `align` is not emitted for inline images).
         let mut img_class = String::from("image");
         if let Some(f) = float {
             img_class.push(' ');
             img_class.push_str(f);
         }
-        if let Some(a) = align {
-            let css = match a.as_ref() {
-                "left" => "text-left",
-                "center" => "text-center",
-                "right" => "text-right",
-                other => other,
-            };
+        if let Some(r) = role {
             img_class.push(' ');
-            img_class.push_str(css);
+            img_class.push_str(r);
         }
         output.push_str("<span class=\"");
         output.push_str(&img_class);
@@ -328,7 +344,7 @@ impl HtmlRenderer {
             output.push_str("\">");
         }
         output.push_str("<img");
-        write_attr(output, "src", &target.as_ref().replace(' ', "%20"));
+        write_attr(output, "src", &self.image_uri(target));
         let effective_alt = if alt.as_ref().is_empty() {
             auto_alt_from_target(target)
         } else {
@@ -341,6 +357,9 @@ impl HtmlRenderer {
         if let Some(h) = height {
             write_attr(output, "height", h);
         }
+        if let Some(t) = title {
+            write_attr(output, "title", t);
+        }
         output.push('>');
         if has_link {
             output.push_str("</a>");
@@ -348,30 +367,52 @@ impl HtmlRenderer {
         output.push_str("</span>");
     }
 
-    /// Build a base CSS class for block images, appending align/float classes from named attrs.
+    /// Resolve an image target to its final `src`, mirroring Asciidoctor's
+    /// `image_uri` on the unsecure, non-`data-uri` path
+    /// (`normalize_web_path target, imagesdir`): a URI target or a web-root
+    /// (`/…`) target is used verbatim (spaces percent-encoded); otherwise a
+    /// non-empty `imagesdir` document attribute is prefixed
+    /// (`imagesdir` + `/` + target). `imagesdir` is read live from
+    /// `document_attrs`, so a mid-document `:imagesdir:` entry applies to the
+    /// images that follow it. (`.`/`..` segment collapsing inside the joined
+    /// path is not performed — no corpus case needs it.)
+    fn image_uri(&self, target: &str) -> String {
+        let encoded = target.replace(' ', "%20");
+        if is_uriish(target) || target.starts_with('/') {
+            return encoded;
+        }
+        match self.document_attrs.get("imagesdir") {
+            Some(dir) if !dir.is_empty() => {
+                let sep = if dir.ends_with('/') { "" } else { "/" };
+                format!("{dir}{sep}{encoded}")
+            }
+            _ => encoded,
+        }
+    }
+
+    /// Build a base CSS class for block images, appending float then align
+    /// classes from named attrs. Order is fixed (float before align), mirroring
+    /// Asciidoctor's `convert_image` (`classes << float; classes << text-align`)
+    /// rather than the unstable `named` map iteration order.
     pub(crate) fn image_base_class(default: &str, meta: &Option<BlockMeta>) -> String {
         let mut class = String::from(default);
         if let Some(m) = meta {
-            for (k, v) in &m.named {
-                match k.as_str() {
-                    "float" => {
-                        // Build raw tokens; escaping happens once at the emission
-                        // boundary in write_meta_attrs (D1/D7 rule, avoids double-escape).
-                        class.push(' ');
-                        class.push_str(v);
-                    }
-                    "align" => {
-                        let css = match v.as_str() {
-                            "left" => "text-left",
-                            "center" => "text-center",
-                            "right" => "text-right",
-                            other => other,
-                        };
-                        class.push(' ');
-                        class.push_str(css);
-                    }
-                    _ => {}
-                }
+            let lookup = |key: &str| m.named.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+            // Build raw tokens; escaping happens once at the emission boundary
+            // in write_meta_attrs (D1/D7 rule, avoids double-escape).
+            if let Some(f) = lookup("float") {
+                class.push(' ');
+                class.push_str(f);
+            }
+            if let Some(a) = lookup("align") {
+                let css = match a.as_str() {
+                    "left" => "text-left",
+                    "center" => "text-center",
+                    "right" => "text-right",
+                    other => other,
+                };
+                class.push(' ');
+                class.push_str(css);
             }
         }
         class

@@ -219,53 +219,38 @@ pub fn is_line_comment(line: &str) -> bool {
     trimmed.starts_with("//") && is_delimiter(trimmed).is_none()
 }
 
-pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
+/// Match a block media macro line against Asciidoctor's `BlockMediaMacroRx`
+/// (`^(image|video|audio)::(\S|\S.*?\S)\[(.+)?\]$`). The line must END with
+/// `]` (after rstrip) — trailing content such as `image::x[] <.>` demotes the
+/// line to a paragraph; the target must be non-empty with no leading/trailing
+/// whitespace (internal whitespace is allowed). Returns `(target, attrs)`.
+fn match_block_media<'a>(line: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
     let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("image::")?;
-    let bracket_start = rest.find('[')?;
-    let bracket_end = rest.rfind(']')?;
-    if bracket_end <= bracket_start {
+    let rest = trimmed.strip_prefix(prefix)?;
+    // `\]$` — the macro must end with the closing bracket.
+    let inner = rest.strip_suffix(']')?;
+    let bracket_start = inner.find('[')?;
+    let target = &inner[..bracket_start];
+    if target.is_empty()
+        || target.starts_with(char::is_whitespace)
+        || target.ends_with(char::is_whitespace)
+    {
         return None;
     }
-    let target = &rest[..bracket_start];
-    // Empty target: not a valid block image
-    if target.is_empty() {
-        return None;
-    }
-    let alt = &rest[bracket_start + 1..bracket_end];
-    Some((target, alt))
+    let attrs = &inner[bracket_start + 1..];
+    Some((target, attrs))
+}
+
+pub fn is_block_image(line: &str) -> Option<(&str, &str)> {
+    match_block_media(line, "image::")
 }
 
 pub fn is_block_video(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("video::")?;
-    let bracket_start = rest.find('[')?;
-    let bracket_end = rest.rfind(']')?;
-    if bracket_end < bracket_start {
-        return None;
-    }
-    let target = &rest[..bracket_start];
-    if target.is_empty() {
-        return None;
-    }
-    let attrs = &rest[bracket_start + 1..bracket_end];
-    Some((target, attrs))
+    match_block_media(line, "video::")
 }
 
 pub fn is_block_audio(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("audio::")?;
-    let bracket_start = rest.find('[')?;
-    let bracket_end = rest.rfind(']')?;
-    if bracket_end < bracket_start {
-        return None;
-    }
-    let target = &rest[..bracket_start];
-    if target.is_empty() {
-        return None;
-    }
-    let attrs = &rest[bracket_start + 1..bracket_end];
-    Some((target, attrs))
+    match_block_media(line, "audio::")
 }
 
 pub fn is_description_list_marker(line: &str) -> Option<(u8, &str, &str)> {
@@ -1288,6 +1273,20 @@ mod tests {
             is_block_image("image::path/to/img.png[Alt text]"),
             Some(("path/to/img.png", "Alt text"))
         );
+        // Must end with `]` (BlockMediaMacroRx `\]$`): trailing content after
+        // the closing bracket demotes the line to a paragraph.
+        assert_eq!(is_block_image("image::sunset.jpg[] <.> <.>"), None);
+        assert_eq!(is_block_image("image::sunset.jpg[Alt,200,100] <.>"), None);
+        assert_eq!(is_block_image("image::sunset.jpg[]trailing"), None);
+        // Trailing whitespace is rstripped before the anchor check.
+        assert_eq!(is_block_image("image::x[]  "), Some(("x", "")));
+        // Target may contain internal whitespace but not leading/trailing.
+        assert_eq!(is_block_image("image::a b[Alt]"), Some(("a b", "Alt")));
+        assert_eq!(is_block_image("image:: x[y]"), None);
+        assert_eq!(is_block_image("image::x [Alt]"), None);
+        // The closing bracket is the last `]`; inner brackets stay in attrs.
+        assert_eq!(is_block_image("image::x[a]b]"), Some(("x", "a]b")));
+        assert_eq!(is_block_image("image::[]"), None); // empty target
     }
 
     #[test]
