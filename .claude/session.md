@@ -1,5 +1,73 @@
 # Session context
 
+## Сессия (2026-06-13, пятьдесят первая) — Фаза 3: blank-строка в open-блоке dlist-continuation обрывала вывод
+
+Запрос «продолжи». Ветка **`fix/dlist-continuation-openblock-truncation`** —
+ЗАКОММИЧЕНА, смержена в master (--no-ff). base-бинарь /tmp/adoc_base обновлён до
+329. **ОЖИДАЕТ: явная авторизация на `git push origin master` + удаление ветки**
+(пуш — outward-facing). Старт: housekeeping 50-й уже закрыт сам (origin/master ==
+master == 0d49cac, дерево чисто, ветки fix/* удалены — пуш 50-й прошёл).
+
+### Выбор задачи
+nearmiss на 328 (16 Different): replacements (4 — NCR, скип). Ведущий не-NCR —
+**ts-url-format (110, Δ108)** — вывод обрывался на 35 токенах из 143. diffone @33:
+эталон `<div class="exampleblock">`, наш `</div></body>` (конец документа). Файл =
+dlist-item (`term::`) + `+`-continuation + open-блок `--`, внутри параграф + два
+titled example-блока (`====`) с source.
+
+### Корень (пробы /tmp/p_ddex,p_dd_list,p_dd_2para,p_dd_exfirst,p_dd_noplus,p_ob_ex,p_dd_ex_direct)
+Сужено бинарным поиском: баг ⟺ **`+`-continuation + open-блок `--` + ЛЮБОЙ второй
+блок после внутренней blank-строки** (не про example специально — `----` listing и
+даже два параграфа тоже рвут; open-блок+example БЕЗ dlist — OK; `term::` сразу `--`
+БЕЗ `+` — OK; example прямо в dd без open — OK). Механика: `+` открывает open-блок
+(возвращает Start, `in_continuation`→false), стек = `[DescriptionList,
+DescriptionListEntry, DelimitedBlock(open)]`. Первый параграф ОК, blank →
+`had_blank_line=true`. На втором блоке (в ts-url первым ловится title-guard
+`.Solution A`) срабатывает guard `is_in_list_context() && !in_continuation &&
+had_blank_line` → `close_list_contexts()` находит на ВЕРШИНЕ стека DelimitedBlock
+(не список) → сразу `break`, возвращает ПУСТО → затем `event_buffer.pop()` = None
+→ парсер думает «поток кончился» и обрывает всё (вкл. незакрытые dd/openblock/dl).
+
+### Что сделано
+- **ПАРСЕР** block.rs: новый хелпер `is_directly_in_list_context()` — сканирует
+  стек сверху, возвращает true только если innermost-контейнер = list-item;
+  DelimitedBlock/PartIntro — БАРЬЕР (return false, блок владеет своими blank-
+  строками, закрывается только своим делимитером через `check_close_delimited_block`).
+  Все 8 blank-line-driven guard-сайтов (block-attr, title, admonition, table,
+  delimiter, md-fence, comment, paragraph-fallback) переведены с `is_in_list_context`
+  на `is_directly_in_list_context` (replace_all по уникальному префиксу
+  `is_in_list_context() && !self.in_continuation`). НЕ тронуты `+`-continuation
+  сайты @1058/1070 (там broad-семантика верна). Док-коммент объясняет
+  truncation-механику.
+- Тест: +1 html `test_dlist_continuation_openblock_multiple_children_html`
+  (все 3 ребёнка open-блока выживают + закрытие врапперов; негатив — blank всё
+  ещё закрывает top-level список).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (996 total: parser 496,
+  html 407); compat parsing-lab 233/233.
+- ts-url-format diffone: **0 diffs** (был 110). Все 7 проб + 3 негатива IDENTICAL.
+- **Корпус: Identical 328→329 (+1 ФЛИП)**. Blast (base 328): ts-url-format 110→0
+  (флип), complex.adoc 152→120 (closer, тот же корень — continuation open-блоки),
+  **0 регрессий, 0 FARTHER**.
+
+### Что дальше
+- nearmiss на 329 (15 Different): replacements (4 — NCR, скип), counters (136 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), **complex (120, Δ — было 152→120, ОСТАЛИСЬ
+  другие корни в том же lists-examples файле; смотреть diffone)**, **image-size
+  (177, Δ92 — таблица `[%autowidth]`/`|====` НЕ распознаётся в ПОЛНОМ документе, но
+  ИЗОЛИРОВАННО (строки 99-125) OK → КОНТЕКСТНЫЙ корень выше строки 99)**, data (181,
+  Δ77 — CSV/DSV таблицы, мульти-root), troubleshoot-unconstrained-formatting (212,
+  Δ−4 — архитектурно), text (249, Δ−5 — то же), image-svg (259, Δ8 — ДВА корня:
+  table `frame-ends grid-none` И `opts=interactive`→`<object>`), align-by-cell (371,
+  Δ−16 — inline `<n>`/`^+` в backtick, архитектурно), block-name-table (431, Δ−2 —
+  `++…++` escape, архитектурно), table (597, Δ1 — ДВА корня), character-replacement-ref
+  (625, Δ113), syntax-quick-reference (2788, Δ−31 — мульти-root), document-attributes-ref
+  (6363, Δ73 — мульти-root), outline (6587, Δ1 — МУЛЬТИ-root).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, пятидесятая) — Фаза 3: нумерация частей книги + `[float]`-заголовки + `sectnumlevels`
 
 Запрос «продолжи». ДВЕ ветки, обе смержены в master (--no-ff), base-бинарь

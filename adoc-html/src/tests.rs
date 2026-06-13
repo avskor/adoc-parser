@@ -647,6 +647,43 @@ fn test_description_list_continuation_html() {
 }
 
 #[test]
+fn test_dlist_continuation_openblock_multiple_children_html() {
+    // A `+` continuation attaching a `--` open block must keep scanning the
+    // open block's content past internal blank lines. Previously a blank line
+    // inside the open block fired a list-closing guard (we are nested in a
+    // dlist), close_list_contexts found no list at the stack top, and the
+    // parser truncated everything after the first child block.
+    let html = to_html(
+        "term::\n+\n--\nFirst paragraph.\n\n.Solution A\n====\nInside example.\n====\n\nAfter example.\n--",
+    );
+    // All three children survive, properly closed inside the open block.
+    assert!(html.contains("<p>First paragraph.</p>"), "first paragraph:\n{html}");
+    assert!(
+        html.contains("<div class=\"exampleblock\">"),
+        "example block must not be dropped:\n{html}"
+    );
+    assert!(
+        html.contains("Example 1. Solution A"),
+        "example title must survive:\n{html}"
+    );
+    assert!(html.contains("<p>Inside example.</p>"), "example body:\n{html}");
+    assert!(
+        html.contains("<p>After example.</p>"),
+        "trailing paragraph after the nested block must survive:\n{html}"
+    );
+    // The dd/openblock/dlist wrappers must all close (no premature truncation).
+    assert!(html.contains("</dd>\n</dl>\n</div>"), "wrappers must close:\n{html}");
+
+    // Negative: a blank line still closes a list when scanning directly in
+    // list-item content (not inside a nested delimited block).
+    let closed = to_html("* item one\n\nParagraph after list.");
+    assert!(
+        closed.contains("</ul>\n</div>\n<div class=\"paragraph\">\n<p>Paragraph after list.</p>"),
+        "blank line must still close a top-level list:\n{closed}"
+    );
+}
+
+#[test]
 fn test_inline_passthrough_html() {
     let html = to_html("hello +++<b>bold</b>+++ world");
     assert!(html.contains("hello <b>bold</b> world"));
