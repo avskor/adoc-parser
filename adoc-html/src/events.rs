@@ -346,6 +346,18 @@ impl HtmlRenderer {
                     subs,
                 });
             }
+            Event::TableCellParagraphBreak => {
+                // Close the current <p class="tableblock"> paragraph (and its
+                // style wrapper, if any) and open the next one. The cell style is
+                // on top of the stack until TagEnd::TableCell pops it.
+                let style = self.cell_style_stack.last().copied().unwrap_or_default();
+                match style {
+                    CellStyle::Emphasis => output.push_str("</em></p><p class=\"tableblock\"><em>"),
+                    CellStyle::Strong => output.push_str("</strong></p><p class=\"tableblock\"><strong>"),
+                    CellStyle::Monospace => output.push_str("</code></p><p class=\"tableblock\"><code>"),
+                    _ => output.push_str("</p><p class=\"tableblock\">"),
+                }
+            }
         }
     }
 

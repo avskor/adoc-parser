@@ -1786,6 +1786,35 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
+        // Partition a non-AsciiDoc/non-literal body cell into paragraphs on
+        // blank lines (asciidoctor `Cell#content`: split on /\n{2,}/). Each
+        // paragraph keeps its non-empty trimmed lines joined by '\n'. Returns at
+        // most one entry for AsciiDoc/literal cells (no splitting) and for cells
+        // without a blank line, so the single-paragraph fast path stays
+        // byte-identical to `cell_text`.
+        fn cell_paragraphs<'b>(cell: &scanner::CellSpec<'b>, style: CellStyle) -> Vec<Cow<'b, str>> {
+            if matches!(style, CellStyle::AsciiDoc | CellStyle::Literal) {
+                return vec![cell_text(cell, style)];
+            }
+            let mut paras: Vec<Cow<'b, str>> = Vec::new();
+            let mut cur: Vec<&str> = Vec::new();
+            for line in cell.content.lines() {
+                let t = line.trim();
+                if t.is_empty() {
+                    if !cur.is_empty() {
+                        paras.push(Cow::Owned(cur.join("\n")));
+                        cur.clear();
+                    }
+                } else {
+                    cur.push(t);
+                }
+            }
+            if !cur.is_empty() {
+                paras.push(Cow::Owned(cur.join("\n")));
+            }
+            paras
+        }
+
         // Build events in reverse (buffer is a stack, pop from top)
         self.push_event(Event::End(TagEnd::Table));
 
@@ -1820,7 +1849,21 @@ impl<'a> BlockScanner<'a> {
                         // `h` column) renders as <th> but keeps the <p> wrapper; the
                         // renderer picks the tag from the resolved style.
                         self.push_event(Event::End(TagEnd::TableCell));
-                        self.push_event(Event::Text(cell_text(cell, style)));
+                        // A cell with a blank line becomes several
+                        // <p class="tableblock"> paragraphs, joined by separator
+                        // markers; the single-paragraph path keeps the old
+                        // (zero-copy) text emission untouched.
+                        let paras = cell_paragraphs(cell, style);
+                        if paras.len() <= 1 {
+                            self.push_event(Event::Text(cell_text(cell, style)));
+                        } else {
+                            for (i, para) in paras.into_iter().enumerate().rev() {
+                                self.push_event(Event::Text(para));
+                                if i > 0 {
+                                    self.push_event(Event::TableCellParagraphBreak);
+                                }
+                            }
+                        }
                         self.push_event(Event::Start(Tag::TableCell {
                             colspan: cell.colspan,
                             rowspan: cell.rowspan,
