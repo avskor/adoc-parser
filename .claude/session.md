@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-13, сорок пятая) — Фаза 3: `-`-маркер вкладывается под `*` + класс стиля маркера на `<ul>`
+
+Запрос «продолжи». Ветка **`fix/unordered-dash-marker-nesting`** — ЗАКОММИЧЕНА
+(`db3b773`), смержена в master (`65e2113`). **ПУШ ОТКЛОНЁН авто-классификатором**
+(прямой push в master без явной авторизации) — master ЛОКАЛЬНО ahead 2, ветка
+СОХРАНЕНА как страховка, base-бинарь /tmp/adoc_base обновлён до 322.
+**ОЖИДАЕТ: явная авторизация пользователя на `git push origin master` +
+удаление ветки.**
+
+### Выбор задачи
+nearmiss на 321 (23 Different): рекомендация 44-й сессии — **unordered (145,
+Δ4)**. diffone @271: эталон `<div class="ulist"><ul><li>` (вложенный), наш
+`</li><li>` (плоско). Тег `nest-alt` (`* L1` / `- L2` / `* L1`).
+
+### Реальная семантика (пробы /tmp/p_un1..5, p_sq/p_cl/p_ov/p_foo/p_role/p_sqr/p_id/p_nest_*)
+- **Матчинг по СТРОКЕ маркера, не по числу**: `-` ≠ `*`; число звёзд = ИДЕНТИЧНОСТЬ,
+  не уровень. p5 (`- a`/`** b`/`* c`): `*` вкладывается ГЛУБЖЕ `**` (не возврат).
+  Маркер матчит открытый предок → sibling; не матчит → вложение в внутренний item.
+- **Стиль маркера** (`[square]`/`[circle]`/`[disc]`/`[none]`/`[no-bullet]`/любой
+  keyword) → класс на `<div class="ulist {style} {roles}">` И `<ul class="{style}">`.
+  Роль — ТОЛЬКО на div (p_role: `ulist myrole` + plain `<ul>`). Комбо `[square.myrole]`:
+  div `ulist square myrole`, ul `square`. Стиль НЕ распространяется на вложенные
+  (p_cl), но вложенный со СВОИМ `[circle]` класс несёт (p_ov marker-override).
+  asciidoctor эмитит id/roles/style и на вложенных списках (p_nest_sq).
+
+### Что сделано
+- **ПАРСЕР** scanner.rs `is_list_marker_unordered`: `-` → identity `0` (было `1`,
+  коллизия с `*`); `*`-счёт остаётся 1..N. depth = идентичность маркера для
+  матчинга (`==`, без арифметики; рендерер unordered depth игнорирует — `ListItem
+  { checked, .. }`, `UnorderedList` без depth-поля). Док-коммент.
+- **РЕНДЕРЕР** blocks.rs `start_unordered_list`: две ветки (top/nested)
+  УНИФИЦИРОВАНЫ через `write_meta_attrs` (nested теперь тоже несёт id/roles/style
+  на div — было pre-existing-роняние, верно по p_nest_*); класс стиля добавлен на
+  `<ul>` (`ul_class` = checklist/bibliography/style). Bibliography осталась
+  top-level-only (`!is_inside_list_item()`).
+- Тесты: +2 html (`test_unordered_dash_marker_nests_under_star` — p1/p2/p5;
+  `test_unordered_list_marker_style_class` — square/role/combo/nested-override/
+  unstyled-nested); scanner-тест +2 ассерта (`- item`→(0,...), `-no-space`→None).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 494, html 397);
+  compat parsing-lab 233/233.
+- unordered.adoc diffone: **0 diffs** (был 145).
+- **Корпус: Identical 321→322 (+1 ФЛИП)**. Blast (base ebc2e35/321): РОВНО 1 файл
+  — unordered.adoc 145→0, **0 регрессий**, 0 затронутых других файлов.
+
+### Что дальше
+- nearmiss на 322 (пересчитать; было 23 Different, минус unordered → 22):
+  replacements (4 — NCR, скип), ts-url-format (110, len_delta=108 — обрезка
+  open-блока в dd-continuation), table-ref (135, len_delta=−8), counters (136 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex (152, len_delta=143),
+  image-size (177, len_delta=92), data (181, len_delta=77), admonition (197,
+  len_delta=−10), troubleshoot-unconstrained-formatting (212, len_delta=−4),
+  text (249), add-title (252, len_delta=−6), image-svg (259, len_delta=8).
+- Pre-existing — см. сессии 36/38/40/42/43/44 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок четвёртая) — Фаза 3: include `leveloffset` сдвигает level-0 заголовки
 
 Запрос «продолжи». Ветка **`fix/include-leveloffset-level0`** — ЗАКОММИЧЕНА
