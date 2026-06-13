@@ -113,6 +113,40 @@ fn test_section() {
 }
 
 #[test]
+fn test_section_marker_does_not_interrupt_paragraph() {
+    // Asciidoctor's read_paragraph_lines (StartOfBlockProc) breaks a paragraph
+    // only on a block delimiter or block-attribute line — never a section
+    // title. A `==`/`====` line that appears as a paragraph continuation line
+    // (no preceding blank line) is therefore plain text, NOT a new section.
+
+    // Mid-paragraph `== Heading` is absorbed as text.
+    let html = to_html("para line one\n== Heading no blank\nmore text");
+    assert!(
+        html.contains("<p>para line one\n== Heading no blank\nmore text</p>"),
+        "section marker should not split the paragraph: {html}"
+    );
+    assert!(!html.contains("<h2"), "no section should be emitted: {html}");
+
+    // admonition.adoc `bl-c` shape: `[IMPORTANT] <.>` is not a block attribute
+    // (no trailing `]`), so it opens a paragraph; the `==== <.>` continuation
+    // line must stay inside it rather than becoming a level-3 section.
+    let html = to_html("[IMPORTANT] <.>\n.Feeding\n==== <.>\nbody text");
+    assert!(
+        html.contains(
+            "<p>[IMPORTANT] &lt;.&gt;\n.Feeding\n==== &lt;.&gt;\nbody text</p>"
+        ),
+        "==== continuation line must stay in the paragraph: {html}"
+    );
+    assert!(!html.contains("class=\"sect3\""), "no section: {html}");
+
+    // Negative: a section marker AFTER a blank line still starts a section
+    // (recognized at the block boundary by the dispatcher).
+    let html = to_html("first para\n\n== Real Section\n\nbody");
+    assert!(html.contains("<h2 id=\"_real_section\">Real Section</h2>"));
+    assert!(html.contains("<p>first para</p>"));
+}
+
+#[test]
 fn test_unordered_list() {
     let html = to_html("* item 1\n* item 2");
     assert!(html.contains("<div class=\"ulist\">\n<ul>"));
