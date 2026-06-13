@@ -2463,6 +2463,45 @@ fn test_horizontal_description_list_empty_desc_html() {
 }
 
 #[test]
+fn test_dd_empty_principal_with_attached_block_no_paragraph_html() {
+    // A description-list item whose principal text is empty but which has an
+    // attached block (list, open block, nested dlist) must NOT emit an empty
+    // `<p></p>` before the block — Asciidoctor omits the principal paragraph
+    // entirely when there is no principal text.
+
+    // Horizontal: empty principal + ulist (sdr-007 case)
+    let h = to_html("[horizontal]\nRelated::\n* item one\n* item two");
+    assert!(
+        h.contains("<td class=\"hdlist2\">\n<div class=\"ulist\">"),
+        "horizontal dd with list must not emit empty <p>: {h}"
+    );
+    assert!(!h.contains("<p>\n</p>"), "no empty <p></p>: {h}");
+
+    // Normal: empty principal + open block (ts-url-format case)
+    let o = to_html("Term::\n+\n--\npara inside\n--");
+    assert!(
+        o.contains("<dd>\n<div class=\"openblock\">"),
+        "normal dd with open block must not emit empty <p>: {o}"
+    );
+    assert!(!o.contains("<p>\n</p>"));
+
+    // Normal: empty principal + nested dlist
+    let n = to_html("Term::\nNested::: nested value");
+    assert!(
+        n.contains("<dd>\n<div class=\"dlist\">"),
+        "normal dd with nested dlist must not emit empty <p>: {n}"
+    );
+    assert!(!n.contains("<p>\n</p>"));
+
+    // Positive: WITH principal text + block keeps the principal `<p>`
+    let p = to_html("Term:: principal text\n+\n--\npara inside\n--");
+    assert!(
+        p.contains("<dd>\n<p>principal text</p>\n<div class=\"openblock\">"),
+        "principal text must be preserved before the block: {p}"
+    );
+}
+
+#[test]
 fn test_horizontal_description_list_with_id_html() {
     let html = to_html("[horizontal#mylist]\nA:: B");
     assert!(html.contains("id=\"mylist\""));
