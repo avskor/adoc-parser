@@ -1,5 +1,83 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят четвёртая) — Фаза 3: monospace `` `text` `` получает полную normal-группу subs (replacements + char-ref restore)
+
+Запрос «продолжи». Ветка **`fix/monospace-replacements-subs`** — ЗАКОММИЧЕНА
+(`bcb9ed5`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 53-й закрыт сам (origin/master == master == 9a8b30e, дерево
+чисто, ветки fix/* удалены — merge+push 53-й прошли). base-бинарь /tmp/adoc_base
+на 331 (master HEAD); обновить до 332 ПОСЛЕ авторизации мержа.
+
+### Выбор задачи
+nearmiss на 331 (13 Different): **replacements (4, Δ0)** — заметки 53-й помечали
+«NCR, скип» по инерции, но это НЕ типографический фон (`'`/`"`). Здесь asciidoctor
+выдаёт литеральный `§`/`#`/`@`, мы — NCR `&#167;`/`&#35;`/`&#64;`. diffone-нормализатор
+декодирует entity на обеих сторонах: значит asciidoctor выдаёт ВАЛИДНУЮ entity
+`&#167;` (→`§`), а мы экранируем `&`→`&amp;`, ломая reference. 4 diff'а, все char-ref
+в monospace `` `&#167;` `` → чистый single-root.
+
+### Реальная семантика (исходник substitutors.rb + REPLACEMENTS-таблица + пробы)
+- **Constrained/unconstrained monospace `` `text` `` получает ПОЛНУЮ normal-группу
+  subs** (specialchars, quotes, attributes, **replacements**, macros, post_repl) —
+  как проза. Asciidoctor применяет `(C)`→©, `--`→em-dash, `...`→ellipsis И ВОССТАНАВЛИВАЕТ
+  char-refs ВНУТРИ `<code>`. Наш код хардкодил «monospace literal — no replacements»
+  (`self.subs.without(REPLACEMENTS)`) — заблуждение. Char-ref restore — последнее
+  правило REPLACEMENTS-таблицы: specialchars экранирует `&#167;`→`&amp;#167;`, потом
+  `replacements` через `:bounding` восстанавливает `&` (тело: named `[A-Za-z][A-Za-z]+\d{0,2}`,
+  decimal `#`+2-6 цифр, hex `#x`+2-5). Литеральный passthrough `` `+...+` ``/`pass:[]`
+  перехватывается раньше → остаётся verbatim независимо от subs.
+- **Спейс-em-dash `(^|\n| |\\)--( |\n|$)` анкорится на КРАЯХ СТРОКИ.** Asciidoctor
+  гоняет replacements ПОСЛЕ обёртки в `<code>`, поэтому `--` на крае спана ограничен
+  символами тега `>`/`<`, НЕ `^`/`$` → остаётся литералом (`` `--` `` → `<code>--</code>`).
+  `a -- b`/`x--y` (внутренние границы) → em-dash как обычно.
+
+### Что сделано
+- **ПАРСЕР** inline.rs `try_constrained`/`try_unconstrained`: убран
+  `.without(REPLACEMENTS)` для backtick (оба сайта) — monospace репарсится с полной
+  `self.subs`.
+- **ПАРСЕР** inline.rs: поле `InlineState.edges_are_line_boundaries` (true ТОЛЬКО для
+  top-level текста @221, default false для inner-репарсинга спанов). `flush_text`
+  вычисляет `left/right_is_boundary` (`start != 0 || edges...` / `end < len || edges...`)
+  и передаёт в `apply_typographic_replacements` (новые параметры). Спейс-em-dash
+  правило (единственное край-зависимое) трактует край-flush как границу КРОМЕ истинного
+  края input не-строки (= край спана). Mid-input края = legacy «граница» → `{empty}--{empty}`
+  (пустой attr-ref) даёт em-dash на крае строки ячейки.
+- Тесты: +2 parser (`test_monospace_applies_replacements`,
+  `test_monospace_edge_em_dash_stays_literal`), +1 html
+  (`test_monospace_replacements_and_char_refs_html`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 500 +2, html 414 +1);
+  compat parsing-lab 233/233.
+- replacements diffone: **0 diffs** (был 4). Пробы char-ref/replacements/passthrough/
+  все --- случаи (standalone/spaced/word/lead/trail) совпали с asciidoctor.
+- **Корпус: Identical 331→332 (+1 ФЛИП)**. Blast (base 331): РОВНО 1 файл —
+  replacements 4→0, **0 регрессий**. (Промежуточно ловились 2 регрессии:
+  hard-line-breaks/sdr-001 `` `--` `` → em-dash [исправлено флагом границ]; затем
+  subs-symbol-repl `{empty}--{empty}` → литерал [исправлено: mid-input края = граница].)
+
+### Что дальше
+- nearmiss на 332 (12 Different): **complex (120, Δ4 — ДВА корня в lists/examples:
+  (A) literal-параграф ` $ cmd` в list-item БЕЗ `+` — asciidoctor закрывает `</p>`
+  ДО literalblock, мы держим открытым; (B) пустой `<p></p>` перед listingblock —
+  asciidoctor эмитит, мы опускаем. Оба нужны для флипа)**, counters (136, Δ9 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), data (181, Δ77 — CSV/DSV `,===`, мульти-root),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — nested-backtick, архитектурно),
+  text (249, Δ−5 — `+ +` hard-break в monospace + apostrophe NCR), align-by-cell
+  (371, Δ−16 — inline `<n>`/`^+` в backtick), block-name-table (431, Δ−2 — `++…++`
+  escape), table (597, Δ1 — ДВА корня), character-replacement-ref (625, Δ113),
+  syntax-quick-reference (2788, Δ−31 — мульти-root), document-attributes-ref (6363,
+  Δ73 — мульти-root), outline (6587, Δ1 — МУЛЬТИ-root).
+- **Латентный (НЕ регрессия, pre-existing, обнажён анализом)**: top-level
+  intermediate-flush после ФОРМАТНОГО маркера трактуется как граница (`foo*b*-- c`
+  → em-dash, asciidoctor литерал, т.к. `>` перед `--`). flush_text не знает тип
+  конструкции, ограничивающей run; `}` (attr-ref) должен быть прозрачным, `>` (тег) —
+  нет. Оставлен legacy (нет корпусного кейса).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53 (без изменений).
+
+---
+
 ## Сессия (2026-06-14, пятьдесят третья) — Фаза 3: table-делимитер 3+ `=` + директивы на колонке 0 + verbatim `indent`
 
 Запрос «продолжи». Ветка **`fix/table-delim-length-verbatim-indent`** —
