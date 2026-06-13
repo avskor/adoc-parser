@@ -1404,9 +1404,14 @@ impl<'a> InlineState<'a> {
         let inner = &rest[..close];
 
         self.flush_text(*text_start, start_pos, events);
-        // `++++` → empty passthrough: renders as nothing (probe-verified).
+        // Double-plus passthrough applies ONLY the `specialcharacters` sub (escapes
+        // `<`/`>`/`&`) — no quotes, replacements, attributes, or inline re-parsing
+        // (probe-verified: `++*x*++`→`*x*`, `++a -- b++`→`a -- b`, `++a & b++`→`a &amp; b`).
+        // Emitting `Event::Text` (not `InlinePassthrough`) gives exactly that: the
+        // renderer html-escapes Text but does not re-run subs. Triple-plus stays raw
+        // (`InlinePassthrough`). `++++` → empty passthrough: renders as nothing.
         if !inner.is_empty() {
-            events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
+            events.push(Event::Text(Cow::Borrowed(inner)));
         }
 
         self.pos = after_open + close + 2;
@@ -4088,20 +4093,22 @@ mod tests {
     fn test_passthrough_inside_monospace() {
         // `++`++` — the inner backtick lives in a ++…++ passthrough and must not
         // close the monospace span early. Asciidoctor renders <code>`</code>.
+        // Double-plus applies specialchars only and emits `Text` (backtick is not a
+        // special char, so it survives verbatim once html-escaped).
         let events = parse("(`++`++`)");
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("(")),
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
-            Event::InlinePassthrough(Cow::Borrowed("`")),
+            Event::Text(Cow::Borrowed("`")),
             Event::End(TagEnd::Monospace),
             Event::Text(Cow::Borrowed(")")),
         ]);
 
-        // ++b++ inside monospace → passthrough yields literal "b".
+        // ++b++ inside monospace → passthrough yields literal "b" (as `Text`).
         let events = parse("`++b++`");
         assert_eq!(events, vec![
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
-            Event::InlinePassthrough(Cow::Borrowed("b")),
+            Event::Text(Cow::Borrowed("b")),
             Event::End(TagEnd::Monospace),
         ]);
 
@@ -4172,13 +4179,33 @@ mod tests {
         ]);
 
         // Inside `++…++` the macro is NOT extracted (the double-plus span wins
-        // positionally in the same extraction pass) — content stays verbatim.
+        // positionally in the same extraction pass) — content stays verbatim, emitted
+        // as `Text` (double-plus applies specialchars only; `pass:[y]` has none).
         let events = parse("`++pass:[y]++`");
         assert_eq!(events, vec![
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
-            Event::InlinePassthrough(Cow::Borrowed("pass:[y]")),
+            Event::Text(Cow::Borrowed("pass:[y]")),
             Event::End(TagEnd::Monospace),
         ]);
+    }
+
+    #[test]
+    fn test_double_plus_passthrough_applies_specialchars() {
+        // Double-plus `++…++` applies ONLY the specialcharacters sub: it emits `Text`
+        // (which the renderer html-escapes `<`/`>`/`&`), NOT `InlinePassthrough` (raw).
+        // Asciidoctor: `++[<LABEL>]++` → `[&lt;LABEL&gt;]`, `++a & b++` → `a &amp; b`.
+        assert_eq!(parse("++[<LABEL>]++"), vec![Event::Text(Cow::Borrowed("[<LABEL>]"))]);
+        assert_eq!(parse("++a & b++"), vec![Event::Text(Cow::Borrowed("a & b"))]);
+
+        // No quotes/replacements/attributes subs run inside double-plus.
+        assert_eq!(parse("++*x*++"), vec![Event::Text(Cow::Borrowed("*x*"))]);
+        assert_eq!(parse("++{foo}++"), vec![Event::Text(Cow::Borrowed("{foo}"))]);
+
+        // Triple-plus stays raw (`InlinePassthrough` — no specialchars escaping).
+        assert_eq!(
+            parse("+++[<LABEL>]+++"),
+            vec![Event::InlinePassthrough(Cow::Borrowed("[<LABEL>]"))]
+        );
     }
 
     // Footnote tests
