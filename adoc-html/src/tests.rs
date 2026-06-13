@@ -2758,13 +2758,67 @@ fn test_normal_description_list_unchanged_html() {
 #[test]
 fn test_qanda_description_list_html() {
     let html = to_html("[qanda]\nWhat is Rust?:: A systems programming language.\nWhy use it?:: Memory safety.");
+    // The answer is wrapped in <p>…</p> (Asciidoctor convert_dlist qanda).
     assert_eq!(
         html,
         "<div class=\"qlist qanda\">\n<ol>\n\
-         <li>\n<p><em>What is Rust?</em></p>\nA systems programming language.</li>\n\
-         <li>\n<p><em>Why use it?</em></p>\nMemory safety.</li>\n\
+         <li>\n<p><em>What is Rust?</em></p>\n<p>A systems programming language.</p>\n</li>\n\
+         <li>\n<p><em>Why use it?</em></p>\n<p>Memory safety.</p>\n</li>\n\
          </ol>\n</div>\n"
     );
+}
+
+#[test]
+fn test_qanda_adjacent_terms_grouped_html() {
+    // Consecutive `term::` lines sharing one answer collapse into a single
+    // <li> with one <p><em>…</em></p> per term; the answer is one <p>.
+    // An empty answer leaves just the term paragraph (no answer <p>).
+    let html = to_html(
+        "[qanda]\nWhat is the answer?::\nThis is the answer.\n\nAre cameras allowed?::\nAre backpacks allowed?::\nNo.",
+    );
+    assert_eq!(
+        html,
+        "<div class=\"qlist qanda\">\n<ol>\n\
+         <li>\n<p><em>What is the answer?</em></p>\n<p>This is the answer.</p>\n</li>\n\
+         <li>\n<p><em>Are cameras allowed?</em></p>\n<p><em>Are backpacks allowed?</em></p>\n<p>No.</p>\n</li>\n\
+         </ol>\n</div>\n"
+    );
+    // Empty answer: term paragraph only, no answer <p>.
+    let empty = to_html("[qanda]\nQuestion?::");
+    assert_eq!(
+        empty,
+        "<div class=\"qlist qanda\">\n<ol>\n<li>\n<p><em>Question?</em></p>\n</li>\n</ol>\n</div>\n"
+    );
+}
+
+#[test]
+fn test_horizontal_dlist_colgroup_widths_html() {
+    // labelwidth/itemwidth on a horizontal dlist emit a <colgroup> with two
+    // <col> elements (Asciidoctor convert_dlist horizontal); each <col> gets a
+    // width style only when its own attribute is set.
+    let both = to_html("[horizontal,labelwidth=25,itemwidth=75]\nTerm:: desc.");
+    assert!(
+        both.contains(
+            "<table>\n<colgroup>\n<col style=\"width: 25%;\">\n<col style=\"width: 75%;\">\n</colgroup>\n<tr>"
+        ),
+        "{both}"
+    );
+    // Only labelwidth → second col is bare; a trailing % in the value is dropped.
+    let label_only = to_html("[horizontal,labelwidth=30%]\nTerm:: desc.");
+    assert!(
+        label_only.contains("<colgroup>\n<col style=\"width: 30%;\">\n<col>\n</colgroup>"),
+        "{label_only}"
+    );
+    // Only itemwidth → first col is bare.
+    let item_only = to_html("[horizontal,itemwidth=80]\nTerm:: desc.");
+    assert!(
+        item_only.contains("<colgroup>\n<col>\n<col style=\"width: 80%;\">\n</colgroup>"),
+        "{item_only}"
+    );
+    // Plain [horizontal] (no widths) emits no colgroup.
+    let plain = to_html("[horizontal]\nTerm:: desc.");
+    assert!(!plain.contains("<colgroup>"), "{plain}");
+    assert!(plain.contains("<table>\n<tr>"), "{plain}");
 }
 
 #[test]

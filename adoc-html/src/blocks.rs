@@ -366,6 +366,31 @@ impl HtmlRenderer {
                 output.push_str(">\n");
                 self.emit_pending_block_title(output);
                 output.push_str("<table>\n");
+                // labelwidth/itemwidth → <colgroup> with two <col> elements
+                // (Asciidoctor html5 convert_dlist horizontal). The colgroup is
+                // emitted iff either attribute is present; each <col> gets a
+                // width style only when its own attribute is set, otherwise it is
+                // bare. A trailing `%` in the value is dropped (`.chomp '%'`).
+                let named_attr = |key: &str| {
+                    meta.as_ref()
+                        .and_then(|m| m.named.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()))
+                };
+                let labelwidth = named_attr("labelwidth");
+                let itemwidth = named_attr("itemwidth");
+                if labelwidth.is_some() || itemwidth.is_some() {
+                    output.push_str("<colgroup>\n");
+                    for w in [labelwidth, itemwidth] {
+                        match w {
+                            Some(v) => {
+                                output.push_str("<col style=\"width: ");
+                                output.push_str(v.strip_suffix('%').unwrap_or(v));
+                                output.push_str("%;\">\n");
+                            }
+                            None => output.push_str("<col>\n"),
+                        }
+                    }
+                    output.push_str("</colgroup>\n");
+                }
             }
             DlistStyle::Qanda => {
                 output.push_str("<div");

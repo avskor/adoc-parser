@@ -483,7 +483,18 @@ impl HtmlRenderer {
                         }
                     }
                     DlistStyle::Qanda => {
-                        output.push_str("<li>\n<p><em>");
+                        // The first term of an item opens the <li>; adjacent
+                        // terms sharing one answer (consecutive `term::` lines)
+                        // only emit their own <p><em>…</em></p> inside it
+                        // (Asciidoctor convert_dlist qanda). Reuses the shared
+                        // in-term-group flag — qanda and horizontal never coexist
+                        // in one list (a list has a single style).
+                        if self.hdlist_in_term_group {
+                            output.push_str("<p><em>");
+                        } else {
+                            output.push_str("<li>\n<p><em>");
+                            self.hdlist_in_term_group = true;
+                        }
                     }
                     DlistStyle::Normal => {
                         output.push_str("<dt class=\"hdlist1\">");
@@ -504,7 +515,15 @@ impl HtmlRenderer {
                         self.hdlist_in_term_group = false;
                         self.li_p_open.push(true);
                     }
-                    DlistStyle::Qanda => {}
+                    DlistStyle::Qanda => {
+                        // The answer is wrapped in <p>…</p> (Asciidoctor emits
+                        // `<p>#{dd.text}</p>` if the dd has text). An empty
+                        // answer leaves a bare <p> that the end-arm rolls back.
+                        self.hdlist_in_term_group = false;
+                        self.dd_output_start = Some(output.len());
+                        output.push_str("<p>");
+                        self.li_p_open.push(true);
+                    }
                     DlistStyle::Normal | DlistStyle::Styled => {
                         self.dd_output_start = Some(output.len());
                         output.push_str("<dd>\n<p>");
@@ -956,7 +975,20 @@ impl HtmlRenderer {
                         }
                         output.push_str("</td>\n</tr>\n");
                     }
-                    DlistStyle::Qanda => output.push_str("</li>\n"),
+                    DlistStyle::Qanda => {
+                        // Roll back an empty answer's bare <p> (a sub-block start
+                        // already cleared li_p_open via the principal-<p> guard),
+                        // otherwise close the answer paragraph; then close <li>.
+                        if let Some(start) = self.dd_output_start.take()
+                            && &output[start..] == "<p>"
+                        {
+                            output.truncate(start);
+                            self.li_p_open.pop();
+                        } else if self.li_p_open.pop() == Some(true) {
+                            output.push_str("</p>\n");
+                        }
+                        output.push_str("</li>\n");
+                    }
                     DlistStyle::Normal | DlistStyle::Styled => {
                         // Check if dd is empty (term-only) — if so, rollback
                         if let Some(start) = self.dd_output_start.take() {
