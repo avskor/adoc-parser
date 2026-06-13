@@ -2324,6 +2324,46 @@ fn test_sect0_heading_standalone() {
 }
 
 #[test]
+fn test_book_part_numbering_partnums_html() {
+    // Book parts under :partnums: get a "{signifier} {roman}: " prefix on the
+    // <h1 class="sect0"> heading and in the TOC; roman numerals are sequential
+    // and document-global. The signifier set adds "Part ".
+    let src = "= Doc\n:doctype: book\n:partnums:\n:part-signifier: Part\n:toc:\n\n\
+               = First Part\n\n== A Chapter\n\nx\n\n= Second Part\n\n== B Chapter\n\ny";
+    let html = to_html(src);
+    assert!(html.contains("<h1 id=\"_first_part\" class=\"sect0\">Part I: First Part</h1>"), "{html}");
+    assert!(html.contains("<h1 id=\"_second_part\" class=\"sect0\">Part II: Second Part</h1>"), "{html}");
+    // Chapters are NOT numbered (no :sectnums:).
+    assert!(html.contains("<h2 id=\"_a_chapter\">A Chapter</h2>"), "{html}");
+    // TOC: parts list is sectlevel0, prefix carried into the entry.
+    assert!(html.contains("<ul class=\"sectlevel0\">"), "{html}");
+    assert!(html.contains("<a href=\"#_first_part\">Part I: First Part</a>"), "{html}");
+
+    // Without :partnums: → no prefix (parity with Asciidoctor).
+    let html = to_html("= Doc\n:doctype: book\n\n= First Part\n\n== A\n\nx");
+    assert!(html.contains("<h1 id=\"_first_part\" class=\"sect0\">First Part</h1>"), "{html}");
+
+    // No part-signifier → bare roman ("I: ").
+    let html = to_html("= Doc\n:doctype: book\n:partnums:\n\n= First Part\n\n== A\n\nx");
+    assert!(html.contains("<h1 id=\"_first_part\" class=\"sect0\">I: First Part</h1>"), "{html}");
+}
+
+#[test]
+fn test_article_sect0_toc_sectlevel0_html() {
+    // A body sect0 (level-0 section) in an article also lists at TOC
+    // sectlevel0 — the list class is the section's real Asciidoctor level.
+    let html = to_html("= Doc\n:toc:\n\n= Body Zero\n\n== Sub\n\nx");
+    assert!(html.contains("<ul class=\"sectlevel0\">"), "{html}");
+    assert!(html.contains("<a href=\"#_body_zero\">Body Zero</a>"), "{html}");
+    // The nested sub-section is sectlevel1.
+    assert!(html.contains("<ul class=\"sectlevel1\">"), "{html}");
+    // Regular article sections (no sect0) stay sectlevel1 only.
+    let html = to_html("= Doc\n:toc:\n\n== Section A\n\nx\n\n== Section B\n\ny");
+    assert!(html.contains("<ul class=\"sectlevel1\">"), "{html}");
+    assert!(!html.contains("sectlevel0"), "{html}");
+}
+
+#[test]
 fn test_partintro_paragraph_masquerades_as_open_block() {
     // [partintro] on a paragraph masquerades it as an open block:
     // <div class="openblock partintro"><div class="content"><div class="paragraph"><p>…
