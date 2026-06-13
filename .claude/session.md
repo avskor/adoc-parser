@@ -1,5 +1,87 @@
 # Session context
 
+## Сессия (2026-06-13, сорок вторая) — Фаза 3: blank-строка в DEFAULT/стилевой table-ячейке → несколько `<p class="tableblock">`
+
+Запрос «продолжи». Ветка **`fix/table-cell-multi-paragraph`** — ЗАКОММИЧЕНА
+(`931b4d5`), смержена в master (`4b477a9`), запушена, ветка удалена.
+Baseline: Identical 314, master `92ca10a`; base-бинарь /tmp/adoc_base
+пересобран с него (чистый release ДО ветки), теперь обновлён до 317.
+
+### Выбор задачи
+nearmiss на 314: replacements (4 — NCR, скип). Сильнейший single-root сигнал
+= малая `|len_delta|` при многих diff'ах. **highlight-lines (185,
+len_delta=2)** — diffone @166 показал РОВНО +2 токена (`<p class="tableblock">`
++ `</p>`): DEFAULT-ячейка с blank-строкой даёт ДВА параграфа, мы схлопывали
+в один. Корень общий с subs-symbol-repl (165) и cell.adoc (965).
+
+### Семантика asciidoctor (исходник table.rb + пробы /tmp/p_cellp/p1..p6 IDENTICAL)
+- **Cell#content (table.rb:371-385)**: если RAW `@text` содержит `\n\n`
+  (DOUBLE_LF) → `text.split(/\n{2,}/)`, КАЖДЫЙ параграф оборачивается
+  стилевым inline-враппером (m→`<code>`, e→`<em>`, s→`<strong>`), для
+  default/header — как есть. html5.rb оборачивает каждый в
+  `<p class="tableblock">…</p>`. Пустая ячейка → `[]` (нет `<p>`,
+  `<td></td>`). Несколько blank подряд = один split (`\n{2,}`).
+- Внутри параграфа одиночный `\n` СОХРАНЯЕТСЯ (p6: `line one\nline two`).
+- Literal/AsciiDoc ячейки НЕ бьются (handled separately). Header-СТРОКИ
+  (thead) используют cell.text — не бьются.
+- **Известный предел (pre-existing, НЕ трогал)**: continuation-отступ внутри
+  параграфа asciidoctor СОХРАНЯЕТ (`one\n  two`), наш `cell_text` тримит
+  (`one\ntwo`). Старый код тоже тримил; нормализатор корпуса НЕ схлопывает
+  внутренние пробелы, но флипнувшие файлы отступов в мульти-пара ячейках не
+  имели → корпусной выгоды от фикса отступа сейчас нет, риск > выгоды.
+
+### Что сделано
+- **ПАРСЕР** event.rs: новый `Event::TableCellParagraphBreak` (unit-маркер,
+  + into_static). parser.rs пропускает его через `other` (subs-стек не
+  трогается); per-para Text идут Owned-путём (inline-парсинг, NORMAL subs).
+- **ПАРСЕР** block.rs: `cell_paragraphs(cell, style)` — split на blank-строки
+  (trim+filter внутри параграфа, join `\n`); AsciiDoc/Literal → один элемент.
+  В emit body-ячейки: `paras.len()<=1` → старый `cell_text` (байт-в-байт,
+  zero-copy); иначе Text(para) с `TableCellParagraphBreak` между (эмиссия в
+  reverse: Text(pN),Break,…,Text(p1) → pop-порядок Start,p1,Break,p2,…,End).
+  Header-строки не затронуты (single Text).
+- **РЕНДЕРЕР** events.rs: арм `TableCellParagraphBreak` — закрывает текущий
+  `<p class="tableblock">` (+ стилевой враппер) и открывает следующий; стиль
+  с верха `cell_style_stack`. m/e/s → `</code></p><p class="tableblock"><code>`
+  и т.п.; default/header → `</p><p class="tableblock">`.
+- **adoc-compat-tests** builder.rs: no-op арм (ASG держит cell-текст плоско).
+- Тесты: +1 html `test_table_cell_multi_paragraph_html` (default 2-para,
+  3-para, m-колонка, e-ячейка, multiple-blank→1 split, single-para
+  не затронут); обновлён `test_table_cell_literal_preserves_blank_and_indent`
+  (plain-ячейка теперь split, не collapse — старый ассерт кодировал баг).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (html 394, всего +1);
+  compat parsing-lab 233/233.
+- Пробы p1..p6 IDENTICAL.
+- **Корпус: Identical 314→317 (+3 ФЛИПА)**. Blast (base 92ca10a):
+  align-cell 211→0, highlight-lines 185→0, subs-symbol-repl 165→0 (флипы);
+  cell.adoc 965→1, image-svg 282→259 (ближе); image-ref 746→748 (+2 —
+  позиционный шум поверх pre-existing colgroup/thead корня @13: ячейка
+  `image::sunset…` + blank + `image::chart…` РЕАЛЬНО бьётся, наш split @661
+  идентичен эталону; первое расхождение файла @13 — нет 4×`<col>` и `<thead>`,
+  не мой домен). **0 семантических регрессий**.
+
+### Что дальше
+- **cell.adoc 965→1** — ОДИН diff @574: `halign-left` (эталон) vs `halign-right`
+  (наш) на rowspan=3 ячейке. ОТДЕЛЬНЫЙ корень: emit_row_cells col_idx
+  (выравнивание/стиль) не учитывает rowspan-сдвиг занятых колонок
+  (TODO.md:228, докинфо-сессия). Чистый single-token флип если починить —
+  нужна occupancy-aware col_idx в пассе выравнивания (как в build_table_rows).
+  ХОРОШИЙ кандидат на следующую задачу (+1 флип, тот же домен).
+- nearmiss на 317 (пересчитать): ts-url-format (110, len_delta=108 — обрезка
+  open-блока в dd-continuation), table-ref (135), counters (136 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), unordered (145, len_delta=4 —
+  вложенность списка), complex (152, len_delta=143), image-size (177,
+  len_delta=92), data (181, len_delta=77), architecture/index (189,
+  len_delta=4), admonition (197, len_delta=-10).
+- Вскрытый pre-existing: image-ref/много-колоночные таблицы — нет
+  `<colgroup>` с N×`<col>` и `<thead>` (главный корень image-ref @13).
+- Pre-existing — см. сессии 36/38/40 (без изменений) + continuation-отступ
+  в table-ячейке тримится (asciidoctor сохраняет).
+
+---
+
 ## Сессия (2026-06-13, сорок первая) — Фаза 3: пустой `<p></p>` в dd без principal-текста
 
 Запрос «продолжи». Ветка **`fix/empty-dd-principal-paragraph`** — ЗАКОММИЧЕНА
