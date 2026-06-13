@@ -444,6 +444,10 @@ impl HtmlRenderer {
         }
         if self.sectnums
             && self.pending_section_caption.is_none()
+            // `sectnumlevels` caps numbering depth (Asciidoctor level =
+            // display level − 1 ≤ sectnumlevels). Deeper sections show no
+            // number and don't bump the counter.
+            && (*level as u16) <= self.sectnumlevels as u16 + 1
             && let Some(prefix) = self.section_numberer.number_prefix(*level)
         {
             output.push_str(&prefix);

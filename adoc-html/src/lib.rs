@@ -171,6 +171,11 @@ struct HtmlRenderer {
     preamble_start: Option<usize>,
     pending_section_caption: Option<String>,
     sectnums: bool,
+    /// Asciidoctor `sectnumlevels` (default 3): the deepest Asciidoctor
+    /// section level that shows a number. Display level − 1 is the
+    /// Asciidoctor level, so display levels up to `sectnumlevels + 1` are
+    /// numbered.
+    sectnumlevels: u8,
     sectanchors: bool,
     showtitle: bool,
     nofooter: bool,
@@ -296,6 +301,7 @@ impl HtmlRenderer {
             preamble_start: None,
             pending_section_caption: None,
             sectnums: false,
+            sectnumlevels: 3,
             sectanchors: false,
             showtitle: false,
             nofooter: false,
@@ -363,6 +369,16 @@ impl HtmlRenderer {
             "toc" => self.toc_position = value.to_string(),
             "sectnums" => self.sectnums = true,
             "!sectnums" | "sectnums!" => self.sectnums = false,
+            "sectnumlevels" => {
+                // Asciidoctor reads this with Ruby's String#to_i, which takes
+                // the leading digits and ignores the rest (`:sectnumlevels:
+                // 2 <.>` → 2, the `<.>` being a doc callout).
+                let digits: String =
+                    value.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(n) = digits.parse::<u8>() {
+                    self.sectnumlevels = n;
+                }
+            }
             "sectanchors" => self.sectanchors = true,
             "!sectanchors" | "sectanchors!" => self.sectanchors = false,
             "showtitle" => self.showtitle = true,
