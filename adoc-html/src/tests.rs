@@ -2275,6 +2275,31 @@ fn test_bare_highlight_no_regression_html() {
 }
 
 #[test]
+fn test_bareword_role_span_html() {
+    // [big]##O## — a bare-word attrlist becomes the role (Asciidoctor parity);
+    // the single-tick form [big]#O#nce stays literal (constrained close before a
+    // word char).
+    let html = to_html("[big]##O##nce upon a loop.");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"big\">O</span>nce upon a loop.</p>\n</div>\n");
+}
+
+#[test]
+fn test_backtick_apostrophe_not_monospace_html() {
+    // Two `' (right single quote) markers in one run must not fold into a <code>
+    // span: the monospace close assertion forbids a backtick followed by `'`.
+    let html = to_html("the `'00s and werewolves`' desks.");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p>the \u{2019}00s and werewolves\u{2019} desks.</p>\n</div>\n");
+}
+
+#[test]
+fn test_superscript_content_full_subs_html() {
+    // Superscript/subscript content gets the full normal substitution group:
+    // attribute refs ({sp}), quotes (*strong*), replacements, macros.
+    let html = to_html("x^a{sp}b^ and ^*z*^");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p>x<sup>a b</sup> and <sup><strong>z</strong></sup></p>\n</div>\n");
+}
+
+#[test]
 fn test_block_admonition_html() {
     let html = to_html("[NOTE]\n====\nThis is a note.\n====");
     assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonitionblock note in:\n{html}");
