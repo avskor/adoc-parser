@@ -1010,10 +1010,35 @@ impl HtmlRenderer {
             TagEnd::TableCell => {
                 let style = self.cell_style_stack.pop().unwrap_or_default();
                 let p_start = self.cell_p_start_stack.pop().unwrap_or(None);
+                // For the styled (e/s/m) and default cells, an empty cell
+                // (nothing written after the opening wrapper, so p_start still
+                // equals the current length) rolls the whole wrapper back to a
+                // bare <td></td>, matching asciidoctor. A non-empty multi-
+                // paragraph cell never trips this: p_start points after the
+                // first wrapper, far below the final length.
+                let is_empty = p_start == Some(output.len());
                 match style {
-                    CellStyle::Emphasis => output.push_str("</em></p>"),
-                    CellStyle::Strong => output.push_str("</strong></p>"),
-                    CellStyle::Monospace => output.push_str("</code></p>"),
+                    CellStyle::Emphasis => {
+                        if is_empty {
+                            output.truncate(output.len() - "<p class=\"tableblock\"><em>".len());
+                        } else {
+                            output.push_str("</em></p>");
+                        }
+                    }
+                    CellStyle::Strong => {
+                        if is_empty {
+                            output.truncate(output.len() - "<p class=\"tableblock\"><strong>".len());
+                        } else {
+                            output.push_str("</strong></p>");
+                        }
+                    }
+                    CellStyle::Monospace => {
+                        if is_empty {
+                            output.truncate(output.len() - "<p class=\"tableblock\"><code>".len());
+                        } else {
+                            output.push_str("</code></p>");
+                        }
+                    }
                     CellStyle::Literal => output.push_str("</pre></div>"),
                     CellStyle::AsciiDoc => {
                         // Nested block parse of the captured raw text, rendered
@@ -1034,7 +1059,7 @@ impl HtmlRenderer {
                         output.push_str("</div>");
                     }
                     _ => {
-                        if p_start == Some(output.len()) {
+                        if is_empty {
                             // Empty cell: asciidoctor renders a bare <td></td>
                             // without the tableblock paragraph wrapper.
                             output.truncate(output.len() - "<p class=\"tableblock\">".len());
