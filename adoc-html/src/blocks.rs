@@ -217,10 +217,26 @@ impl HtmlRenderer {
                 _ => {}
             }
         } else {
+            // Record the position right after the paragraph wrapper for the
+            // styled (e/s/m) and default cells so TagEnd::TableCell can detect
+            // an empty cell (nothing written after the wrapper) and roll the
+            // wrapper back to a bare <td></td>, matching asciidoctor's
+            // `Cell#content` (empty text => [] => no paragraph). Literal and
+            // AsciiDoc cells keep their wrapper even when empty (asciidoctor
+            // emits <pre></pre>/<div class="content"></div>), so no marker.
             match style {
-                CellStyle::Emphasis => output.push_str("<p class=\"tableblock\"><em>"),
-                CellStyle::Strong => output.push_str("<p class=\"tableblock\"><strong>"),
-                CellStyle::Monospace => output.push_str("<p class=\"tableblock\"><code>"),
+                CellStyle::Emphasis => {
+                    output.push_str("<p class=\"tableblock\"><em>");
+                    p_start = Some(output.len());
+                }
+                CellStyle::Strong => {
+                    output.push_str("<p class=\"tableblock\"><strong>");
+                    p_start = Some(output.len());
+                }
+                CellStyle::Monospace => {
+                    output.push_str("<p class=\"tableblock\"><code>");
+                    p_start = Some(output.len());
+                }
                 CellStyle::Literal => output.push_str("<div class=\"literal\"><pre>"),
                 CellStyle::AsciiDoc => {
                     // Nested-document cell: content is captured raw and block-

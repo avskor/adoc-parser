@@ -1250,6 +1250,44 @@ fn test_table_cell_multi_paragraph_html() {
 }
 
 #[test]
+fn test_table_cell_empty_styled_no_wrapper_html() {
+    // An empty styled cell (m/e/s) renders a bare <td></td>, like a default
+    // empty cell — asciidoctor's `Cell#content` returns [] for empty text, so
+    // no paragraph (and no inner <code>/<em>/<strong>) is emitted. Root of
+    // table-ref.adoc @848 (empty `m` column cell). Probe /tmp/p_empty2.
+    for style in ["m", "e", "s"] {
+        let html = to_html(&format!("[cols=\"1{style},1\"]\n|===\n|filled |x\n| |y\n|==="));
+        assert!(
+            html.contains("<td class=\"tableblock halign-left valign-top\"></td>"),
+            "empty {style} cell should be a bare <td></td>. Got:\n{html}"
+        );
+        // The non-empty cell in the same column keeps its wrapper.
+        assert!(
+            !html.contains("<code></code>") && !html.contains("<em></em>") && !html.contains("<strong></strong>"),
+            "empty {style} cell must not emit an empty inline wrapper. Got:\n{html}"
+        );
+    }
+
+    // Empty default and header cells were already bare; confirm no regression.
+    let html = to_html("[cols=\"1,1h\"]\n|===\n| |\n|===");
+    assert!(
+        html.contains("<td class=\"tableblock halign-left valign-top\"></td>"),
+        "empty default cell bare. Got:\n{html}"
+    );
+    assert!(
+        html.contains("<th class=\"tableblock halign-left valign-top\"></th>"),
+        "empty header-column cell bare. Got:\n{html}"
+    );
+
+    // A non-empty monospace cell is unchanged.
+    let html = to_html("[cols=\"m\"]\n|===\n|rotate\n|===");
+    assert!(
+        html.contains("<p class=\"tableblock\"><code>rotate</code></p>"),
+        "non-empty m cell keeps wrapper. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_table_column_style_inheritance_html() {
     // Column styles apply to cells without an explicit style; explicit styles
     // (including `d` and `v` → default) win; header rows ignore column styles
