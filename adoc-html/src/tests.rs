@@ -2856,6 +2856,47 @@ fn test_dd_empty_principal_with_attached_block_no_paragraph_html() {
 }
 
 #[test]
+fn test_list_item_literal_paragraph_closes_principal_p_html() {
+    // A literal paragraph attached to a list item (indented, no `+` needed)
+    // is a separate block: Asciidoctor closes the principal `</p>` BEFORE the
+    // literalblock. We previously left the `<p>` open and nested the
+    // literalblock inside it, closing `</p>` only after (complex.adoc root A).
+    let html = to_html("* A literal paragraph does not require a list continuation.\n\n $ cd projects/my-book");
+    assert!(
+        html.contains(
+            "<p>A literal paragraph does not require a list continuation.</p>\n<div class=\"literalblock\">"
+        ),
+        "principal <p> must close before the attached literalblock: {html}"
+    );
+    // The literalblock must not be wrapped inside the principal paragraph.
+    assert!(!html.contains("continuation.<div class=\"literalblock\">"), "{html}");
+}
+
+#[test]
+fn test_list_item_empty_principal_keeps_p_with_block_html() {
+    // A regular list item (olist/ulist) whose principal text is empty but
+    // which has an attached block keeps an empty `<p></p>` — Asciidoctor always
+    // wraps a list-item principal, even when empty (`. {empty}` → `<p></p>`).
+    // This is the OPPOSITE of a description `dd`, which rolls the empty `<p>`
+    // back (see test_dd_empty_principal_with_attached_block_no_paragraph_html).
+    // complex.adoc root B.
+    let ol = to_html(". {empty}\n+\n----\nprint(\"one\")\n----");
+    assert!(
+        ol.contains("<li>\n<p></p>\n<div class=\"listingblock\">"),
+        "ordered item empty principal + block must keep <p></p>: {ol}"
+    );
+    let ul = to_html("* {empty}\n+\n----\nx\n----");
+    assert!(
+        ul.contains("<li>\n<p></p>\n<div class=\"listingblock\">"),
+        "unordered item empty principal + block must keep <p></p>: {ul}"
+    );
+    // Sanity: an empty-principal item WITHOUT an attached block still emits
+    // `<p></p>` (unchanged behaviour).
+    let bare = to_html(". {empty}");
+    assert!(bare.contains("<li>\n<p></p>\n</li>"), "{bare}");
+}
+
+#[test]
 fn test_horizontal_description_list_with_id_html() {
     let html = to_html("[horizontal#mylist]\nA:: B");
     assert!(html.contains("id=\"mylist\""));
