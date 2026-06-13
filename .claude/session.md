@@ -1,5 +1,87 @@
 # Session context
 
+## Сессия (2026-06-13, пятидесятая) — Фаза 3: нумерация частей книги + `[float]`-заголовки + `sectnumlevels`
+
+Запрос «продолжи». ДВЕ ветки, обе смержены в master (--no-ff), base-бинарь
+/tmp/adoc_base обновлён до 328. **ОЖИДАЕТ: явная авторизация на `git push origin
+master` + удаление двух веток** (пуш — outward-facing). Старт: push 49-й уже
+прошёл (origin/master == master == 9010e50, дерево чисто, ветки fix/* удалены).
+
+### Ветка 1: `fix/book-part-numbering` (`dd3c2f0`, merge `ea2e0c2`) — КОРРЕКТНО, БЕЗ ФЛИПА
+Выбор: outline (6597, Δ1) выглядел single-root — первые 6 diff'ов «Part I:
+Fundamentals» vs «Fundamentals». Документ `:doctype: book` + `:partnums:` +
+`:part-signifier: Part`. **Семантика** (пробы /tmp/p_part1..7, html5.rb
+convert_section): части (level-0 секции книги) под `:partnums:` получают префикс
+`{signifier+" " если задан}{roman}: ` (signifier="Part"→«Part I: », unset→«I: »);
+римские заглавные сквозные глобальные; нумерация частей зависит ТОЛЬКО от
+partnums, глав — от sectnums (независимы, P5); главы сквозные через части
+(глобальный chapter-number, P4); префикс попадает и в TOC (P6).
+**РЕНДЕР-CORE** SectionNumberer: `part_counter` + `part_prefix(signifier)` +
+`to_roman`. **РЕНДЕРЕР** blocks.rs start_section_div: book-part ветка ставит
+`pending_section_caption` (тот же канал что appendix — в заголовок И TOC),
+signifier экранируется. **Бонус-багфикс (pre-existing)**: TOC внешний `<ul>`
+класс = реальный asciidoctor-уровень секции (`level-1`, было `(level-1).max(1)`)
+→ body sect0 (book part ИЛИ article level-0) теперь `sectlevel0`, не `sectlevel1`
+(проба p_art0). +2 html, +2 core теста. **Корпус: Identical 327 (БЕЗ флипа —
+нет файла где нумерация частей единственное расхождение)**; blast: outline
+closer 6597→6587, **0 регрессий**. Закоммичено как корректное улучшение
+(part-numbering — реальная книжная фича + pre-existing sectlevel0 багфикс).
+outline НЕ single-root (мульти-root: escaped `\*`, pre-existing `+ +`→hard-break
+в monospace [TODO.md строка 256], и др. — spec-файл со всеми конструкциями).
+
+### Ветка 2: `fix/float-discrete-headings-sectnumlevels` (`3a7e203`, merge на master) — +1 ФЛИП
+Выбор после ветки 1: **section (347, Δ−40)** — diffone @39 `<h1 class="float">`
+vs наш `class="sect0"`. ТРИ корня section.adoc, все про секции/нумерацию:
+- **(1) `[float]` = синоним `[discrete]`** (standalone-заголовок, не секция).
+  Парсер УЖЕ имел scan_discrete_heading + Tag::Heading, но триггер только на
+  `[discrete]`. **ПАРСЕР** block.rs: хелпер `is_discrete_style(s)` =
+  `matches!(s, "discrete"|"float")`, три проверки section-маркера переведены
+  (scan_section триггер @1426, header-detect skip @625, scan_discrete_heading
+  id-gen @1534). Класс = буквальное имя стиля (`[float]`→`class="float"`,
+  `[discrete]`→`class="discrete"`; роль `[float.r]`→`class="float r"`). Не
+  секция, не в TOC, не нумеруется (пробы /tmp/p_disc, p_disc2). Строка 1450
+  scan_section `!= "float"` filter осталась мёртвой защитой (float перехватывается
+  раньше).
+- **(2) `sectnumlevels` ограничивает глубину нумерации** (default 3). **РЕНДЕРЕР**:
+  поле `sectnumlevels` (lib.rs), гейт в start_section_title: нумеровать только
+  при `display_level <= sectnumlevels+1` (asciidoctor level = display−1).
+  Фиксит pre-existing баг — мы всегда нумеровали asciidoctor-level-4 (display 5)
+  секции (проба p_snl: default обрезает на level 3).
+- **(3) `sectnumlevels` значение парсится Ruby-`to_i`** (ведущие цифры): строка
+  178 `:sectnumlevels: 2 <.>` (callout-суффикс в документации) → 2, а наш
+  `parse::<u8>` падал → оставался default 3 (проба p_snlc подтвердил
+  asciidoctor берёт 2).
++2 html, +1 parser теста. **Корпус: Identical 327→328 (+1 ФЛИП, section.adoc
+347→0)**; blast (base 327): РОВНО 1 файл, **0 регрессий, 0 затронутых других**.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 496, html 406,
+  core +2); compat parsing-lab 233/233.
+- section.adoc diffone: **0 diffs** (был 347). Все пробы совпали с asciidoctor.
+- **Корпус итог: Identical 327→328** (ветка 1 без флипа, ветка 2 +1 флип).
+
+### Что дальше
+- nearmiss на 328 (16 Different): replacements (4 — NCR, скип), ts-url-format
+  (110, Δ108 — обрезка open-блока в dd-continuation), counters (136 —
+  АРХИТЕКТУРНЫЙ verbatim `{counter:}`), complex (152, Δ143), **image-size (177,
+  Δ92 — таблица `[%autowidth]`/`|====` НЕ распознаётся в ПОЛНОМ документе, но
+  ИЗОЛИРОВАННО (строки 99-125) распознаётся (`fit-content` есть!) → КОНТЕКСТНЫЙ
+  корень выше по файлу, НЕ в таблице; искать что ломает state до строки 99)**,
+  **data (181, Δ77 — CSV/DSV таблицы `[%header,format=csv/dsv]` + shorthand
+  `,===`; БОЛЬШАЯ многокорневая фича, не парсим colgroup для autocols)**,
+  troubleshoot-unconstrained-formatting (212, Δ−4 — архитектурно), text (249,
+  Δ−5 — то же), image-svg (259, Δ8 — ДВА корня: table `frame-ends grid-none` И
+  `opts=interactive` SVG → `<object>`), align-by-cell (371, Δ−16 — inline-формат
+  `<n>`/`^+` в backtick-тексте, архитектурно), block-name-table (431, Δ−2 —
+  `++…++` double-plus escape, архитектурно), table (597, Δ1 — `|=== <1>` не
+  точный делимитер + `<2>` callout-list-item рвёт параграф, ДВА корня),
+  character-replacement-ref (625, Δ113), syntax-quick-reference (2788, Δ−31),
+  document-attributes-ref (6363, Δ73), **outline (6587, Δ1 — МУЛЬТИ-root, НЕ
+  флипнет одним фиксом)**.
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сорок девятая) — Фаза 3: горизонтальный dlist colgroup-ширины + qanda `<p>`-обёртка ответа и группировка термов
 
 Запрос «продолжи». Ветка **`fix/horizontal-dlist-colgroup-widths`** —
