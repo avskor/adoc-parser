@@ -484,6 +484,14 @@ pub struct CellSpec<'a> {
     pub style_explicit: bool,
     pub halign: HAlign,
     pub valign: VAlign,
+    /// True when the cell spec carried an explicit horizontal-align operator
+    /// (`<`/`^`/`>`). An explicit alignment wins over the column default; an
+    /// unspecified one inherits it. Needed because the default `Left` value is
+    /// indistinguishable from an explicit `<` without this flag.
+    pub halign_explicit: bool,
+    /// True when the cell spec carried an explicit vertical-align operator
+    /// (`.<`/`.^`/`.>`). See [`CellSpec::halign_explicit`].
+    pub valign_explicit: bool,
 }
 
 /// Cells parsed from one line of a psv table, plus any text that appeared
@@ -529,62 +537,73 @@ fn split_unescaped_pipes(s: &str) -> Vec<&str> {
 
 /// Parse alignment prefix from a cell specifier (prefix before first `|`).
 /// Reads `[<^>]` for halign, then `.[<^>]` for valign from the beginning.
-/// Returns `(remaining, halign, valign)`.
-pub fn parse_cell_align_prefix(s: &str) -> (&str, HAlign, VAlign) {
+/// Returns `(remaining, halign, valign, halign_explicit, valign_explicit)`;
+/// the explicit flags record whether each operator was actually present.
+pub fn parse_cell_align_prefix(s: &str) -> (&str, HAlign, VAlign, bool, bool) {
     let mut rest = s;
     let mut halign = HAlign::default();
     let mut valign = VAlign::default();
+    let mut halign_explicit = false;
+    let mut valign_explicit = false;
 
     // Parse halign: <, ^, >
     if let Some(stripped) = rest.strip_prefix('<') {
         halign = HAlign::Left;
+        halign_explicit = true;
         rest = stripped;
     } else if let Some(stripped) = rest.strip_prefix('^') {
         halign = HAlign::Center;
+        halign_explicit = true;
         rest = stripped;
     } else if let Some(stripped) = rest.strip_prefix('>') {
         halign = HAlign::Right;
+        halign_explicit = true;
         rest = stripped;
     }
 
     // Parse valign: .<, .^, .>
     if let Some(stripped) = rest.strip_prefix(".<") {
         valign = VAlign::Top;
+        valign_explicit = true;
         rest = stripped;
     } else if let Some(stripped) = rest.strip_prefix(".^") {
         valign = VAlign::Middle;
+        valign_explicit = true;
         rest = stripped;
     } else if let Some(stripped) = rest.strip_prefix(".>") {
         valign = VAlign::Bottom;
+        valign_explicit = true;
         rest = stripped;
     }
 
-    (rest, halign, valign)
+    (rest, halign, valign, halign_explicit, valign_explicit)
 }
 
 /// Parse alignment suffix from the end of a segment (content between pipes).
 /// The alignment spec for the NEXT cell sits at the END of the segment, after content.
 /// Pattern at end: `[<^>]` for halign, then `.[<^>]` for valign.
 /// Only valid if preceded by space or at start of string.
-/// Returns `(remaining_content, halign, valign)`.
-pub fn parse_cell_align_suffix(s: &str) -> (&str, HAlign, VAlign) {
+/// Returns `(remaining_content, halign, valign, halign_explicit, valign_explicit)`;
+/// the explicit flags record whether each operator was actually present.
+pub fn parse_cell_align_suffix(s: &str) -> (&str, HAlign, VAlign, bool, bool) {
     let trimmed = s.trim_end();
     if trimmed.is_empty() {
-        return (s, HAlign::default(), VAlign::default());
+        return (s, HAlign::default(), VAlign::default(), false, false);
     }
 
     let bytes = trimmed.as_bytes();
     let mut end = trimmed.len();
     let mut halign = HAlign::default();
     let mut valign = VAlign::default();
-    let mut found = false;
+    let mut halign_explicit = false;
+    let mut valign_explicit = false;
 
     // Try to parse valign from end: .< .^ .>
     if end >= 2 && bytes[end - 2] == b'.' {
         match bytes[end - 1] {
-            b'<' => { valign = VAlign::Top; end -= 2; found = true; }
-            b'^' => { valign = VAlign::Middle; end -= 2; found = true; }
-            b'>' => { valign = VAlign::Bottom; end -= 2; found = true; }
+            b'<' => { valign = VAlign::Top; end -= 2; valign_explicit = true; }
+            b'^' => { valign = VAlign::Middle; end -= 2; valign_explicit = true; }
+            b'>' => { valign = VAlign::Bottom; end -= 2; valign_explicit = true; }
             _ => {}
         }
     }
@@ -592,22 +611,28 @@ pub fn parse_cell_align_suffix(s: &str) -> (&str, HAlign, VAlign) {
     // Try to parse halign from end: < ^ >
     if end >= 1 {
         match bytes[end - 1] {
-            b'<' => { halign = HAlign::Left; end -= 1; found = true; }
-            b'^' => { halign = HAlign::Center; end -= 1; found = true; }
-            b'>' => { halign = HAlign::Right; end -= 1; found = true; }
+            b'<' => { halign = HAlign::Left; end -= 1; halign_explicit = true; }
+            b'^' => { halign = HAlign::Center; end -= 1; halign_explicit = true; }
+            b'>' => { halign = HAlign::Right; end -= 1; halign_explicit = true; }
             _ => {}
         }
     }
 
     // Only valid if preceded by space or at start of string
-    if found {
+    if halign_explicit || valign_explicit {
         let remaining = &trimmed[..end];
         if remaining.is_empty() || remaining.ends_with(' ') {
-            return (&s[..s.len() - (trimmed.len() - end)], halign, valign);
+            return (
+                &s[..s.len() - (trimmed.len() - end)],
+                halign,
+                valign,
+                halign_explicit,
+                valign_explicit,
+            );
         }
     }
 
-    (s, HAlign::default(), VAlign::default())
+    (s, HAlign::default(), VAlign::default(), false, false)
 }
 
 /// Parse a span modifier from the end of a segment (the part before `|`).
@@ -715,6 +740,10 @@ pub struct ExactCellSpec {
     pub style: CellStyle,
     /// See [`CellSpec::style_explicit`].
     pub style_explicit: bool,
+    /// See [`CellSpec::halign_explicit`].
+    pub halign_explicit: bool,
+    /// See [`CellSpec::valign_explicit`].
+    pub valign_explicit: bool,
 }
 
 /// Parse an entire string as a cell specifier (mirror of asciidoctor's
@@ -746,7 +775,8 @@ pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
         }
     }
 
-    let (after_align, halign, valign) = parse_cell_align_prefix(rest);
+    let (after_align, halign, valign, halign_explicit, valign_explicit) =
+        parse_cell_align_prefix(rest);
     rest = after_align;
 
     let (style, style_explicit) = match rest {
@@ -763,7 +793,17 @@ pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
         _ => return None,
     };
 
-    Some(ExactCellSpec { duplication, colspan, rowspan, halign, valign, style, style_explicit })
+    Some(ExactCellSpec {
+        duplication,
+        colspan,
+        rowspan,
+        halign,
+        valign,
+        style,
+        style_explicit,
+        halign_explicit,
+        valign_explicit,
+    })
 }
 
 pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
@@ -786,6 +826,8 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         style_explicit: false,
         halign: HAlign::default(),
         valign: VAlign::default(),
+        halign_explicit: false,
+        valign_explicit: false,
     };
 
     if !prefix.is_empty() {
@@ -815,6 +857,8 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         style_explicit: false,
         halign: HAlign::default(),
         valign: VAlign::default(),
+        halign_explicit: false,
+        valign_explicit: false,
     };
     let mut cells = Vec::new();
     let parts: Vec<&str> = split_unescaped_pipes(&line[first_pipe + 1..]);
@@ -838,7 +882,8 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         } else {
             let (after_style, style, style_explicit) = parse_cell_style_suffix(part);
             let (after_span, cs, rs) = parse_span_spec(after_style);
-            let (content, halign, valign) = parse_cell_align_suffix(after_span);
+            let (content, halign, valign, halign_explicit, valign_explicit) =
+                parse_cell_align_suffix(after_span);
             (
                 content,
                 ExactCellSpec {
@@ -849,6 +894,8 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
                     style_explicit,
                     halign,
                     valign,
+                    halign_explicit,
+                    valign_explicit,
                 },
             )
         };
@@ -866,6 +913,8 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
             style_explicit: pending.style_explicit,
             halign: pending.halign,
             valign: pending.valign,
+            halign_explicit: pending.halign_explicit,
+            valign_explicit: pending.valign_explicit,
         });
 
         pending = next;
@@ -1508,23 +1557,25 @@ mod tests {
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default(), halign_explicit: false, valign_explicit: false }
     }
 
     fn spanned_cell(content: &str, colspan: u8, rowspan: u8) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style: CellStyle::Default, style_explicit: false, halign: HAlign::default(), valign: VAlign::default(), halign_explicit: false, valign_explicit: false }
     }
 
     fn styled_cell(content: &str, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default(), halign_explicit: false, valign_explicit: false }
     }
 
     fn spanned_styled_cell(content: &str, colspan: u8, rowspan: u8, style: CellStyle) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default() }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan, rowspan, style, style_explicit: true, halign: HAlign::default(), valign: VAlign::default(), halign_explicit: false, valign_explicit: false }
     }
 
+    // The aligned-cell assertions below only use non-default alignment
+    // operators, so explicit-ness mirrors "value differs from default".
     fn aligned_cell(content: &str, halign: HAlign, valign: VAlign) -> CellSpec<'_> {
-        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign, valign }
+        CellSpec { content: Cow::Borrowed(content), duplication: 1, colspan: 1, rowspan: 1, style: CellStyle::Default, style_explicit: false, halign, valign, halign_explicit: halign != HAlign::default(), valign_explicit: valign != VAlign::default() }
     }
 
     /// Cells of a parsed table line (continuation ignored), for assertions.
@@ -1591,6 +1642,17 @@ mod tests {
                    (1, 3, HAlign::Center, VAlign::Bottom, CellStyle::Strong));
         let sp = parse_cell_spec_exact("2.3+").unwrap();
         assert_eq!((sp.colspan, sp.rowspan), (2, 3));
+        // Explicit-alignment flags: `<.>` sets an explicit Left (the default
+        // value) and an explicit Bottom — both must be flagged so a cell can
+        // override a non-default column alignment (cell.adoc `.3+<.>m`).
+        let sp = parse_cell_spec_exact(".3+<.>m").unwrap();
+        assert_eq!(
+            (sp.halign, sp.valign, sp.halign_explicit, sp.valign_explicit),
+            (HAlign::Left, VAlign::Bottom, true, true)
+        );
+        // A bare span spec carries no explicit alignment.
+        let sp = parse_cell_spec_exact("2.3+").unwrap();
+        assert_eq!((sp.halign_explicit, sp.valign_explicit), (false, false));
         // Partial matches are not specs
         assert!(parse_cell_spec_exact("mid").is_none());
         assert!(parse_cell_spec_exact("x2+").is_none());
@@ -1857,28 +1919,28 @@ mod tests {
 
     #[test]
     fn test_parse_cell_align_prefix_halign() {
-        assert_eq!(parse_cell_align_prefix("^"), ("", HAlign::Center, VAlign::Top));
-        assert_eq!(parse_cell_align_prefix("<"), ("", HAlign::Left, VAlign::Top));
-        assert_eq!(parse_cell_align_prefix(">"), ("", HAlign::Right, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix("^"), ("", HAlign::Center, VAlign::Top, true, false));
+        assert_eq!(parse_cell_align_prefix("<"), ("", HAlign::Left, VAlign::Top, true, false));
+        assert_eq!(parse_cell_align_prefix(">"), ("", HAlign::Right, VAlign::Top, true, false));
     }
 
     #[test]
     fn test_parse_cell_align_prefix_valign() {
-        assert_eq!(parse_cell_align_prefix(".<"), ("", HAlign::Left, VAlign::Top));
-        assert_eq!(parse_cell_align_prefix(".^"), ("", HAlign::Left, VAlign::Middle));
-        assert_eq!(parse_cell_align_prefix(".>"), ("", HAlign::Left, VAlign::Bottom));
+        assert_eq!(parse_cell_align_prefix(".<"), ("", HAlign::Left, VAlign::Top, false, true));
+        assert_eq!(parse_cell_align_prefix(".^"), ("", HAlign::Left, VAlign::Middle, false, true));
+        assert_eq!(parse_cell_align_prefix(".>"), ("", HAlign::Left, VAlign::Bottom, false, true));
     }
 
     #[test]
     fn test_parse_cell_align_prefix_combined() {
-        assert_eq!(parse_cell_align_prefix("^.>"), ("", HAlign::Center, VAlign::Bottom));
-        assert_eq!(parse_cell_align_prefix(">.^rest"), ("rest", HAlign::Right, VAlign::Middle));
+        assert_eq!(parse_cell_align_prefix("^.>"), ("", HAlign::Center, VAlign::Bottom, true, true));
+        assert_eq!(parse_cell_align_prefix(">.^rest"), ("rest", HAlign::Right, VAlign::Middle, true, true));
     }
 
     #[test]
     fn test_parse_cell_align_prefix_no_align() {
-        assert_eq!(parse_cell_align_prefix(""), ("", HAlign::Left, VAlign::Top));
-        assert_eq!(parse_cell_align_prefix("text"), ("text", HAlign::Left, VAlign::Top));
+        assert_eq!(parse_cell_align_prefix(""), ("", HAlign::Left, VAlign::Top, false, false));
+        assert_eq!(parse_cell_align_prefix("text"), ("text", HAlign::Left, VAlign::Top, false, false));
     }
 
     #[test]
