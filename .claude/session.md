@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят шестая) — Фаза 3: double-plus passthrough `++…++` применяет specialchars (экранирует `<>&`), не raw
+
+Запрос «продолжи». Ветка **`fix/double-plus-passthrough-specialchars`** —
+ЗАКОММИЧЕНА (`1d2d6e8`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 55-й закрыт сам (мерж 55-й УЖЕ выполнен И запушен —
+origin/master == master == 9d51b71 (333), дерево чисто, ветки fix/* удалены).
+base-бинарь /tmp/adoc_base обновлён до 333 (master HEAD) ПЕРЕД фиксом.
+
+### Выбор задачи
+nearmiss на 333 (11 Different): кандидаты с малым |len_delta| — block-name-table
+(431, Δ−2), table (597, Δ1 — ДВА корня). diffone block-name-table @95: эталон
+`[<LABEL>]` как ОДИН текст-токен внутри `<code>`, наш `[`, `<label>` (РЕАЛЬНЫЙ
+HTML-тег!), `]` — мы выводили `<LABEL>` НЕ экранированным. Single-root.
+
+### Реальная семантика (пробы /tmp/pass_probe,pass_probe2,pp3 vs asciidoctor)
+- **`++…++` (double-plus, unconstrained) применяет ТОЛЬКО `specialcharacters`** —
+  экранирует `<`/`>`/`&`, как `+…+` (single). `+++…+++` (triple) и `pass:[]` (без
+  spec) — raw, без субституций. Пробы: `++[<LABEL>]++`→`[&lt;LABEL&gt;]`,
+  `++a & b++`→`a &amp; b`, `+++[<LABEL>]+++`→`[<LABEL>]` (сырой).
+- **НЕ применяются** quotes/replacements/attributes/inline-репарсинг: `++*x*++`→`*x*`,
+  `++a -- b++`→`a -- b`, `++{foo}++`→`{foo}`. Работает mid-word (`a++bc++d`→`abcd`),
+  пустой `++++`→ничего. Все эти случаи у нас УЖЕ совпадали.
+
+### Что сделано (1 точка в парсере)
+- **ПАРСЕР** inline.rs `try_double_plus_passthrough`: `Event::InlinePassthrough`
+  (raw) → `Event::Text` (рендерер html-экранирует). Триггерит ровно specialchars,
+  без реран субституций (Text — уже-распарсенный leaf, рендерер только экранирует).
+  Triple-plus остался `InlinePassthrough` (raw). Док-коммент.
+- Тесты: +1 parser (`test_double_plus_passthrough_applies_specialchars`), +1 html
+  (`test_double_plus_passthrough_escapes_specialchars_html`); 2 parser-теста
+  обновлены (`test_passthrough_inside_monospace`, `test_pass_macro_inside_single_plus`
+  — кодировали старый `InlinePassthrough` для double-plus → теперь `Text`; backtick/
+  `pass:[y]` не содержат `<>&`, остаются литералом).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 500→501, html 416→417);
+  compat parsing-lab 233/233.
+- block-name-table diffone: **0 diffs** (был 431). Все пробы IDENTICAL.
+- **Корпус: Identical 333→334 (+1 ФЛИП)**. Blast (base 333): РОВНО 1 флип —
+  block-name-table 431→0; **0 регрессий**. outline.adoc «FARTHER» 6586→6647 (+61) —
+  **АРТЕФАКТ нормализатора, НЕ регрессия**: единственная изменённая строка
+  (page-break `` `++<<<++` ``) теперь `<code>&lt;&lt;&lt;</code>` БАЙТ-В-БАЙТ с
+  asciidoctor (было `<code><<<</code>` — невалидный HTML). Доказано: нормализатор
+  токенизирует сырой `<<<` как `'<','<','<'` (≠ эталон `'<<<'`), а `&lt;&lt;&lt;` →
+  `'<<<'` (== эталон, `new==ref: True`). 2-токенный сдвиг переразложил позиционное
+  выравнивание гигантского мульти-root spec → счётчик ВЫРОС, хотя строка стала верна.
+
+### Что дальше
+- nearmiss на 334 (10 Different): counters (136, Δ9 — АРХИТЕКТУРНЫЙ verbatim
+  `{counter:}`), data (181, Δ77 — CSV/DSV `,===`, мульти-root),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — nested-backtick, архитектурно),
+  text (249, Δ−5 — `+ +` hard-break в monospace + apostrophe NCR), align-by-cell
+  (371, Δ−16 — inline `<n>`/`^+` в backtick), table (597, Δ1 — ДВА корня:
+  `|=== <1>` не точный делимитер + callout-list-item рвёт параграф),
+  character-replacement-ref (625, Δ113), syntax-quick-reference (2788, Δ−31 —
+  мульти-root), document-attributes-ref (6363, Δ73 — мульти-root), outline (6647,
+  Δ — МУЛЬТИ-root).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54/55 (без изменений).
+
+---
+
 ## Сессия (2026-06-14, пятьдесят пятая) — Фаза 3: list-item принципиальный `<p>` — literal-параграф закрывает его, пустой принципал держит `<p></p>`
 
 Запрос «продолжи». Ветка **`fix/list-item-principal-p-empty-and-literal`** —

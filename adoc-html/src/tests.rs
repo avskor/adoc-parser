@@ -4335,6 +4335,25 @@ fn test_empty_double_plus_passthrough_html() {
 }
 
 #[test]
+fn test_double_plus_passthrough_escapes_specialchars_html() {
+    // Double-plus `++…++` applies the specialcharacters sub: `<`/`>`/`&` are escaped,
+    // unlike triple-plus (raw). Asciidoctor: `++[<LABEL>]++` → `[&lt;LABEL&gt;]`.
+    let html = to_html("a ++[<LABEL>]++ b");
+    assert!(html.contains("<p>a [&lt;LABEL&gt;] b</p>"),
+        "++…++ should escape < and >. Got: {html}");
+
+    // In a monospace (`m`) table column the escaped passthrough sits inside <code>.
+    let html = to_html("[cols=1m]\n|===\n|++[<LABEL>]++\n|===");
+    assert!(html.contains("<code>[&lt;LABEL&gt;]</code>"),
+        "++…++ in m-column should escape inside <code>. Got: {html}");
+
+    // Triple-plus stays raw — the angle brackets pass through unescaped.
+    let html = to_html("a +++[<LABEL>]+++ b");
+    assert!(html.contains("<p>a [<LABEL>] b</p>"),
+        "+++…+++ should pass through raw. Got: {html}");
+}
+
+#[test]
 fn test_unknown_inline_macro_empty_attrs_stays_literal() {
     let html = to_html("widget:component[]");
     assert!(html.contains("<p>widget:component[]</p>"),
