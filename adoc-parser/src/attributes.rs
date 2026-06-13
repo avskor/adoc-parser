@@ -465,9 +465,16 @@ impl BlockAttributes {
             return Some(vec![ColSpec::default(); n]);
         }
 
-        // Comma-separated specs: cols="<,^,>" or cols="^.>2,<1" or cols="3*^"
+        // Comma- or semicolon-separated specs: cols="<,^,>" or cols="^.>2,<1"
+        // or cols="3*^". Asciidoctor picks the separator by presence: if a
+        // comma appears it splits on comma, otherwise on semicolon. This is
+        // why `[cols=1;m;m]` works unquoted — semicolons survive the attrlist
+        // splitter (which itself consumes commas), so authors use `;` to avoid
+        // quoting. Mixed separators yield garbage specs on the non-split char,
+        // matching asciidoctor's lone-separator rule.
+        let sep = if trimmed.contains(',') { ',' } else { ';' };
         let mut specs = Vec::new();
-        for part in trimmed.split(',') {
+        for part in trimmed.split(sep) {
             let part = part.trim();
             if part.is_empty() {
                 continue;
@@ -1234,6 +1241,27 @@ mod tests {
         assert_eq!(specs[0].width, 2);
         assert_eq!(specs[1].halign, HAlign::Left);
         assert_eq!(specs[1].width, 1);
+    }
+
+    #[test]
+    fn test_table_col_specs_semicolon_separator() {
+        // Semicolon is the column separator when no comma is present, so
+        // `[cols=1;m;m]` survives the attrlist splitter unquoted → 3 columns.
+        let attrs = BlockAttributes::parse("cols=1;m;m");
+        let specs = attrs.table_col_specs().unwrap();
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].width, 1);
+        assert_eq!(specs[0].style, CellStyle::Default);
+        assert_eq!(specs[1].style, CellStyle::Monospace);
+        assert_eq!(specs[2].style, CellStyle::Monospace);
+        assert_eq!(attrs.table_cols_count(), Some(3));
+        // Multiplier survives semicolon split too: `2*;m` → 3 columns.
+        let attrs = BlockAttributes::parse("cols=2*;m");
+        assert_eq!(attrs.table_cols_count(), Some(3));
+        // A comma anywhere forces comma-splitting (semicolons stay literal,
+        // yielding lenient default specs — mirrors asciidoctor's lone sep).
+        let attrs = BlockAttributes::parse("cols=\"1,m;m\"");
+        assert_eq!(attrs.table_cols_count(), Some(2));
     }
 
     #[test]
