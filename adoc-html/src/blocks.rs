@@ -129,8 +129,24 @@ impl HtmlRenderer {
             None => 100,
         };
 
-        // Base Asciidoctor table classes
-        let mut classes = String::from("tableblock frame-all grid-all");
+        // Base Asciidoctor table classes (html5.rb convert_table:859-860):
+        // `frame-{frame} grid-{grid}` where frame defaults to "all" with
+        // "topbot" aliased to "ends", grid defaults to "all". Both read the
+        // table's named attribute first, then fall back to the document
+        // attribute (table-frame/table-grid), then the default. The value is
+        // emitted verbatim — asciidoctor performs no validation here.
+        let frame_value = meta.as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "frame").map(|(_, v)| v.clone()))
+            .or_else(|| self.document_attrs.get("table-frame").cloned());
+        let grid_value = meta.as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "grid").map(|(_, v)| v.clone()))
+            .or_else(|| self.document_attrs.get("table-grid").cloned());
+        let frame = match frame_value.as_deref().unwrap_or("all") {
+            "topbot" => "ends",
+            other => other,
+        };
+        let grid = grid_value.as_deref().unwrap_or("all");
+        let mut classes = format!("tableblock frame-{frame} grid-{grid}");
         let mut width_style = None;
         if tablepcwidth == 100 {
             // An explicit width suppresses fit-content even with %autowidth.

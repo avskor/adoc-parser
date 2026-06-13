@@ -562,8 +562,8 @@ impl HtmlRenderer {
                 self.start_table_cell(output, false, colspan, rowspan, style, halign, valign),
             Tag::TableHeaderCell { colspan, rowspan, style, halign, valign } =>
                 self.start_table_cell(output, true, colspan, rowspan, style, halign, valign),
-            Tag::BlockImage { target, alt, width, height, link } =>
-                self.start_block_image(output, target, alt, width, height, link, &meta),
+            Tag::BlockImage { target, alt, width, height, link, interactive, fallback } =>
+                self.start_block_image(output, target, alt, width, height, link, *interactive, fallback, &meta),
             Tag::BlockVideo { target, attrs } => {
                 self.open_block_with_title(output, &meta, "videoblock");
                 render_video_tag(output, target, attrs);

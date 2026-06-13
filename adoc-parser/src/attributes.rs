@@ -550,6 +550,14 @@ pub struct ImageAttrs<'a> {
     pub role: Option<&'a str>,
     pub caption: Option<&'a str>,
     pub title: Option<&'a str>,
+    /// `format=` named attribute (e.g. `svg`); selects the SVG rendering path
+    /// alongside a `.svg` target extension.
+    pub format: Option<&'a str>,
+    /// `fallback=` named attribute: image shown when an interactive `<object>`
+    /// SVG cannot be displayed by the browser.
+    pub fallback: Option<&'a str>,
+    /// Set when the `interactive` option (`opts=interactive`) is present.
+    pub interactive: bool,
 }
 
 pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
@@ -564,6 +572,9 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
             role: None,
             caption: None,
             title: None,
+            format: None,
+            fallback: None,
+            interactive: false,
         };
     }
 
@@ -576,6 +587,9 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
     let mut role: Option<&str> = None;
     let mut caption: Option<&str> = None;
     let mut title: Option<&str> = None;
+    let mut format: Option<&str> = None;
+    let mut fallback: Option<&str> = None;
+    let mut interactive = false;
     let mut positional = Vec::new();
 
     for part in split_respecting_quotes(bracket_content) {
@@ -597,6 +611,13 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
                 "role" => role = Some(value),
                 "caption" => caption = Some(value),
                 "title" => title = Some(value),
+                "format" => format = Some(value),
+                "fallback" => fallback = Some(value),
+                // `opts`/`options` is a comma-separated list; only `interactive`
+                // affects the HTML output (SVG `<object>` rendering).
+                "opts" | "options" => {
+                    interactive = value.split(',').any(|o| o.trim() == "interactive");
+                }
                 _ => {}
             }
         } else {
@@ -626,7 +647,7 @@ pub fn parse_image_attrs(bracket_content: &str) -> ImageAttrs<'_> {
         height = Some(h);
     }
 
-    ImageAttrs { alt, width, height, align, float, link, role, caption, title }
+    ImageAttrs { alt, width, height, align, float, link, role, caption, title, format, fallback, interactive }
 }
 
 pub struct LinkAttrs<'a> {

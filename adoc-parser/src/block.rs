@@ -867,6 +867,13 @@ impl<'a> BlockScanner<'a> {
                 .link
                 .map(Cow::Borrowed)
                 .or_else(|| block_attrs.named.get("link").map(|v| Cow::Owned(v.clone())));
+            // An SVG image (format=svg or a `.svg` target) with the `interactive`
+            // option renders as an `<object>` element (html5.rb convert_image).
+            // The `inline` option (embed the SVG source) is not supported — it
+            // requires reading the file; such images fall back to `<img>`.
+            let is_svg = img_attrs.format == Some("svg") || target.contains(".svg");
+            let interactive = is_svg && img_attrs.interactive;
+            let fallback = img_attrs.fallback.map(Cow::Borrowed);
             self.push_event(Event::End(TagEnd::BlockImage));
             self.push_event(Event::Start(Tag::BlockImage {
                 target: Cow::Borrowed(target),
@@ -874,6 +881,8 @@ impl<'a> BlockScanner<'a> {
                 width: img_attrs.width.map(Cow::Borrowed),
                 height: img_attrs.height.map(Cow::Borrowed),
                 link,
+                interactive,
+                fallback,
             }));
             self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
             self.push_title_then_events(title_events);

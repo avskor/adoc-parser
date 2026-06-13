@@ -278,7 +278,7 @@ fn is_uriish(target: &str) -> bool {
 
 impl HtmlRenderer {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn start_block_image(&mut self, output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
+    pub(crate) fn start_block_image(&mut self, output: &mut String, target: &CowStr<'_>, alt: &CowStr<'_>, width: &Option<CowStr<'_>>, height: &Option<CowStr<'_>>, link: &Option<CowStr<'_>>, interactive: bool, fallback: &Option<CowStr<'_>>, meta: &Option<BlockMeta>) {
         // Build base class with align/float CSS classes from named attrs
         let base_class = Self::image_base_class("imageblock", meta);
         output.push_str("<div");
@@ -290,22 +290,57 @@ impl HtmlRenderer {
             html_escape(output, href);
             output.push_str("\">");
         }
-        output.push_str("<img");
-        write_attr(output, "src", &self.image_uri(target));
         // Auto-generate alt from filename if empty
         let effective_alt = if alt.as_ref().is_empty() {
             auto_alt_from_target(target)
         } else {
             alt.to_string()
         };
-        write_attr(output, "alt", &effective_alt);
-        if let Some(w) = width {
-            write_attr(output, "width", w);
+        if interactive {
+            // Interactive SVG → <object> (html5.rb convert_image). Both the
+            // object and the fallback <img> carry width/height; the fallback is
+            // a <img> when the `fallback` attribute is set, else a styled <span>.
+            output.push_str("<object type=\"image/svg+xml\"");
+            write_attr(output, "data", &self.image_uri(target));
+            if let Some(w) = width {
+                write_attr(output, "width", w);
+            }
+            if let Some(h) = height {
+                write_attr(output, "height", h);
+            }
+            output.push('>');
+            match fallback {
+                Some(fb) => {
+                    output.push_str("<img");
+                    write_attr(output, "src", &self.image_uri(fb));
+                    write_attr(output, "alt", &effective_alt);
+                    if let Some(w) = width {
+                        write_attr(output, "width", w);
+                    }
+                    if let Some(h) = height {
+                        write_attr(output, "height", h);
+                    }
+                    output.push('>');
+                }
+                None => {
+                    output.push_str("<span class=\"alt\">");
+                    html_escape(output, &effective_alt);
+                    output.push_str("</span>");
+                }
+            }
+            output.push_str("</object>");
+        } else {
+            output.push_str("<img");
+            write_attr(output, "src", &self.image_uri(target));
+            write_attr(output, "alt", &effective_alt);
+            if let Some(w) = width {
+                write_attr(output, "width", w);
+            }
+            if let Some(h) = height {
+                write_attr(output, "height", h);
+            }
+            output.push('>');
         }
-        if let Some(h) = height {
-            write_attr(output, "height", h);
-        }
-        output.push('>');
         if has_link {
             output.push_str("</a>");
         }
