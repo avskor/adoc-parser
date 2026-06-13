@@ -3583,6 +3583,18 @@ fn test_intrinsic_char_replacement_attrs() {
 }
 
 #[test]
+fn test_monospace_replacements_and_char_refs_html() {
+    // Constrained monospace `` `text` `` undergoes the full normal substitution group
+    // (Asciidoctor), so char-refs are restored and `(C)`/word-flanked `--` are replaced
+    // inside `<code>`; a standalone `--` at the span edge stays literal.
+    let html = to_html("`&#167;` and `(C)` and `x--y` and `--`");
+    assert!(html.contains("<code>&#167;</code>"), "char-ref preserved in monospace. Got: {html}");
+    assert!(html.contains("<code>\u{00A9}</code>"), "(C) replaced in monospace. Got: {html}");
+    assert!(html.contains("<code>x\u{2014}\u{200B}y</code>"), "word-flanked em-dash in monospace. Got: {html}");
+    assert!(html.contains("<code>--</code>"), "edge `--` stays literal in monospace. Got: {html}");
+}
+
+#[test]
 fn test_builtin_attr_doctype() {
     let html = to_html("{doctype}");
     assert!(html.contains("article"), "doctype should be article. Got: {html}");

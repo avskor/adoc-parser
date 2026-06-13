@@ -3,7 +3,11 @@ use std::borrow::Cow;
 use crate::attributes::parse_link_attrs;
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 
-fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
+fn apply_typographic_replacements<'a>(
+    text: &'a str,
+    left_is_boundary: bool,
+    right_is_boundary: bool,
+) -> Cow<'a, str> {
     // Quick check: if none of the trigger characters are present, return borrowed
     if !text.contains('-') && !text.contains('.') && !text.contains('(') && !text.contains('\'')
         && !text.contains('`')
@@ -27,9 +31,18 @@ fn apply_typographic_replacements<'a>(text: &'a str) -> Cow<'a, str> {
                 // thin-space; the flanking chars are consumed (adjacent lines merge).
                 // A flanking char already consumed by a previous replacement does not
                 // count (regex gsub semantics: `a -- -- b` replaces only the first).
-                let before_boundary = i == 0
-                    || (i > copied_up_to && matches!(bytes[i - 1], b' ' | b'\n'));
-                let after_boundary = i + 2 >= len || matches!(bytes[i + 2], b' ' | b'\n');
+                // At the run edges, the caller reports whether they are real line edges
+                // (`^`/`$`) — span-internal content is bounded by `<tag>` chars, not `^`/`$`.
+                let before_boundary = if i == 0 {
+                    left_is_boundary
+                } else {
+                    i > copied_up_to && matches!(bytes[i - 1], b' ' | b'\n')
+                };
+                let after_boundary = if i + 2 >= len {
+                    right_is_boundary
+                } else {
+                    matches!(bytes[i + 2], b' ' | b'\n')
+                };
                 if before_boundary && after_boundary {
                     let buf = result.get_or_insert_with(|| String::from(&text[..copied_up_to]));
                     let copy_end = if i == 0 { 0 } else { i - 1 };
@@ -219,6 +232,8 @@ impl InlineParser {
 
         let mut events = Vec::new();
         let mut parser = InlineState::new(text, subs, options);
+        // Top-level text: its start/end are the real paragraph/line edges.
+        parser.edges_are_line_boundaries = true;
         parser.parse_inline(&mut events);
 
         if events.is_empty() {
@@ -236,11 +251,20 @@ struct InlineState<'a> {
     /// Document-attribute-derived options (e.g. `:experimental:` gating the
     /// `kbd:`/`btn:`/`menu:` UI macros).
     options: InlineOptions,
+    /// Whether the start and end of `input` are real line/paragraph edges (`^`/`$`),
+    /// as opposed to the content of an inline span reparsed in isolation. Asciidoctor
+    /// runs replacements over the whole post-quotes string, so a span's inner content
+    /// is bounded by its `<tag>`/`</tag>` (chars `>`/`<`), not by `^`/`$`. The boundary
+    /// matters only for the spaced em-dash rule (`(^|\n| |\\)--( |\n|$)`): an edge `--`
+    /// must stay literal inside a span (`` `--` `` → `<code>--</code>`) but becomes an
+    /// em-dash at a true line edge. Top-level text sets this true; inner reparses leave
+    /// it false (the default).
+    edges_are_line_boundaries: bool,
 }
 
 impl<'a> InlineState<'a> {
     fn new(input: &'a str, subs: SubstitutionSet, options: InlineOptions) -> Self {
-        Self { input, pos: 0, subs, options }
+        Self { input, pos: 0, subs, options, edges_are_line_boundaries: false }
     }
 
     fn remaining(&self) -> &'a str {
@@ -920,7 +944,19 @@ impl<'a> InlineState<'a> {
         if start < end {
             let text = &self.input[start..end];
             if self.subs.has(SubstitutionSet::REPLACEMENTS) {
-                events.push(Event::Text(apply_typographic_replacements(text)));
+                // An edge-anchored replacement (the spaced em-dash) treats a run edge as a
+                // boundary unless that edge is also a true input edge that is NOT a line
+                // boundary — i.e. the start/end of inline-span content reparsed in isolation
+                // (`` `--` `` → `<code>--</code>`, never an em-dash). Mid-input run edges keep
+                // the legacy "boundary" treatment so an attribute-ref that expands to nothing
+                // stays transparent (`{empty}--{empty}` → em-dash at the cell's line edges).
+                let left_is_boundary = start != 0 || self.edges_are_line_boundaries;
+                let right_is_boundary = end < self.input.len() || self.edges_are_line_boundaries;
+                events.push(Event::Text(apply_typographic_replacements(
+                    text,
+                    left_is_boundary,
+                    right_is_boundary,
+                )));
             } else {
                 events.push(Event::Text(Cow::Borrowed(text)));
             }
@@ -1134,13 +1170,12 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            // Monospace (backtick) content is literal — no typographic replacements
-            let inner_subs = if marker == b'`' {
-                self.subs.without(SubstitutionSet::REPLACEMENTS)
-            } else {
-                self.subs
-            };
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
+            // Constrained monospace `` `text` `` undergoes the full normal substitution
+            // group, replacements included: Asciidoctor applies `(C)`/`--`/`...` and
+            // restores valid char-refs (`&#167;`) inside `<code>` exactly as in prose.
+            // Literal monospace (`+...+`, `pass:[]`) is intercepted as a passthrough
+            // before this point, so it stays verbatim regardless of these subs.
+            let mut inner_parser = InlineState::new(inner, self.subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1278,13 +1313,11 @@ impl<'a> InlineState<'a> {
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
 
-            // Monospace (backtick) content is literal — no typographic replacements
-            let inner_subs = if marker == b'`' {
-                self.subs.without(SubstitutionSet::REPLACEMENTS)
-            } else {
-                self.subs
-            };
-            let mut inner_parser = InlineState::new(inner, inner_subs, self.options);
+            // Unconstrained monospace ``` ``text`` ``` undergoes the full normal
+            // substitution group, replacements included — same rule as constrained
+            // monospace (see try_constrained): `(C)`/`--`/`...` are replaced and valid
+            // char-refs restored inside `<code>`. Passthroughs stay verbatim regardless.
+            let mut inner_parser = InlineState::new(inner, self.subs, self.options);
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -3814,7 +3847,7 @@ mod tests {
 
     #[test]
     fn test_typographic_no_match() {
-        let result = apply_typographic_replacements("hello world");
+        let result = apply_typographic_replacements("hello world", true, true);
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(result, "hello world");
     }
@@ -3959,6 +3992,42 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("(C) 2024")),
         ]);
+    }
+
+    #[test]
+    fn test_monospace_applies_replacements() {
+        // Constrained monospace `` `text` `` undergoes the full normal substitution
+        // group like prose: `(C)` becomes ©, a word-flanked `--` an em-dash, and a
+        // valid char-ref is restored (Asciidoctor: <code>&#169; x&#8212;&#8203;y &#167;</code>).
+        let events = parse("`(C) x--y &#167;`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("\u{00A9} x\u{2014}\u{200B}y ")),
+            Event::InlinePassthrough(Cow::Borrowed("&#167;")),
+            Event::End(TagEnd::Monospace),
+        ]);
+    }
+
+    #[test]
+    fn test_monospace_edge_em_dash_stays_literal() {
+        // A spaced em-dash needs a `^`/`$`/space boundary on each side. Asciidoctor runs
+        // replacements after wrapping in `<code>`, so `--` at the span edge is bounded by
+        // the tag chars, not a line edge → it stays literal (`` `--` `` → <code>--</code>).
+        for input in ["`--`", "`--x`", "`x--`"] {
+            let events = parse(input);
+            let text: String = events.iter().filter_map(|e| match e {
+                Event::Text(t) => Some(t.as_ref()),
+                _ => None,
+            }).collect();
+            assert!(!text.contains('\u{2014}'), "{input:?} should keep `--` literal, got {events:?}");
+        }
+        // But a true word-flanked `--` inside the span is still replaced.
+        let events = parse("`x--y`");
+        let text: String = events.iter().filter_map(|e| match e {
+            Event::Text(t) => Some(t.to_string()),
+            _ => None,
+        }).collect();
+        assert!(text.contains('\u{2014}'), "x--y inside monospace should form an em-dash, got {events:?}");
     }
 
     #[test]
