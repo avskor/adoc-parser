@@ -364,22 +364,26 @@ impl HtmlRenderer {
     pub(crate) fn start_tag(&mut self, output: &mut String, tag: &Tag) {
         // Close <p> inside list item when a sub-block starts
         match tag {
-            Tag::Paragraph | Tag::UnorderedList { .. } | Tag::OrderedList { .. }
-            | Tag::DescriptionList | Tag::DelimitedBlock { .. } | Tag::SourceBlock { .. }
-            | Tag::BlockImage { .. } | Tag::Table | Tag::Admonition { .. }
-                if self.li_p_open.last() == Some(&true) =>
+            Tag::Paragraph | Tag::LiteralParagraph | Tag::UnorderedList { .. }
+            | Tag::OrderedList { .. } | Tag::DescriptionList | Tag::DelimitedBlock { .. }
+            | Tag::SourceBlock { .. } | Tag::BlockImage { .. } | Tag::Table
+            | Tag::Admonition { .. }
+                if self.li_p_open.last().copied().is_some_and(LiPara::is_open) =>
             {
-                // A principal `<p>` with no text — e.g. a description-list item
-                // whose first content is a block (`term::` + `+` + `--`, or a
-                // term immediately followed by a nested list) — is never emitted
-                // by Asciidoctor. If nothing was written after the opening `<p>`,
-                // roll it back instead of closing an empty `<p></p>`.
-                if output.ends_with("<p>") {
+                // An empty description `<p>` — a dd whose first content is a
+                // block (`term::` + `+` + `--`, or a term immediately followed
+                // by a nested list) — is never emitted by Asciidoctor
+                // (`convert_dlist` wraps the dd text only when present), so roll
+                // it back. A list-item principal, by contrast, is always wrapped
+                // even when empty (`. {empty}` + block → `<p></p>`), and a
+                // non-empty principal of either kind closes normally.
+                let is_dd = self.li_p_open.last() == Some(&LiPara::OpenDd);
+                if is_dd && output.ends_with("<p>") {
                     output.truncate(output.len() - 3);
                 } else {
                     output.push_str("</p>\n");
                 }
-                *self.li_p_open.last_mut().unwrap() = false;
+                *self.li_p_open.last_mut().unwrap() = LiPara::Closed;
             }
             _ => {}
         }
@@ -513,7 +517,7 @@ impl HtmlRenderer {
                     DlistStyle::Horizontal => {
                         output.push_str("</td>\n<td class=\"hdlist2\">\n<p>");
                         self.hdlist_in_term_group = false;
-                        self.li_p_open.push(true);
+                        self.li_p_open.push(LiPara::OpenDd);
                     }
                     DlistStyle::Qanda => {
                         // The answer is wrapped in <p>…</p> (Asciidoctor emits
@@ -522,12 +526,12 @@ impl HtmlRenderer {
                         self.hdlist_in_term_group = false;
                         self.dd_output_start = Some(output.len());
                         output.push_str("<p>");
-                        self.li_p_open.push(true);
+                        self.li_p_open.push(LiPara::OpenDd);
                     }
                     DlistStyle::Normal | DlistStyle::Styled => {
                         self.dd_output_start = Some(output.len());
                         output.push_str("<dd>\n<p>");
-                        self.li_p_open.push(true);
+                        self.li_p_open.push(LiPara::OpenDd);
                     }
                 }
             }
@@ -970,7 +974,7 @@ impl HtmlRenderer {
                 self.li_para_count.pop();
                 match self.current_dlist_style() {
                     DlistStyle::Horizontal => {
-                        if self.li_p_open.pop() == Some(true) {
+                        if self.li_p_open.pop().is_some_and(LiPara::is_open) {
                             output.push_str("</p>\n");
                         }
                         output.push_str("</td>\n</tr>\n");
@@ -984,7 +988,7 @@ impl HtmlRenderer {
                         {
                             output.truncate(start);
                             self.li_p_open.pop();
-                        } else if self.li_p_open.pop() == Some(true) {
+                        } else if self.li_p_open.pop().is_some_and(LiPara::is_open) {
                             output.push_str("</p>\n");
                         }
                         output.push_str("</li>\n");
@@ -998,12 +1002,12 @@ impl HtmlRenderer {
                                 output.truncate(start);
                                 self.li_p_open.pop();
                                 // skip emitting </dd>
-                            } else if self.li_p_open.pop() == Some(true) {
+                            } else if self.li_p_open.pop().is_some_and(LiPara::is_open) {
                                 output.push_str("</p>\n</dd>\n");
                             } else {
                                 output.push_str("</dd>\n");
                             }
-                        } else if self.li_p_open.pop() == Some(true) {
+                        } else if self.li_p_open.pop().is_some_and(LiPara::is_open) {
                             output.push_str("</p>\n</dd>\n");
                         } else {
                             output.push_str("</dd>\n");

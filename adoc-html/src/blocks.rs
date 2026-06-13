@@ -769,7 +769,7 @@ impl HtmlRenderer {
     /// Open the principal `<p>` of a list item, tracking it so a continuation
     /// block can close it before being emitted (see the guard in `start_tag`).
     pub(crate) fn open_li_paragraph(&mut self) {
-        self.li_p_open.push(true);
+        self.li_p_open.push(LiPara::OpenItem);
         self.li_para_count.push(1); // count the initial <p>
     }
 
@@ -777,7 +777,7 @@ impl HtmlRenderer {
     /// open and needs its closing tag.
     pub(crate) fn close_li_paragraph(&mut self) -> bool {
         self.li_para_count.pop();
-        self.li_p_open.pop() == Some(true)
+        self.li_p_open.pop().is_some_and(LiPara::is_open)
     }
 
     /// Open a block wrapper div with meta attrs, emit a pending `.Title`,

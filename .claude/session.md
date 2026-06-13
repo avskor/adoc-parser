@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят пятая) — Фаза 3: list-item принципиальный `<p>` — literal-параграф закрывает его, пустой принципал держит `<p></p>`
+
+Запрос «продолжи». Ветка **`fix/list-item-principal-p-empty-and-literal`** —
+ЗАКОММИЧЕНА (`36d9642`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 54-й закрыт сам (мерж 54-й УЖЕ выполнен И запушен —
+origin/master == master == 47fe571, дерево чисто, ветки fix/* удалены). base-бинарь
+/tmp/adoc_base обновлён до 332 (master HEAD) ПЕРЕД фиксом — корректная база для blast.
+
+### Выбор задачи
+nearmiss на 332 (12 Different): replacements закрыт 54-й. Ближайший — **complex
+(120, Δ4)** — заметки 54-й: ДВА корня, оба нужны для флипа. Подтверждено diffone +
+эмпирикой на asciidoctor (пробы pA1/pA2/pB1..pB4 в /tmp).
+
+### Реальная семантика (пробы /tmp/pA1,pA2,pB1,pB2,pB3,pB4 vs asciidoctor)
+- **Корень A** (b-complex, ` $ cmd` literal-параграф в list-item БЕЗ `+`): отступный
+  literal-параграф = ОТДЕЛЬНЫЙ блок; asciidoctor закрывает принципиальный `</p>`
+  ПЕРЕД `<div class="literalblock">`. Наш guard закрытия `<p>` при старте суб-блока
+  НЕ включал `Tag::LiteralParagraph` → literalblock вкладывался в открытый `<p>`,
+  `</p>` закрывался ПОСЛЕ. (Путь через `+`-continuation для `----`/listing закрывал
+  верно — pB3 OK; баг только для literal-параграфа через отступ.)
+- **Корень B** (complex-only, `. {empty}` + `+` + listing): обычный list-item
+  (olist/ulist/colist) с ПУСТЫМ принципалом + присоединённый блок — asciidoctor
+  ВСЕГДА оборачивает принципал (`<p></p>`), даже пустой. Это ПРОТИВОПОЛОЖНО dd:
+  `convert_dlist` эмитит `<p>` только при `dd.text?` (откатывает пустой). Наш
+  откат пустого `<p>` (введён для empty-dd, сессия 2026-06-13) срабатывал для ВСЕХ
+  list-контекстов → `. {empty}`+блок терял `<p></p>`. (pB2 `. {empty}` БЕЗ блока —
+  у нас уже верно `<p></p>`; баг только при наличии присоединённого блока.)
+
+### Что сделано (оба корня — в guard'е events.rs start_tag @366)
+- **РЕНДЕРЕР** lib.rs: новый enum **`LiPara { OpenItem, OpenDd, Closed }`** (+ метод
+  `is_open()`) заменил `li_p_open: Vec<bool>`. Дискриминатор «item vs dd» нужен
+  только в guard'е, но обновлены все push/pop-сайты: dd-push (events.rs ×3 стиля) →
+  `OpenDd`; open_li_paragraph (blocks.rs, regular item + callout) → `OpenItem`;
+  все pop-сравнения `== Some(true)` → `.is_some_and(LiPara::is_open)`.
+- **РЕНДЕРЕР** events.rs guard: (A) добавлен `Tag::LiteralParagraph` в match-список
+  тегов суб-блока; (B) откат пустого `<p>` (`truncate`) теперь ТОЛЬКО при
+  `is_dd && ends_with("<p>")`; иначе (item пустой ИЛИ непустой любой) → `</p>\n`
+  (даёт `<p></p>` для пустого item). `last_mut = LiPara::Closed`.
+- Тесты: +2 html (`test_list_item_literal_paragraph_closes_principal_p_html`,
+  `test_list_item_empty_principal_keeps_p_with_block_html`). Существующий
+  `test_dd_empty_principal_with_attached_block_no_paragraph_html` (негатив корня B —
+  dd-откат сохранён) проходит.
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 500, html 414→416);
+  compat parsing-lab 233/233.
+- complex diffone: **0 diffs** (был 120). Пробы pA1/pA2/pB1/pB2/pB3/pB4 — все IDENTICAL.
+- **Корпус: Identical 332→333 (+1 ФЛИП)**. Blast (base 332): РОВНО 1 флип —
+  complex 120→0; outline closer 6587→6586 (мульти-root spec, тот же паттерн где-то);
+  **0 регрессий, 0 FARTHER**.
+
+### Что дальше
+- nearmiss на 333 (11 Different): counters (136, Δ9 — АРХИТЕКТУРНЫЙ verbatim
+  `{counter:}`), data (181, Δ77 — CSV/DSV `,===`, мульти-root),
+  troubleshoot-unconstrained-formatting (212, Δ−4 — nested-backtick, архитектурно),
+  text (249, Δ−5 — `+ +` hard-break в monospace + apostrophe NCR), align-by-cell
+  (371, Δ−16 — inline `<n>`/`^+` в backtick), block-name-table (431, Δ−2 — `++…++`
+  escape), table (597, Δ1 — ДВА корня), character-replacement-ref (625, Δ113),
+  syntax-quick-reference (2788, Δ−31 — мульти-root), document-attributes-ref (6363,
+  Δ73 — мульти-root), outline (6586, Δ1 — МУЛЬТИ-root).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54 (без изменений).
+
+---
+
 ## Сессия (2026-06-14, пятьдесят четвёртая) — Фаза 3: monospace `` `text` `` получает полную normal-группу subs (replacements + char-ref restore)
 
 Запрос «продолжи». Ветка **`fix/monospace-replacements-subs`** — ЗАКОММИЧЕНА

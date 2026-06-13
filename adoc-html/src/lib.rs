@@ -87,6 +87,31 @@ enum DlistStyle {
     Styled,
 }
 
+/// State of a principal `<p>` open inside a list item or description.
+///
+/// The kind matters when a sub-block starts while the principal is still
+/// empty (`output` ends with `<p>`): Asciidoctor wraps a list-item principal
+/// even when empty (`. {empty}` + block → `<p></p>`), but emits a description
+/// `<p>` only when the dd has text (`convert_dlist`), rolling back an empty one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiPara {
+    /// Principal of a regular list item (olist/ulist/colist) — kept as
+    /// `<p></p>` even when empty.
+    OpenItem,
+    /// Principal of a description (`<dd>`/qanda/horizontal) — an empty one is
+    /// rolled back.
+    OpenDd,
+    /// Already closed (or rolled back) by a sub-block start.
+    Closed,
+}
+
+impl LiPara {
+    /// Whether this principal `<p>` is still open and needs a closing `</p>`.
+    fn is_open(self) -> bool {
+        matches!(self, LiPara::OpenItem | LiPara::OpenDd)
+    }
+}
+
 #[derive(Clone)]
 struct BlockMeta {
     style: Option<String>,
@@ -225,8 +250,9 @@ struct HtmlRenderer {
     /// reftext at `TagEnd::DescriptionTerm`.
     pending_term_anchor: Option<(String, usize)>,
     in_header: bool,
-    /// Stack of booleans tracking whether a `<p>` is currently open inside a list item/dd.
-    li_p_open: Vec<bool>,
+    /// Stack tracking the principal `<p>` open inside each enclosing list
+    /// item / description (and its kind — see [`LiPara`]).
+    li_p_open: Vec<LiPara>,
     li_para_count: Vec<u32>,
     linenums_active: bool,
     linenums_start: usize,
