@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-13, сороковая) — Фаза 3: block-media trailing-content + image link/role/title/float-align/imagesdir
+
+Запрос «продолжи». Ветка **`fix/block-media-macro-trailing-content`** —
+ЗАКОММИЧЕНА (`ed651fe`), смержена в master (`54317ee`), запушена, ветка
+удалена. Baseline: Identical 303, master `32ac8cc`; base-бинарь /tmp/adoc_base
+пересобран с него (worktree).
+
+### Выбор задачи
+nearmiss на 303: replacements (4 — NCR, скип); **image.adoc (125,
+len_delta=−1)** — оказалось ПЯТЬ корней (закрыты все → флип).
+
+### Семантика asciidoctor (пробы /tmp/p_img/p1..p4,t1..t7,lnk,role + исходник gem'а)
+- **BlockMediaMacroRx** (`^(image|video|audio)::(\S|\S.*?\S)\[(.+)?\]$`,
+  rx.rb:421): строка обязана ЗАКАНЧИВАТЬСЯ `]` (после rstrip — t6/t7 → блок);
+  trailing-контент (`image::x[] <.>`, даже `image::x[]trailing`) → ПАРАГРАФ
+  (p1-p4). Target непустой, без whitespace по КРАЯМ (`\S…\S`), внутренний
+  пробел OK (`a b`→`a%20b`, t2; ` x`/`x ` → параграф, t1/t3). Вложенный `]`
+  при концовке на `]` — rfind корректен (t4).
+- **block image link= из БЛОК-АТРИБУТНОЙ строки** (`[#id,link=…]`): мёржится
+  в макрос, оборачивает `<img>` в `<a class="image" href>` (html5.rb:641).
+  Макрос-attrs приоритетнее блок-строки.
+- **convert_inline_image** (html5.rb:1185-1233): span class = `image` + float
+  + role (align НЕ эмитится для inline!); title → атрибут `<img>` (после
+  width/height). Нормализатор сортирует атрибуты — порядок img-атрибутов не
+  важен.
+- **convert_image** (block): classes = imageblock, float, `text-{align}`, role
+  (фикс. порядок). Наш баг — итерация `named`-Vec по ПОРЯДКУ ВСТАВКИ
+  (block.rs мёржил align ПЕРЕД float → `text-center right`).
+- **image_uri/normalize_web_path/web_path** (abstract_node.rb, path_resolver.rb):
+  unsecure без data-uri → uriish target (UriSniffRx, схема ≥2) или web-root
+  `/…` → verbatim (spaces→%20); иначе непустой imagesdir префиксится
+  (`imagesdir`+`/`+target, scheme `//` сохраняется через uri_prefix). imagesdir
+  читается ЖИВО (mid-document `:imagesdir:` действует на последующие).
+
+### Что сделано
+- **ПАРСЕР** scanner.rs: `match_block_media(line, prefix)` (общий для
+  image/video/audio) — strip_suffix(']') + find('[') + target whitespace-guard;
+  3 функции стали врапперами. +9 кейсов в test_is_block_image.
+- **ПАРСЕР** block.rs scan_block_macros: link = `img_attrs.link` или
+  `block_attrs.named["link"]` (макрос приоритетнее).
+- **ПАРСЕР** event.rs/inline.rs: `Tag::InlineImage` +поля `role`,`title`.
+- **РЕНДЕРЕР** media.rs: start_inline_image — class `image+float+role` (align
+  убран), title-атрибут; стал `&self`-методом (для image_uri). image_base_class
+  — фикс. порядок float→align (lookup по ключу в Vec). НОВОЕ: `image_uri(&self)`
+  + `is_uriish` (зеркало preprocessor); start_block_image/inline зовут его.
+  +5 html-тестов (link-из-attr, trailing→параграф, float/align-порядок,
+  imagesdir, role/title; test_inline_image_align переписан под align-ignored).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (975).
+- Пробы все IDENTICAL; image.adoc 125→0.
+- **Корпус: Identical 303→304 (+1 флип)**. Blast (base 32ac8cc): РОВНО 1 файл
+  (image.adoc 125→0), **0 регрессий** (ни одного позиционного сдвига в других).
+
+### Что дальше
+- nearmiss на 304: replacements (4 — NCR, скип), ts-url-format (125,
+  len_delta=106), sdr-007 (130), table-ref (135), counters (136),
+  unordered (145), complex (152, len_delta=143), sdr-001 (153),
+  subs-symbol-repl (165), **image-size (177, len_delta=92)** и
+  **image-ref/image-svg** — возможно частично закрыты image-фиксами этой
+  сессии (проверить diffone перед выбором), data (181, len_delta=77).
+- Известный предел imagesdir: `..`/`.`/`//` внутри joined-пути НЕ
+  нормализуются (web_path partition_path не реализован; нет корпусного кейса).
+- Pre-existing — см. сессии 36/38 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, тридцать девятая) — Фаза 3: uriish include-таргет → link
 
 Запрос «продолжи». Ветка **`fix/uriish-include-link`** — ЗАКОММИЧЕНА
