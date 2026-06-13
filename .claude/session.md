@@ -1,5 +1,75 @@
 # Session context
 
+## Сессия (2026-06-13, сорок первая) — Фаза 3: пустой `<p></p>` в dd без principal-текста
+
+Запрос «продолжи». Ветка **`fix/empty-dd-principal-paragraph`** — ЗАКОММИЧЕНА
+(`c75f7ff`), смержена в master (`23b4420`), запушена, ветка удалена.
+Baseline: Identical 304, master `49f95b2`; base-бинарь /tmp/adoc_base
+пересобран с него (скопирован чистый release-бинарь master ДО ветки).
+
+### Выбор задачи
+nearmiss на 304: replacements (4 — NCR, скип). Разведка diffone выявила
+ОДИН общий корень у группы файлов: **sdr-007 (130, len_delta=−2)** оказался
+ЧИСТЫМ single-root флипом — единственное различие = лишний пустой `<p></p>`
+в `<td class="hdlist2">` (our=153 vs ref=151, ровно +2 токена, 130
+позиционных diff'ов — каскад от вставки 2 токенов).
+
+### Семантика asciidoctor (пробы /tmp/p_dd/p1..p7, все IDENTICAL)
+- **dd с ПУСТЫМ principal-текстом + присоединённый блок** (list / open-block
+  через `+` / nested dlist через смежность) → asciidoctor НЕ эмитит
+  принципиальный `<p>` вовсе (convert_dlist: `<p>` только при `dd.text?`).
+  Формы: p1 horizontal+ulist (`<td class="hdlist2">` сразу ulist), p2
+  normal+openblock (`<dd>` сразу openblock), p3 normal+paragraph-via-`+`
+  (`<dd>` сразу `<div class="paragraph">`), p7 normal+nested-dlist.
+- p4 (principal-текст ЕСТЬ + блок) → `<p>principal text</p>` сохраняется.
+- p5/p6 (полностью пустой `term::` + blank + параграф) — lazy principal:
+  следующий параграф становится principal-текстом dd (`<p>Next para</p>`);
+  у нас УЖЕ работало (IDENTICAL).
+
+### Что сделано
+- **РЕНДЕРЕР** events.rs start_tag, guard закрытия `<p>` при старте
+  суб-блока (Tag::Paragraph/UnorderedList/OrderedList/DescriptionList/
+  DelimitedBlock/SourceBlock/BlockImage/Table/Admonition при
+  `li_p_open.last()==Some(&true)`): если `output.ends_with("<p>")` (principal
+  пуст — ничего не дописано после открывающего `<p>`) → откатить `<p>`
+  (`truncate(len-3)`) вместо эмиссии `</p>`. Проверка `ends_with("<p>")`
+  робастна: текст/чекбоксы/маркеры (`<input…> `, `&#10003; `) дают иное
+  окончание → ложного отката нет. Работает для normal/styled (`<dd>\n<p>`)
+  и horizontal (`<td class="hdlist2">\n<p>`); существующий
+  `dd_output_start`-rollback полностью-пустого dd не затронут.
+- +1 html-тест `test_dd_empty_principal_with_attached_block_no_paragraph_html`
+  (horizontal+ulist, normal+openblock, normal+nested-dlist, позитив
+  principal+block).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (976).
+- Пробы p1..p7 IDENTICAL.
+- **Корпус: Identical 304→314 (+10 ФЛИПОВ!)**. Blast (base 49f95b2):
+  CHANGELOG 1994→0, sdr-002 831→0, release-and-progress-reviews 406→0,
+  sdr-005 372→0, sdr-003 318→0, sdr-004 314→0, sdr-006 205→0, sdr-008
+  199→0, sdr-001 153→0, sdr-007 130→0; closer: cookbook 2582→2481,
+  ts-url-format 125→110; **0 регрессий** (description.adoc 298→299 — diff
+  base-наш vs new-наш = ровно удалённые пустые `<p></p>` перед
+  ulist/olist/dlist, все совпадают с asciidoctor; +1 — позиционный шум
+  поверх ДРУГОГО pre-existing корня: отсутствующий `<colgroup><col><col>`
+  гориз. dlist, первый расходящийся токен @92 идентичен в base и new).
+
+### Что дальше
+- nearmiss на 314 (30 Different): replacements (4 — NCR, скип),
+  ts-url-format (110, len_delta=108 — ОСТАТОК: обрезка контента open-блока
+  внутри dd-continuation, теряем example-блоки `====` после первого
+  параграфа; отдельный корень), table-ref (135), counters (136 —
+  АРХИТЕКТУРНЫЙ: `{counter:}` в verbatim-блоках, block-context awareness в
+  препроцессоре), unordered (145, len_delta=4 — вложенность списка),
+  complex (152, len_delta=143), subs-symbol-repl (165 — blank в DEFAULT
+  table-cell → второй `<p class="tableblock">`, pre-existing, тот же корень
+  у cell.adoc 965), image-size (177, len_delta=92), data (181, len_delta=77).
+- Вскрытый pre-existing: горизонтальный dlist НЕ эмитит `<colgroup><col><col>`
+  (description.adoc главный корень; >2 колонок?).
+- Pre-existing — см. сессии 36/38/40 (без изменений).
+
+---
+
 ## Сессия (2026-06-13, сороковая) — Фаза 3: block-media trailing-content + image link/role/title/float-align/imagesdir
 
 Запрос «продолжи». Ветка **`fix/block-media-macro-trailing-content`** —
