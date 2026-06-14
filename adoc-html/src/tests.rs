@@ -552,6 +552,22 @@ fn test_thematic_break() {
 }
 
 #[test]
+fn test_markdown_thematic_breaks() {
+    // Asciidoctor recognizes Markdown-style thematic breaks in addition to `'''`:
+    // `---`, `***`, `___` and their spaced forms `- - -`, `* * *`, `_ _ _`.
+    for marker in ["---", "***", "___", "- - -", "* * *", "_ _ _", "-  -  -"] {
+        let html = to_html(&format!("Before.\n\n{marker}\n\nAfter."));
+        assert!(html.contains("<hr>"), "expected <hr> for [{marker}]. Got:\n{html}");
+    }
+    // Exactly three markers: `----` is a listing block, `--` an open block.
+    assert!(!to_html("Before.\n\n----\n\nAfter.").contains("<hr>"));
+    assert!(!to_html("Before.\n\n--\n\nAfter.").contains("<hr>"));
+    // Inconsistent spacing and four markers are not thematic breaks.
+    assert!(!to_html("Before.\n\n- -  -\n\nAfter.").contains("<hr>"));
+    assert!(!to_html("Before.\n\n- - - -\n\nAfter.").contains("<hr>"));
+}
+
+#[test]
 fn test_html_escaping() {
     let html = to_html("Use <b> & \"quotes\".");
     assert!(html.contains("&lt;b&gt;"));
@@ -1295,6 +1311,35 @@ fn test_table_cell_style_asciidoc_html() {
         html.contains("<p>Para one.</p>\n</div>\n<div class=\"paragraph\">\n<p>Para two.</p>"),
         "expected two nested paragraphs. Got:\n{html}"
     );
+}
+
+#[test]
+fn test_asciidoc_cell_leading_attribute_entries_no_header_html() {
+    // An `a|` cell is an embedded document: its leading attribute entries must
+    // not be treated as the OUTER document's header. Previously the cell's
+    // nested header fired `TagEnd::Header`, which both emitted a spurious
+    // `<div id="header">` in the cell and hijacked the outer document's
+    // content-div placement (the main `<div id="content">` got spliced in after
+    // the cell). Byte-for-byte with asciidoctor 2.0.23.
+    let html = to_html_with_options(
+        "= Doc Title\n\nPreamble paragraph.\n\n== Section\n\n[.unstyled]\n|===\na|\n:url-home: https://example.org\n:summary: hello\n\nCheck {url-home}[link]!\n\n{summary}\n|===",
+        HtmlOptions { standalone: true, ..Default::default() },
+    );
+    // Outer document structure: header, then content wrapping the preamble.
+    assert!(
+        html.contains("<div id=\"header\">\n<h1>Doc Title</h1>\n</div>\n<div id=\"content\">\n<div id=\"preamble\">"),
+        "expected header then content then preamble. Got:\n{html}"
+    );
+    // The cell content carries no nested header/preamble div, only its blocks,
+    // and its attribute references resolve.
+    assert!(
+        html.contains("<td class=\"tableblock halign-left valign-top\"><div class=\"content\"><div class=\"paragraph\">\n<p>Check <a href=\"https://example.org\">link</a>!</p>"),
+        "expected cell body to start directly with its paragraph. Got:\n{html}"
+    );
+    assert!(!html.contains("<div class=\"content\"><div id=\"header\">"), "cell must not emit a header div. Got:\n{html}");
+    // Exactly one content div and one preamble div in the whole document.
+    assert_eq!(html.matches("id=\"content\"").count(), 1, "exactly one content div. Got:\n{html}");
+    assert_eq!(html.matches("id=\"preamble\"").count(), 1, "exactly one preamble div. Got:\n{html}");
 }
 
 #[test]

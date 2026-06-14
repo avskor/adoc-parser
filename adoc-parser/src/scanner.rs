@@ -94,7 +94,51 @@ pub fn strip_section_marker(line: &str) -> Option<(u8, &str)> {
 }
 
 pub fn is_thematic_break(line: &str) -> bool {
-    line.trim() == "'''"
+    line.trim() == "'''" || is_markdown_thematic_break(line)
+}
+
+/// Markdown-style thematic break, matching Asciidoctor's
+/// `/^ {0,3}([-*_])( *)\1\2\1$/`: up to 3 leading spaces, then one of `-`, `*`
+/// or `_` repeated three times with identical (possibly empty) spacing between
+/// each occurrence. The line is right-trimmed first (Asciidoctor reads lines
+/// rstripped). Exactly three markers — `----` (four) is a listing delimiter and
+/// `--` (two) an open block, neither of which matches.
+fn is_markdown_thematic_break(line: &str) -> bool {
+    let bytes = line.trim_end().as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b' ' {
+        i += 1;
+    }
+    if i > 3 {
+        return false;
+    }
+    let rest = &bytes[i..];
+    let Some(&c) = rest.first() else { return false };
+    if c != b'-' && c != b'*' && c != b'_' {
+        return false;
+    }
+    // Spaces between the first and second marker define the gap; it must repeat
+    // identically between the second and third.
+    let mut j = 1;
+    while rest.get(j) == Some(&b' ') {
+        j += 1;
+    }
+    let gap = j - 1;
+    if rest.get(j) != Some(&c) {
+        return false;
+    }
+    j += 1;
+    for _ in 0..gap {
+        if rest.get(j) != Some(&b' ') {
+            return false;
+        }
+        j += 1;
+    }
+    if rest.get(j) != Some(&c) {
+        return false;
+    }
+    j += 1;
+    j == rest.len()
 }
 
 pub fn is_page_break(line: &str) -> bool {
@@ -1435,6 +1479,25 @@ mod tests {
         assert_eq!(strip_section_marker("== Sub"), Some((2, "Sub")));
         assert_eq!(strip_section_marker("=NoSpace"), None);
         assert_eq!(strip_section_marker("= "), None);
+    }
+
+    #[test]
+    fn test_is_thematic_break() {
+        // AsciiDoc apostrophe form and Markdown-style forms.
+        for s in ["'''", "---", "***", "___", "- - -", "* * *", "_ _ _", "-  -  -"] {
+            assert!(is_thematic_break(s), "expected thematic break: {s:?}");
+        }
+        // Up to 3 leading spaces allowed; trailing whitespace ignored.
+        assert!(is_thematic_break("   ---"));
+        assert!(is_thematic_break("---   "));
+        // Four leading spaces, four markers, two markers, inconsistent spacing.
+        assert!(!is_thematic_break("    ---"));
+        assert!(!is_thematic_break("----"));
+        assert!(!is_thematic_break("--"));
+        assert!(!is_thematic_break("- - - -"));
+        assert!(!is_thematic_break("- -  -"));
+        assert!(!is_thematic_break("* **"));
+        assert!(!is_thematic_break("abc"));
     }
 
     #[test]

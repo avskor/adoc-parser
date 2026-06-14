@@ -184,6 +184,12 @@ struct HtmlRenderer {
     // captured. On TagEnd::TableCell the text gets a nested block parse whose
     // events run through this same renderer (shared footnote/xref state).
     acell_capture: Vec<String>,
+    // >0 while rendering the nested document of an AsciiDoc-style (`a`) table
+    // cell. The cell is an embedded document: Asciidoctor emits no `#header`
+    // div for it and its leading attribute entries must not be treated as the
+    // outer document's header. Used to suppress all header structural side
+    // effects (header div, content_start/preamble_start) during the cell parse.
+    cell_render_depth: usize,
     caption_counters: CaptionCounters,
     block_title_output_start: Option<usize>,
     block_title_inner_html: Option<String>,
@@ -315,6 +321,7 @@ impl HtmlRenderer {
             cell_style_stack: Vec::new(),
             cell_p_start_stack: Vec::new(),
             acell_capture: Vec::new(),
+            cell_render_depth: 0,
             caption_counters: CaptionCounters::new(),
             block_title_output_start: None,
             block_title_inner_html: None,
