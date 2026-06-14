@@ -95,6 +95,23 @@ pub(super) enum TagToken {
     /// verbatim as a run of leaf events. Extracted FIRST so no later pass can
     /// reach inside the protected content.
     Passthrough(Vec<PassPiece>),
+    /// An attribute reference `{name}` (optionally followed by `[brackets]` /
+    /// `/path[brackets]`), restored as an `AttributeReference` event. The
+    /// reference is NOT resolved here — the legacy parser also defers resolution
+    /// to the renderer, so the engine mirrors that by emitting the same event.
+    /// `fallback` is always `None` (the legacy parser has no `{name:fallback}`
+    /// syntax).
+    AttrRef {
+        name: String,
+        trailing_brackets: Option<String>,
+    },
+    /// An inline attribute assignment `{set:name:value}` / `{set:name}` /
+    /// `{set:name!}` (unset → `name` is `!name`), restored as an `Attribute`
+    /// event the way the legacy `{set:…}` inline macro emits it.
+    AttrSet {
+        name: String,
+        value: String,
+    },
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -142,6 +159,24 @@ impl Work {
     pub(super) fn passthrough_sentinel(&mut self, pieces: Vec<PassPiece>) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::Passthrough(pieces));
+        sentinel(idx)
+    }
+
+    /// Register an attribute reference leaf and return its sentinel string.
+    pub(super) fn attr_ref_sentinel(
+        &mut self,
+        name: String,
+        trailing_brackets: Option<String>,
+    ) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::AttrRef { name, trailing_brackets });
+        sentinel(idx)
+    }
+
+    /// Register an inline attribute assignment leaf and return its sentinel.
+    pub(super) fn attr_set_sentinel(&mut self, name: String, value: String) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::AttrSet { name, value });
         sentinel(idx)
     }
 }
@@ -237,6 +272,19 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                             Event::Text(text)
                         });
                     }
+                }
+                Some(TagToken::AttrRef { name, trailing_brackets }) => {
+                    events.push(Event::AttributeReference {
+                        name: Cow::Owned(name.clone()),
+                        fallback: None,
+                        trailing_brackets: trailing_brackets.clone().map(Cow::Owned),
+                    });
+                }
+                Some(TagToken::AttrSet { name, value }) => {
+                    events.push(Event::Attribute {
+                        name: Cow::Owned(name.clone()),
+                        value: Cow::Owned(value.clone()),
+                    });
                 }
                 None => {}
             }

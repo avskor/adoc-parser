@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-15, 73-я) — РЕРАЙТ inline, Фаза 2 (4/N): attributes `{name}`/`{set:}` extract пасс за гейтом
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-attributes`** (off master `967dcd4`, 343) —
+**1 коммит `c60aa27`, НЕ смержена, НЕ запушена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в
+master + `git push` + удаление ветки. base-бинарь `/tmp/adoc_base` собран из master HEAD `967dcd4`
+(343). **ВАЖНО:** Phase 2 (3/N) passthrough уже СМЕРЖЕНА в master между сессиями (`967dcd4`).
+
+### Контекст
+Фаза 0 (toggle) + Фаза 1 (quotes) + Фаза 2 (1-3/N passthrough+replacements+post_replacements) — в master.
+Фаза 2 = перенести ОСТАЛЬНЫЕ пассы (`subs=normal`: passthrough → specialchars → quotes →
+**attributes** → replacements → macros → post_replacements → restore), довести FORCE до байт-идентичности,
+в финале СНЯТЬ gate → flip outline. См. [[proj_sequential_quotes_rewrite]], план greedy-yawning-pumpkin.
+
+### Анализ перед реализацией (КЛЮЧЕВОЙ вопрос 72-й сессии разрешён)
+**Legacy НЕ резолвит `{name}` инлайн** — эмитит `Event::AttributeReference{name,fallback,trailing_brackets}`,
+рендерер резолвит. `fallback` ВСЕГДА `None` (нет синтаксиса `{name:fallback}` — все 5 `fallback:`
+в inline.rs либо `None`, либо в `mod tests`). `{set:...}` → `Event::Attribute`. Доноры: `try_attribute_reference`
+(inline.rs 2320) + `try_inline_set` (2396) + `is_valid_attr_name` (2442). В диспетче `{` — в
+`handle_inline_macro` (арм 555, гейт `has_attributes`), НЕ конкурирует с quotes/passthrough (разные
+первые байты), всегда доходит.
+
+### Сделано (1 коммит)
+- **`subst/attributes.rs`** (НОВЫЙ): `extract(work)` сканит буфер L→R, при `{` зовёт `try_attr`
+  (порт `try_attribute_reference`): валидация имени `\w[\w-]*`, захват trailing `[brackets]`/`/path[brackets]`
+  (skip `[[`, skip без закрывающего `]`), `{set:...}` → `try_set` (порт `try_inline_set`: `name!`→unset
+  `!name`, `name:value`, `name`). Возврат `Extracted::{Ref{name,trailing},Set{name,value}}` + end-индекс,
+  caller регистрирует сентинел.
+- **tokenize.rs**: `TagToken::AttrRef{name,trailing_brackets}` → `Event::AttributeReference{fallback:None}`,
+  `TagToken::AttrSet{name,value}` → `Event::Attribute`; хелперы `attr_ref_sentinel`/`attr_set_sentinel`.
+  (Cow::Owned vs legacy Cow::Borrowed — равны по PartialEq, как passthrough-pieces.)
+- **mod.rs**: `attributes::extract` ПОСЛЕ passthrough, ДО quotes, гейт `subs.has(ATTRIBUTES)`.
+
+### Архитектурное решение: attributes ДО quotes (вопреки порядку asciidoctor)
+Asciidoctor: quotes→attributes. Но legacy захватывает trailing-bracket НА attribute-ref; если бы quotes
+шёл первым, он съел бы `[.role]*x*` как attributed-strong (`{a}[.role]*x*`). Extract ДО quotes защищает
+brackets (→ AttrRef(trailing=`[.role]`) + ГОЛЫЙ strong, = legacy). Граничные байты для quotes идентичны
+(`{`/`}`/сентинел все non-word). Резолва нет → единственное, что важно для паритета, — воспроизвести
+events legacy. (Это legacy-специфичное расхождение с asciidoctor, не для корпуса — для flip outline.)
+
+### Баг, пойманный FORCE: UTF-8 порча (mojibake)
+Первый прогон FORCE дал 4 REGR (`_foundations`/`monitoring`/`index`/`error-handling` 0→N) — diffone
+показал кириллицу как Latin-1 (`Базовые`→`Ð\x91Ð°Ð·Ð¾Ð²Ñ\x8bÐµ`). Корень: fall-through copy
+`out.push(bytes[i] as char)` — `byte as char` для continuation-байта ≥0x80 даёт U+0080..00FF и
+перекодирует в 2 байта. Фикс: `utf8_char_len(bytes[i])` + `push_str(&src[i..i+len])` (как passthrough).
+Gate это ловил (toggle-on держался 343 — порченый текст ≠ legacy → fallback), но FORCE обнажил. После
+фикса 0 REGR. **Урок: любой fall-through copy в пассах ОБЯЗАН быть char-aware (utf8_char_len), не байтовым.**
+
+### Верификация
+- clippy 0, test --workspace зелёное (parser 531→532, html 433), parsing-lab 233/233 (+1 subst-тест
+  `reproduces_legacy_on_attribute_inputs`, 11 subst всего; убран кейс `{a}[[anchor]]` — это macros).
+- **blast toggle-off 343, toggle-on 343** (гейт держит, 0 регрессий, 0 flips, airtight).
+- **FORCE (blast_force.py): 92 → 97** raw-идентичных, **0 REGR**, 5 FLIP, 12 closer, 2 FARTHER.
+  FARTHER (footnote 281→283, replacements 450→494) — каскады отложенных macros/char-refs (diffone:
+  footnote @13 `footnote:[]` литерал; replacements @12 `<a href=#char-ref-sidebar>` link/char-ref),
+  НЕ баги attributes. Стали FARTHER т.к. `{attr}` теперь резолвится и сдвигает позиции относительно
+  ещё-литерального macro — экспектед «фикс обнажает следующий слой».
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **macros** — САМОЕ большое: link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email +
+   inline-anchor `[[id]]` + concealed index-term `((…))`. Нужен overhaul токенизатора: leaf-токены с
+   ПРОИЗВОЛЬНЫМ `Vec<Event>` (напр. `TagToken::Macro(Vec<Event<'static>>)`), т.к. macro-события
+   разнотипны. Донор `handle_inline_macro` (inline.rs 416-680). Именно macros держит 2 FORCE-FARTHER
+   и outline cross-span (footnote `<<xref>>` каскад).
+2. **char-refs** (`&#167;` survival — legacy эмитит InlinePassthrough при specialchars+replacements,
+   inline.rs 398), **escape** `\*`/`\{`/`\pass:` (донор `handle_inline_escape` 821), **curved smart-quotes**
+   `"…"`/`'…'`, **spec'd `pass:SPEC[]`**. specialchars — NO-OP (Event::Text сырой).
+3. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545 overlap) при 343.
+- Скрипты: `blast.py` (toggle-off), `blast_toggle.py` (toggle-on gate), `blast_force.py` (FORCE),
+  `diffone.py <file> <limit>` (с `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1` для FORCE-диффа).
+
+---
+
 ## Сессия (2026-06-15, 72-я) — РЕРАЙТ inline, Фаза 2: passthrough extract/restore пасс за гейтом
 
 Запрос «продолжи». Ветка **`feat/subst-phase2-passthrough`** (off master `296834b`, 343) —

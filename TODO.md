@@ -202,12 +202,30 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 72-я сессия): РЕРАЙТ inline — Фаза 2 продолжается (ветка `feat/subst-phase2-passthrough`)
+## АКТУАЛЬНО (2026-06-15, 73-я сессия): РЕРАЙТ inline — Фаза 2 продолжается (ветка `feat/subst-phase2-attributes`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-2/N replacements+post_replacements) уже СМЕРЖЕНА в master
-(296834b). **1 новый коммит `691a208` на ветке (MERGE+ПУШ ждут авторизации):**
+снять gate → flip outline. Phase 2 (1-3/N passthrough+replacements+post_replacements) уже
+СМЕРЖЕНА в master (967dcd4). **1 новый коммит `c60aa27` на ветке (MERGE+ПУШ ждут авторизации):**
+- [x] **(4/N) attributes `{name}`/`{set:}` extract** (`subst/attributes.rs`) — после passthrough,
+  ДО quotes. Legacy НЕ резолвит `{name}` — эмитит `Event::AttributeReference` (резолв в рендерере);
+  порт: `{name}` (+опц. trailing `[brackets]`/`/path[brackets]`) → `TagToken::AttrRef` →
+  `Event::AttributeReference{fallback:None}`; `{set:name:value}`/`{set:name}`/`{set:name!}` →
+  `TagToken::AttrSet` → `Event::Attribute`. ДО quotes (вопреки порядку asciidoctor quotes→attributes):
+  захваченный trailing-bracket защищён от quotes-attrlist (`{a}[.role]*x*` → AttrRef(trailing=`[.role]`)
+  + голый strong, = legacy). Граничные байты для quotes идентичны (`{`/`}`/сентинел — non-word).
+  **UTF-8 баг (поймал FORCE на кириллице):** fall-through copy через `utf8_char_len`+`push_str`
+  (побайтовый `push(b as char)` трактует continuation-байт как Latin-1 → порча многобайтового).
+  Зеркало `try_attribute_reference`/`try_inline_set` (`fallback` всегда None — нет синтаксиса
+  `{name:fallback}`). Escape `\{` — отдельный отложенный пасс (gate отклоняет).
+- **Гейт:** toggle-off 343, toggle-on 343, **0 регрессий, 0 flips** (airtight). **FORCE-верность
+  92 → 97** raw-идентичных, **0 REGR** (ни один ранее-идеальный файл не сломан); 5 FLIP, 12 closer,
+  2 FARTHER (footnote/replacements — каскады отложенных macros/char-refs, подтверждено diffone).
+- clippy 0, test --workspace зелёное (parser 532, html 433), parsing-lab 233/233 (+1 subst-тест
+  `reproduces_legacy_on_attribute_inputs`, 11 subst всего).
+
+### (АРХИВ 72-й) Phase 2 (3/N) passthrough — в master `967dcd4`
 - [x] **(3/N) passthrough extract/restore** (`subst/passthrough.rs`) — FIRST в пайплайне.
   `+++/++/+/bare pass:[]` → `TagToken::Passthrough(Vec<PassPiece{text,raw}>)` (sentinel), токенизатор
   восстанавливает: raw→InlinePassthrough, !raw→Text (escaped). Контракт зеркалит legacy try_*_passthrough
@@ -221,11 +239,13 @@ asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до 
   85 → 92** raw-идентичных, **0 REGR** (ни один ранее-идеальный файл не сломан); 6 FORCE-FARTHER —
   каскады отложенных macros/attr (footnote `<<xref>>`, id anchors, outline), gate их отклоняет.
 - clippy 0, test --workspace зелёное (parser 531, html 433), parsing-lab 233/233 (+1 subst-тест, 10 всего).
-- [ ] **ОСТАЛОСЬ Фаза 2:** attributes `{name}` (СНАЧАЛА: legacy эмитит AttributeReference или резолвит
-  инлайн?), macros (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email —
-  overhaul токенизатора, САМОЕ большое), char-refs (`&#167;` survival), escape `\*`, curved smart-quotes
-  `"…"`. spec'd `pass:SPEC[]`. specialchars — фактически NO-OP (Event::Text сырой). ФИНАЛ: снять gate →
-  flip outline при 343.
+- [ ] **ОСТАЛОСЬ Фаза 2:** **macros** (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/
+  email + inline-anchor `[[id]]` + concealed index-term `((…))` — overhaul токенизатора, нужны
+  leaf-токены с произвольными `Vec<Event>`; САМОЕ большое; донор `handle_inline_macro` inline.rs ~416;
+  именно macros держит 2 FORCE-FARTHER + outline cross-span), char-refs (`&#167;` survival —
+  legacy InlinePassthrough при specialchars+replacements), escape `\*`/`\{`/`\pass:` (донор
+  `handle_inline_escape` inline.rs ~821), curved smart-quotes `"…"`/`'…'`, spec'd `pass:SPEC[]`.
+  specialchars — фактически NO-OP (Event::Text сырой). ФИНАЛ: снять gate → flip outline при 343.
 
 ## (АРХИВ) после 70-й сессии: Identical **343 / 344**; РЕРАЙТ inline — Фаза 1 СДЕЛАНА
 

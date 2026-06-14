@@ -39,6 +39,7 @@
 //! returns the raw new-engine result, so a `blast` run measures how faithfully
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
+mod attributes;
 mod passthrough;
 mod post_replacements;
 mod quotes;
@@ -120,11 +121,12 @@ pub(crate) fn try_parse<'a>(
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
-/// Implemented so far: passthrough extract/restore, `quotes`, `replacements`,
-/// `post_replacements`. The remaining passes (specialchars, attributes, macros,
-/// char references, escapes, curved smart quotes) are not yet ported; inputs
-/// that need them diverge from legacy and are rejected by the gate (or surface
-/// as diffs under `force()`).
+/// Implemented so far: passthrough extract/restore, `attributes` (`{name}` /
+/// `{set:…}`, unresolved leaf events mirroring legacy), `quotes`,
+/// `replacements`, `post_replacements`. The remaining passes (specialchars,
+/// macros, char references, escapes, curved smart quotes) are not yet ported;
+/// inputs that need them diverge from legacy and are rejected by the gate (or
+/// surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted first so the protected content is opaque to
@@ -132,6 +134,14 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // unconditional: the legacy parser runs `+…+`/`pass:[…]` regardless of the
     // subs flags, and the engine only runs when QUOTES is present anyway.
     passthrough::extract(&mut work, subs);
+    // Attribute references are extracted next, before quotes. The legacy parser
+    // emits an unresolved `AttributeReference`; extracting `{name}[…]` up front
+    // both reproduces that and protects a trailing `[brackets]` from being eaten
+    // by the quotes attrlist (`{a}[.role]*x*`). See `attributes` for the
+    // before-quotes rationale.
+    if subs.has(SubstitutionSet::ATTRIBUTES) {
+        attributes::extract(&mut work);
+    }
     if subs.has(SubstitutionSet::QUOTES) {
         quotes::run_all(&mut work);
     }
@@ -343,6 +353,55 @@ mod tests {
             // but a `+` whose content starts with `\n` and has NO leading space is
             // a genuine single-plus span (no hard-break interception)
             "+\nfoo+",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the `attributes` pass ported, the pipeline must reproduce legacy on
+    /// `{name}` references (unresolved leaf events), `{set:…}` assignments, the
+    /// trailing-bracket capture, and their interaction with surrounding quotes.
+    /// Extraction runs before quotes, so a captured `[brackets]` is protected
+    /// from the quotes attrlist and the reference stays opaque inside a span.
+    #[test]
+    fn reproduces_legacy_on_attribute_inputs() {
+        let cases = [
+            // bare references, mixed with text
+            "{name}",
+            "{author}",
+            "see {version} here",
+            "{a}{b}{c}",
+            // not references → stay literal
+            "{n!}",
+            "{counter:x}",
+            "{}",
+            "{ spaced }",
+            "{-leading-dash}",
+            // trailing brackets / path (renderer re-parses value + brackets)
+            "{url}[text]",
+            "{url}/issues[text]",
+            "{a}[unclosed kept",
+            // reference inside / beside quote spans
+            "_{name}_",
+            "*{name}*",
+            "`{name}`",
+            "before {name} *after*",
+            // captured trailing bracket must not become a quotes attrlist
+            "{a}[.role]*x*",
+            "{a} [.role]*x*",
+            // {set:…} inline assignment, all three forms
+            "{set:foo:bar}",
+            "{set:foo}",
+            "{set:foo!}",
+            "x {set:k:v} y",
+            // reference beside replacements (apostrophe untouched between)
+            "don't {name} and don't",
+            "{name} -- dash",
         ];
         for c in cases {
             assert_eq!(
