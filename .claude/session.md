@@ -1,5 +1,64 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят восьмая) — Фаза 3: escape `\*`/`\_`/`` \` `` сохраняет `\` без пары (один из 2 корней outline; БЕЗ флипа)
+
+Запрос «продолжи». Ветка **`fix/escape-backslash-keep-when-no-span`** —
+ЗАКОММИЧЕНА. **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 67-й закрыт сам (мерж 67-й УЖЕ выполнен И запушен —
+origin/master == master == 4463225 (343), дерево чисто, веток нет). base-бинарь
+/tmp/adoc_base пересобран из master HEAD (343).
+
+### Выбор задачи
+nearmiss на 343: остался ТОЛЬКО `outline` (4814, Δ4) — 2 корня (diffone 12): @2041
+escape `\*` (изолированный content-diff, НЕ влияет на len_delta) + каскад с @4545
+(cross-span strong, это и есть +4 токена). Выбран escape `\*` (contained, безопасный
+путь документирован 66-й). cross-span strong НЕ берётся — глубоко архитектурный (проба
+ниже).
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+- **escape (consume-on-match)**: quote-regexp'ы несут опц. `\\?` и снимают ведущий `\`
+  ТОЛЬКО при реальном матче. Таблица (lone/no-pair): `\*`→`\*`, `\_`→`\_`, `` \` ``→`` \` ``
+  (keep — мы ошибочно дропали); `\*bold*`→`*bold*` (валидный → drop, literal — уже верно);
+  `\#lone`→`#lone` (asciidoctor ДРОПАЕТ # всегда — мы совпадаем, НЕ трогать); `\^`/`\~`
+  asciidoctor keep, у нас вообще сломано (`\^lone`→`\</sup>` — отдельный механизм sup/sub,
+  НЕ трогал); `\{`/`\[`/`\<`/`\'`/`\\` — каждый со своей нюансной логикой, отложены.
+- **cross-span strong @4545** (проба probe727): исходник outline:727
+  `` `[1-9][0-9]*.` (ordered), …, `<([1-9][0-9]*|\.)>` ``. asciidoctor →
+  `<code>[1-9]<strong class="0-9">.</code> … <code>&lt;([1-9][0-9]</strong>|\.)&gt;</code>`.
+  Механизм: QUOTE_SUBS строго `strong` ДО `monospace`; constrained strong `[0-9]*…*` матчит
+  поверх ВСЕЙ строки (роль "0-9" из `[...]` перед `*`), открывается в 3-м code-спане, закрыт
+  в 5-м — strong ПЕРЕСЕКАЕТ границы code-спанов (невалидно-вложенный HTML). Наша рекурсивная/
+  иерархическая модель спанов (найти span → рекурс внутрь) этого не воспроизводит без
+  переписывания inline-модели на последовательные line-level regexp-пассы. ГЛУБОКО
+  АРХИТЕКТУРНЫЙ, высокий риск на весь корпус, 1 файл. ОТЛОЖЕН.
+
+### Что сделано
+- **ПАРСЕР** inline.rs `handle_inline_escape`: новый escape-арм ПЕРЕД blanket'ом (стр.952).
+  Гейт: `has_quotes && peek_at(1)∈{*,_,`} && find_closing_constrained(marker, pos+2).is_none()`
+  → flush, emit `\`+маркер как литеральный Text, advance_by(2). Регрессионно-безопасно ПО
+  ПОСТРОЕНИЮ (None ⇒ нет пары ⇒ asciidoctor тоже keep). Some-кейс не тронут (blanket дропает).
+- +1 parser (`test_escaped_marker_no_span_keeps_backslash`: `\*`/`\_`/`` \` `` без пары →
+  `\` сохранён; контраст test_escaped_bold/italic/monospace — с парой дропается),
+  +1 html (`test_escaped_marker_no_span_keeps_backslash_html`: corpus `` `\* literal` ``→
+  `<code>\* literal</code>`, `` `\*bold*` ``→`<code>*bold*</code>` без `<strong>`, prose `\_lone`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 521→522, html 432→433);
+  parsing-lab 233/233.
+- diffone outline: @2041 escape `\*` УШЁЛ; первый diff теперь @4545 (cross-span strong),
+  total 4814→4813.
+- **Корпус: Identical 343 (БЕЗ флипа)**. blast (base 343): **outline 4814→4813 closer,
+  0 регрессий, 0 других файлов**. Корректный фикс + закрытие одного из 2 корней outline.
+
+### Что дальше
+- nearmiss на 343: останется ТОЛЬКО outline (4813) — ЕДИНСТВЕННЫЙ корень @4545 cross-span
+  strong, глубоко архитектурный (рерайт inline на line-level QUOTES-пассы). Других Different
+  нет. **Корпус-driven compat достиг предела**: рост Identical требует ЛИБО этого рерайта
+  (высокий риск, 1 файл), ЛИБО расширения корпуса. Обсудить направление с пользователем.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят седьмая) — Фаза 3: a-ячейка = embedded-документ + Markdown thematic breaks → ФЛИП syntax-quick-reference
 
 Запрос «продолжи». Ветка **`fix/acell-nested-doc-header-content-div`** —
