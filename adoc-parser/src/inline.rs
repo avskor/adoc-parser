@@ -1288,11 +1288,11 @@ impl<'a> InlineState<'a> {
             // must not terminate the surrounding span. Skip the whole passthrough region;
             // its inner content (incl. any markers) is handled when the span is reparsed.
             if b == b'+' {
-                if let Some(skip) = Self::passthrough_span_len(s, i) {
+                if let Some(skip) = crate::scanner::passthrough_span_len(s, i) {
                     i += skip;
                     continue;
                 }
-                if let Some(skip) = Self::single_plus_span_len(s, i) {
+                if let Some(skip) = crate::scanner::single_plus_span_len(s, i) {
                     i += skip;
                     continue;
                 }
@@ -1301,7 +1301,7 @@ impl<'a> InlineState<'a> {
             // substitution, so a quote marker living inside its bracket must not
             // terminate the surrounding span (`` `pass:[`']` `` → `<code>`'</code>`).
             if b == b'p'
-                && let Some(skip) = Self::pass_macro_span_len(s, i)
+                && let Some(skip) = crate::scanner::pass_macro_span_len(s, i)
             {
                 i += skip;
                 continue;
@@ -1310,96 +1310,6 @@ impl<'a> InlineState<'a> {
                 return Some(i);
             }
             i += 1;
-        }
-        None
-    }
-
-    /// If a `pass:[…]`/`pass:SPEC[…]` inline macro begins at byte offset `i` in
-    /// `s`, return its total byte length (so quote-delimiter scanning can skip
-    /// over it). Mirrors `try_pass_macro` (content runs to the first `]`).
-    /// `i` must point at `p`.
-    fn pass_macro_span_len(s: &str, i: usize) -> Option<usize> {
-        let rest = &s[i..];
-        if !rest.starts_with("pass:") {
-            return None;
-        }
-        let spec_len = Self::pass_spec_len(rest, 5)?;
-        let content_start = 5 + spec_len + 1; // past '['
-        let close = rest[content_start..].find(']')?;
-        Some(content_start + close + 1)
-    }
-
-    /// If a closed `++…++` or `+++…+++` passthrough begins at byte offset `i` in `s`,
-    /// return its total byte length (so quote-delimiter scanning can skip over it).
-    /// Mirrors the matching in `try_double_plus_passthrough` / `try_triple_plus_passthrough`
-    /// (non-empty content, nearest closing delimiter). `i` must point at a `+`.
-    fn passthrough_span_len(s: &str, i: usize) -> Option<usize> {
-        let rest = &s[i..];
-        if let Some(after) = rest.strip_prefix("+++") {
-            let close = after.find("+++")?;
-            (close != 0).then_some(3 + close + 3)
-        } else if let Some(after) = rest.strip_prefix("++") {
-            let close = after.find("++")?;
-            (close != 0).then_some(2 + close + 2)
-        } else {
-            None
-        }
-    }
-
-    /// If a *constrained* single-plus passthrough (`+…+`) begins at byte offset
-    /// `i` in `s`, return its total byte length so quote-delimiter scanning can
-    /// skip over it. Mirrors the matching in `try_single_plus_passthrough`: the
-    /// opening `+` must not begin `++`/`+++`, must not follow a word char, the
-    /// content's first char must not be a space, and the closing `+` must obey
-    /// the constrained-close rule (not preceded by `+`/space, not followed by
-    /// `+`/word). A `pass:[…]` macro inside the span is extracted first, so a
-    /// `+` in its brackets cannot close. `i` must point at a `+`. AsciiDoc
-    /// extracts these passthroughs before quote substitution, so a quote marker
-    /// living inside one must not terminate the surrounding span — e.g. in
-    /// `` `<n>+`x`+y` `` the inner backticks are literal and the outer pair runs
-    /// from the first backtick to the last.
-    fn single_plus_span_len(s: &str, i: usize) -> Option<usize> {
-        let bytes = s.as_bytes();
-        // Not a single '+': `++`/`+++` are handled by `passthrough_span_len`.
-        if bytes.get(i + 1).copied() == Some(b'+') {
-            return None;
-        }
-        // The opening '+' must not follow a word char (`C+a+` stays literal) nor a
-        // backslash (`` `\+` `` is an escaped plus, not a passthrough — the main parse
-        // loop consumes the escape before `try_single_plus_passthrough`, but this raw
-        // delimiter scan must reject it explicitly). At i == 0 the preceding char is the
-        // opening quote marker (`` ` ``/`_`/`#`/`*`), all non-word, so the open is allowed.
-        if i > 0 {
-            let prev = bytes[i - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'\\' {
-                return None;
-            }
-        }
-        // The content's first char must exist and not be a space.
-        match bytes.get(i + 1) {
-            None | Some(b' ') => return None,
-            _ => {}
-        }
-        // Find the constrained closing '+'.
-        let mut j = i + 1;
-        while j < bytes.len() {
-            let b = bytes[j];
-            if b == b'p'
-                && let Some(skip) = Self::pass_macro_span_len(s, j)
-            {
-                j += skip;
-                continue;
-            }
-            if b == b'+' && j > i + 1 {
-                let prev = bytes[j - 1];
-                let next = bytes.get(j + 1).copied();
-                let followed_by_word =
-                    next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
-                if prev != b'+' && prev != b' ' && next != Some(b'+') && !followed_by_word {
-                    return Some(j - i + 1);
-                }
-            }
-            j += 1;
         }
         None
     }
@@ -1455,17 +1365,17 @@ impl<'a> InlineState<'a> {
             // the surrounding unconstrained span (mirror of
             // find_closing_constrained; `**a+++**+++b**` → strong over a**b).
             if bytes[i] == b'+' {
-                if let Some(skip) = Self::passthrough_span_len(s, i) {
+                if let Some(skip) = crate::scanner::passthrough_span_len(s, i) {
                     i += skip;
                     continue;
                 }
-                if let Some(skip) = Self::single_plus_span_len(s, i) {
+                if let Some(skip) = crate::scanner::single_plus_span_len(s, i) {
                     i += skip;
                     continue;
                 }
             }
             if bytes[i] == b'p'
-                && let Some(skip) = Self::pass_macro_span_len(s, i)
+                && let Some(skip) = crate::scanner::pass_macro_span_len(s, i)
             {
                 i += skip;
                 continue;
@@ -1579,7 +1489,7 @@ impl<'a> InlineState<'a> {
         while i < bytes.len() {
             let b = bytes[i];
             if b == b'p'
-                && let Some(skip) = Self::pass_macro_span_len(s, i)
+                && let Some(skip) = crate::scanner::pass_macro_span_len(s, i)
             {
                 i += skip;
                 continue;
@@ -1633,12 +1543,12 @@ impl<'a> InlineState<'a> {
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i] == b'p'
-                && let Some(skip) = Self::pass_macro_span_len(inner, i)
+                && let Some(skip) = crate::scanner::pass_macro_span_len(inner, i)
             {
                 if i > text_start {
                     events.push(Event::Text(Cow::Borrowed(&inner[text_start..i])));
                 }
-                let spec_len = Self::pass_spec_len(&inner[i..], 5).unwrap_or(0);
+                let spec_len = crate::scanner::pass_spec_len(&inner[i..], 5).unwrap_or(0);
                 let spec = &inner[i + 5..i + 5 + spec_len];
                 // content sits between "pass:SPEC[" and the trailing "]"
                 let content = &inner[i + 5 + spec_len + 1..i + skip - 1];
@@ -1874,7 +1784,7 @@ impl<'a> InlineState<'a> {
         // Optional subs spec between the colon and the bracket: `pass:c[…]`,
         // `pass:q,a[…]`, full names too (`pass:quotes[…]`). Without brackets
         // the macro form does not match at all and the text stays literal.
-        let Some(spec_len) = Self::pass_spec_len(self.input, start_pos + 5) else {
+        let Some(spec_len) = crate::scanner::pass_spec_len(self.input, start_pos + 5) else {
             return false;
         };
         let Some((inner, new_pos)) = self.parse_bracket_macro(5 + spec_len) else {
@@ -1894,30 +1804,6 @@ impl<'a> InlineState<'a> {
         self.pos = new_pos;
         *text_start = self.pos;
         true
-    }
-
-    /// If byte `p` (just past `pass:`) starts an optional subs spec immediately
-    /// followed by `[`, return the spec's byte length (0 for the bare `pass:[…]`
-    /// form). `None` when no bracket follows — the macro form does not match and
-    /// the text stays literal in Asciidoctor (`pass:c` without brackets,
-    /// an uppercase spec, an empty comma token, …).
-    fn pass_spec_len(s: &str, p: usize) -> Option<usize> {
-        let bytes = s.as_bytes();
-        let mut i = p;
-        while bytes
-            .get(i)
-            .is_some_and(|&b| b.is_ascii_lowercase() || b == b',' || b == b'_' || b == b'-')
-        {
-            i += 1;
-        }
-        if bytes.get(i) != Some(&b'[') {
-            return None;
-        }
-        let spec = &s[p..i];
-        if !spec.is_empty() && !spec.split(',').all(|t| !t.is_empty()) {
-            return None;
-        }
-        Some(i - p)
     }
 
     /// Map a pass-macro subs spec to a substitution set. Single-letter aliases
@@ -1980,7 +1866,7 @@ impl<'a> InlineState<'a> {
         if !rest.starts_with("pass:") {
             return 0;
         }
-        match Self::pass_spec_len(rest, 5) {
+        match crate::scanner::pass_spec_len(rest, 5) {
             Some(spec_len) => 5 + spec_len + 1, // "pass:" + spec + "["
             None => 0,
         }

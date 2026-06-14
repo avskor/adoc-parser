@@ -1268,6 +1268,126 @@ pub fn parse_tsv_fields(line: &str) -> Vec<Cow<'_, str>> {
     line.split('\t').map(|f| Cow::Borrowed(f.trim())).collect()
 }
 
+// Passthrough-span scanners (`pass:[…]`, `+…+`, `++…++`, `+++…+++`).
+//
+// Stateless text scanners shared by the inline parser — to skip over passthrough
+// regions while matching quote delimiters — and the preprocessor — to leave
+// counter macros inside a passthrough literal (Asciidoctor extracts passthroughs
+// before the `attributes` substitution that resolves `{counter:…}`).
+
+/// If byte `p` (just past `pass:`) starts an optional subs spec immediately
+/// followed by `[`, return the spec's byte length (0 for the bare `pass:[…]`
+/// form). `None` when no bracket follows — the macro form does not match and
+/// the text stays literal in Asciidoctor (`pass:c` without brackets,
+/// an uppercase spec, an empty comma token, …).
+pub fn pass_spec_len(s: &str, p: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = p;
+    while bytes
+        .get(i)
+        .is_some_and(|&b| b.is_ascii_lowercase() || b == b',' || b == b'_' || b == b'-')
+    {
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b'[') {
+        return None;
+    }
+    let spec = &s[p..i];
+    if !spec.is_empty() && !spec.split(',').all(|t| !t.is_empty()) {
+        return None;
+    }
+    Some(i - p)
+}
+
+/// If a `pass:[…]`/`pass:SPEC[…]` inline macro begins at byte offset `i` in
+/// `s`, return its total byte length (so quote-delimiter scanning can skip
+/// over it). Mirrors `try_pass_macro` (content runs to the first `]`).
+/// `i` must point at `p`.
+pub fn pass_macro_span_len(s: &str, i: usize) -> Option<usize> {
+    let rest = &s[i..];
+    if !rest.starts_with("pass:") {
+        return None;
+    }
+    let spec_len = pass_spec_len(rest, 5)?;
+    let content_start = 5 + spec_len + 1; // past '['
+    let close = rest[content_start..].find(']')?;
+    Some(content_start + close + 1)
+}
+
+/// If a closed `++…++` or `+++…+++` passthrough begins at byte offset `i` in `s`,
+/// return its total byte length (so quote-delimiter scanning can skip over it).
+/// Mirrors the matching in `try_double_plus_passthrough` / `try_triple_plus_passthrough`
+/// (non-empty content, nearest closing delimiter). `i` must point at a `+`.
+pub fn passthrough_span_len(s: &str, i: usize) -> Option<usize> {
+    let rest = &s[i..];
+    if let Some(after) = rest.strip_prefix("+++") {
+        let close = after.find("+++")?;
+        (close != 0).then_some(3 + close + 3)
+    } else if let Some(after) = rest.strip_prefix("++") {
+        let close = after.find("++")?;
+        (close != 0).then_some(2 + close + 2)
+    } else {
+        None
+    }
+}
+
+/// If a *constrained* single-plus passthrough (`+…+`) begins at byte offset
+/// `i` in `s`, return its total byte length so quote-delimiter scanning can
+/// skip over it. Mirrors the matching in `try_single_plus_passthrough`: the
+/// opening `+` must not begin `++`/`+++`, must not follow a word char, the
+/// content's first char must not be a space, and the closing `+` must obey
+/// the constrained-close rule (not preceded by `+`/space, not followed by
+/// `+`/word). A `pass:[…]` macro inside the span is extracted first, so a
+/// `+` in its brackets cannot close. `i` must point at a `+`. AsciiDoc
+/// extracts these passthroughs before quote substitution, so a quote marker
+/// living inside one must not terminate the surrounding span — e.g. in
+/// `` `<n>+`x`+y` `` the inner backticks are literal and the outer pair runs
+/// from the first backtick to the last.
+pub fn single_plus_span_len(s: &str, i: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    // Not a single '+': `++`/`+++` are handled by `passthrough_span_len`.
+    if bytes.get(i + 1).copied() == Some(b'+') {
+        return None;
+    }
+    // The opening '+' must not follow a word char (`C+a+` stays literal) nor a
+    // backslash (`` `\+` `` is an escaped plus, not a passthrough — the main parse
+    // loop consumes the escape before `try_single_plus_passthrough`, but this raw
+    // delimiter scan must reject it explicitly). At i == 0 the preceding char is the
+    // opening quote marker (`` ` ``/`_`/`#`/`*`), all non-word, so the open is allowed.
+    if i > 0 {
+        let prev = bytes[i - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'\\' {
+            return None;
+        }
+    }
+    // The content's first char must exist and not be a space.
+    match bytes.get(i + 1) {
+        None | Some(b' ') => return None,
+        _ => {}
+    }
+    // Find the constrained closing '+'.
+    let mut j = i + 1;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == b'p'
+            && let Some(skip) = pass_macro_span_len(s, j)
+        {
+            j += skip;
+            continue;
+        }
+        if b == b'+' && j > i + 1 {
+            let prev = bytes[j - 1];
+            let next = bytes.get(j + 1).copied();
+            let followed_by_word = next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
+            if prev != b'+' && prev != b' ' && next != Some(b'+') && !followed_by_word {
+                return Some(j - i + 1);
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
