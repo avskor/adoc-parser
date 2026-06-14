@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят пятая) — Фаза 3: emphasis leading-edge подавляет strong/mono + docyear/localyear
+
+Запрос «продолжи». Ветка **`fix/emphasis-leading-edge-suppresses-strong-mono`** —
+ЗАКОММИЧЕНА (`57870bf`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 64-й закрыт сам (мерж 64-й УЖЕ выполнен И запушен —
+origin/master == master == fea2329 (341), дерево чисто, веток нет). base-бинарь
+/tmp/adoc_base пересобран из master HEAD (341) через временный worktree.
+
+### Выбор задачи
+nearmiss на 341: остались ТОЛЬКО 3 Different, ВСЕ мульти-root spec/каталог-файлы
+(других near-miss для побочных флипов больше нет): **document-attributes-ref (953,
+Δ−3)**, syntax-quick-reference (2788), outline (6647). Выбран document-attributes-ref.
+Анализ gap'ов diff-позиций (diffone | awk): ровно 3 корня — @726 (`{docyear}`,
+изолирован), @1043 (`{localyear}`, изолирован), @6257→@7232 contiguous = ОДИН
+структурный десинк, каскадящий ~950 ложных diff'ов до конца файла. len_delta=-3 =
+ровно 3 лишних токена. Фикс всех трёх → флип.
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+- **Десинк @6257**: исходник стр.1216 `_`inline` not yet supported._` — внутри
+  emphasis `_..._` стоит `` `inline` ``. asciidoctor НЕ делает `<code>` (backtick
+  литерален), мы — делаем. Порядок QUOTE_SUBS (выведен пробами): **strong → monospace
+  → emphasis → mark**. На ведущем крае emphasis-спана constrained strong (`*`) и
+  monospace (`` ` ``) ещё видят ЛИТЕРАЛЬНЫЙ внешний `_` (word-char) — их open-ассерт
+  `(^|[^\w…])` его отвергает → литерал. Mark (`#`) идёт ПОСЛЕ emphasis (видит `>` от
+  `<em>`) → открывается; unconstrained/`~`/`^` open-ассерта не имеют → открываются.
+  После внешних `*`/`#` (не word-char) внутренние markers открываются. Пробы покрыли
+  все 10 комбинаций (см. ниже), все совпали.
+- **docyear/localyear**: asciidoctor — `docyear` из mtime ФАЙЛА-источника (целевой
+  файл 2026-03-15 → 2026; проба mtime=2019 → dy=2019), `localyear` из NOW (2026).
+  Оба = 2026 сейчас → совпадают. CLI УЖЕ сидит весь date-family через chrono
+  (docdate/doctime/.../localdate/...) — не хватало только года.
+
+### Что сделано
+- **ПАРСЕР** inline.rs: поле `emphasis_leading_edge: bool` (зеркало
+  `smart_quote_leading_edge`), init false; гейт в `try_constrained`
+  (`flag && start_pos==0 && marker∈{*,`` ` ``}` → return false); установка
+  `inner_parser.emphasis_leading_edge = marker == b'_'` в ОБОИХ репарс-сайтах
+  (try_constrained @inner + try_unconstrained @inner — покрывает `_` и `__`).
+- **CLI** main.rs: `seed("docyear", input_mtime.format("%Y"))` (из mtime, как doc*),
+  `seed("localyear", now.format("%Y"))` (из now, как local*). Та же chrono-машинерия.
+  Комментарий блока обновлён.
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 516→519, html 428→429);
+  parsing-lab 233/233.
+- document-attributes-ref diffone: **953→2 (после inline-фикса, каскад схлопнулся)
+  →0 (после date-фикса, байт-в-байт)**, len ref==our==7230.
+- **Корпус: Identical 341→342 (+1 ФЛИП)**. blast (base 341): **РОВНО 1 флип, 0
+  регрессий, 0 FARTHER** (inline-фикс широкий — затрагивает всё содержимое `_..._`
+  с ведущим `*`/`` ` `` — но ни один другой файл не изменился).
+- Проба docyear робастности: mtime=2019 → dy=2019/ly=2026 байт-в-байт с asciidoctor
+  (doc* следует за mtime, не «now» → устойчиво к ре-checkout'у).
+- Тесты: +2 parser (`test_emphasis_leading_edge_suppresses_strong_and_mono`:
+  `_`inline`_`/`_*b*_`/`__`inline`__`; `test_emphasis_leading_edge_does_not_suppress
+  _mark_or_unconstrained`: `_#m#_`→mark, `_``c``_`→code; `..._suppression_is_leading_only`:
+  `_x `c` y_`/`*`c`*`), +1 html (`test_emphasis_leading_edge_keeps_strong_mono_literal_html`).
+  Date-семейство (как и docdate/localdate ранее) без юнит-теста — clock/mtime-зависимо,
+  охраняется корпусом; робастность подтверждена пробой.
+
+### Что дальше
+- nearmiss на 342 (2 Different, ОБА мульти-root spec/каталог): **syntax-quick-reference
+  (2788)**, **outline (6647, Δ3 — `\*` экранирование + `+` hard-break)**. Применять ту
+  же методику: diffone | awk на gap'ы → выделить отдельные корни → проба asciidoctor →
+  фикс корня (даже если файл не флипнет одним фиксом, схлопывание каскадов приближает).
+- **Остаток кластера col-spec** (из 64-й): голый `cols="^~m,..."` БЕЗ `%autowidth` —
+  per-column `~` = autowidth колонки, мы эмитим `width:…%`. НЕ в корпусе — отложено.
+- **Pre-existing шире**: `*`/`.` list-маркер после строки параграфа БЕЗ blank —
+  asciidoctor поглощает, мы прерываем.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят четвёртая) — Фаза 3: `~` autowidth-маркер в col-spec не должен съедать стиль колонки
 
 Запрос «продолжи». Ветка **`fix/session64-nearmiss`** — ЗАКОММИЧЕНА.
