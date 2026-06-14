@@ -1284,14 +1284,18 @@ impl<'a> InlineState<'a> {
         while i < bytes.len() {
             let b = bytes[i];
             // Passthroughs are extracted before quote substitution in AsciiDoc, so
-            // a quote marker that lives inside a `++…++` / `+++…+++` passthrough must
-            // not terminate the surrounding span. Skip the whole passthrough region;
+            // a quote marker that lives inside a `++…++` / `+++…+++` / `+…+` passthrough
+            // must not terminate the surrounding span. Skip the whole passthrough region;
             // its inner content (incl. any markers) is handled when the span is reparsed.
-            if b == b'+'
-                && let Some(skip) = Self::passthrough_span_len(s, i)
-            {
-                i += skip;
-                continue;
+            if b == b'+' {
+                if let Some(skip) = Self::passthrough_span_len(s, i) {
+                    i += skip;
+                    continue;
+                }
+                if let Some(skip) = Self::single_plus_span_len(s, i) {
+                    i += skip;
+                    continue;
+                }
             }
             // The `pass:[…]` inline macro is also extracted before quote
             // substitution, so a quote marker living inside its bracket must not
@@ -1342,6 +1346,64 @@ impl<'a> InlineState<'a> {
         }
     }
 
+    /// If a *constrained* single-plus passthrough (`+…+`) begins at byte offset
+    /// `i` in `s`, return its total byte length so quote-delimiter scanning can
+    /// skip over it. Mirrors the matching in `try_single_plus_passthrough`: the
+    /// opening `+` must not begin `++`/`+++`, must not follow a word char, the
+    /// content's first char must not be a space, and the closing `+` must obey
+    /// the constrained-close rule (not preceded by `+`/space, not followed by
+    /// `+`/word). A `pass:[…]` macro inside the span is extracted first, so a
+    /// `+` in its brackets cannot close. `i` must point at a `+`. AsciiDoc
+    /// extracts these passthroughs before quote substitution, so a quote marker
+    /// living inside one must not terminate the surrounding span — e.g. in
+    /// `` `<n>+`x`+y` `` the inner backticks are literal and the outer pair runs
+    /// from the first backtick to the last.
+    fn single_plus_span_len(s: &str, i: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        // Not a single '+': `++`/`+++` are handled by `passthrough_span_len`.
+        if bytes.get(i + 1).copied() == Some(b'+') {
+            return None;
+        }
+        // The opening '+' must not follow a word char (`C+a+` stays literal) nor a
+        // backslash (`` `\+` `` is an escaped plus, not a passthrough — the main parse
+        // loop consumes the escape before `try_single_plus_passthrough`, but this raw
+        // delimiter scan must reject it explicitly). At i == 0 the preceding char is the
+        // opening quote marker (`` ` ``/`_`/`#`/`*`), all non-word, so the open is allowed.
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'\\' {
+                return None;
+            }
+        }
+        // The content's first char must exist and not be a space.
+        match bytes.get(i + 1) {
+            None | Some(b' ') => return None,
+            _ => {}
+        }
+        // Find the constrained closing '+'.
+        let mut j = i + 1;
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b == b'p'
+                && let Some(skip) = Self::pass_macro_span_len(s, j)
+            {
+                j += skip;
+                continue;
+            }
+            if b == b'+' && j > i + 1 {
+                let prev = bytes[j - 1];
+                let next = bytes.get(j + 1).copied();
+                let followed_by_word =
+                    next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
+                if prev != b'+' && prev != b' ' && next != Some(b'+') && !followed_by_word {
+                    return Some(j - i + 1);
+                }
+            }
+            j += 1;
+        }
+        None
+    }
+
     fn try_unconstrained(
         &mut self,
         marker: u8,
@@ -1388,15 +1450,19 @@ impl<'a> InlineState<'a> {
         let bytes = s.as_bytes();
         let mut i = 0;
         while i + 1 < bytes.len() {
-            // Passthroughs (`++…++`/`+++…+++`/`pass:[…]`) are extracted before
+            // Passthroughs (`++…++`/`+++…+++`/`+…+`/`pass:[…]`) are extracted before
             // quote substitution, so a marker pair inside them must not close
             // the surrounding unconstrained span (mirror of
             // find_closing_constrained; `**a+++**+++b**` → strong over a**b).
-            if bytes[i] == b'+'
-                && let Some(skip) = Self::passthrough_span_len(s, i)
-            {
-                i += skip;
-                continue;
+            if bytes[i] == b'+' {
+                if let Some(skip) = Self::passthrough_span_len(s, i) {
+                    i += skip;
+                    continue;
+                }
+                if let Some(skip) = Self::single_plus_span_len(s, i) {
+                    i += skip;
+                    continue;
+                }
             }
             if bytes[i] == b'p'
                 && let Some(skip) = Self::pass_macro_span_len(s, i)
@@ -4216,6 +4282,39 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::InlinePassthrough(Cow::Borrowed("++++")),
+            Event::End(TagEnd::Monospace),
+        ]);
+    }
+
+    #[test]
+    fn test_single_plus_passthrough_spans_backtick() {
+        // A single-plus passthrough is extracted before monospace and may swallow
+        // backticks: in `` `a +`b`+ c` `` the inner `+`b`+` is a passthrough whose
+        // backticks are literal, so the outer monospace runs from the first backtick
+        // to the last (Asciidoctor: <code>a `b` c</code>), not two separate spans.
+        let events = parse("`a +`b`+ c`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Text(Cow::Borrowed("`b`")),
+            Event::Text(Cow::Borrowed(" c")),
+            Event::End(TagEnd::Monospace),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_plus_does_not_span_backtick() {
+        // An escaped `\+` is NOT a passthrough open, so it must not swallow the
+        // backticks of a following monospace span. `` `\+` and `n+` `` stays two
+        // separate <code> spans (Asciidoctor: <code>+</code> and <code>n+</code>).
+        let events = parse("`\\+` and `n+`");
+        assert_eq!(events, vec![
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("+")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" and ")),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("n+")),
             Event::End(TagEnd::Monospace),
         ]);
     }

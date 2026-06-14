@@ -4404,6 +4404,31 @@ fn test_double_plus_passthrough_escapes_specialchars_html() {
 }
 
 #[test]
+fn test_single_plus_passthrough_spans_backticks_html() {
+    // Single-plus passthroughs are extracted before monospace and swallow backticks,
+    // so the chain `` `<n>+`…`+<n>*+`…`+^+` `` collapses into ONE <code> with the inner
+    // backticks literal (asciidoc-lang align-by-cell.adoc). Asciidoctor renders the
+    // whole run as a single monospace span.
+    let html = to_html(
+        "a span (`<n>+`) or duplication (`+<n>*+`), place the `+^+` after.",
+    );
+    assert!(
+        html.contains(
+            "<code>&lt;n&gt;`) or duplication (`&lt;n&gt;*`), place the `^+</code>"
+        ),
+        "single-plus passthroughs should span backticks into one <code>. Got: {html}"
+    );
+
+    // An escaped `\+` is not a passthrough open, so adjacent monospace spans stay
+    // separate: `` `\+` `` → <code>+</code>, `` `<n>.<n>+` `` → its own <code>.
+    let html = to_html("the plus sign (`\\+`) after the factor (`<n>.<n>+`).");
+    assert!(
+        html.contains("(<code>+</code>)") && html.contains("<code>&lt;n&gt;.&lt;n&gt;+</code>"),
+        "escaped \\+ must not merge the two <code> spans. Got: {html}"
+    );
+}
+
+#[test]
 fn test_unknown_inline_macro_empty_attrs_stays_literal() {
     let html = to_html("widget:component[]");
     assert!(html.contains("<p>widget:component[]</p>"),
