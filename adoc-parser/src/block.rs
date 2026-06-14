@@ -1723,8 +1723,8 @@ impl<'a> BlockScanner<'a> {
         }
 
         // Check for CSV/DSV/TSV format. A shorthand delimiter prefix selects the
-        // format directly (`,===` → CSV, `:===` → DSV); `|===` defers to the
-        // `format=` attribute (Native unless overridden).
+        // format directly (`,===` → CSV, `:===` → DSV); `|===` and `!===` defer
+        // to the `format=` attribute (Native unless overridden).
         let format = match opening_delim.as_bytes().first() {
             Some(b',') => TableFormat::Csv,
             Some(b':') => TableFormat::Dsv,
@@ -1733,6 +1733,10 @@ impl<'a> BlockScanner<'a> {
         if format != TableFormat::Native {
             return self.scan_delimited_format_table(&content_lines, block_attrs, format, title_events);
         }
+
+        // PSV cell separator: `!===` (a table nested inside an AsciiDoc `a`
+        // cell) splits cells on `!`; every other native table uses `|`.
+        let sep = if opening_delim.as_bytes().first() == Some(&b'!') { b'!' } else { b'|' };
 
         // Parse cells from content lines. Text before the first `|` of a line
         // (or a line with no `|` at all) continues the previous cell — the
@@ -1781,7 +1785,7 @@ impl<'a> BlockScanner<'a> {
                 }
                 continue;
             }
-            let parsed = scanner::parse_table_cells(line);
+            let parsed = scanner::parse_table_cells_with_sep(line, sep);
             let starts_fresh = matches!(&parsed, Some(t) if t.continuation.is_none());
             if awaiting_post_blank_line {
                 awaiting_post_blank_line = false;
@@ -1797,11 +1801,11 @@ impl<'a> BlockScanner<'a> {
                     }
                     all_cells.extend(t.cells);
                 }
-                // A line with no (unescaped) pipe continues the open cell;
-                // escaped `\|` separators in it are unescaped like cell content.
+                // A line with no (unescaped) separator continues the open cell;
+                // escaped `\|`/`\!` separators in it are unescaped like content.
                 None => Self::append_cell_continuation(
                     &mut all_cells,
-                    &scanner::unescape_cell_pipes(line.trim_end()),
+                    &scanner::unescape_cell_sep(line.trim_end(), sep),
                 ),
             }
             if first_data_idx.is_none() {
@@ -4452,6 +4456,26 @@ mod tests {
         }).collect();
         assert_eq!(texts, vec!["A", "B"]);
         assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Table))));
+    }
+
+    #[test]
+    fn test_bang_delimiter_nested_table_splits_on_bang() {
+        // `!===` is the nested-table delimiter: cells split on `!`, a literal
+        // `|` is ordinary content, and cols is synthesized like a native table.
+        let input = "!===\n! Col1 ! Col2\n! C11\n! C12\n!===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let texts: Vec<_> = events.iter().filter_map(|e| match e {
+            Event::Text(t) => Some(t.as_ref()),
+            _ => None,
+        }).collect();
+        assert_eq!(texts, vec!["Col1", "Col2", "C11", "C12"]);
+        assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Table))));
+        // First-row width is 2 → synthesized cols="2"
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::BlockMetadata { named, .. }
+                if named.iter().any(|(k, v)| k == "cols" && v == "2")
+        )));
     }
 
     #[test]
