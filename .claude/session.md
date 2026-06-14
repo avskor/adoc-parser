@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят восьмая) — Фаза 3: ведущий край smart-quote подавляет constrained mono/em/mark
+
+Запрос «продолжи». Ветка **`fix/curved-quote-double-backtick-literal`** —
+ЗАКОММИЧЕНА (`1c5e8b3`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 57-й закрыт сам (мерж 57-й УЖЕ выполнен И запушен —
+origin/master == master == 78f2273 (335), дерево чисто, ветки fix/* удалены;
+session.md 57-й устарел — там «ОЖИДАЕТ авторизации», но фактически смержено).
+base-бинарь /tmp/adoc_base обновлён до 335 (master HEAD) ПЕРЕД фиксом.
+
+### Выбор задачи
+nearmiss на 335 (9 Different, все «трудный хвост»): counters (136, Δ9 — мульти-root:
+verbatim `{counter:}` НЕ должен резолвиться + listing мис-классифицирован как
+admonition-warning), data (181, Δ77), **troubleshoot (212, Δ−4)**, align-by-cell
+(371, Δ−16), table (597, Δ1 — ДВА корня), character-replacement-ref (625, Δ113),
+document-attributes-ref (953), syntax-quick-reference (2788), outline (6647).
+diffone troubleshoot: первый diff @366 из 588 (62% идентично). Хвост @366→ —
+ЧИСТЫЙ позиционный сдвиг +4 (наш `<code>…</code>` = 5 токенов вместо 1 текстового;
+len our 588 = ref 584 + 4, ровно одна вставка). **Single-root** — line 83.
+
+### Реальная семантика (пробы /tmp/mono_open,edge2,tb_probe vs asciidoctor)
+- Конструкция `"``end points``"` (двойной backtick внутри curved-quote маркеров):
+  asciidoctor → `“`end points`”` (внутренние одинарные backtick ЛИТЕРАЛЬНЫ, НЕ
+  monospace). Мы → `“<code>end points</code>”` («на пару backtick впереди»).
+  `"`x`"` (одинарный) → `“x”`; `"```x```"` (тройной) → `“<code>x</code>”`.
+- **Корень — порядок QUOTE_SUBS asciidoctor**: `:double`/`:single` (curved-quote
+  `"`…`"`/`'`…`'`) идут ПОСЛЕ `:strong constrained` (`*`) но ПЕРЕД
+  `:monospaced/:emphasis/:mark constrained` (`` ` ``/`_`/`#`). На ведущем крае
+  span'а monospace/em/mark видят `;` от выведенного `&#8220;`/`&#8216;` → их
+  open-ассерт `(^|[^\w;:…])` падает → литерал. Strong уже сматчился ПРОТИВ
+  исходного backtick (open-класс strong `[^\w;:}]` `` ` `` разрешает) → открывается.
+  Unconstrained (`**`/`` `` ``/`__`/`##`) и super/sub (`^`/`~`) open-ассерта НЕ
+  имеют → открываются всегда (тройной → inner `` ``…`` `` unconstrained → `<code>`).
+- Пробы подтвердили: `"`*bold*`"`→strong, `"`_em_`"`→литерал, `"`#mk#`"`→литерал,
+  `"`^x^`"`→`<sup>`, `"`~x~`"`→`<sub>`, `"`**b**`"`→strong, mid `"`a `c` b`"`→`<code>`.
+
+### Что сделано (1 точка в ПАРСЕРЕ inline.rs)
+- Поле `InlineState.smart_quote_leading_edge` (default false; true только для
+  inner-рерана в `try_smart_quotes`).
+- Гейт в `try_constrained` (после `is_word_char_before`): `flag && start_pos == 0
+  && matches!(marker, b'`'|b'_'|b'#')` → return false. `*` (strong) НЕ блокируется
+  (идёт до `:double`), unconstrained/super-sub не проходят через try_constrained.
+- Доком-коммент на поле и на гейт (порядок субституций — почему именно так).
+- Тесты: +3 parser (double-backtick inner literal, em/mark edge literal,
+  suppression-leading-only [mid-content `<code>` сохраняется]), +1 html
+  (double vs triple, em-edge vs strong-edge).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 503→506, html 420→421);
+  compat parsing-lab 233/233.
+- troubleshoot diffone: **0 diffs** (был 212), len ref==our==584.
+- **Корпус: Identical 335→336 (+1 ФЛИП, troubleshoot 212→0)**. Blast (base 335):
+  РОВНО 1 флип; **0 регрессий, 0 FARTHER**. Попутно фиксит латентные em/mark
+  edge-кейсы (не в корпусе, но к asciidoctor-паритету).
+
+### Что дальше
+- nearmiss на 336 (8 Different): counters (136, Δ9 — мульти-root), data (181, Δ77 —
+  CSV/DSV `,===`, мульти-root), align-by-cell (371, Δ−16 — inline `<n>`/`^+` в
+  backtick), table (597, Δ1 — ДВА корня + огромный сдвиг), character-replacement-ref
+  (625, Δ113), document-attributes-ref (953, Δ−3), syntax-quick-reference (2788,
+  Δ−31 — мульти-root), outline (6647, Δ3 — МУЛЬТИ-root spec).
+- Pre-existing идея (НЕ в корпусе): smart-quote `"`…`"` open-диспетч не проверяет
+  word-границу перед `"` (`a"`code`"b` → должен быть литерал — constrained).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57.
+
+---
+
 ## Сессия (2026-06-14, пятьдесят седьмая) — Фаза 3: monospace close-граница `` `' ``, sup/sub субституции, bare-word role-span
 
 Запрос «продолжи». Ветка **`fix/monospace-close-boundary-quote-tick`** —
