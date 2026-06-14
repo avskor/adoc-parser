@@ -202,18 +202,24 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-14, после 68-й сессии): Identical **343 / 344**
+## АКТУАЛЬНО (2026-06-14, после 69-й сессии): Identical **343 / 344**; РЕРАЙТ inline начат (Фаза 0)
 
-Осталось РОВНО 1 Different — `spec/outline.adoc` (теперь **4813 diff**, было 4814). После
-68-й escape `\*` ЗАКРЫТ → остаётся ЕДИНСТВЕННЫЙ корень: **cross-span strong @4545**
-(глубоко архитектурный — line-level QUOTES-пасс asciidoctor: `strong` ДО `monospace`
-поверх всей строки, `[0-9]*…*` = strong с ролью "0-9", тянется через границы code-спанов,
-невалидно-вложенный HTML; наша рекурсивная модель спанов не воспроизводит без слома модели).
-Это весь остаток outline (+4 токена). Других Different-файлов нет → дальнейший рост Identical
-требует ЛИБО этого архитектурного рерайта inline-модели (высокий риск, 1 файл), ЛИБО
-расширения корпуса. **Корпус-driven compat-работа достигла естественного предела.**
-Методология/скрипты — в memory [[compat_corpus_methodology]]. Ветка 68-й
-`fix/escape-backslash-keep-when-no-span` ЗАКОММИЧЕНА, ОЖИДАЕТ мержа/пуша.
+Остался РОВНО 1 Different — `spec/outline.adoc` (4813 diff), единственный корень
+**cross-span strong @4545** (глубоко архитектурный). Пользователь авторизовал **полный
+рерайт inline-субституций на модель asciidoctor (string-rewriting passes)** ради outline
+344/344 — план `~/.claude/plans/greedy-yawning-pumpkin.md` (4 фазы, dual-engine за toggle,
+blast-гейт 0-регрессий, мерж по авторизации). НЕ путать с корпус-driven-фиксами: это
+архитектурный рерайт самого тяжёлого модуля, multi-session, риск ОЧЕНЬ ВЫСОКИЙ, цель —
+воспроизвести НЕВАЛИДНЫЙ overlapping HTML (баг asciidoctor) ради байт-идентичности 1 файла.
+
+**Фаза 0 СДЕЛАНА и СМЕРЖЕНА в master** (была ветка `feat/sequential-quotes-engine`; Фаза 1 —
+новая ветка off master): toggle `ADOC_QUOTES_SEQUENTIAL=1` (env→`crate::subst::enabled()`, OnceLock;
+отступил от плана `InlineOptions.sequential_quotes` ради меньшей инвазивности scaffolding),
+скелет модуля `adoc-parser/src/subst/mod.rs` (`try_parse`→None = fallback на legacy),
+ветвление в `parse_str_with_subs_options`, скрипт `/mnt/c/tmp/adoc-test/blast_toggle.py`.
+ИНЕРТНО: blast off И on оба 343→343, 0 diff; clippy 0, test (parser 522, html 433),
+parsing-lab 233/233. **Дальше — Фаза 1** (passthrough/specialchars/quotes-пассы + токенизатор;
+самая рискованная). Методология/скрипты — в memory [[compat_corpus_methodology]].
 
 ## Свежий baseline корпуса (2026-06-09, ПОСЛЕ stem-mathjax-docinfo) — УСТАРЕЛ, см. блок выше
 

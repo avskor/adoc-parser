@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят девятая) — РЕРАЙТ inline на string-rewriting (Фаза 0: инфраструктура+toggle, инертно)
+
+Запрос «продолжи» → дошли до архитектурного решения. Фаза 0 (инертная инфраструктура)
+СДЕЛАНА на ветке `feat/sequential-quotes-engine` и **СМЕРЖЕНА в master по авторизации
+пользователя** (merge --no-ff + push, ветка удалена). **Фаза 1 — новая ветка off master.**
+Старт: 68-я (escape `\*`) УЖЕ смержена И запушена пользователем (master=7a8fecc, 343).
+base-бинарь /tmp/adoc_base пересобран из master 7a8fecc.
+
+### Как сюда пришли (важный контекст для будущих сессий)
+- 68-я закрыла escape `\*` (один из 2 корней outline), БЕЗ флипа. Остался 1 корень outline:
+  **cross-span strong @4545**.
+- Разобрал его пробами (probe727): asciidoctor применяет QUOTES как последовательные плоские
+  gsub-пассы по всей строке (strong ДО monospace); `[0-9]*…*` = strong с ролью "0-9",
+  пересекает границы code-спанов → НЕВАЛИДНЫЙ overlapping HTML (`<code>…<strong>…</code>…
+  <strong>…</code>`). Рендерер вложенность НЕ валидирует — выдал бы overlap как есть. Блокер
+  ТОЛЬКО в парсере (рекурсивная модель даёт лишь вложенные теги).
+- 2 независимых анализа (Explore+Plan-агенты): ограниченного подхода НЕТ (детектор = полный
+  рерайт за гейтом). Рекомендация обоих — WONTFIX (343/344). **Пользователь дважды, с полным
+  знанием рисков, выбрал РЕРАЙТ.**
+
+### План (утверждён) — `~/.claude/plans/greedy-yawning-pumpkin.md`
+Реплицировать substitutor asciidoctor: extract_passthroughs → specialchars → quotes
+(gsub-последовательность с сентинел-тегами) → attributes → replacements → macros →
+post_replacements → restore; финал — токенизатор строки-с-сентинелами в Vec<Event> БЕЗ
+балансировки (overlap сохраняется). Dual-engine за toggle (legacy = дефолт, не трогать до
+Фазы 3), blast-гейт 0-регрессий. Фазы: 0 инфра / 1 passthrough+specialchars+quotes (самая
+рискованная) / 2 остальные пассы → flip outline / 3 swap дефолта + удаление legacy quotes.
+
+### Что сделано (Фаза 0)
+- **`adoc-parser/src/subst/mod.rs`** (НОВЫЙ): `enabled()` (OnceLock из env
+  `ADOC_QUOTES_SEQUENTIAL`, `1`/`true`), `try_parse(text,subs,options)->Option<Vec<Event>>`
+  (Phase 0: всегда None = fallback на legacy). Doc-коммент объясняет string-rewriting и
+  transitional-статус. **ОТСТУПЛЕНИЕ ОТ ПЛАНА**: toggle через env+OnceLock, НЕ через
+  `InlineOptions.sequential_quotes` — меньше инвазивности для scaffolding (удаляется в Фазе 3).
+- **lib.rs**: `mod subst;`.
+- **inline.rs** `parse_str_with_subs_options`: ветвление ПЕРЕД построением InlineState —
+  `if subst::enabled() && let Some(ev)=subst::try_parse(...) { return ev }`. Только top-level
+  (inner-reparse — legacy исключительно).
+- **`/mnt/c/tmp/adoc-test/blast_toggle.py`** (НОВЫЙ): ставит env=1, `import blast` (base-бинарь
+  master игнорирует переменную, новый читает). 
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 522, html 433); parsing-lab 233/233.
+- toggle sanity: вывод on==off (md5 совпал).
+- **blast toggle-OFF vs base: 343→343, 0 изменённых файлов (инертно).**
+- **blast toggle-ON vs base: 343→343, 0 изменённых файлов (инертно)** — движок Фазы 0
+  отклоняет всё, fallback на legacy. Плумбинг работает end-to-end.
+
+### Что дальше — Фаза 1 (следующая сессия)
+Реализовать в `subst/`: extract_passthroughs (переиспользовать сканеры scanner.rs:
+passthrough_span_len/single_plus_span_len/pass_macro_span_len), specialchars-пасс, quotes как
+gsub-последовательность с сентинелами + токенизатор. Перенести attrlist-логику
+(parse_inline_shorthand:2870, try_inline_attr_span:2896) и escape-правила (inline.rs:772).
+Гейт: blast toggle-ON приближается к 344, 0 регрессий на 343. Самая рискованная фаза
+(воспроизвести leading-edge-семантику порядком пассов вместо edge-флагов).
+
+---
+
 ## Сессия (2026-06-14, шестьдесят восьмая) — Фаза 3: escape `\*`/`\_`/`` \` `` сохраняет `\` без пары (один из 2 корней outline; БЕЗ флипа)
 
 Запрос «продолжи». Ветка **`fix/escape-backslash-keep-when-no-span`** —

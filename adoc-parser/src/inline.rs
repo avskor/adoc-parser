@@ -230,6 +230,16 @@ impl InlineParser {
             return vec![Event::Text(Cow::Borrowed(""))];
         }
 
+        // Transitional: when the sequential-pass engine is enabled and can
+        // handle this top-level text, use it; otherwise fall through to the
+        // legacy recursive parser. Phase 0: the engine always declines, so this
+        // is inert (see `crate::subst`).
+        if crate::subst::enabled()
+            && let Some(events) = crate::subst::try_parse(text, subs, options)
+        {
+            return events;
+        }
+
         let mut events = Vec::new();
         let mut parser = InlineState::new(text, subs, options);
         // Top-level text: its start/end are the real paragraph/line edges.

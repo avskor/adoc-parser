@@ -5,6 +5,7 @@ pub mod inline;
 mod parser;
 pub mod preprocessor;
 mod scanner;
+mod subst;
 
 pub use event::*;
 pub use inline::{InlineOptions, InlineParser};
