@@ -1276,6 +1276,42 @@ fn test_table_cell_style_asciidoc_html() {
 }
 
 #[test]
+fn test_nested_bang_table_inside_asciidoc_cell_html() {
+    // A `!===` table nested inside an `a` cell: the inner table uses `!` as its
+    // cell separator (so it does not clash with the enclosing `|`), and its
+    // [cols="2,1"] gives a 66.6666%/33.3334% colgroup with an implicit header
+    // (blank line after the first row). Byte-for-byte with asciidoctor 2.0.23.
+    let html = to_html(
+        "[cols=\"1,1a\"]\n|===\n|x\n|before\n\n[cols=\"2,1\"]\n!===\n! Col1 ! Col2\n\n! C11\n! C12\n\n!===\n|===",
+    );
+    // Inner table opens inside the a-cell's content div, after the `before` para
+    assert!(
+        html.contains("<p>before</p>\n</div>\n<table class=\"tableblock frame-all grid-all stretch\">"),
+        "expected nested table after the leading paragraph. Got:\n{html}"
+    );
+    // Proportional colgroup from cols="2,1"
+    assert!(
+        html.contains("<col style=\"width: 66.6666%;\">\n<col style=\"width: 33.3334%;\">"),
+        "expected 66.6666%/33.3334% colgroup. Got:\n{html}"
+    );
+    // Header row split on `!` (implicit header from the blank line)
+    assert!(
+        html.contains("<thead>\n<tr>\n<th class=\"tableblock halign-left valign-top\">Col1</th>\n<th class=\"tableblock halign-left valign-top\">Col2</th>"),
+        "expected `!`-split header cells Col1/Col2. Got:\n{html}"
+    );
+    // Body row split on `!`
+    assert!(
+        html.contains("<td class=\"tableblock halign-left valign-top\"><p class=\"tableblock\">C11</p></td>"),
+        "expected `!`-split body cell C11. Got:\n{html}"
+    );
+    // Nested table closes inside the a-cell (</table></div></td>)
+    assert!(
+        html.contains("</tbody>\n</table></div></td>"),
+        "expected nested table to close inside the a-cell. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_table_cell_literal_preserves_blank_and_indent() {
     // Literal cell keeps inner blank lines and indentation; the edges of the
     // whole cell text are stripped; a plain cell still collapses blank lines

@@ -472,12 +472,13 @@ pub fn is_table_delimiter(line: &str) -> bool {
     // Asciidoctor accepts a prefix char followed by THREE OR MORE `=` (`|===`,
     // `|====`, …); the rest of the line after the prefix must be all `=` (no
     // trailing content). Open and close delimiters need not be the same length.
-    // The prefix selects the cell format: `|` PSV (native), `,` CSV, `:` DSV
-    // (`table_delimiter_format` maps the prefix to the format). `!===` (nested
-    // tables) is not parsed.
+    // The prefix selects the cell format/separator: `|` PSV (native, `|`
+    // separator), `,` CSV, `:` DSV, `!` nested-table PSV (`!` separator — used
+    // for tables inside an AsciiDoc `a` cell so the inner separator differs from
+    // the enclosing `|`).
     let trimmed = line.trim();
     match trimmed.as_bytes().first() {
-        Some(b'|' | b',' | b':') => {
+        Some(b'|' | b',' | b':' | b'!') => {
             let rest = &trimmed[1..];
             rest.len() >= 3 && rest.bytes().all(|b| b == b'=')
         }
@@ -522,30 +523,35 @@ pub struct TableLineCells<'a> {
     pub cells: Vec<CellSpec<'a>>,
 }
 
-/// A `|` immediately preceded by `\` is an escaped cell separator: it does not
-/// split cells, and exactly one backslash is consumed (`\|` → `|`, `\\|` → `\|`
-/// in one cell — probe-verified).
-pub fn unescape_cell_pipes(s: &str) -> Cow<'_, str> {
-    if s.contains("\\|") {
-        Cow::Owned(s.replace("\\|", "|"))
+/// A separator char immediately preceded by `\` is an escaped cell separator: it
+/// does not split cells, and exactly one backslash is consumed (`\|` → `|`,
+/// `\\|` → `\|` in one cell — probe-verified). `sep` is the table's cell
+/// separator byte (`|` for native/CSV-less PSV tables, `!` for nested tables).
+pub fn unescape_cell_sep(s: &str, sep: u8) -> Cow<'_, str> {
+    let sep_ch = sep as char;
+    let mut escaped = String::with_capacity(2);
+    escaped.push('\\');
+    escaped.push(sep_ch);
+    if s.contains(&escaped) {
+        Cow::Owned(s.replace(&escaped, &sep_ch.to_string()))
     } else {
         Cow::Borrowed(s)
     }
 }
 
-/// Byte offset of the first unescaped `|` in `s`, if any.
-fn find_unescaped_pipe(s: &str) -> Option<usize> {
+/// Byte offset of the first unescaped `sep` in `s`, if any.
+fn find_unescaped_sep(s: &str, sep: u8) -> Option<usize> {
     let bytes = s.as_bytes();
-    (0..bytes.len()).find(|&i| bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\'))
+    (0..bytes.len()).find(|&i| bytes[i] == sep && (i == 0 || bytes[i - 1] != b'\\'))
 }
 
-/// Split `s` at unescaped `|` separators (escaped `\|` stays inside a part).
-fn split_unescaped_pipes(s: &str) -> Vec<&str> {
+/// Split `s` at unescaped `sep` separators (escaped `\sep` stays inside a part).
+fn split_unescaped_sep(s: &str, sep: u8) -> Vec<&str> {
     let bytes = s.as_bytes();
     let mut parts = Vec::new();
     let mut start = 0;
     for i in 0..bytes.len() {
-        if bytes[i] == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
+        if bytes[i] == sep && (i == 0 || bytes[i - 1] != b'\\') {
             parts.push(&s[start..i]);
             start = i + 1;
         }
@@ -825,13 +831,23 @@ pub fn parse_cell_spec_exact(s: &str) -> Option<ExactCellSpec> {
     })
 }
 
+/// Convenience wrapper over [`parse_table_cells_with_sep`] for the default `|`
+/// separator. Only the separator-parametrized form is used by the scanner; this
+/// keeps the single-argument call ergonomic for unit tests.
+#[cfg(test)]
 pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
-    // Find the first unescaped pipe — if none, not a table line
-    let first_pipe = find_unescaped_pipe(line)?;
+    parse_table_cells_with_sep(line, b'|')
+}
 
-    // Before first pipe: a valid align+style+span spec (for the first cell on
-    // this line), or content continuing the previous line's last cell —
-    // possibly with a spec at its end, attached to the `|` that follows
+/// Parse one PSV table line, splitting cells at unescaped `sep`. `sep` is `|`
+/// for ordinary tables and `!` for tables nested inside an AsciiDoc `a` cell.
+pub fn parse_table_cells_with_sep(line: &str, sep: u8) -> Option<TableLineCells<'_>> {
+    // Find the first unescaped separator — if none, not a table line
+    let first_pipe = find_unescaped_sep(line, sep)?;
+
+    // Before first separator: a valid align+style+span spec (for the first cell
+    // on this line), or content continuing the previous line's last cell —
+    // possibly with a spec at its end, attached to the separator that follows
     // (mirror of the non-last part parsing below). Continuation text keeps its
     // leading indentation (significant in literal and AsciiDoc cells).
     let prefix_raw = &line[..first_pipe];
@@ -863,7 +879,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
                 text = before.trim_end();
             }
             if !text.trim().is_empty() {
-                continuation = Some(unescape_cell_pipes(text));
+                continuation = Some(unescape_cell_sep(text, sep));
             }
         }
     }
@@ -880,7 +896,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         valign_explicit: false,
     };
     let mut cells = Vec::new();
-    let parts: Vec<&str> = split_unescaped_pipes(&line[first_pipe + 1..]);
+    let parts: Vec<&str> = split_unescaped_sep(&line[first_pipe + 1..], sep);
 
     for (i, part) in parts.iter().enumerate() {
         // Parse next-cell specs from END of the part. A spec only ever
@@ -924,7 +940,7 @@ pub fn parse_table_cells(line: &str) -> Option<TableLineCells<'_>> {
         // renders `|a |` as two cells, the second an empty <td>). A trailing
         // delimiter leaves the cell open: continuation lines fill it.
         cells.push(CellSpec {
-            content: unescape_cell_pipes(content),
+            content: unescape_cell_sep(content, sep),
             duplication: pending.duplication.max(1),
             colspan: pending.colspan,
             rowspan: pending.rowspan,
@@ -1706,7 +1722,11 @@ mod tests {
         assert!(!is_table_delimiter(",==")); // need at least 3 equals
         assert!(!is_table_delimiter(":")); // colon alone is not a delimiter
         assert!(!is_table_delimiter(":name: value")); // attribute entry, not a delimiter
-        assert!(!is_table_delimiter("!===")); // nested-table delimiter not parsed
+        // Nested-table delimiter (`!===`, `!` cell separator)
+        assert!(is_table_delimiter("!==="));
+        assert!(is_table_delimiter("  !====  "));
+        assert!(!is_table_delimiter("!==")); // need at least 3 equals
+        assert!(!is_table_delimiter("!")); // bang alone is not a delimiter
     }
 
     fn cell(content: &str) -> CellSpec<'_> {
@@ -1765,6 +1785,27 @@ mod tests {
         let t = parse_table_cells("2+| x").unwrap();
         assert_eq!(t.continuation, None);
         assert_eq!(t.cells, vec![spanned_cell("x", 2, 1)]);
+    }
+
+    #[test]
+    fn test_parse_table_cells_bang_separator() {
+        // Nested tables (`!===`) split on `!`, not `|`. A literal `|` is then
+        // ordinary cell content.
+        assert_eq!(
+            parse_table_cells_with_sep("! C11 ! C12", b'!').map(|t| t.cells),
+            Some(vec![cell("C11"), cell("C12")])
+        );
+        assert_eq!(
+            parse_table_cells_with_sep("! a | b ! c", b'!').map(|t| t.cells),
+            Some(vec![cell("a | b"), cell("c")])
+        );
+        // No `!` → not a `!`-table line (continuation), even with a `|` present
+        assert_eq!(parse_table_cells_with_sep("a | b", b'!'), None);
+        // `\!` is an escaped separator under the `!` rule
+        assert_eq!(
+            parse_table_cells_with_sep("!a \\! b !c", b'!').map(|t| t.cells),
+            Some(vec![cell("a ! b"), cell("c")])
+        );
     }
 
     #[test]
