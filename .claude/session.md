@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-14, семидесятая) — РЕРАЙТ inline, Фаза 1: quotes-пайплайн за differential-equality gate (БЕЗ флипа, 0-регрессий по построению)
+
+Запрос «Продолжи фазу 1». Ветка **`feat/subst-phase1-quotes`** (off master c566b10, 343) —
+ЗАКОММИЧЕНА. **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+base-бинарь /tmp/adoc_base собран из master c566b10 (343).
+
+### Что это за фаза (контекст рерайта)
+Фаза 0 (инертный scaffolding + toggle `ADOC_QUOTES_SEQUENTIAL=1`) уже в master. Фаза 1 —
+реализовать `quotes`-субституцию как string-rewriting (gsub-последовательность плоских пассов
+по всей строке) + токенизатор, чтобы воспроизвести cross-span OVERLAP, который рекурсивная
+legacy-модель не может (см. [[proj_sequential_quotes_rewrite]], план greedy-yawning-pumpkin).
+Самая рискованная фаза. Мандат «0 регрессий на 343» НЕ-обсуждаем.
+
+### Ключевое архитектурное решение: differential-equality gate (scaffold Фазы 1)
+`try_parse` гоняет НОВЫЙ пайплайн И legacy, возвращает `Some(new)` ТОЛЬКО при побайтовом
+равенстве `Vec<Event>`, иначе `None` → fallback на legacy. Это делает корпус **0-регрессий
+ПО ПОСТРОЕНИЮ** (вывод == legacy всегда) и даёт честную метрику покрытия. Gate — ВРЕМЕННЫЙ:
+Фаза 2 его снимает, чтобы расходящиеся (overlapping) кейсы флипнули outline. Диагностика
+`ADOC_SUBST_FORCE=1` минует gate (сырой вывод движка) для замера верности.
+
+### Анализ перед реализацией (важно для будущих сессий)
+- **Парсер выдаёт Events, не HTML.** Экранирование `<>&` — задача рендерера (Event::Text сырой).
+  Поэтому specialchars-перезапись в Фазе 1 НЕ нужна (и вредна) — работаем на СЫРОМ тексте.
+- **Overlap = порядок пассов.** strong-пасс по всей строке ДО mono-пасса → strong-сентинелы
+  в строке до того, как mono их оборачивает. Edge-флаги воспроизводятся ЕСТЕСТВЕННО: mono-пасс
+  видит литеральный `_` (word-char) перед backtick → не открывается (`_`code`_`→`<em>`code`</em>`).
+- Порядок QUOTE_SUBS (без curved, отложены): strong(unc,con), mono(unc,con), em(unc,con),
+  mark(unc,con), sup, sub.
+
+### Что сделано
+- **inline.rs**: `parse_legacy(text,subs,options)` вынесена из `parse_str_with_subs_options`
+  (тело после toggle-чека) — чтобы subst вызывал legacy для сравнения без рекурсии.
+- **`subst/tokenize.rs`** (НОВЫЙ): сентинел `\x01<dec-idx>\x02` в рабочей `String`; side-table
+  `Vec<TagToken::{Open{kind,id,roles},Close(kind)}>`; `Work{buf,tags}`; `tokenize`→`Vec<Event>`
+  БЕЗ балансировки (overlap сохраняется); `SpanKind`→Tag/TagEnd; `utf8_char_len`, `sentinel_end`.
+- **`subst/quotes.rs`** (НОВЫЙ): `run_all` (10 пассов в порядке QUOTE_SUBS); generic
+  `pass_unconstrained`/`pass_constrained`/`pass_simple_pair`; `[attrlist]` (`parse_attrs`/
+  `parse_shorthand` зеркало legacy; constrained требует open-boundary, unconstrained нет;
+  mark+attrlist→InlineSpan, bare→Highlight); `find_closing_constrained`/`_unconstrained`
+  (скип сентинел-регионов; mono extra-close `(?![\w"'`])` только в bare-ветке — зеркало legacy).
+- **`subst/mod.rs`**: `try_parse` (gate QUOTES + sentinel-byte reject + equality gate / FORCE);
+  `enabled()`/`force()`/`env_true`; `run_pipeline`; +6 unit-тестов (differential vs legacy на
+  32 quotes-only пробах; overlap-кейс; gate adopts/declines; sentinel/no-quotes reject).
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 522→528, html 433); parsing-lab 233/233.
+- **blast toggle-OFF 0 diff vs base** (инертность); **toggle-ON+gate 0 diff vs base** (Фаза 1
+  гейт — корпус не изменён, 343 неизменны). Замер прямым `gate_check.py` (base-vs-new, без asciidoctor).
+- **FORCE-диагностика**: 46/344 файлов идентичны base на уровне файла (сильно занижено — 1
+  inline-текст с отложенной фичей флипает весь файл). **0 паник на 344 файлах** (сырой пайплайн
+  робастен). Спот-чек расхождений: ВСЕ — отложенные фичи (don't→don’t replacements, ` +`→`<br>`
+  post-repl, `<<>>`/`xref:` macros, `` `+*word*+` `` passthrough), НИ ОДНОГО бага quotes.
+- Скрипты в корпусе: `gate_check.py` (KEY=VAL→env нового бинаря), `blast_force.py`.
+
+### Что дальше — Фаза 2
+Перенести остальные пассы (passthrough-extract ПЕРВЫМ, затем specialchars, attributes,
+replacements, macros, post-replacements, restore) + escape `\` + curved smart-quotes. По мере
+роста верности FORCE-расхождения тают. КОГДА движок воспроизводит 343 байт-в-байт под FORCE —
+СНЯТЬ equality gate (или сделать его per-construct) чтобы cross-span overlap флипнул outline
+(4813→0). Гейт Фазы 2: Identical→344, 0 регрессий, 0 FARTHER. Затем Фаза 3 — swap дефолта,
+удаление legacy quotes + edge-флагов (`emphasis_leading_edge`/`smart_quote_leading_edge`/
+`edges_are_line_boundaries`) + toggle.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят девятая) — РЕРАЙТ inline на string-rewriting (Фаза 0: инфраструктура+toggle, инертно)
 
 Запрос «продолжи» → дошли до архитектурного решения. Фаза 0 (инертная инфраструктура)

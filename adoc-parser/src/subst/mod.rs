@@ -1,4 +1,5 @@
-//! Sequential-pass inline substitution engine (Asciidoctor `Substitutors` model).
+//! Sequential-pass inline substitution engine (Asciidoctor `Substitutors`
+//! model).
 //!
 //! TRANSITIONAL / DEV scaffolding. The legacy recursive inline parser
 //! ([`crate::inline`]) remains the default; this engine is built in parallel
@@ -12,21 +13,40 @@
 //! passes over the whole paragraph string (passthrough-extract → specialchars →
 //! quotes → attributes → replacements → macros → post_replacements → restore).
 //! The `quotes` step is itself a sequence of independent gsub passes (strong
-//! before monospace, …). Because an earlier pass splices literal `<strong>` text
-//! into the string before a later pass wraps backticks in `<code>`, a quote span
-//! can physically *overlap* a sibling span — output Asciidoctor itself emits as
+//! before monospace, …). Because an earlier pass splices literal tag text into
+//! the string before a later pass wraps markers around it, a quote span can
+//! physically *overlap* a sibling span — output Asciidoctor itself emits as
 //! invalid, non-nested HTML. A recursive/tree parser (the legacy engine) can
 //! only ever produce *nested* tags, so it cannot reproduce this; replicating it
-//! requires the string-rewriting pipeline this module will house.
+//! requires the string-rewriting pipeline this module houses.
 //!
-//! Phase 0 (current): the pipeline body is unimplemented; [`try_parse`] always
-//! returns `None`, so even with the toggle on every input falls back to the
-//! legacy engine and output is unchanged.
+//! ## Phase 1: quotes pipeline behind a differential-equality gate
+//!
+//! This phase implements the `quotes` pass family ([`quotes`]) plus the
+//! sentinel tokenizer ([`tokenize`]). The other passes (passthrough,
+//! specialchars, attributes, replacements, macros, post-replacements) are NOT
+//! yet implemented.
+//!
+//! To make partial coverage provably **zero-regression**, [`try_parse`] runs
+//! the new pipeline AND the legacy parser and only returns the new result when
+//! the two event streams are byte-identical; on any difference it returns
+//! `None` and the caller falls back to legacy. So with the toggle on, corpus
+//! output is unchanged (the gate). This gate is a Phase-1-only scaffold: Phase 2
+//! removes it precisely so the divergent (overlapping) cases can flip
+//! `outline.adoc`.
+//!
+//! `ADOC_SUBST_FORCE=1` (diagnostic, requires the toggle on) skips the gate and
+//! returns the raw new-engine result, so a `blast` run measures how faithfully
+//! the new engine reproduces the legacy output (divergences show up as diffs).
+
+mod quotes;
+mod tokenize;
 
 use std::sync::OnceLock;
 
 use crate::event::{Event, SubstitutionSet};
 use crate::inline::InlineOptions;
+use tokenize::{Work, TAG_LEAD, TAG_TAIL};
 
 /// Whether the sequential-quotes engine is enabled for this process.
 ///
@@ -36,25 +56,189 @@ use crate::inline::InlineOptions;
 /// corpus harness (`blast_toggle.py`) runs each engine in a separate process.
 pub(crate) fn enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("ADOC_QUOTES_SEQUENTIAL")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
+    *FLAG.get_or_init(|| env_true("ADOC_QUOTES_SEQUENTIAL"))
+}
+
+/// Diagnostic: when set (and the engine is enabled), bypass the
+/// differential-equality gate and return the raw new-engine result. Used to
+/// measure reproduction fidelity via `blast`; NOT the safety gate.
+fn force() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| env_true("ADOC_SUBST_FORCE"))
+}
+
+fn env_true(var: &str) -> bool {
+    std::env::var(var)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Attempt to parse top-level inline `text` with the sequential-pass engine.
 ///
-/// Returns `None` when the engine cannot (yet) handle the input, signalling the
-/// caller to fall back to the legacy recursive parser. Only called for
-/// top-level paragraph text (the unit a line-level pass operates on), never for
-/// inner-span reparses — those belong to the legacy model exclusively.
-///
-/// Phase 0: always `None` (pipeline body not implemented).
+/// Returns `None` when the engine declines (no quotes substitution requested,
+/// the input contains a reserved sentinel byte, or — under the Phase 1 gate —
+/// the result would differ from the legacy parser), signalling the caller to
+/// fall back to the legacy recursive parser. Only called for top-level
+/// paragraph text, never for inner-span reparses.
 pub(crate) fn try_parse<'a>(
-    _text: &'a str,
-    _subs: SubstitutionSet,
-    _options: InlineOptions,
+    text: &'a str,
+    subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Option<Vec<Event<'a>>> {
-    None
+    // The engine only performs the `quotes` substitution; without it there is
+    // nothing to do (e.g. verbatim blocks) — defer to legacy.
+    if !subs.has(SubstitutionSet::QUOTES) {
+        return None;
+    }
+    // A sentinel byte in the source would be indistinguishable from an
+    // engine-inserted sentinel; refuse such input outright.
+    if text
+        .bytes()
+        .any(|b| b == TAG_LEAD || b == TAG_TAIL)
+    {
+        return None;
+    }
+
+    let candidate = run_pipeline(text);
+
+    if force() {
+        return Some(candidate);
+    }
+
+    // Phase 1 gate: only adopt the new result when it exactly reproduces legacy.
+    let legacy = crate::inline::parse_legacy(text, subs, options);
+    if candidate == legacy {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// Run the implemented substitution passes and tokenize the result.
+fn run_pipeline<'a>(text: &str) -> Vec<Event<'a>> {
+    let mut work = Work::new(text);
+    quotes::run_all(&mut work);
+    tokenize::tokenize(work)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{Tag, TagEnd};
+
+    fn legacy(text: &str) -> Vec<Event<'_>> {
+        crate::inline::parse_legacy(text, SubstitutionSet::NORMAL, InlineOptions::default())
+    }
+
+    /// The new pipeline must reproduce the legacy parser byte-for-byte on every
+    /// input that involves only the implemented `quotes` constructs and no
+    /// substitution the engine defers (replacements/macros/attributes/…).
+    #[test]
+    fn reproduces_legacy_on_quotes_only_inputs() {
+        let cases = [
+            // bare formatting, all markers, constrained + unconstrained
+            "*bold*",
+            "_em_",
+            "`mono`",
+            "#mark#",
+            "^sup^",
+            "~sub~",
+            "**strong**",
+            "__emph__",
+            "``code``",
+            "##hi##",
+            // mixed siblings
+            "_em_ and *strong* and `code`",
+            "a*b*c",
+            "**unc** then `m`",
+            // nesting (both orderings)
+            "*a _b_ c*",
+            "_a *b* c_",
+            "*a `b` c*",
+            "`a *b* c`",
+            // leading-edge cases reproduced by pass ordering, no edge flags
+            "_`code`_",
+            "_*b*_",
+            "`*b*`",
+            // attrlist spans
+            "[.role]*x*",
+            "[#id.cls]_y_",
+            "[big]##O##",
+            "[role]#span#",
+            "word[role]#x# stays literal",
+            "mid[x]##word##",
+            // plain text and non-triggering punctuation
+            "plain text no markup",
+            "a lone . and ( stay literal",
+            "trailing marker * alone",
+            "unterminated *open and _open",
+            // empty / doubled-edge
+            "**",
+            "``",
+        ];
+        for c in cases {
+            assert_eq!(
+                run_pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// The signature cross-span case: a constrained strong that opens inside one
+    /// monospace region and closes inside the next produces *overlapping*,
+    /// non-nested events — which the recursive legacy parser cannot. The Phase 1
+    /// gate therefore declines this input (falls back), but the raw pipeline
+    /// must produce the overlap.
+    #[test]
+    fn produces_cross_span_overlap() {
+        let events = run_pipeline("a *crosses `code* span`");
+        assert_eq!(
+            events,
+            vec![
+                Event::Text("a ".into()),
+                Event::Start(Tag::Strong { id: None, roles: vec![] }),
+                Event::Text("crosses ".into()),
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("code".into()),
+                Event::End(TagEnd::Strong),
+                Event::Text(" span".into()),
+                Event::End(TagEnd::Monospace),
+            ]
+        );
+        // And it genuinely differs from the legacy (nested) interpretation.
+        assert_ne!(events, legacy("a *crosses `code* span`"));
+    }
+
+    #[test]
+    fn try_parse_declines_without_quotes() {
+        // Verbatim subs (no QUOTES) → engine defers to legacy.
+        assert!(try_parse("*x*", SubstitutionSet::VERBATIM, InlineOptions::default()).is_none());
+    }
+
+    #[test]
+    fn try_parse_declines_on_sentinel_bytes() {
+        let with_lead = "a\u{01}b";
+        assert!(try_parse(with_lead, SubstitutionSet::NORMAL, InlineOptions::default()).is_none());
+    }
+
+    #[test]
+    fn try_parse_gate_adopts_matching_result() {
+        // A plain quotes input the engine reproduces exactly → gate adopts it.
+        let got = try_parse("*bold* and _em_", SubstitutionSet::NORMAL, InlineOptions::default());
+        assert_eq!(got, Some(legacy("*bold* and _em_")));
+    }
+
+    #[test]
+    fn try_parse_gate_declines_divergent_result() {
+        // Cross-span overlap differs from legacy → gate declines (None).
+        assert!(
+            try_parse(
+                "a *crosses `code* span`",
+                SubstitutionSet::NORMAL,
+                InlineOptions::default()
+            )
+            .is_none()
+        );
+    }
 }

@@ -240,17 +240,30 @@ impl InlineParser {
             return events;
         }
 
-        let mut events = Vec::new();
-        let mut parser = InlineState::new(text, subs, options);
-        // Top-level text: its start/end are the real paragraph/line edges.
-        parser.edges_are_line_boundaries = true;
-        parser.parse_inline(&mut events);
+        parse_legacy(text, subs, options)
+    }
+}
 
-        if events.is_empty() {
-            vec![Event::Text(Cow::Borrowed(text))]
-        } else {
-            events
-        }
+/// The legacy recursive inline parser, factored out of
+/// [`InlineParser::parse_str_with_subs_options`] so the sequential-pass engine
+/// ([`crate::subst`]) can run it for differential comparison without
+/// re-entering the toggle check (which would recurse). Handles any `text`
+/// including the empty string (yields a single empty `Text`).
+pub(crate) fn parse_legacy<'a>(
+    text: &'a str,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'a>> {
+    let mut events = Vec::new();
+    let mut parser = InlineState::new(text, subs, options);
+    // Top-level text: its start/end are the real paragraph/line edges.
+    parser.edges_are_line_boundaries = true;
+    parser.parse_inline(&mut events);
+
+    if events.is_empty() {
+        vec![Event::Text(Cow::Borrowed(text))]
+    } else {
+        events
     }
 }
 

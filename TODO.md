@@ -202,7 +202,7 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-14, после 69-й сессии): Identical **343 / 344**; РЕРАЙТ inline начат (Фаза 0)
+## АКТУАЛЬНО (2026-06-14, после 70-й сессии): Identical **343 / 344**; РЕРАЙТ inline — Фаза 1 СДЕЛАНА
 
 Остался РОВНО 1 Different — `spec/outline.adoc` (4813 diff), единственный корень
 **cross-span strong @4545** (глубоко архитектурный). Пользователь авторизовал **полный
@@ -212,14 +212,39 @@ blast-гейт 0-регрессий, мерж по авторизации). НЕ
 архитектурный рерайт самого тяжёлого модуля, multi-session, риск ОЧЕНЬ ВЫСОКИЙ, цель —
 воспроизвести НЕВАЛИДНЫЙ overlapping HTML (баг asciidoctor) ради байт-идентичности 1 файла.
 
-**Фаза 0 СДЕЛАНА и СМЕРЖЕНА в master** (была ветка `feat/sequential-quotes-engine`; Фаза 1 —
-новая ветка off master): toggle `ADOC_QUOTES_SEQUENTIAL=1` (env→`crate::subst::enabled()`, OnceLock;
-отступил от плана `InlineOptions.sequential_quotes` ради меньшей инвазивности scaffolding),
-скелет модуля `adoc-parser/src/subst/mod.rs` (`try_parse`→None = fallback на legacy),
-ветвление в `parse_str_with_subs_options`, скрипт `/mnt/c/tmp/adoc-test/blast_toggle.py`.
-ИНЕРТНО: blast off И on оба 343→343, 0 diff; clippy 0, test (parser 522, html 433),
-parsing-lab 233/233. **Дальше — Фаза 1** (passthrough/specialchars/quotes-пассы + токенизатор;
-самая рискованная). Методология/скрипты — в memory [[compat_corpus_methodology]].
+**Фаза 0 СДЕЛАНА и СМЕРЖЕНА в master** (была ветка `feat/sequential-quotes-engine`):
+toggle `ADOC_QUOTES_SEQUENTIAL=1` (env→`crate::subst::enabled()`, OnceLock), скелет
+`adoc-parser/src/subst/mod.rs` (`try_parse`→None), ветвление в `parse_str_with_subs_options`.
+
+**Фаза 1 СДЕЛАНА — quotes-пайплайн за differential-equality gate** (ветка
+`feat/subst-phase1-quotes`, ЗАКОММИЧЕНА; **MERGE+ПУШ ОЖИДАЮТ авторизации**). Реализован
+string-rewriting движок quotes как gsub-последовательность пассов:
+- **`subst/tokenize.rs`**: сентинел-модель (`\x01<idx>\x02` в рабочей String → side-table
+  `TagToken::{Open{kind,id,roles},Close(kind)}`), `tokenize` → `Vec<Event>` БЕЗ балансировки
+  (overlap сохраняется). `SpanKind`→Tag/TagEnd; `utf8_char_len`/`sentinel_end`.
+- **`subst/quotes.rs`**: пассы в порядке asciidoctor QUOTE_SUBS — strong(unc/con),
+  mono(unc/con), em(unc/con), mark(unc/con→Highlight/InlineSpan), sup, sub; `[attrlist]`
+  префикс (constrained требует open-boundary, unconstrained — нет); граничная логика и
+  `find_closing_*` портированы из legacy. Сентинел-байты = non-word boundary (как `<`/`>`
+  в asciidoctor) — естественно (контрол-байты не alnum/`_`).
+- **`subst/mod.rs`**: `try_parse` гоняет пайплайн + legacy, возвращает `Some` ТОЛЬКО при
+  побайтовом равенстве событий, иначе `None` (fallback). Gate = **0-регрессий ПО ПОСТРОЕНИЮ**.
+  `parse_legacy` вынесена из inline.rs. Диагностика `ADOC_SUBST_FORCE=1` (минует gate).
+- **ВАЖНО (бонус):** edge-флаги (`emphasis_leading_edge`) воспроизводятся ЕСТЕСТВЕННО порядком
+  пассов — `_`code`_`→`<em>`code`</em>` без хаков (mono-пасс видит `_` word-char перед backtick).
+  Cross-span OVERLAP воспроизводится (`a *crosses `code* span`` → Start(Strong)…Start(Mono)…
+  End(Strong)…End(Mono)) — ровно то, что рекурсивная модель не может. Проверено unit-тестом.
+- **ОТЛОЖЕНО (Фаза 2, fallback через gate):** passthrough-extract, specialchars, attributes,
+  replacements, macros, post-replacements, escape `\`, curved smart-quotes `"`…`"`.
+- **Гейт верифицирован:** clippy 0, test --workspace (parser 522→528, +6 subst-тестов, html 433),
+  parsing-lab 233/233. blast toggle-OFF 0 diff vs base (инертность), toggle-ON+gate **0 diff**
+  (корпус не изменён, 343 неизменны). FORCE-диагностика: 46/344 файлов идентичны base на уровне
+  файла (занижено — 1 inline-текст с отложенной фичей флипает весь файл); **0 паник на 344
+  файлах**; ВСЕ FORCE-расхождения атрибутированы отложенным фичам (don't→don’t, ` +`→`<br>`,
+  `<<>>`/`xref:`, `+*word*+` passthrough), НИ ОДНОГО бага quotes.
+- Скрипты: `/mnt/c/tmp/adoc-test/gate_check.py` (быстрое прямое base-vs-new сравнение, режимы
+  через KEY=VAL), `blast_force.py`. **Дальше — Фаза 2** (остальные пассы → flip outline; снять gate).
+Методология — в memory [[compat_corpus_methodology]], [[proj_sequential_quotes_rewrite]].
 
 ## Свежий baseline корпуса (2026-06-09, ПОСЛЕ stem-mathjax-docinfo) — УСТАРЕЛ, см. блок выше
 

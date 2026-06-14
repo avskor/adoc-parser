@@ -1,0 +1,378 @@
+//! The `quotes` substitution as a sequence of flat gsub-style passes.
+//!
+//! Each pass scans the current working buffer once, left to right, and splices
+//! sentinel tags around every match of one quote type, then continues *after*
+//! the match (non-overlapping, like Ruby `String#gsub`). Passes run in
+//! Asciidoctor's `QUOTE_SUBS` order so that an earlier type (e.g. strong)
+//! rewrites the string before a later type (e.g. monospace) scans it — the
+//! mechanism behind cross-span overlap.
+//!
+//! Boundary rules are ported verbatim from the legacy recursive parser
+//! (`crate::inline`), which already encodes Asciidoctor's open/close
+//! assertions. Sentinel bytes count as non-word boundary characters (like the
+//! `<`/`>` of a spliced tag in Asciidoctor), which falls out naturally because
+//! they are neither alphanumeric nor `_`.
+//!
+//! ## Phase 1 scope
+//!
+//! Implemented: strong/monospace/emphasis/mark (constrained + unconstrained,
+//! with `[attrlist]` prefixes) and superscript/subscript. **Not** implemented
+//! (left for later phases; the engine's caller falls back to the legacy parser
+//! whenever the result would differ): curved smart quotes `"`…`"`/`'`…`'`,
+//! passthrough extraction, specialchars, attributes, replacements, macros,
+//! post-replacements, and escape (`\`) handling.
+
+use super::tokenize::{sentinel_end, utf8_char_len, SpanKind, Work, TAG_LEAD};
+
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Run every quote pass over `work`, in Asciidoctor `QUOTE_SUBS` order.
+pub(super) fn run_all(work: &mut Work) {
+    // strong
+    pass_unconstrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
+    pass_constrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
+    // monospace (runs before emphasis/mark)
+    pass_unconstrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
+    pass_constrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
+    // emphasis
+    pass_unconstrained(work, b'_', SpanKind::Emphasis, SpanKind::Emphasis);
+    pass_constrained(work, b'_', SpanKind::Emphasis, SpanKind::Emphasis);
+    // mark / highlight: bare is Highlight, an attrlist turns it into a span
+    pass_unconstrained(work, b'#', SpanKind::Highlight, SpanKind::InlineSpan);
+    pass_constrained(work, b'#', SpanKind::Highlight, SpanKind::InlineSpan);
+    // superscript then subscript
+    pass_simple_pair(work, b'^', SpanKind::Superscript);
+    pass_simple_pair(work, b'~', SpanKind::Subscript);
+}
+
+/// Parsed `[attrlist]` content: the first positional attribute as an optional
+/// id and a list of roles. Returns `None` when the attrlist yields neither
+/// (e.g. `[]`), matching the legacy `try_inline_attr_span` rejection.
+fn parse_attrs(attr_content: &str) -> Option<(Option<String>, Vec<String>)> {
+    let first = attr_content
+        .split(',')
+        .next()
+        .unwrap_or(attr_content)
+        .trim();
+    if first.is_empty() {
+        return None;
+    }
+    let (id, roles) = if first.starts_with('.') || first.starts_with('#') {
+        parse_shorthand(first)
+    } else {
+        (None, vec![first.to_string()])
+    };
+    if id.is_none() && roles.is_empty() {
+        return None;
+    }
+    Some((id, roles))
+}
+
+/// Mirror `InlineState::parse_inline_shorthand`: `#id.role1.role2`.
+fn parse_shorthand(s: &str) -> (Option<String>, Vec<String>) {
+    let mut id = None;
+    let mut rest = s;
+    if let Some(stripped) = rest.strip_prefix('#') {
+        rest = stripped;
+        let end = rest.find('.').unwrap_or(rest.len());
+        let id_str = &rest[..end];
+        if !id_str.is_empty() {
+            id = Some(id_str.to_string());
+        }
+        rest = &rest[end..];
+    }
+    let mut roles = Vec::new();
+    for part in rest.split('.') {
+        if !part.is_empty() {
+            roles.push(part.to_string());
+        }
+    }
+    (id, roles)
+}
+
+/// Find the index of the constrained closing `marker` at or after
+/// `search_start`, skipping sentinel regions. Mirrors
+/// `find_closing_constrained`: the marker must be past `search_start` (non-empty
+/// content) and not be the first of a doubled marker.
+fn find_closing_constrained(bytes: &[u8], marker: u8, search_start: usize) -> Option<usize> {
+    let mut i = search_start;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            i = sentinel_end(bytes, i);
+            continue;
+        }
+        if bytes[i] == marker && i > search_start && bytes.get(i + 1).copied() != Some(marker) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the index of the unconstrained closing `marker``marker` at or after
+/// `search_start`, skipping sentinel regions.
+fn find_closing_unconstrained(bytes: &[u8], marker: u8, search_start: usize) -> Option<usize> {
+    let mut i = search_start;
+    while i + 1 < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            i = sentinel_end(bytes, i);
+            continue;
+        }
+        if bytes[i] == marker && bytes[i + 1] == marker {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Common close-side checks for a constrained span whose content is
+/// `bytes[content_start..close_pos]` and whose marker is `marker`.
+fn constrained_close_ok(bytes: &[u8], marker: u8, content_start: usize, close_pos: usize, mono_extra: bool) -> bool {
+    // content must not be empty (guaranteed by find_closing) nor end with a space
+    if close_pos == content_start || bytes[close_pos - 1] == b' ' {
+        return false;
+    }
+    let after_close = close_pos + 1;
+    if after_close < bytes.len() && is_word(bytes[after_close]) {
+        return false;
+    }
+    // Constrained monospace forbids `"`/`'`/backtick immediately after the close
+    // (Asciidoctor's `(?![\w"'`])`). The attrlist path does not apply this extra
+    // rule (mirrors the legacy `try_inline_attr_span`).
+    if mono_extra && marker == b'`' && matches!(bytes.get(after_close), Some(b'"' | b'\'' | b'`')) {
+        return false;
+    }
+    true
+}
+
+/// `marker``…``marker``marker` — unconstrained constrained-free pair, optionally
+/// prefixed by `[attrlist]` (no open boundary, may appear mid-word).
+fn pass_unconstrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind: SpanKind) {
+    let old = std::mem::take(&mut work.buf);
+    let bytes = old.as_bytes();
+    let mut out = String::with_capacity(old.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            out.push_str(&old[i..end]);
+            i = end;
+            continue;
+        }
+
+        // [attrlist]MM…MM (no open-boundary requirement when unconstrained)
+        if bytes[i] == b'['
+            && let Some((id, roles, content_start, close_pos)) =
+                attrlist_unconstrained(&old, bytes, i, marker)
+        {
+            out.push_str(&work.open_sentinel(attr_kind, id, roles));
+            out.push_str(&old[content_start..close_pos]);
+            out.push_str(&work.close_sentinel(attr_kind));
+            i = close_pos + 2;
+            continue;
+        }
+
+        // bare MM…MM
+        if bytes[i] == marker && bytes.get(i + 1).copied() == Some(marker) {
+            let content_start = i + 2;
+            if content_start < bytes.len()
+                && let Some(close_pos) = find_closing_unconstrained(bytes, marker, content_start)
+                && close_pos > content_start
+            {
+                out.push_str(&work.open_sentinel(bare_kind, None, Vec::new()));
+                out.push_str(&old[content_start..close_pos]);
+                out.push_str(&work.close_sentinel(bare_kind));
+                i = close_pos + 2;
+                continue;
+            }
+        }
+
+        let len = utf8_char_len(bytes[i]);
+        out.push_str(&old[i..i + len]);
+        i += len;
+    }
+
+    work.buf = out;
+}
+
+/// `[attrlist]` immediately followed by `markermarker…markermarker`.
+fn attrlist_unconstrained(
+    old: &str,
+    bytes: &[u8],
+    lbrack: usize,
+    marker: u8,
+) -> Option<(Option<String>, Vec<String>, usize, usize)> {
+    let rbrack = find_attr_close(bytes, lbrack)?;
+    let (id, roles) = parse_attrs(&old[lbrack + 1..rbrack])?;
+    let marker_pos = rbrack + 1;
+    if bytes.get(marker_pos).copied() != Some(marker)
+        || bytes.get(marker_pos + 1).copied() != Some(marker)
+    {
+        return None;
+    }
+    let content_start = marker_pos + 2;
+    if content_start >= bytes.len() {
+        return None;
+    }
+    let close_pos = find_closing_unconstrained(bytes, marker, content_start)?;
+    if close_pos == content_start {
+        return None;
+    }
+    Some((id, roles, content_start, close_pos))
+}
+
+/// `marker…marker` — constrained pair, optionally prefixed by `[attrlist]`,
+/// requiring a non-word (or start/sentinel) open boundary.
+fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind: SpanKind) {
+    let old = std::mem::take(&mut work.buf);
+    let bytes = old.as_bytes();
+    let mut out = String::with_capacity(old.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            out.push_str(&old[i..end]);
+            i = end;
+            continue;
+        }
+
+        let open_boundary = i == 0 || !is_word(bytes[i - 1]);
+
+        // [attrlist]M…M (constrained: open boundary required)
+        if open_boundary
+            && bytes[i] == b'['
+            && let Some((id, roles, content_start, close_pos)) =
+                attrlist_constrained(&old, bytes, i, marker)
+        {
+            out.push_str(&work.open_sentinel(attr_kind, id, roles));
+            out.push_str(&old[content_start..close_pos]);
+            out.push_str(&work.close_sentinel(attr_kind));
+            i = close_pos + 1;
+            continue;
+        }
+
+        // bare M…M (not the first of a doubled marker — that is the
+        // unconstrained pass's job)
+        if open_boundary
+            && bytes[i] == marker
+            && bytes.get(i + 1).copied() != Some(marker)
+        {
+            let content_start = i + 1;
+            if content_start < bytes.len()
+                && bytes[content_start] != b' '
+                && let Some(close_pos) = find_closing_constrained(bytes, marker, content_start)
+                && constrained_close_ok(bytes, marker, content_start, close_pos, true)
+            {
+                out.push_str(&work.open_sentinel(bare_kind, None, Vec::new()));
+                out.push_str(&old[content_start..close_pos]);
+                out.push_str(&work.close_sentinel(bare_kind));
+                i = close_pos + 1;
+                continue;
+            }
+        }
+
+        let len = utf8_char_len(bytes[i]);
+        out.push_str(&old[i..i + len]);
+        i += len;
+    }
+
+    work.buf = out;
+}
+
+/// `[attrlist]` immediately followed by a constrained `marker…marker`.
+fn attrlist_constrained(
+    old: &str,
+    bytes: &[u8],
+    lbrack: usize,
+    marker: u8,
+) -> Option<(Option<String>, Vec<String>, usize, usize)> {
+    let rbrack = find_attr_close(bytes, lbrack)?;
+    let (id, roles) = parse_attrs(&old[lbrack + 1..rbrack])?;
+    let marker_pos = rbrack + 1;
+    // single marker only (a doubled marker is the unconstrained form, which the
+    // earlier pass owns; legacy does not fall back from unconstrained to
+    // constrained for the attrlist form)
+    if bytes.get(marker_pos).copied() != Some(marker)
+        || bytes.get(marker_pos + 1).copied() == Some(marker)
+    {
+        return None;
+    }
+    let content_start = marker_pos + 1;
+    if content_start >= bytes.len() || bytes[content_start] == b' ' {
+        return None;
+    }
+    let close_pos = find_closing_constrained(bytes, marker, content_start)?;
+    if !constrained_close_ok(bytes, marker, content_start, close_pos, false) {
+        return None;
+    }
+    Some((id, roles, content_start, close_pos))
+}
+
+/// Find the `]` that closes an attrlist opened at `lbrack` (`[`), refusing to
+/// cross a newline (mirrors `try_inline_attr_span`).
+fn find_attr_close(bytes: &[u8], lbrack: usize) -> Option<usize> {
+    let mut j = lbrack + 1;
+    while j < bytes.len() {
+        match bytes[j] {
+            b']' => return Some(j),
+            b'\n' => return None,
+            _ => j += 1,
+        }
+    }
+    None
+}
+
+/// `marker…marker` superscript/subscript: no boundary assertion, content must be
+/// non-empty (mirrors `try_simple_pair`). No attrlist support.
+fn pass_simple_pair(work: &mut Work, marker: u8, kind: SpanKind) {
+    let old = std::mem::take(&mut work.buf);
+    let bytes = old.as_bytes();
+    let mut out = String::with_capacity(old.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            out.push_str(&old[i..end]);
+            i = end;
+            continue;
+        }
+
+        if bytes[i] == marker {
+            let content_start = i + 1;
+            // first marker strictly after content_start (non-empty content),
+            // skipping sentinel regions
+            let mut j = content_start;
+            let mut close = None;
+            while j < bytes.len() {
+                if bytes[j] == TAG_LEAD {
+                    j = sentinel_end(bytes, j);
+                    continue;
+                }
+                if bytes[j] == marker && j > content_start {
+                    close = Some(j);
+                    break;
+                }
+                j += 1;
+            }
+            if let Some(close_pos) = close {
+                out.push_str(&work.open_sentinel(kind, None, Vec::new()));
+                out.push_str(&old[content_start..close_pos]);
+                out.push_str(&work.close_sentinel(kind));
+                i = close_pos + 1;
+                continue;
+            }
+        }
+
+        let len = utf8_char_len(bytes[i]);
+        out.push_str(&old[i..i + len]);
+        i += len;
+    }
+
+    work.buf = out;
+}
