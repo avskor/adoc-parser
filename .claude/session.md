@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят четвёртая) — Фаза 3: `~` autowidth-маркер в col-spec не должен съедать стиль колонки
+
+Запрос «продолжи». Ветка **`fix/session64-nearmiss`** — ЗАКОММИЧЕНА.
+**НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на `git merge --no-ff` в
+master + `git push origin master` + удаление ветки.** Старт: housekeeping 63-й
+закрыт сам (мерж 63-й УЖЕ выполнен И запушен — origin/master == master == ac6aaf6
+(340), дерево чисто, веток нет). base-бинарь /tmp/adoc_base пересобран из master HEAD (340).
+
+### Выбор задачи
+nearmiss на 340 (4 Different, весь «трудный хвост»): **character-replacement-ref
+(625, Δ113)**, document-attributes-ref (953), syntax-quick-reference (2788),
+outline (6647). Выбран character-replacement-ref — таблица `[%autowidth,cols="^~m,^~l,^~"]`,
+diff'ы стартуют с #86 (`<code>` vs голый `<p>`) = кластер «стили колонок m/e/s/l не наследуются».
+
+### Корень (одна точка, пробы asciidoctor 2.0.23)
+- Col-spec `^~m`: `~` — это **токен ширины autowidth** (регэксп asciidoctor `(\d+%?|~)`).
+  Наш `parse_col_spec` (attributes.rs:127) парсил ТОЛЬКО цифры как ширину → `~` не
+  потреблялся → rest=`~m` (len 2) → проверка стиля `rest.len()==1` ПРОВАЛИВАЛАСЬ →
+  колонка получала Default вместо Monospace/Literal. (Стиль колонки УЖЕ наследуется в
+  block.rs `resolve_style`@1916 и рендерится в blocks.rs@230-264 — не хватало лишь
+  разбора `~`.) Пробы: `^~m`→`<code>`, `^~l`→`<div class="literal"><pre>`, `^~`→plain.
+- colgroup для целевого файла уже совпадал (`%autowidth` → голый `<col>`, рендерер
+  гейтит на `has_autowidth`). Так что НЕ кластер colgroup — чисто стиль ячеек.
+
+### Что сделано (ПАРСЕР, одна точка)
+- **attributes.rs::parse_col_spec**: после цифр-ширины потребляется опциональный `%`;
+  при отсутствии цифр потребляется `~` (autowidth-маркер). spec.width при `~` = 0.
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 515→516, html 427→428);
+  parsing-lab 233/233.
+- character-replacement-ref diffone: **625→0 (ФЛИП, байт-в-байт)**, len ref==our==756.
+- **Корпус: Identical 340→341 (+1 ФЛИП)**. blast (base 340): **РОВНО 1 флип, 0 регрессий,
+  0 FARTHER**.
+- Тесты: +1 parser (`test_parse_col_spec_autowidth_marker_keeps_style`: `^~m`/`^~l`/`^~`/`50%s`),
+  +1 html (`test_table_col_autowidth_marker_inherits_style_html`).
+
+### Что дальше
+- nearmiss на 341 (3 Different, ВСЕ архитектурные/мульти-root): document-attributes-ref
+  (953, Δ−3 — docyear/localyear date-интринсики [риск] + inline-в-link),
+  syntax-quick-reference (2788, мульти-root), outline (6647, Δ3 — `\*` экранирование +
+  `+` hard-break, мульти-root).
+- **Остаток кластера col-spec**: голый `cols="^~m,..."` БЕЗ `%autowidth` — asciidoctor даёт
+  голый `<col>` (per-column `~` = autowidth колонки), мы эмитим `width: …%` (рендерер
+  гейтит colgroup только на table-level `%autowidth`, не на per-column `~`). НЕ в корпусе
+  как Different — отложено.
+- **Pre-existing шире (НЕ трогал)**: unordered/ordered list-маркер (`*`/`.`) после строки
+  параграфа БЕЗ blank — asciidoctor поглощает в параграф, мы прерываем.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят третья) — Фаза 3: вложенная таблица `!===` (разделитель `!`)
 
 Запрос «продолжи». Ветка **`fix/nested-table-bang-delimiter`** — ЗАКОММИЧЕНА
