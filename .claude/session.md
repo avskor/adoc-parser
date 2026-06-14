@@ -1,5 +1,79 @@
 # Session context
 
+## Сессия (2026-06-14, шестидесятая) — Фаза 3: счётчики литеральны в verbatim styled-параграфах и passthrough
+
+Запрос «продолжи». Ветка **`fix/counter-verbatim-and-passthrough`** — ЗАКОММИЧЕНА
+(`1907213`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 59-й закрыт сам (мерж 59-й УЖЕ выполнен И запушен —
+origin/master == master == 0fd22fa (337), дерево чисто, ветки fix/* удалены).
+base-бинарь /tmp/adoc_base пересобран из master HEAD (337) — изначально был 336
+(align-by-cell `pages/` показывал ложный флип 371→0 — это фикс 59-й, уже в master;
+NB: ДВА файла align-by-cell — `examples/` [base 0] и `pages/` [фикс 59-й]).
+
+### Выбор задачи
+nearmiss на 337 (7 Different, весь «трудный хвост»): **counters (136, Δ9)**, data
+(181, Δ77 — CSV/DSV `,===` + colgroup, мульти-root), table (597, Δ1 — `|=== <1>`
+callout-суффикс делает строку невалидным делимитером → текст параграфа; ДВА корня),
+character-replacement-ref (625, Δ113 — m-колонка `<code>`-наследование, архитектурный
+кластер), document-attributes-ref (953, Δ−3 — docyear/localyear date-интринсики
+[рискованно] + inline-в-link-тексте), syntax-quick-reference (2788, мульти-root),
+outline (6647, Δ3 — `\*` экранирование + `+` hard-break, мульти-root spec).
+diffone counters: @38/@68/@77 изолированы, @142→@282 — ОДИН сплошной каскад
+(промежуток @78-@141 идентичен → `====` example-блоки и `----` listing уже корректны).
+Выбран counters — наименьший и сводится к ОДНОМУ концептуальному корню.
+
+### Реальная семантика (проба counters.adoc + asciidoctor)
+Счётчики `{counter:N}`/`{counter2:N}` резолвятся asciidoctor в `attributes`-субституции,
+которой НЕТ в verbatim-контекстах и passthrough'ах. Препроцессор же раскрывал их
+ВЕЗДЕ. ДВА под-корня (оба независимы — счётчики «name»/«seq1»/«pnum» раздельны):
+- **Root A**: `[source]`/`[listing]`/`[literal]` styled-параграф (одиночный, БЕЗ `----`).
+  Препроцессор УЖЕ скипал delimited verbatim-fences (`----`/`....`/`++++`/`////`), но НЕ
+  styled-параграф. `{counter2:seq1}` в `[source]`-параграфе резолвился в ПУСТО → пустой
+  блок дропался → каскад @142→@282 (поэтому 130+ из 136 diff'ов — ОДИН корень).
+- **Root B**: inline-passthrough `+...+`/`++...++`/`+++...+++`/`pass:[]` (строки 12/21:
+  `` `+{counter:name}+` ``). asciidoctor извлекает passthrough ДО attributes-субституции.
+
+### Что сделано (ПАРСЕР)
+- **Рефактор**: 4 passthrough-сканера (`pass_spec_len`, `pass_macro_span_len`,
+  `passthrough_span_len`, `single_plus_span_len`) вынесены из `impl InlineState` в
+  `scanner.rs` как stateless `pub fn` (они и были stateless — `(s,i)`, без self/'a;
+  место по CLAUDE.md). inline.rs: 11 call-sites `Self::`→`crate::scanner::`. Байт-в-байт.
+- **Root B** (preprocessor.rs `expand_counters`): скан по байтовому индексу `i` (вместо
+  moving `rest`-слайса — чтобы `single_plus_span_len` видел РЕАЛЬНЫЙ предыдущий символ:
+  `C+a+` НЕ passthrough); при `+`/`p` пробуем passthrough-span → копируем verbatim, НЕ
+  раскрываем/НЕ инкрементим счётчик.
+- **Root A** (preprocessor.rs `preprocess_with_attrs`): поля `verbatim_para_pending`/
+  `in_verbatim_para`; секция 4a (после skip, перед fence-4b): pending взводится в секции 6
+  после эмита verbatim-style attr-строки (`is_verbatim_style_attr_line` — first positional
+  ∈ source/listing/literal, шортхенд `%`/`.`/`#`/space стрипается); следующая строка: если
+  delimiter → fence (4b) handles, если blank → orphan, иначе → in_verbatim_para (строки
+  untouched до blank). Зеркало delimited-fence-логики.
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 508→510, html 422→424, всего
+  1026); parsing-lab 233/233.
+- counters diffone: **0 diffs** (был 136), len ref==our==283.
+- **Корпус: Identical 337→338 (+1 ФЛИП, counters 136→0)**. Blast (base 337,
+  пересобран из master): **РОВНО 1 флип, 0 регрессий, 0 FARTHER**.
+- Тесты: +2 parser (`test_counter_literal_inside_passthrough` [single/double/triple/pass +
+  word-preceded `+` не span], `test_counter_literal_in_styled_verbatim_paragraph`
+  [source/listing-параграф, multi-line, `[source]\n----` → fence, `[example]` НЕ verbatim]),
+  +1 html (`test_counter_literal_in_styled_paragraph_and_passthrough_html`: source-параграф
+  verbatim + counter2 не дропается + `+...+` литерал).
+
+### Что дальше
+- nearmiss на 338 (6 Different): data (181, Δ77 — CSV/DSV colgroup + строки, мульти-root),
+  table (597, Δ1 — `|=== <1>` callout невалид-делимитер + ДВА корня), character-replacement-ref
+  (625, Δ113 — m-колонка `<code>`-наследование), document-attributes-ref (953, Δ−3 —
+  docyear/localyear date-интринсики [риск] + inline-в-link), syntax-quick-reference (2788,
+  мульти-root), outline (6647, Δ3 — мульти-root spec). ВСЕ архитектурные/мульти-root.
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57/58/59.
+- Известный clippy-warning (НЕ мой, pre-existing, виден только `--all-targets`): `concat!`
+  в adoc-html/src/tests.rs:2025. Гейт проекта `cargo clippy --workspace` чист.
+
+---
+
 ## Сессия (2026-06-14, пятьдесят девятая) — Фаза 3: single-plus passthrough `+…+` охватывает backtick'и
 
 Запрос «продолжи». Ветка **`fix/single-plus-passthrough-spans-backtick`** —
