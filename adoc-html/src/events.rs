@@ -425,6 +425,12 @@ impl HtmlRenderer {
 
         match tag {
             Tag::Header => {
+                if self.cell_render_depth > 0 {
+                    // Embedded AsciiDoc table-cell document: no `#header` div and
+                    // no document-structure side effects (its leading attribute
+                    // entries still flow through as Event::Attribute).
+                    return;
+                }
                 self.in_header = true;
                 if self.standalone {
                     output.push_str("<div id=\"header\">\n");
@@ -724,6 +730,11 @@ impl HtmlRenderer {
         }
 
         match tag_end {
+            TagEnd::Header if self.cell_render_depth > 0 => {
+                // Embedded AsciiDoc table-cell document: mirror of the
+                // suppressed `Tag::Header` start — no header div was opened and
+                // no document-structure state must be touched.
+            }
             TagEnd::Header => {
                 self.in_header = false;
                 // Asciidoctor locks the doctype when the header ends; a
@@ -1083,9 +1094,14 @@ impl HtmlRenderer {
                         // Pop BEFORE rendering: nested Text must not be captured.
                         let raw = self.acell_capture.pop().unwrap_or_default();
                         if !raw.is_empty() {
+                            // Embedded document: suppress its header machinery so
+                            // leading attribute entries don't hijack the outer
+                            // document's `#header`/content-div placement.
+                            self.cell_render_depth += 1;
                             for ev in adoc_parser::Parser::new(&raw) {
                                 self.push_event(output, ev);
                             }
+                            self.cell_render_depth -= 1;
                             // Blocks end with '\n'; asciidoctor puts none before
                             // the closing </div></td>.
                             if output.ends_with('\n') {
