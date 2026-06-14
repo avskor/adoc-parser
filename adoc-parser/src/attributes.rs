@@ -165,13 +165,21 @@ fn parse_col_spec(s: &str) -> (usize, ColSpec) {
         rest = stripped;
     }
 
-    // Parse width (digits)
+    // Parse width: digits (optionally with a trailing `%`) or the autowidth
+    // marker `~`. asciidoctor's column-spec width token is `(\d+%?|~)`; a `~`
+    // must be consumed here so the following style letter still parses
+    // (e.g. `^~m` → center + autowidth + monospace).
     let digit_count = rest.chars().take_while(|c| c.is_ascii_digit()).count();
     if digit_count > 0 {
         if let Ok(w) = rest[..digit_count].parse::<u8>() {
             spec.width = w;
         }
         rest = &rest[digit_count..];
+        if let Some(stripped) = rest.strip_prefix('%') {
+            rest = stripped;
+        }
+    } else if let Some(stripped) = rest.strip_prefix('~') {
+        rest = stripped;
     }
 
     // Parse style letter
@@ -1238,6 +1246,29 @@ mod tests {
         assert_eq!(spec.halign, HAlign::Right);
         assert_eq!(spec.width, 1);
         assert_eq!(spec.style, CellStyle::Emphasis);
+    }
+
+    #[test]
+    fn test_parse_col_spec_autowidth_marker_keeps_style() {
+        // `~` is the autowidth width token; it must be consumed so the trailing
+        // style letter still parses (regression: `^~m` lost its monospace style).
+        let (_, spec) = parse_col_spec("^~m");
+        assert_eq!(spec.halign, HAlign::Center);
+        assert_eq!(spec.width, 0);
+        assert_eq!(spec.style, CellStyle::Monospace);
+
+        let (_, spec) = parse_col_spec("^~l");
+        assert_eq!(spec.halign, HAlign::Center);
+        assert_eq!(spec.style, CellStyle::Literal);
+
+        let (_, spec) = parse_col_spec("^~");
+        assert_eq!(spec.halign, HAlign::Center);
+        assert_eq!(spec.style, CellStyle::Default);
+
+        // A trailing `%` after a numeric width is likewise consumed.
+        let (_, spec) = parse_col_spec("50%s");
+        assert_eq!(spec.width, 50);
+        assert_eq!(spec.style, CellStyle::Strong);
     }
 
     #[test]

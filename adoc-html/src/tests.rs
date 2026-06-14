@@ -1244,6 +1244,28 @@ fn test_table_cell_style_literal_html() {
 }
 
 #[test]
+fn test_table_col_autowidth_marker_inherits_style_html() {
+    // `^~m` / `^~l` columns: the `~` autowidth width token must not swallow the
+    // trailing style letter. Cells inherit monospace (<code>) and literal (<pre>)
+    // from their column even with no per-cell style prefix (probe-verified).
+    let html = to_html("[%autowidth,cols=\"^~m,^~l,^~\"]\n|===\n|alpha |beta |gamma\n|===");
+    assert!(
+        html.contains("<td class=\"tableblock halign-center valign-top\"><p class=\"tableblock\"><code>alpha</code></p></td>"),
+        "expected monospace inherited from ^~m column. Got:\n{html}"
+    );
+    assert!(
+        html.contains("<td class=\"tableblock halign-center valign-top\"><div class=\"literal\"><pre>beta</pre></div></td>"),
+        "expected literal inherited from ^~l column. Got:\n{html}"
+    );
+    assert!(
+        html.contains("<td class=\"tableblock halign-center valign-top\"><p class=\"tableblock\">gamma</p></td>"),
+        "expected default cell for ^~ column. Got:\n{html}"
+    );
+    // %autowidth → bare <col> (no width style).
+    assert!(html.contains("<colgroup>\n<col>\n<col>\n<col>\n</colgroup>"), "expected bare colgroup. Got:\n{html}");
+}
+
+#[test]
 fn test_table_cell_style_asciidoc_html() {
     // `a|` cell: nested block parse inside <div class="content"> (probe-verified).
     let html = to_html("|===\na|\n* one\n* two\n|plain\n|===");
