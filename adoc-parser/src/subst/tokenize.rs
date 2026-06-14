@@ -78,6 +78,9 @@ pub(super) enum TagToken {
         roles: Vec<String>,
     },
     Close(SpanKind),
+    /// A standalone event with no span pairing (e.g. a hard line break emitted
+    /// by the `post_replacements` pass).
+    HardBreak,
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -111,6 +114,13 @@ impl Work {
     pub(super) fn close_sentinel(&mut self, kind: SpanKind) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::Close(kind));
+        sentinel(idx)
+    }
+
+    /// Register a standalone hard-break and return its sentinel string.
+    pub(super) fn break_sentinel(&mut self) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::HardBreak);
         sentinel(idx)
     }
 }
@@ -193,6 +203,9 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                 }
                 Some(TagToken::Close(kind)) => {
                     events.push(Event::End(kind.into_end()));
+                }
+                Some(TagToken::HardBreak) => {
+                    events.push(Event::HardBreak);
                 }
                 None => {}
             }

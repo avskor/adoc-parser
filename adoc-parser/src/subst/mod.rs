@@ -39,6 +39,7 @@
 //! returns the raw new-engine result, so a `blast` run measures how faithfully
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
+mod post_replacements;
 mod quotes;
 mod replacements;
 mod tokenize;
@@ -118,10 +119,10 @@ pub(crate) fn try_parse<'a>(
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
-/// Implemented so far: `quotes` then `replacements`. The remaining passes
-/// (passthrough extract/restore, specialchars, attributes, macros,
-/// post-replacements) are not yet ported; inputs that need them diverge from
-/// legacy and are rejected by the gate (or surface as diffs under `force()`).
+/// Implemented so far: `quotes`, `replacements`, `post_replacements`. The
+/// remaining passes (passthrough extract/restore, specialchars, attributes,
+/// macros) are not yet ported; inputs that need them diverge from legacy and
+/// are rejected by the gate (or surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     if subs.has(SubstitutionSet::QUOTES) {
@@ -129,6 +130,9 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     }
     if subs.has(SubstitutionSet::REPLACEMENTS) {
         replacements::run(&mut work);
+    }
+    if subs.has(SubstitutionSet::POST_REPLACEMENTS) {
+        post_replacements::run(&mut work);
     }
     tokenize::tokenize(work)
 }
@@ -232,6 +236,40 @@ mod tests {
             // mixed span + replacement siblings
             "*bold* and don't and `code`",
             "see -> *there*",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With `post_replacements` ported, the pipeline must reproduce legacy on
+    /// hard-break (` +`) inputs. The end-of-buffer break fires only at the true
+    /// line edge: a ` +` inside a span is followed by its close sentinel and
+    /// stays literal, with no `edges_are_line_boundaries` flag needed.
+    #[test]
+    fn reproduces_legacy_on_hard_break_inputs() {
+        let cases = [
+            // top-level trailing break
+            "line one +",
+            "see *there* +",
+            "a +\nb",
+            "a +\nb +\nc",
+            // ` +` NOT a break (space-plus-space, mid-line)
+            "a + b",
+            "one + two + three",
+            // ` +` inside a span stays literal (no break)
+            "*x +*",
+            "`code +`",
+            "_em +_",
+            // span then trailing break at the real edge
+            "*x* +",
+            "`m` +\nnext",
+            // break combined with replacements
+            "don't stop +\ngo",
         ];
         for c in cases {
             assert_eq!(
