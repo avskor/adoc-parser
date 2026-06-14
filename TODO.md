@@ -202,12 +202,31 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 74-я сессия): РЕРАЙТ inline — Фаза 2 (5/N) curved smart quotes (ветка `feat/subst-phase2-curved-quotes`)
+## АКТУАЛЬНО (2026-06-15, 75-я сессия): РЕРАЙТ inline — Фаза 2 (6/N) escape `\` (ветка `feat/subst-phase2-escape`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-4/N) уже СМЕРЖЕНА в master (e9ce613). **(5/N) СМЕРЖЕНА
-`--no-ff` + ЗАПУШЕНА (master `7995142`), ветка удалена; коммиты `7d13f7c`+`01391c2`:**
+снять gate → flip outline. Phase 2 (1-5/N) уже СМЕРЖЕНА в master (`5421e0e`). **(6/N) НЕ
+закоммичена, ОЖИДАЕТ авторизации на commit+merge+push:**
+- [x] **(6/N) escape `\` (НЕ-маркерный)** (`subst/escape.rs` НОВЫЙ) — дроп backslash + `Literal`-сентинел
+  для: типографики (`\--`/`\->`/`\=>`/`\<-`/`\<=`/`\...`/`\(C)`/`\(R)`/`\(TM)`), smart-quote openers
+  (`\"`​`` ` ``/`\'`​`` ` ``), `\{`/`\[`/`\<`/`\'`. **tokenize.rs**: `TagToken::Literal(String)` —
+  коалесцирующий токен (флашит предыдущий ран, СИДИТ pending → escaped char мержится со следующим в
+  ОДИН Text, зеркалит legacy «дроп `\`, char в next flush»). Токенизатор переделан на `pending`-буфер
+  (`flush_pending`); НЕ-Literal токены флашат перед эмитом (поведение прежних сохранено). **Порядок:
+  passthrough ПЕРВЫМ, escape ВТОРЫМ** (как asciidoctor — passthrough защищает контент до субституций;
+  `\` в буфере всегда top-level).
+- **ОТЛОЖЕНО (контекстные баги escape-flat-scan, найдены blast'ом):** маркеры `\*`/`\_`/`` \` ``/`\#`/
+  `\^`/`\~` (промах `` (`\`) `` — пряли закрывающий маркер span'а → рвали span; их `\\?` принадлежит
+  ВНУТРЬ quote-пассов, span-aware); `\+` (требует `\\?` в passthrough-пассе); `\\`/macro/char-ref escape.
+- **Гейт:** toggle-off **343→343** (legacy не тронут), toggle-on **343→343**, **0 регрессий, 0 flips**
+  (airtight). **FORCE-верность 107 → 108** raw-идентичных, **unresolved-references FLIP 1→0**, 3 closer
+  (bibliography 12→11, subs 123→122, subs-symbol-repl 4→3), **0 FARTHER, 0 REGR** (airtight).
+- clippy 0, test --workspace зелёное (parser 533→535, html 433, render-core 15), parsing-lab 233/233
+  (+2 subst-теста `reproduces_legacy_on_escape_inputs`/`escape_marker_left_untouched`, 15 subst всего).
+
+### (АРХИВ 74-й) Phase 2 (5/N) curved smart quotes — в master `5421e0e`
+**(5/N) СМЕРЖЕНА `--no-ff` + ЗАПУШЕНА (master `7995142`), ветка удалена; коммиты `7d13f7c`+`01391c2`:**
 - [x] **(5/N) curved smart quotes `:double`/`:single`** (`subst/quotes.rs`) — пассы `"`​`…`​`"`→`“…”`
   и `'`​`…`​`'`→`‘…’`, идут ПОСЛЕ strong, ДО monospace (слот QUOTE_SUBS). Curly-символ — leaf-Text
   сентинель (`TagToken::SmartQuote{text,opening}`, литерал-char как legacy, НЕ `&#8220;`-entity) →

@@ -40,6 +40,7 @@
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
 mod attributes;
+mod escape;
 mod passthrough;
 mod post_replacements;
 mod quotes;
@@ -121,19 +122,32 @@ pub(crate) fn try_parse<'a>(
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
-/// Implemented so far: passthrough extract/restore, `attributes` (`{name}` /
-/// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
-/// `:double`/`:single` curved smart quotes), `replacements`,
-/// `post_replacements`. The remaining passes (specialchars, macros, char
-/// references, escapes) are not yet ported; inputs that need them diverge from
-/// legacy and are rejected by the gate (or surface as diffs under `force()`).
+/// Implemented so far: `escape` (non-marker `\`-prefixed literals — `\{`, `\+`,
+/// `\"`/`\'` smart-quote openers, `\[`/`\<`, typographic), passthrough
+/// extract/restore, `attributes` (`{name}` / `{set:…}`, unresolved leaf events
+/// mirroring legacy), `quotes` (including the `:double`/`:single` curved smart
+/// quotes), `replacements`, `post_replacements`. The remaining passes
+/// (specialchars, macros, char references) — and the quote-marker escapes
+/// `\*`/`\_`/`` \` `` etc., which belong inside the quote passes — are not yet
+/// ported; inputs that need them diverge from legacy and are rejected by the
+/// gate (or surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
-    // Passthroughs are extracted first so the protected content is opaque to
-    // every later pass (mirrors Asciidoctor's `extract_passthroughs`). It is
-    // unconditional: the legacy parser runs `+…+`/`pass:[…]` regardless of the
-    // subs flags, and the engine only runs when QUOTES is present anyway.
+    // Passthroughs are extracted FIRST so their content is verbatim — opaque to
+    // every later pass INCLUDING `escape` (mirrors Asciidoctor's
+    // `extract_passthroughs`, which runs before all substitutions). A backslash
+    // inside `+…+`/`pass:[…]` is literal content, never an escape, so extracting
+    // first is what stops `escape` from mangling it (`` `+\{name}+` `` →
+    // `<code>\{name}</code>`). Unconditional: the legacy parser runs
+    // `+…+`/`pass:[…]` regardless of the subs flags, and the engine only runs when
+    // QUOTES is present anyway.
     passthrough::extract(&mut work, subs);
+    // Escapes are neutralised next, before the attribute/quote passes: a
+    // recognised `\x` drops the backslash and turns `x` into a literal leaf that
+    // is opaque to those passes (mirrors Asciidoctor's per-substitution `\\?`
+    // capture). Running after passthrough means a `\` left in the buffer is always
+    // top-level (passthrough-internal backslashes are already inside a sentinel).
+    escape::run(&mut work);
     // Attribute references are extracted next, before quotes. The legacy parser
     // emits an unresolved `AttributeReference`; extracting `{name}[…]` up front
     // both reproduces that and protects a trailing `[brackets]` from being eaten
@@ -454,6 +468,86 @@ mod tests {
                 "new engine diverged from legacy for {c:?}"
             );
         }
+    }
+
+    /// With the `escape` pass ported, the pipeline must reproduce legacy on the
+    /// NON-marker backslash escapes it handles: the `\{name}` attribute-reference
+    /// escape, the `\"`/`\'` smart-quote opener escapes, and the generic
+    /// single-character escapes (`\[`/`\<`/`\'`). Each drops the backslash and
+    /// keeps the character literal, COALESCING with the following text into one
+    /// `Text` event exactly as the legacy parser does. (Quote-marker escapes
+    /// `\*`/`\_`/`` \` ``/`\#`/`\^`/`\~` and the passthrough escape `\+` are
+    /// intentionally NOT handled here — see [`escape_marker_left_untouched`].)
+    #[test]
+    fn reproduces_legacy_on_escape_inputs() {
+        let cases = [
+            // attribute-reference escape (the unresolved-references win): the
+            // escaped `{name}` stays literal while a later live one resolves
+            "\\{name}",
+            "\\{author} and {author}",
+            "see \\{version} here",
+            // escaped smart-quote openers (the escaped-smart-quote win)
+            "\\\"`text`\"",
+            "\\'`text`'",
+            "say \\\"`q`\" and \"`real`\"",
+            // generic single-character escapes (bracket / angle / apostrophe)
+            "\\[x]",
+            "\\<x",
+            "it\\'s mine",
+            // escape mixed with a live span / reference after it
+            "\\{name} *bold*",
+            // a backslash INSIDE a passthrough is verbatim content, NOT an escape:
+            // passthrough is extracted first, so the `\{` never reaches this pass
+            // (the `` `+\{name}+` `` monospace-around-passthrough regression)
+            "+\\{name}+",
+            "`+\\{name}+`",
+            "pass:[\\{x}]",
+            // a backslash before a non-escapable char stays literal
+            "a\\b c",
+            "path\\to\\file",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// Quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`) are deferred: the
+    /// escape-first pass leaves the backslash untouched so it cannot hide an
+    /// enclosing span's closing marker (`` `\` `` must stay a `<code>\</code>`, not
+    /// tear the monospace apart). A `\` that is genuine span content therefore
+    /// flows through as ordinary text and the quote passes see it unchanged.
+    #[test]
+    fn escape_marker_left_untouched() {
+        // `\` inside a monospace span is literal content — the span still forms.
+        assert_eq!(
+            pipeline("`\\`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("\\".into()),
+                Event::End(TagEnd::Monospace),
+            ]
+        );
+        // Two adjacent monospace spans around a literal backslash and bracket: the
+        // escape pass must not let the first span swallow the second (the bug the
+        // marker deferral fixes).
+        assert_eq!(
+            pipeline("(`\\`) (`]`)"),
+            vec![
+                Event::Text("(".into()),
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("\\".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text(") (".into()),
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("]".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text(")".into()),
+            ]
+        );
     }
 
     /// The signature cross-span case: a constrained strong that opens inside one
