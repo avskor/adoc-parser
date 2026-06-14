@@ -651,32 +651,58 @@ fn expand_counters(
     }
 
     let mut result = String::with_capacity(line.len());
-    let mut rest = line;
+    let bytes = line.as_bytes();
+    let mut i = 0;
     let mut any_expanded = false;
 
-    while !rest.is_empty() {
-        if rest.starts_with("{counter")
-            && let Some((replacement, consumed)) =
-                try_parse_counter(rest, attributes, counter_names)
+    while i < line.len() {
+        // Passthrough spans (`+…+`, `++…++`, `+++…+++`, `pass:[…]`) are extracted
+        // by Asciidoctor before the `attributes` substitution resolves counters,
+        // so a `{counter:…}` living inside one stays literal — copy the span
+        // verbatim without expanding (or incrementing) the counter. Index-based
+        // scanning lets the constrained single-plus scanner see the real preceding
+        // char (`C+a+` is not a passthrough), which a moving suffix slice loses.
+        let b = bytes[i];
+        if b == b'+' {
+            if let Some(len) = crate::scanner::passthrough_span_len(line, i)
+                .or_else(|| crate::scanner::single_plus_span_len(line, i))
+            {
+                result.push_str(&line[i..i + len]);
+                i += len;
+                continue;
+            }
+        } else if b == b'p'
+            && let Some(len) = crate::scanner::pass_macro_span_len(line, i)
         {
-            result.push_str(&replacement);
-            rest = &rest[consumed..];
-            any_expanded = true;
+            result.push_str(&line[i..i + len]);
+            i += len;
             continue;
         }
-        if rest.starts_with('{')
-            && let Some((value, consumed)) =
+
+        let rest = &line[i..];
+        if b == b'{' {
+            if rest.starts_with("{counter")
+                && let Some((replacement, consumed)) =
+                    try_parse_counter(rest, attributes, counter_names)
+            {
+                result.push_str(&replacement);
+                i += consumed;
+                any_expanded = true;
+                continue;
+            }
+            if let Some((value, consumed)) =
                 try_expand_counter_reference(rest, attributes, counter_names)
-        {
-            result.push_str(&value);
-            rest = &rest[consumed..];
-            any_expanded = true;
-            continue;
+            {
+                result.push_str(&value);
+                i += consumed;
+                any_expanded = true;
+                continue;
+            }
         }
         // Copy one full UTF-8 char (byte-indexing here would corrupt multibyte text).
         let ch = rest.chars().next().expect("rest is non-empty");
         result.push(ch);
-        rest = &rest[ch.len_utf8()..];
+        i += ch.len_utf8();
     }
 
     if any_expanded { Some(result) } else { None }
@@ -718,6 +744,14 @@ pub fn preprocess_with_attrs(
         Markdown(usize),
     }
     let mut verbatim_fence: Option<VerbatimFence> = None;
+    // A `[source]`/`[listing]`/`[literal]` block-attr line whose body is a plain
+    // paragraph (not a `----`-delimited block) still makes a verbatim block in
+    // Asciidoctor — counter macros and attribute entries in it stay literal.
+    // `verbatim_para_pending` is set just after such an attr line is emitted;
+    // `in_verbatim_para` holds while the paragraph's lines are passed through
+    // untouched (until the next blank line ends the block).
+    let mut verbatim_para_pending = false;
+    let mut in_verbatim_para = false;
 
     while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
@@ -781,6 +815,30 @@ pub fn preprocess_with_attrs(
         // If currently skipping, don't process or output the line
         if is_skipping(&skip_stack) {
             continue;
+        }
+
+        // 4a. Styled verbatim paragraph: a `[source]`/`[listing]`/`[literal]`
+        //     attr line whose body is a plain paragraph (not a `----`-delimited
+        //     block) is still a verbatim block — its lines are emitted untouched
+        //     (no counter expansion, no attribute entries) until the next blank.
+        //     A delimiter starts a real fence instead (handled in 4b); a blank
+        //     line orphans the style.
+        if verbatim_para_pending {
+            verbatim_para_pending = false;
+            let opens_delimited = crate::scanner::is_delimiter(line).is_some()
+                || crate::scanner::is_markdown_code_fence(line).is_some();
+            if !opens_delimited && !line.trim().is_empty() {
+                in_verbatim_para = true;
+            }
+        }
+        if in_verbatim_para {
+            if line.trim().is_empty() {
+                in_verbatim_para = false; // blank ends the paragraph; emit it normally below
+            } else {
+                output.push_str(line);
+                output.push('\n');
+                continue;
+            }
         }
 
         // 4b. Verbatim fence tracking — inside a listing/literal/passthrough/
@@ -868,6 +926,11 @@ pub fn preprocess_with_attrs(
         // 6. Output the line
         output.push_str(&effective_line);
         output.push('\n');
+        // A verbatim-style block-attr line arms the styled-paragraph tracking in
+        // 4a so the following plain paragraph (if any) is treated as verbatim.
+        if is_verbatim_style_attr_line(&effective_line) {
+            verbatim_para_pending = true;
+        }
     }
 
     // Remove trailing newline if original didn't end with one
@@ -931,6 +994,24 @@ fn skip_continuation_lines<'a>(
 
 fn is_skipping(stack: &[bool]) -> bool {
     stack.iter().any(|&s| s)
+}
+
+/// Whether `line` is a block-attribute line (`[…]`) whose first positional token
+/// is a verbatim block style (`source`/`listing`/`literal`). Such a block's body
+/// gets verbatim substitutions, so counter macros and attribute entries inside it
+/// stay literal. The style may carry shorthand/options (`source%linenums`,
+/// `source.rouge`, `source#id`), which are stripped before the match.
+fn is_verbatim_style_attr_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(inner) = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+    else {
+        return false;
+    };
+    let style = inner.split(',').next().unwrap_or("");
+    let style = style.split(['%', '.', '#', ' ']).next().unwrap_or("");
+    matches!(style, "source" | "listing" | "literal")
 }
 
 #[derive(Debug, PartialEq)]
@@ -2127,6 +2208,53 @@ end::foo[]";
         assert_eq!(
             preprocess(input),
             "-----\n{counter:x}\n----\n{counter:x}\n-----\n1\n"
+        );
+    }
+
+    #[test]
+    fn test_counter_literal_inside_passthrough() {
+        // Asciidoctor extracts passthroughs before the `attributes` substitution
+        // that resolves counters, so a `{counter:…}` inside a passthrough stays
+        // literal and does NOT advance the counter (counters.adoc lines 12/21).
+        // Single-plus span:
+        assert_eq!(
+            preprocess("`+{counter:n}+`\n{counter:n}\n"),
+            "`+{counter:n}+`\n1\n"
+        );
+        // Double/triple plus and the `pass:[…]` macro:
+        assert_eq!(
+            preprocess("++{counter:m}++ +++{counter:m}+++ pass:[{counter:m}]\n{counter:m}\n"),
+            "++{counter:m}++ +++{counter:m}+++ pass:[{counter:m}]\n1\n"
+        );
+        // A `+` that follows a word char does not open a constrained passthrough,
+        // so the counter inside still resolves.
+        assert_eq!(preprocess("a+{counter:k}+\n"), "a+1+\n");
+    }
+
+    #[test]
+    fn test_counter_literal_in_styled_verbatim_paragraph() {
+        // A `[source]`/`[listing]`/`[literal]` paragraph (not a `----` block) is
+        // still a verbatim block, so counter macros in it stay literal and do not
+        // advance the counter (counters.adoc lines 23/65).
+        assert_eq!(
+            preprocess("[source]\nThe count is {counter:n}.\n\n{counter:n}\n"),
+            "[source]\nThe count is {counter:n}.\n\n1\n"
+        );
+        // Verbatim until the blank line ends the paragraph.
+        assert_eq!(
+            preprocess("[listing]\na {counter:n}\nb {counter:n}\n\n{counter:n}\n"),
+            "[listing]\na {counter:n}\nb {counter:n}\n\n1\n"
+        );
+        // `[source]` followed by a `----` delimited block uses fence handling, not
+        // the styled-paragraph path (and the counter is still literal).
+        assert_eq!(
+            preprocess("[source]\n----\n{counter:n}\n----\n{counter:n}\n"),
+            "[source]\n----\n{counter:n}\n----\n1\n"
+        );
+        // A non-verbatim style (`[example]`) gets normal subs — its counter resolves.
+        assert_eq!(
+            preprocess("[example]\ncount {counter:n}\n"),
+            "[example]\ncount 1\n"
         );
     }
 

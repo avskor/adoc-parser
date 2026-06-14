@@ -2069,6 +2069,39 @@ fn test_counter_literal_in_listing_block_html() {
 }
 
 #[test]
+fn test_counter_literal_in_styled_paragraph_and_passthrough_html() {
+    // `[source]` styled paragraph (no `----`) is verbatim: the counter stays
+    // literal and the empty `counter2` block is not silently dropped — both are
+    // roots of counters.adoc.
+    let src = adoc_parser::preprocess("[source]\nThe count is {counter:n}.\n\npara {counter:n}");
+    let html = to_html(&src);
+    assert!(
+        html.contains("<code>The count is {counter:n}.</code>"),
+        "styled source paragraph stays verbatim. Got:\n{html}"
+    );
+    // The counter was not advanced inside the verbatim block.
+    assert!(html.contains("<p>para 1</p>"), "Got:\n{html}");
+
+    // `counter2` (silent) in a source paragraph: literal, block kept (not empty).
+    let silent = adoc_parser::preprocess("[source]\n{counter2:seq}");
+    let html = to_html(&silent);
+    assert!(
+        html.contains("<code>{counter2:seq}</code>"),
+        "silent counter in source paragraph stays literal. Got:\n{html}"
+    );
+
+    // `+…+` passthrough in prose: the counter inside is literal (and does not
+    // advance), so the later reference resolves to 1.
+    let pass = adoc_parser::preprocess("a `+{counter:n}+` b\n\npara {counter:n}");
+    let html = to_html(&pass);
+    assert!(
+        html.contains("<code>{counter:n}</code>"),
+        "counter inside +…+ stays literal. Got:\n{html}"
+    );
+    assert!(html.contains("<p>para 1</p>"), "Got:\n{html}");
+}
+
+#[test]
 fn test_table_no_title_no_caption_html() {
     let html = to_html("|===\n| A | B\n|===");
     assert!(!html.contains("<caption"));
