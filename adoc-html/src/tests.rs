@@ -1032,6 +1032,32 @@ fn test_callout_item_with_continuation_note_html() {
 }
 
 #[test]
+fn test_callout_marker_top_level_paragraph_not_colist_html() {
+    // A `<N>` line following paragraph content at top level is plain text, not a
+    // new callout list (the `|=== <1>` table-doc shape). The whole run is one
+    // paragraph; no `colist` is emitted.
+    let html = to_html("|=== <1>\n<2>\n| Cell A | Cell B <3>\n| Cell C | Cell D");
+    assert!(html.contains("<div class=\"paragraph\">"));
+    assert!(!html.contains("colist"));
+    // The callout-looking lines are escaped text inside the single paragraph.
+    assert!(html.contains("|=== &lt;1&gt;\n&lt;2&gt;\n| Cell A | Cell B &lt;3&gt;"));
+}
+
+#[test]
+fn test_callout_marker_inside_list_splits_items_html() {
+    // Inside a callout list, a `<N>` line DOES end the current item's
+    // continuation paragraph and open the next sibling item (the gate that keeps
+    // localization.adoc-style docs correct). Two items, the `+` continuation
+    // paragraph belonging to the first.
+    let input = "----\ncode <1>\nmore <2>\n----\n<1> first item\n+\ncontinued para\n<2> second item";
+    let html = to_html(input);
+    assert_eq!(html.matches("<li>").count(), 2, "two callout items. Got: {html}");
+    assert!(html.contains("first item"));
+    assert!(html.contains("<div class=\"paragraph\">\n<p>continued para</p>\n</div>\n</li>"));
+    assert!(html.contains("second item"));
+}
+
+#[test]
 fn test_source_lang_shifted_by_leading_named_attr_html() {
     // `[id=app, source, yaml]` — the leading `id=` shifts positionals, so
     // `source` is the language (slot 2), not `yaml` (slot 3).

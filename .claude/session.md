@@ -1,5 +1,73 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят вторая) — Фаза 3: callout-маркер не прерывает top-level параграф
+
+Запрос «продолжи». Ветка **`fix/callout-marker-no-paragraph-interrupt`** — ЗАКОММИЧЕНА
+(`82b8824`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 61-й закрыт сам (мерж 61-й УЖЕ выполнен И запушен —
+origin/master == master == 62b0407 (339), дерево чисто, веток нет).
+base-бинарь /tmp/adoc_base пересобран из master HEAD (339) через временный worktree.
+
+### Выбор задачи
+nearmiss на 339 (5 Different, ВСЕ архитектурные/мульти-root): **table (597, Δ1)**,
+character-replacement-ref (625, Δ113 — m-колонка `<code>`-наследование, кластер),
+document-attributes-ref (953, Δ−3), syntax-quick-reference (2788, мульти-root),
+outline (6647, Δ3). Выбран table — структурно ближайший (Δ1).
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+table.adoc — документация с примерами AsciiDoc-исходника, где `<1>`,`<2>` — текстовые
+аннотации. ДВА корня:
+- **Root 1 (СДЕЛАНО)**: `|=== <1>` (суффикс ` <1>` → НЕ валидный делимитер) открывает
+  параграф; следующие `<2>`/`<4>` должны ПРОДОЛЖАТЬ его, а не открывать colist.
+  Реальное правило: callout-маркер `<N>` распознаётся как НОВЫЙ callout-список ТОЛЬКО на
+  границе блока (после blank), НЕ как продолжение открытого параграфа. Пробы: `Some intro.\n<1>…`
+  → ОДИН параграф (поглощает); `Some intro.\n\n<1>…` → colist (с warning «no callout found»).
+  NB: asciidoctor так же поглощает `* item`/`. item` после строки параграфа (НЕ прерывают) —
+  это pre-existing ШИРЕ расхождение нашего парсера (мы прерываем), НЕ трогал (риск).
+- **Root 2 (НЕ сделано — отдельная крупная фича)**: вложенная таблица `!===` (разделитель
+  ячеек `!`) внутри `a`-style ячейки (`[cols="1,2a"]`, ячейка `Cell 2.2` содержит
+  `[cols="2,1"] !=== … !===`). Наш парсер `!===` НЕ распознаёт (CSV/DSV-сессия 61
+  намеренно исключила `!`). `a`-ячейка УЖЕ ре-парсится рекурсивно
+  (`adoc-html/events.rs:1086 Parser::new(&raw)`), нужно лишь научить BlockScanner
+  делимитеру `!===` с разделителем `!`.
+
+### Что сделано (ПАРСЕР, узкий фикс Root 1)
+- **block.rs**: в ДВУХ местах прерывания открытого параграфа (`scan_paragraph` @~2379 +
+  admonition-continuation @~2770) условие `is_callout_list_item` ГЕЙТНУТО на
+  `self.is_in_callout_list()`. Top-level (НЕ в colist) → callout-маркер поглощается;
+  внутри colist → завершает continuation текущего item'а и открывает следующий sibling.
+- Гейт критичен: первая наивная версия (безусловно убрать callout из break) дала
+  **3 регрессии** (localization 0→60, cookbook 0→1999, java/index 0→2007) — там
+  `<1>…\n+\ncont-para\n<2>…` (continuation-параграф в colist-item, затем sibling `<2>`):
+  без гейта `<2>` поглощался в текст. blast поймал → добавлен `is_in_callout_list()`.
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 512→513, html 424→426);
+  parsing-lab 233/233.
+- table.adoc diffone: **597→37 diffs** (НЕ флип — остаток = вложенная `!===`-таблица).
+- **Корпус: Identical 339 (БЕЗ флипа — корректное улучшение, прецедент: partnums)**.
+  blast (base 339): table.adoc closer 597→37, **0 регрессий** (339→339).
+- Тесты: +1 parser (`test_callout_marker_does_not_interrupt_top_level_paragraph`),
+  +2 html (`test_callout_marker_top_level_paragraph_not_colist_html`,
+  `test_callout_marker_inside_list_splits_items_html`).
+
+### Что дальше
+- **table.adoc флип = реализовать вложенную `!===`-таблицу** (Root 2, см. выше). Объём:
+  протащить разделитель ячеек (`|`→`!`) через `scanner::parse_table_cells`/`unescape_cell_pipes`/
+  colspan-парсинг; добавить `!` в `is_table_delimiter` (3+ `=`); `scan_table` детект `!`→
+  separator `!` (формат Native/PSV, не Csv/Dsv). РИСК: `delimited.adoc` (сейчас Identical)
+  содержит `!===` как СОДЕРЖИМОЕ ячейки `|===`-таблицы (строки 109-112: примеры делимитеров) —
+  не сломать. Рендер вложенной таблицы УЖЕ работает (a-cell рекурсивный парс), нужны
+  width% из `[cols="2,1"]` (ref: 66.6666%/33.3334%).
+- Прочие nearmiss на 339: character-replacement-ref (m-колонка `<code>`-наследование),
+  document-attributes-ref, syntax-quick-reference, outline — все архитектурные/мульти-root.
+- **Pre-existing шире (НЕ трогал)**: unordered/ordered list-маркер (`*`/`.`) после строки
+  параграфа БЕЗ blank — asciidoctor поглощает в параграф, мы прерываем → отдельный список.
+  Широкое изменение (`*`/`.` очень частые), своя оценка регрессий нужна.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят первая) — Фаза 3: shorthand `,===`/`:===` + colgroup для format-таблиц
 
 Запрос «продолжи». Ветка **`fix/csv-dsv-shorthand-and-colgroup`** — ЗАКОММИЧЕНА.
