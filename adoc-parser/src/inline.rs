@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::attributes::parse_link_attrs;
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 
-fn apply_typographic_replacements<'a>(
+pub(crate) fn apply_typographic_replacements<'a>(
     text: &'a str,
     left_is_boundary: bool,
     right_is_boundary: bool,

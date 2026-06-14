@@ -1,5 +1,62 @@
 # Session context
 
+## Сессия (2026-06-14, 71-я) — РЕРАЙТ inline, Фаза 2 НАЧАТА: replacements + post_replacements пассы за гейтом
+
+Запрос «начни фазу 2». Ветка **`feat/subst-phase2-passes`** (off master `9cc1c2c`, 343) —
+**2 коммита, НЕ смержена, НЕ запушена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master +
+`git push` + удаление ветки. base-бинарь /tmp/adoc_base ПЕРЕСОБРАН из master HEAD `9cc1c2c` (343).
+
+### Контекст
+Фаза 0 (toggle) + Фаза 1 (quotes-пайплайн + токенизатор за differential-equality gate) — в master.
+Фаза 2 = перенести ОСТАЛЬНЫЕ пассы пайплайна asciidoctor (`subs=normal`: passthrough-extract →
+specialchars → quotes → attributes → replacements → macros → post_replacements → restore), довести
+FORCE-движок до байт-идентичности, в финале СНЯТЬ gate → flip outline при 343 неизменных.
+См. [[proj_sequential_quotes_rewrite]], план `~/.claude/plans/greedy-yawning-pumpkin.md`.
+
+### AIRTIGHT-гарантия (подтверждена кодом, inline.rs ~224)
+`parse_str_with_subs_options` при toggle-on зовёт `try_parse`, иначе `parse_legacy`. Гейт ВНУТРИ
+try_parse сравнивает candidate с ТЕМ ЖЕ `parse_legacy`. ⇒ toggle-on вывод ≡ `parse_legacy` ВСЕГДА
+(adopt: new==legacy; decline: legacy). Нет отдельного продакшн-пути для ячеек/спанов с edges=false —
+edges-семантика гейта самосогласована, edges-флаг для нового движка НЕ релевантен. 0 регрессий по построению.
+
+### Сделано (2 коммита)
+- `run_pipeline(text, subs)` теперь прокидывает `subs`; каждый пасс гейтится на своём флаге SubstitutionSet.
+- **`6574062` (1/N) replacements** (`subst/replacements.rs`): `crate::inline::apply_typographic_replacements`
+  стал `pub(crate)`, применяется к ВСЕМУ буферу разом с (true,true). Анализ: сентинел-байты 0x01/0x02 =
+  `<>`-границы тегов asciidoctor (non-space/non-word) ⇒ `*--*`→литерал `--`, top-level `--`→em-dash,
+  span-internal `-- x`/`x --`→литерал, `*don't*`→curly — совпадает с legacy И asciidoctor. char-ref
+  restore НЕ здесь (с passthrough). +1 тест (18 кейсов).
+- **`55f0a2f` (2/N) post_replacements** (`subst/post_replacements.rs`): hard-break ` +`. Новый
+  `TagToken::HardBreak` + `break_sentinel` в tokenize.rs → Event::HardBreak. ` +\n` всюду; ` +` на конце
+  буфера. КЛЮЧ: edges-флаг НЕ нужен — ` +` внутри спана идёт перед close-сентинелом (TAG_LEAD), т.е.
+  не конец и не \n ⇒ литерал автоматически (`*x +*`→`<strong>x +</strong>`, `*x* +`→`...<br>`). +1 тест (12 кейсов).
+
+### Верификация
+- clippy 0, test --workspace зелёное (parser 530, html 433), parsing-lab 233/233 (+2 subst-теста, 8 всего).
+- blast toggle-off **343**, toggle-on **343** (гейт держит, 0 регрессий, 0 FARTHER в toggle-режимах).
+- **FORCE (blast_force.py, метрика прогресса): 46 → 85** raw-идентичных файлов, **0 паник**.
+  5 FORCE-FARTHER (subs/quotes, image-size, subs/attributes, subs/post-replacements,
+  document-attributes-ref) — ЭКСПЕКТЕД каскад: ` +` рядом с нерезолвленным `{attr}`/macro (напр.
+  ячейка `{y} +` в post-replacements.adoc); верный `<br>` сдвигает позиции пока `{attr}` литерал.
+  diffone подтвердил: @13 `{plus}`, @31 `<<table-post>>` — отложенные attributes/macros, НЕ баг hard-break.
+  Gate эти тексты отклоняет (new≠legacy из-за `{attr}`) → сойдутся, когда лягут attributes/macros.
+
+### Дальше (ОСТАЛОСЬ Фаза 2, по убыванию приоритета/фундаментальности)
+1. **passthrough extract/restore** — FIRST в пайплайне, фундамент (иначе quotes лезет внутрь `+...+`).
+   Нужны Code/InlinePassthrough события в токенизаторе; донор: `scanner::passthrough_span_len`/
+   `single_plus_span_len`/`pass_macro_span_len`, `try_*_passthrough` в inline.rs (759-).
+2. **attributes** `{name}` — СНАЧАЛА проверить, эмитит ли legacy `Event::AttributeReference` (резолв в
+   рендерере) или резолвит инлайн; от этого зависит, что эмитить токенизатору.
+3. **macros** — САМОЕ большое: link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email,
+   много типов событий → overhaul токенизатора. Донор: `handle_inline_macro` (inline.rs 390-).
+4. **char-refs** (`&#167;` survival — legacy эмитит passthrough, рендерер не экранирует), **escape `\*`**,
+   **curved smart-quotes** `"…"`/`'…'`. **specialchars — NO-OP** (Event::Text сырой, рендерер экранирует).
+5. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545 даёт overlap) при 343.
+- Скрипты корпуса: `blast.py` (toggle-off), `blast_toggle.py` (toggle-on gate), `blast_force.py` (FORCE),
+  `diffone.py <file> <limit>` (с ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1 для FORCE-диффа одного файла).
+
+---
+
 ## Сессия (2026-06-14, семидесятая) — РЕРАЙТ inline, Фаза 1: quotes-пайплайн за differential-equality gate (БЕЗ флипа, 0-регрессий по построению)
 
 Запрос «Продолжи фазу 1». Ветка **`feat/subst-phase1-quotes`** (off master c566b10, 343) —

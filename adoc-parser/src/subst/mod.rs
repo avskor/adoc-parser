@@ -39,7 +39,9 @@
 //! returns the raw new-engine result, so a `blast` run measures how faithfully
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
+mod post_replacements;
 mod quotes;
+mod replacements;
 mod tokenize;
 
 use std::sync::OnceLock;
@@ -99,7 +101,7 @@ pub(crate) fn try_parse<'a>(
         return None;
     }
 
-    let candidate = run_pipeline(text);
+    let candidate = run_pipeline(text, subs);
 
     if force() {
         return Some(candidate);
@@ -114,10 +116,24 @@ pub(crate) fn try_parse<'a>(
     }
 }
 
-/// Run the implemented substitution passes and tokenize the result.
-fn run_pipeline<'a>(text: &str) -> Vec<Event<'a>> {
+/// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
+/// each gated on its presence in `subs`) and tokenize the result.
+///
+/// Implemented so far: `quotes`, `replacements`, `post_replacements`. The
+/// remaining passes (passthrough extract/restore, specialchars, attributes,
+/// macros) are not yet ported; inputs that need them diverge from legacy and
+/// are rejected by the gate (or surface as diffs under `force()`).
+fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
-    quotes::run_all(&mut work);
+    if subs.has(SubstitutionSet::QUOTES) {
+        quotes::run_all(&mut work);
+    }
+    if subs.has(SubstitutionSet::REPLACEMENTS) {
+        replacements::run(&mut work);
+    }
+    if subs.has(SubstitutionSet::POST_REPLACEMENTS) {
+        post_replacements::run(&mut work);
+    }
     tokenize::tokenize(work)
 }
 
@@ -128,6 +144,10 @@ mod tests {
 
     fn legacy(text: &str) -> Vec<Event<'_>> {
         crate::inline::parse_legacy(text, SubstitutionSet::NORMAL, InlineOptions::default())
+    }
+
+    fn pipeline(text: &str) -> Vec<Event<'_>> {
+        run_pipeline(text, SubstitutionSet::NORMAL)
     }
 
     /// The new pipeline must reproduce the legacy parser byte-for-byte on every
@@ -178,7 +198,82 @@ mod tests {
         ];
         for c in cases {
             assert_eq!(
-                run_pipeline(c),
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the `replacements` pass ported, the pipeline must also reproduce
+    /// legacy on inputs that mix quotes with typographic replacements
+    /// (apostrophe, dashes, arrows, (C)/(R)/(TM), ellipsis). The whole-buffer
+    /// replacement treats sentinel bytes as span boundaries, so an edge-anchored
+    /// `--` inside a span stays literal while a top-level one becomes an em-dash.
+    #[test]
+    fn reproduces_legacy_on_replacement_inputs() {
+        let cases = [
+            // apostrophe (curly), inside and outside spans
+            "don't worry",
+            "*it's* fine",
+            "`it's` code",
+            "_a don't b_",
+            // spaced em-dash: top-level vs span-internal
+            "a -- b",
+            "*--*",
+            "`--`",
+            "*a -- b*",
+            "-- leading",
+            // word--word em-dash, ellipsis, arrows, symbols
+            "foo--bar",
+            "wait... what",
+            "a->b and c=>d",
+            "x<-y and z<=w",
+            "(C) (R) (TM) 2024",
+            "rights (C)2024",
+            // backtick-apostrophe closing smart quote
+            "the `'90s",
+            // mixed span + replacement siblings
+            "*bold* and don't and `code`",
+            "see -> *there*",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With `post_replacements` ported, the pipeline must reproduce legacy on
+    /// hard-break (` +`) inputs. The end-of-buffer break fires only at the true
+    /// line edge: a ` +` inside a span is followed by its close sentinel and
+    /// stays literal, with no `edges_are_line_boundaries` flag needed.
+    #[test]
+    fn reproduces_legacy_on_hard_break_inputs() {
+        let cases = [
+            // top-level trailing break
+            "line one +",
+            "see *there* +",
+            "a +\nb",
+            "a +\nb +\nc",
+            // ` +` NOT a break (space-plus-space, mid-line)
+            "a + b",
+            "one + two + three",
+            // ` +` inside a span stays literal (no break)
+            "*x +*",
+            "`code +`",
+            "_em +_",
+            // span then trailing break at the real edge
+            "*x* +",
+            "`m` +\nnext",
+            // break combined with replacements
+            "don't stop +\ngo",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
                 legacy(c),
                 "new engine diverged from legacy for {c:?}"
             );
@@ -192,7 +287,7 @@ mod tests {
     /// must produce the overlap.
     #[test]
     fn produces_cross_span_overlap() {
-        let events = run_pipeline("a *crosses `code* span`");
+        let events = pipeline("a *crosses `code* span`");
         assert_eq!(
             events,
             vec![
