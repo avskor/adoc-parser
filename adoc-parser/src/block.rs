@@ -2376,7 +2376,17 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_description_list_marker(line).is_some()
-                || scanner::is_callout_list_item(line).is_some()
+                // A callout-list marker (`<1>`) interrupts an open paragraph ONLY
+                // when we are already inside a callout list — there it ends the
+                // current item's continuation text and opens the next sibling item.
+                // At top level a `<N>` line following paragraph content is plain
+                // text: Asciidoctor recognizes a *new* callout list only at a block
+                // boundary (after a blank line) via the scan_leaf_blocks dispatcher,
+                // never as a paragraph continuation (cf. `|=== <1>` then `<2>`).
+                // (Unordered/ordered markers above remain a known pre-existing
+                // divergence: Asciidoctor absorbs those into an open paragraph too.)
+                || (self.is_in_callout_list()
+                    && scanner::is_callout_list_item(line).is_some())
                 || scanner::is_list_continuation(line)
                 || scanner::is_table_delimiter(line)
             {
@@ -2767,7 +2777,10 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_description_list_marker(line).is_some()
-                || scanner::is_callout_list_item(line).is_some()
+                // A callout-list marker interrupts an open paragraph only inside a
+                // callout list — see the note in scan_paragraph.
+                || (self.is_in_callout_list()
+                    && scanner::is_callout_list_item(line).is_some())
                 || scanner::is_list_continuation(line)
                 || scanner::is_table_delimiter(line)
             {
@@ -4941,6 +4954,26 @@ mod tests {
             Event::End(TagEnd::CalloutListItem),
             Event::End(TagEnd::CalloutList),
         ]);
+    }
+
+    #[test]
+    fn test_callout_marker_does_not_interrupt_top_level_paragraph() {
+        // A `<N>` line following paragraph content at top level is plain text,
+        // not a new callout list — Asciidoctor recognizes a callout list only at
+        // a block boundary. This is the `|=== <1>` / `<2>` table-doc shape.
+        let input = "|=== <1>\n<2>\n| Cell A | Cell B <3>";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("|=== <1>")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("<2>")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("| Cell A | Cell B <3>")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+        // Sanity: no callout list was opened.
+        assert!(!events.iter().any(|e| matches!(e, Event::Start(Tag::CalloutList))));
     }
 
     #[test]
