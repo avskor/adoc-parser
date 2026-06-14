@@ -1,5 +1,73 @@
 # Session context
 
+## Сессия (2026-06-15, 74-я) — РЕРАЙТ inline, Фаза 2 (5/N): curved smart quotes `:double`/`:single` пасс за гейтом
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-curved-quotes`** (off master `e9ce613`, 343) —
+**1 коммит `7d13f7c`, НЕ смержена, НЕ запушена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master
++ `git push` + удаление ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `e9ce613` (343).
+**ВАЖНО:** Phase 2 (4/N) attributes уже СМЕРЖЕНА в master между сессиями (`e9ce613`).
+
+### Решение по объёму (data-driven пивот с macros)
+Изначально завёл ветку `-macros` (план: самый большой пасс), но FORCE-карта показала ДВА файла в
+1-2 diff от флипа: image-position (242→2) и unresolved-references (214→2). diffone выявил корни: оба
+блокируются **curved smart quotes** (`"`​`pushy`​`"`→`“pushy”`), unresolved-references ещё и escape
+`\{name}`. Curved-quotes — наивысший ROI (разблокирует ОБА + массу прозы), намного меньше/безопаснее
+macros. Пивотнул, ветку переименовал в `-curved-quotes`. Macros отложен (глубокие сложности с RAW-
+подстроками — см. ниже), ему — отдельная сессия.
+
+### Анализ macros (для будущей сессии — почему отложен)
+Donor `handle_inline_macro` (inline.rs 416-680). Ключевая трудность: span-макросы (link/xref) можно
+сделать open/close-сентинелями (label остаётся в буфере между ними — уже прошёл quotes/replacements,
+что зеркалит legacy re-parse label с MACROS-disabled). НО `Tag::CrossReference{label}`/footnote-текст/
+image-alt несут **RAW-подстроку** (исходный label ДО подстановок), которая к moment'у macros уже стёрта
+ранними пассами (сентинели в буфере). Faithful-подход: extract макросов как РАННИЙ пасс (как passthrough/
+attributes) с захватом RAW target/label + recursive-вычисление label-событий через под-пайплайн с
+label-subs (MACROS off) → leaf `TagToken::Macro(Vec<Event>)`. Ordering vs passthrough/attributes extract
+требует аккуратности (`link:{url}[...]` — attributes уже извлёк `{url}`). Большой, отдельная сессия.
+
+### Сделано (1 коммит)
+- **tokenize.rs**: `TagToken::SmartQuote { text: &'static str, opening: bool }` + `Work::smart_quote_sentinel`
+  + arm в tokenize → `Event::Text(Cow::Borrowed(text))` (литерал-char `“`/`”`/`‘`/`’`, КАК legacy, не
+  `&#8220;`-entity). Раздельный leaf-сентинель на КАЖДУЮ curly = три Text-события (open/inner/close),
+  зеркалит legacy `try_smart_quotes`.
+- **quotes.rs**: `pass_smart_quotes(work, quote, open_curly, close_curly)` в `run_all` ПОСЛЕ strong
+  (unc+con), ДО monospace — слот asciidoctor QUOTE_SUBS. `find_smart_quote_close` (skip сентинелей,
+  первый `` ` ``+quote после непустого контента). **Leading-edge подавление**: `pass_constrained`
+  отказывает bare `` ` ``/`_`/`#`-open, если непосредственно перед позицией — SmartQuote-OPEN сентинель
+  (`smart_quote_leading_edge(&work.tags, bytes, marker, i)` + `sentinel_index_before` — backward-скан
+  TAG_TAIL→digits→TAG_LEAD). Флаг legacy `smart_quote_leading_edge` воспроизведён ПОРЯДКОМ пассов
+  (strong до :double → exempt; mono/em/mark после → подавлены), не полем парсера. Нет open-boundary/
+  attrlist (паритет с legacy, не широкий asciidoctor `(^|[^\w;:}])`-regexp). sup/sub (`^`/`~`) НЕ
+  подавляются (legacy try_simple_pair без assertion).
+- **mod.rs/quotes.rs doc**: curved quotes помечены реализованными; +тест `reproduces_legacy_on_smart_quote_inputs`.
+
+### Ключевая семантика (трассировка legacy-тестов, все воспроизведены)
+- `"`​`text`​`"` → Text(“),Text(text),Text(”). `"`​``end points``​`"` → inner literal `` `end points` ``
+  (constrained mono подавлен на leading edge; :double ДО mono unc → `` `` `` не матчится первым).
+  `"`​`_em_ x`​`"`/`"`​`#mk# x`​`"` → подавлены. `"`​`a `c` b`​`"` → mono ОТКРЫВАЕТСЯ (после пробела,
+  не leading edge — sentinel_before=None). nested `'`​`outer "`​`inner`​`" end`​`'` (:double inner, :single
+  outer). unclosed/empty → литерал. Escaped `\"`​`…`​`"` → diverge (escape отложен) → gate fallback.
+
+### Верификация
+- clippy 0, test --workspace зелёное (parser 532→533, html 433, render-core 15), parsing-lab 233/233
+  (+1 subst-тест, 12 subst всего).
+- **blast toggle-off 343→343** (legacy байт-в-байт не тронут), **toggle-on 343→343** (гейт, 0 регрессий,
+  0 flips, airtight). base пересобран из master `e9ce613`.
+- **FORCE (blast_force.py): 97 → 107** raw-идентичных, **0 REGR, 0 FARTHER**, 10 FLIP, 11 closer.
+  image-position 2→0 FLIP, unresolved-references 2→1 (остаток = `\{name}` escape, отложен). Прошлые
+  FARTHER (footnote/replacements) не ухудшились.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **escape** `\*`/`\_`/`` \` ``/`\{`/`\pass:`/`\"` — самый дешёвый следующий (1-diff unresolved-references
+   + escaped smart-quote). Донор `handle_inline_escape` inline.rs ~821.
+2. **char-refs** (`&#167;` survival — донор `char_ref_len_at` 1122, гейт specialchars&&replacements).
+3. **macros** — САМОЕ большое (см. анализ выше), отдельная сессия.
+4. **ФИНАЛ:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты: `blast.py` (toggle-off), `blast_toggle.py` (toggle-on gate), `blast_force.py` (FORCE),
+  `diffone.py <file> <limit>` (с `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1` для FORCE-диффа).
+
+---
+
 ## Сессия (2026-06-15, 73-я) — РЕРАЙТ inline, Фаза 2 (4/N): attributes `{name}`/`{set:}` extract пасс за гейтом
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-attributes`** (off master `967dcd4`, 343) —
