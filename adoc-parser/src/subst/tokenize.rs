@@ -69,6 +69,16 @@ impl SpanKind {
     }
 }
 
+/// One restored fragment of an extracted passthrough. `raw` content becomes an
+/// `InlinePassthrough` event (the renderer emits it verbatim); non-`raw`
+/// content becomes a `Text` event (the renderer html-escapes it — the
+/// `specialcharacters`-only semantics of `+…+`/`++…++`).
+#[derive(Debug)]
+pub(super) struct PassPiece {
+    pub text: String,
+    pub raw: bool,
+}
+
 /// A deferred tag, referenced by a sentinel's index.
 #[derive(Debug)]
 pub(super) enum TagToken {
@@ -81,6 +91,10 @@ pub(super) enum TagToken {
     /// A standalone event with no span pairing (e.g. a hard line break emitted
     /// by the `post_replacements` pass).
     HardBreak,
+    /// An extracted passthrough (`+…+`/`++…++`/`+++…+++`/`pass:[…]`), restored
+    /// verbatim as a run of leaf events. Extracted FIRST so no later pass can
+    /// reach inside the protected content.
+    Passthrough(Vec<PassPiece>),
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -121,6 +135,13 @@ impl Work {
     pub(super) fn break_sentinel(&mut self) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::HardBreak);
+        sentinel(idx)
+    }
+
+    /// Register an extracted passthrough leaf and return its sentinel string.
+    pub(super) fn passthrough_sentinel(&mut self, pieces: Vec<PassPiece>) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::Passthrough(pieces));
         sentinel(idx)
     }
 }
@@ -206,6 +227,16 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                 }
                 Some(TagToken::HardBreak) => {
                     events.push(Event::HardBreak);
+                }
+                Some(TagToken::Passthrough(pieces)) => {
+                    for p in pieces {
+                        let text = Cow::Owned(p.text.clone());
+                        events.push(if p.raw {
+                            Event::InlinePassthrough(text)
+                        } else {
+                            Event::Text(text)
+                        });
+                    }
                 }
                 None => {}
             }
