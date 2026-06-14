@@ -202,12 +202,30 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 73-я сессия): РЕРАЙТ inline — Фаза 2 продолжается (ветка `feat/subst-phase2-attributes`)
+## АКТУАЛЬНО (2026-06-15, 74-я сессия): РЕРАЙТ inline — Фаза 2 (5/N) curved smart quotes (ветка `feat/subst-phase2-curved-quotes`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-3/N passthrough+replacements+post_replacements) уже
-СМЕРЖЕНА в master (967dcd4). **1 новый коммит `c60aa27` на ветке (MERGE+ПУШ ждут авторизации):**
+снять gate → flip outline. Phase 2 (1-4/N) уже СМЕРЖЕНА в master (e9ce613). **1 новый коммит
+`7d13f7c` на ветке (MERGE+ПУШ ждут авторизации):**
+- [x] **(5/N) curved smart quotes `:double`/`:single`** (`subst/quotes.rs`) — пассы `"`​`…`​`"`→`“…”`
+  и `'`​`…`​`'`→`‘…’`, идут ПОСЛЕ strong, ДО monospace (слот QUOTE_SUBS). Curly-символ — leaf-Text
+  сентинель (`TagToken::SmartQuote{text,opening}`, литерал-char как legacy, НЕ `&#8220;`-entity) →
+  раздельные Text-события (open/inner/close), как у legacy. **Leading-edge подавление** mono/em/mark:
+  strong уже отработал (до пасса) → exempt; mono/em/mark идут после → constrained `` ` ``/`_`/`#` НЕ
+  открывается, если непосредственно перед ним SmartQuote-OPEN сентинель (`smart_quote_leading_edge`
+  + `sentinel_index_before`) — флаг legacy воспроизведён ПОРЯДКОМ пассов, не полем парсера.
+  `find_smart_quote_close` скипает сентинели; нет open-boundary/attrlist (паритет с legacy
+  `try_smart_quotes`, не широкий asciidoctor-regexp). Escaped `\"`​`…`​`"` — отложенный escape-пасс
+  (gate отклоняет). Зеркало всех legacy smart-quote-тестов (double/single, formatting, double-backtick-
+  literal, edge-emphasis/mark suppression, leading-only, nested, unclosed/empty).
+- **Гейт:** toggle-off **343→343** (legacy не тронут), toggle-on **343→343**, **0 регрессий, 0 flips**
+  (airtight). **FORCE-верность 97 → 107** raw-идентичных, **0 REGR, 0 FARTHER**, 10 FLIP, 11 closer
+  (near-miss image-position 2→0 FLIP, unresolved-references 2→1 — остаток = отложенный `\{name}` escape).
+- clippy 0, test --workspace зелёное (parser 532→533, html 433), parsing-lab 233/233 (+1 subst-тест
+  `reproduces_legacy_on_smart_quote_inputs`, 12 subst всего).
+
+### (АРХИВ 73-й) Phase 2 (4/N) attributes — в master `e9ce613`
 - [x] **(4/N) attributes `{name}`/`{set:}` extract** (`subst/attributes.rs`) — после passthrough,
   ДО quotes. Legacy НЕ резолвит `{name}` — эмитит `Event::AttributeReference` (резолв в рендерере);
   порт: `{name}` (+опц. trailing `[brackets]`/`/path[brackets]`) → `TagToken::AttrRef` →
@@ -239,12 +257,16 @@ asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до 
   85 → 92** raw-идентичных, **0 REGR** (ни один ранее-идеальный файл не сломан); 6 FORCE-FARTHER —
   каскады отложенных macros/attr (footnote `<<xref>>`, id anchors, outline), gate их отклоняет.
 - clippy 0, test --workspace зелёное (parser 531, html 433), parsing-lab 233/233 (+1 subst-тест, 10 всего).
-- [ ] **ОСТАЛОСЬ Фаза 2:** **macros** (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/
-  email + inline-anchor `[[id]]` + concealed index-term `((…))` — overhaul токенизатора, нужны
+- [ ] **ОСТАЛОСЬ Фаза 2** (FORCE 107/344; near-miss кандидаты на флип под FORCE: unresolved-references
+  1-diff = escape `\{name}`; assignment-precedence/comments/discrete-headings/separating и др. уже
+  FLIP'нули): **escape** `\*`/`\_`/`` \` ``/`\{`/`\pass:`/`\"` (донор `handle_inline_escape` inline.rs
+  ~821; самый дешёвый следующий — 1-diff unresolved-references + escaped smart-quote `\"`​`…`​`"`),
+  **char-refs** (`&#167;` survival — legacy InlinePassthrough при specialchars+replacements, донор
+  `char_ref_len_at` inline.rs 1122), **macros** (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/
+  autolink/email + inline-anchor `[[id]]` + concealed index-term `((…))` — overhaul токенизатора, нужны
   leaf-токены с произвольными `Vec<Event>`; САМОЕ большое; донор `handle_inline_macro` inline.rs ~416;
-  именно macros держит 2 FORCE-FARTHER + outline cross-span), char-refs (`&#167;` survival —
-  legacy InlinePassthrough при specialchars+replacements), escape `\*`/`\{`/`\pass:` (донор
-  `handle_inline_escape` inline.rs ~821), curved smart-quotes `"…"`/`'…'`, spec'd `pass:SPEC[]`.
+  макросы несут RAW-подстроки (label/alt/footnote-текст), уже стёртые ранними пассами — нужен extract
+  с recursive-вычислением label-событий, см. session.md 74-я анализ), spec'd `pass:SPEC[]`.
   specialchars — фактически NO-OP (Event::Text сырой). ФИНАЛ: снять gate → flip outline при 343.
 
 ## (АРХИВ) после 70-й сессии: Identical **343 / 344**; РЕРАЙТ inline — Фаза 1 СДЕЛАНА
