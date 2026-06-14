@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят первая) — Фаза 3: shorthand `,===`/`:===` + colgroup для format-таблиц
+
+Запрос «продолжи». Ветка **`fix/csv-dsv-shorthand-and-colgroup`** — ЗАКОММИЧЕНА.
+**НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на `git merge --no-ff` в
+master + `git push origin master` + удаление ветки.** Старт: housekeeping 60-й закрыт
+сам (мерж 60-й УЖЕ выполнен И запушен — origin/master == master == 82c9519 (338),
+дерево чисто). base-бинарь /tmp/adoc_base пересобран из master HEAD (338).
+
+### Выбор задачи
+nearmiss на 338 (6 Different, весь «трудный хвост», ВСЕ архитектурные/мульти-root):
+**data (181, Δ77)**, table (597, Δ1 — `|=== <1>` callout-суффикс → невалид-делимитер,
+ДВА корня), character-replacement-ref (625, Δ113 — m-колонка `<code>`-наследование),
+document-attributes-ref (953, Δ−3 — docyear/localyear интринсики [риск] + inline-в-link),
+syntax-quick-reference (2788, мульти-root), outline (6647, Δ3, мульти-root spec).
+Выбран **data** — корни связные (все про CSV/DSV-таблицы), ограниченная область.
+
+### Реальная семантика (пробы asciidoctor)
+data.adoc = 5 CSV/DSV-таблиц. ТРИ корня, все вокруг format-таблиц:
+- **Root 1 (colgroup)**: asciidoctor эмитит `<colgroup>` с `<col>` на каждую колонку для
+  ВСЕХ таблиц. Наш рендерер (blocks.rs:190) эмитит colgroup ТОЛЬКО при `cols` в meta.named.
+  `scan_table` (native) синтезирует `cols` (block.rs:1828), `scan_delimited_format_table`
+  (CSV/DSV/TSV) — НЕТ → format-таблицы без colgroup. (нормализатор compare срезает
+  `style`, так что важно само наличие `<colgroup><col>…`).
+- **Root 2 (shorthand)**: `,===` (CSV) / `:===` (DSV) НЕ распознавались → проза. Пробы:
+  `,===`/`:===` рвут открытый параграф как `|===` (= полноценные делимитеры блока).
+- **Root 3 (escaped include)**: `\include::customers.csv[]` в `,===` → УЖЕ работал
+  (препроцессор снимает backslash → литерал `include::…[]` = одна CSV-ячейка).
+
+### Что сделано (ПАРСЕР)
+- **scanner.rs** `is_table_delimiter`: `|`-only → префиксы `|`/`,`/`:` (+ 3+ `=`, остаток
+  всё `=`). `!===` НЕ парсится. Все 3 call-site (диспетч block.rs:1052 + 2 para-break
+  2368/2759) получают единообразное поведение — корректно (shorthand = делимитер блока).
+- **block.rs** `scan_table`: формат из первого байта `opening_delim` (`,`→Csv, `:`→Dsv,
+  иначе `block_attrs.table_format()` — `|===` уважает `format=`). Закрытие по точному
+  совпадению строки делимитера работает как было.
+- **block.rs** `scan_delimited_format_table`: `block_attrs` → `mut`; после `num_cols`
+  синтез `cols` (зеркало 1828) при отсутствии явного `cols=`.
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 510→512, html 423→424);
+  parsing-lab 233/233.
+- data diffone: **0 diffs** (был 181), len ref==our==210.
+- **Корпус: Identical 338→339 (+1 ФЛИП, data 181→0)**. Blast (base 338): **РОВНО 1
+  флип, 0 регрессий, 0 FARTHER**.
+- Тесты: +2 parser (`test_csv_shorthand_delimiter_routes_to_format_and_synthesizes_cols`
+  [`,===` → CSV + cols="2"], `test_dsv_shorthand_delimiter_routes_to_format` [`:===` → DSV]),
+  +1 scanner (расширен `test_is_table_delimiter`: `,===`/`:====`/негативы `,==`/`:`/
+  `:name: value`/`!===`), +1 html (`test_csv_dsv_shorthand_delimiter_and_colgroup_html`:
+  `,===` 3-col colgroup+thead, `:===` DSV, single-field 100%-col без header).
+
+### Что дальше
+- nearmiss на 339 (5 Different, ВСЕ архитектурные/мульти-root): table (597, Δ1 —
+  `|=== <1>` callout-суффикс делает строку невалид-делимитером → проза/литерал, ДВА корня),
+  character-replacement-ref (625, Δ113 — m-колонка `<code>`-наследование, кластер),
+  document-attributes-ref (953, Δ−3 — docyear/localyear date-интринсики [риск] +
+  inline-в-link-тексте), syntax-quick-reference (2788, мульти-root), outline (6647, Δ3 —
+  `\*` экранирование + `+` hard-break, мульти-root spec).
+- Pre-existing — см. сессии 36/38/40/42/.../60.
+- Известный clippy-warning (НЕ мой, pre-existing, только `--all-targets`): `concat!` в
+  adoc-html/src/tests.rs. Гейт проекта `cargo clippy --workspace` чист.
+
+---
+
 ## Сессия (2026-06-14, шестидесятая) — Фаза 3: счётчики литеральны в verbatim styled-параграфах и passthrough
 
 Запрос «продолжи». Ветка **`fix/counter-verbatim-and-passthrough`** — ЗАКОММИЧЕНА

@@ -2229,6 +2229,39 @@ fn test_csv_table_quoted_fields_html() {
 }
 
 #[test]
+fn test_csv_dsv_shorthand_delimiter_and_colgroup_html() {
+    // The bare `,===` delimiter selects CSV format (no attribute line needed);
+    // a blank line after the first row promotes it to a header. A format table
+    // without explicit cols= emits a <colgroup> with one <col> per column, just
+    // like a native table.
+    let csv = to_html(",===\nArtist,Track,Genre\n\nBaauer,Harlem Shake,Hip Hop\n,===");
+    assert!(
+        csv.contains("<colgroup>\n<col style=\"width: 33.3333%;\">\n<col style=\"width: 33.3333%;\">\n<col style=\"width: 33.3334%;\">\n</colgroup>"),
+        "CSV shorthand table should emit a 3-col colgroup. Got: {csv}"
+    );
+    assert!(csv.contains("<thead>"), "blank after first row → header. Got: {csv}");
+    assert!(csv.contains("<th class=\"tableblock halign-left valign-top\">Artist</th>"));
+    assert!(csv.contains("<p class=\"tableblock\">Harlem Shake</p>"));
+
+    // The bare `:===` delimiter selects DSV format.
+    let dsv = to_html(":===\nName:Age\nAlice:30\n:===");
+    assert!(dsv.contains("<table class=\"tableblock"), "DSV shorthand → table. Got: {dsv}");
+    assert!(dsv.contains("<p class=\"tableblock\">Alice</p>"));
+    assert!(dsv.contains("<p class=\"tableblock\">30</p>"));
+
+    // A single-field, single-row CSV table → one-column colgroup (100%) and no
+    // header. (The data.adoc i-csv case feeds an escaped `\include::` here; the
+    // backslash is stripped by the preprocessor, which to_html does not run.)
+    let one = to_html(",===\nOnly field\n,===");
+    assert!(
+        one.contains("<colgroup>\n<col style=\"width: 100%;\">\n</colgroup>"),
+        "single-column format table → 100% col. Got: {one}"
+    );
+    assert!(one.contains("<p class=\"tableblock\">Only field</p>"), "Got: {one}");
+    assert!(!one.contains("<thead>"), "single row → no header. Got: {one}");
+}
+
+#[test]
 fn test_discrete_heading_with_id_and_role() {
     let html = to_html("[discrete#myh.special]\n== Heading");
     assert!(html.contains("id=\"myh\""), "should have explicit id. Got: {html}");
