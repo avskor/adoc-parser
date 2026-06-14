@@ -75,8 +75,9 @@ fn run(cli: Cli) -> Result<(), String> {
     }
 
     // Intrinsic document attributes derived from the input: docname/docfile/
-    // docdir/docfilesuffix from the path, docdate/doctime/docdatetime from its
-    // mtime (now when reading stdin; docdir falls back to the cwd). Explicit
+    // docdir/docfilesuffix from the path, docdate/docyear/doctime/docdatetime from
+    // its mtime, localdate/localyear/localtime/localdatetime from now (mtime falls
+    // back to now when reading stdin; docdir falls back to the cwd). Explicit
     // -a values win; header attribute entries override the date family like
     // Asciidoctor (docname/docfile/docdir are locked there — known limit).
     let cli_attr_names: HashSet<&str> = cli
@@ -106,12 +107,14 @@ fn run(cli: Cli) -> Result<(), String> {
     seed("docdatetime", format!("{docdate} {doctime}"));
     seed("docdate", docdate);
     seed("doctime", doctime);
+    seed("docyear", input_mtime.format("%Y").to_string());
     let now = Local::now();
     let localdate = now.format("%Y-%m-%d").to_string();
     let localtime = now.format("%H:%M:%S %z").to_string();
     seed("localdatetime", format!("{localdate} {localtime}"));
     seed("localdate", localdate);
     seed("localtime", localtime);
+    seed("localyear", now.format("%Y").to_string());
     if let Some(path) = &cli.input {
         let abs = path.canonicalize().unwrap_or_else(|_| path.clone());
         if let Some(stem) = abs.file_stem() {

@@ -271,6 +271,16 @@ struct InlineState<'a> {
     /// position 0 of the inner span is suppressed; `*`, all unconstrained markers and
     /// super/subscript (no open assertion) are unaffected.
     smart_quote_leading_edge: bool,
+    /// True when `input` is the reparsed inner content of an emphasis span
+    /// (`_…_` / `__…__`). In Asciidoctor's QUOTE_SUBS order constrained strong (`*`)
+    /// and monospace (`` ` ``) both run *before* emphasis, so at the span's leading
+    /// edge they still see the literal `_` marker — a word character that their open
+    /// assertion `(^|[^\w…])` rejects — and stay literal (`_`code`_` → `<em>`code`</em>`,
+    /// `_*b*_` → `<em>*b*</em>`). Mark (`#`) runs *after* emphasis (it sees the emitted
+    /// `<em>`'s `>`) and opens normally; unconstrained markers and super/subscript have
+    /// no open assertion and are likewise unaffected. This flag reproduces that: a
+    /// constrained `*`/`` ` `` open at position 0 of the inner span is suppressed.
+    emphasis_leading_edge: bool,
 }
 
 impl<'a> InlineState<'a> {
@@ -282,6 +292,7 @@ impl<'a> InlineState<'a> {
             options,
             edges_are_line_boundaries: false,
             smart_quote_leading_edge: false,
+            emphasis_leading_edge: false,
         }
     }
 
@@ -1181,6 +1192,15 @@ impl<'a> InlineState<'a> {
             return false;
         }
 
+        // At the leading edge of an emphasis span (`_…_` / `__…__`), constrained strong
+        // (`*`) and monospace (`` ` ``) cannot open: both run before emphasis in
+        // QUOTE_SUBS, so they still see the literal `_` (a word character) their open
+        // assertion forbids. Mark (`#`) runs after emphasis and is exempt. See
+        // `emphasis_leading_edge`.
+        if self.emphasis_leading_edge && start_pos == 0 && matches!(marker, b'*' | b'`') {
+            return false;
+        }
+
         let after_marker = start_pos + 1;
         if after_marker >= self.input.len() {
             return false;
@@ -1222,6 +1242,7 @@ impl<'a> InlineState<'a> {
             // Literal monospace (`+...+`, `pass:[]`) is intercepted as a passthrough
             // before this point, so it stays verbatim regardless of these subs.
             let mut inner_parser = InlineState::new(inner, self.subs, self.options);
+            inner_parser.emphasis_leading_edge = marker == b'_';
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -1343,6 +1364,7 @@ impl<'a> InlineState<'a> {
             // monospace (see try_constrained): `(C)`/`--`/`...` are replaced and valid
             // char-refs restored inside `<code>`. Passthroughs stay verbatim regardless.
             let mut inner_parser = InlineState::new(inner, self.subs, self.options);
+            inner_parser.emphasis_leading_edge = marker == b'_';
             inner_parser.parse_inline(events);
 
             events.push(Event::End(tag_end));
@@ -4398,6 +4420,77 @@ mod tests {
             Event::End(TagEnd::Monospace),
             Event::Text(Cow::Borrowed(" b")),
             Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_emphasis_leading_edge_suppresses_strong_and_mono() {
+        // At an emphasis span's leading edge, constrained strong (`*`) and monospace
+        // (`` ` ``) stay literal: both run before emphasis in QUOTE_SUBS and still see
+        // the literal `_` (a word char) their open assertion forbids.
+        // `_`inline` text_` → `<em>`inline` text</em>` (asciidoc-lang
+        // document-attributes-ref.adoc line 1216).
+        assert_eq!(parse("_`inline` text_"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("`inline` text")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+        assert_eq!(parse("_*bold* x_"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("*bold* x")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+        // Unconstrained emphasis `__…__` suppresses the same way.
+        assert_eq!(parse("__`inline` x__"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("`inline` x")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+    }
+
+    #[test]
+    fn test_emphasis_leading_edge_does_not_suppress_mark_or_unconstrained() {
+        // Mark (`#`) runs *after* emphasis (it sees the emitted `<em>`'s `>`), so it
+        // opens at the leading edge; unconstrained monospace (``) has no open assertion.
+        assert_eq!(parse("_#mark# x_"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Start(Tag::Highlight),
+            Event::Text(Cow::Borrowed("mark")),
+            Event::End(TagEnd::Highlight),
+            Event::Text(Cow::Borrowed(" x")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+        assert_eq!(parse("_``code`` x_"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("code")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" x")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+    }
+
+    #[test]
+    fn test_emphasis_leading_edge_suppression_is_leading_only() {
+        // Positional: a constrained monospace later in the emphasis content, preceded by
+        // a real space, still opens. Strong/mono after `*`/`#` outer markers also open
+        // (those markers are not word characters), proving the gate is emphasis-specific.
+        assert_eq!(parse("_x `c` y_"), vec![
+            Event::Start(Tag::Emphasis { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("x ")),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("c")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" y")),
+            Event::End(TagEnd::Emphasis),
+        ]);
+        assert_eq!(parse("*`code` x*"), vec![
+            Event::Start(Tag::Strong { id: None, roles: Vec::new() }),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("code")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" x")),
+            Event::End(TagEnd::Strong),
         ]);
     }
 

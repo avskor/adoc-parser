@@ -2475,6 +2475,27 @@ fn test_smart_quote_double_backtick_literal_html() {
 }
 
 #[test]
+fn test_emphasis_leading_edge_keeps_strong_mono_literal_html() {
+    // A backtick (or `*`) directly after the emphasis marker stays literal: constrained
+    // monospace and strong run before emphasis in QUOTE_SUBS and reject the leading `_`.
+    // `_`inline` text_` → `<em>`inline` text</em>` (asciidoc-lang
+    // document-attributes-ref.adoc line 1216).
+    assert_eq!(
+        to_html("_`inline` text_"),
+        "<div class=\"paragraph\">\n<p><em>`inline` text</em></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("_*bold* x_"),
+        "<div class=\"paragraph\">\n<p><em>*bold* x</em></p>\n</div>\n"
+    );
+    // Mark (`#`) runs after emphasis, so it still opens at the leading edge.
+    assert_eq!(
+        to_html("_#mark# x_"),
+        "<div class=\"paragraph\">\n<p><em><mark>mark</mark> x</em></p>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_block_admonition_html() {
     let html = to_html("[NOTE]\n====\nThis is a note.\n====");
     assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonitionblock note in:\n{html}");
