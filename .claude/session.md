@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-15, 75-я) — РЕРАЙТ inline, Фаза 2 (6/N): escape `\` пасс (не-маркерный) за гейтом
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-escape`** (off master `5421e0e`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master +
+`git push` + удаление ветки. base-бинарь `/tmp/adoc_base` собран из master HEAD `5421e0e` (343).
+
+### Контекст
+Фаза 0 (toggle) + Фаза 1 (quotes) + Фаза 2 (1-5/N: replacements/post_replacements/passthrough/
+attributes/curved-quotes) — в master. Цель Фазы 2: перенести остальные пассы, в финале снять gate →
+flip outline. См. [[proj_sequential_quotes_rewrite]]. Следующий по плану 74-й сессии — escape
+(разблокирует 1-diff unresolved-references + escaped smart-quote).
+
+### Сделано (1 логический коммит, escape — НЕ-МАРКЕРНЫЙ)
+- **tokenize.rs**: `TagToken::Literal(String)` + `Work::literal_sentinel`. Токенизатор переделан на
+  коалесцирующий `pending`-буфер: `Literal` ФЛАШИТ предыдущий ран и СИДИТ pending своим текстом → escaped
+  char МЕРЖИТСЯ со следующим раном в ОДИН Text (зеркалит legacy: дроп backslash, char в next flush).
+  `flush_pending` хелпер; все НЕ-Literal токены флашат pending перед эмитом (поведение прежних токенов
+  сохранено байт-в-байт). SmartQuote ОСТАЁТСЯ отдельным Text (флашит, не коалесцирует) — 3 события на
+  `"`…`"` сохранены.
+- **subst/escape.rs** (НОВЫЙ): `run(work)` — дроп backslash + `Literal`-сентинел для НЕ-маркерных escape:
+  типографика (`\--`/`\->`/`\=>`/`\<-`/`\<=`/`\...`/`\(C)`/`\(R)`/`\(TM)`, порт `typographic_escape_len`),
+  smart-quote openers (`\"`` ``/`\'`` ``), `\{`/`\[`/`\<`/`\'`. `\\` (двойной) и trailing `\` — оставлены.
+- **mod.rs**: `escape::run` ПОСЛЕ passthrough, ДО attributes. +2 теста (`reproduces_legacy_on_escape_inputs`
+  15 кейсов, `escape_marker_left_untouched` 2 кейса).
+
+### ДВА контекстных бага escape-first, найденных blast'ом, и итоговое решение
+escape-first (до passthrough) дал ДВА бага (FARTHER в FORCE):
+1. **Маркеры** (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`): `\` ВНУТРИ открытого span — это контент, не escape.
+   `` (`\`) `` — escape-first прятал ЗАКРЫВАЮЩИЙ backtick monospace в Literal → span рвался
+   (`<code>` `` ` ``)...`). keyboard-macro 16→34, outline +18, replacements +3. **Решение: НЕ обрабатывать
+   маркеры в escape** — их `\\?` принадлежит ВНУТРЬ quote-пассов (span-aware, модель asciidoctor),
+   отдельная сессия. Оставлены untouched → gate отклоняет, FORCE-faithful (legacy тоже держит `\`).
+2. **escape ВНУТРИ passthrough**: `` `+\{name}+` `` — `\{` внутри single-plus passthrough (verbatim!),
+   но escape-first калечил его ДО passthrough-extract → порча сентинела (утечка цифры `0name...}`).
+   reference-attributes 338→339, span-cells +3. **Решение: passthrough ПЕРВЫМ, escape ВТОРЫМ** (как
+   asciidoctor: passthrough защищает контент до всех субституций). Тогда `\` в буфере всегда top-level.
+   Попутно `\+` ОТЛОЖЕН (требует escape-aware passthrough `\\?`, иначе passthrough-first съест `+x+`).
+
+### Ключевая семантика (трассировка legacy, все воспроизведены)
+- `\{name}`→Text("{name}") ОДНО событие (коалесценция). `\{author} and {author}`→Text+AttrRef.
+  `\"`` ``…`` `" ``→Text(`` "`…`" ``). `it\'s`→[Text("it"),Text("'s")] (apostrophe прямой, escape бьёт
+  replacements). `+\{name}+`/`` `+\{name}+` ``/`pass:[\{x}]`→`\{` verbatim (passthrough защищает).
+  `` `\` ``→`<code>\</code>` (маркер untouched, span формируется, `\`=контент).
+
+### Верификация (всё зелёное)
+- clippy --workspace 0; cargo test --workspace 18 ok-групп (parser 533→535, html 433, render-core 15);
+  parsing-lab 233/233 (+2 subst-теста, 15 subst всего).
+- **blast toggle-off 343→343** (legacy не тронут), **toggle-on 343→343** (gate airtight, 0 regr, 0 flips).
+- **FORCE (blast_force.py): 107→108** raw-идентичных, **unresolved-references FLIP 1→0**, 3 closer
+  (bibliography 12→11, subs 123→122, subs-symbol-repl 4→3), **0 FARTHER, 0 REGR** (airtight).
+  Спот-чек: `` (`\`) and (`]`) `` и `` `+\{name-of-attribute}+` `` теперь байт-в-байт с base.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **escape маркеров+`\+` ВНУТРИ пассов** (`\\?` в quote/passthrough-пассах, span-aware — правильная
+   модель asciidoctor; даст `\*bold*`→`*bold*`, `\+x+`→`+x+` БЕЗ промахов `` (`\`) ``).
+2. **macros** — САМОЕ большое (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email +
+   `[[id]]` + `((…))`; leaf-токен с произвольным `Vec<Event>`; держит outline cross-span). Донор
+   `handle_inline_macro` inline.rs 416-680. Анализ в 74-й сессии (RAW-подстроки label).
+3. **char-refs** (`&#167;` survival, донор `char_ref_len_at` 1122) + **char-ref escape** `\&#…;`.
+4. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты в каталоге корпуса `/mnt/c/tmp/adoc-test/`: `blast.py` (toggle-off), `blast_toggle.py`
+  (toggle-on gate), `blast_force.py` (FORCE), `diffone.py <file> <limit>` (FORCE-дифф:
+  `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1`). base-бинарь пересобирать из master HEAD в начале сессии.
+
+---
+
 ## Сессия (2026-06-15, 74-я) — РЕРАЙТ inline, Фаза 2 (5/N): curved smart quotes `:double`/`:single` пасс за гейтом
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-curved-quotes`** (off master `e9ce613`, 343) —
