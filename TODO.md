@@ -202,7 +202,25 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-14, после 70-й сессии): Identical **343 / 344**; РЕРАЙТ inline — Фаза 1 СДЕЛАНА
+## АКТУАЛЬНО (2026-06-14, 71-я сессия): РЕРАЙТ inline — Фаза 2 НАЧАТА (ветка `feat/subst-phase2-passes`)
+
+Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
+asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
+снять gate → flip outline. **2 коммита на ветке (MERGE+ПУШ ждут авторизации):**
+- [x] **(2/N) replacements** (`subst/replacements.rs`) — типографика на всём буфере, переиспользует
+  donor `apply_typographic_replacements` (стал `pub(crate)`). Сентинел-байты = `<>`-границы тегов.
+- [x] **(2/N) post_replacements** (`subst/post_replacements.rs`) — hard-break ` +`; `TagToken::HardBreak`
+  в токенизаторе. edges-флаг не нужен (close-сентинел блокирует break внутри спана естественно).
+- **Гейт:** toggle-off 343, toggle-on 343, **0 регрессий, 0 FARTHER** (airtight: toggle-on вывод ≡
+  parse_legacy всегда). **FORCE-верность 46 → 85** raw-идентичных файлов; 5 FORCE-FARTHER —
+  ожидаемый каскад от нерезолвленных `{attr}`/macro рядом с ` +`, gate их отклоняет.
+- clippy 0, test --workspace зелёное (parser 530, html 433), parsing-lab 233/233.
+- [ ] **ОСТАЛОСЬ Фаза 2:** passthrough extract/restore (FIRST в пайплайне; Code/passthrough события),
+  attributes `{name}`, macros (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email —
+  overhaul токенизатора), char-refs (`&#167;` survival), escape `\*`, curved smart-quotes `"…"`.
+  specialchars — фактически NO-OP (Event::Text сырой). ФИНАЛ: снять gate → flip outline при 343.
+
+## (АРХИВ) после 70-й сессии: Identical **343 / 344**; РЕРАЙТ inline — Фаза 1 СДЕЛАНА
 
 Остался РОВНО 1 Different — `spec/outline.adoc` (4813 diff), единственный корень
 **cross-span strong @4545** (глубоко архитектурный). Пользователь авторизовал **полный
