@@ -547,10 +547,15 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Inline attr span: [.class]#text# or [#id.class]#text# (QUOTES)
+            // Inline attr span: [.class]#text#, [#id.class]#text#, or a bare-word
+            // role list [role]#text# (QUOTES). A bare word is taken verbatim as the
+            // role by Asciidoctor (`[big]##O##` → <span class="big">O</span>); the
+            // `[[` form is reserved for the bibliography/anchor macros.
             b'[' if has_quotes
                 && self.peek_at(1) != Some(b'[')
-                && self.peek_at(1).is_some_and(|c| c == b'.' || c == b'#') =>
+                && self
+                    .peek_at(1)
+                    .is_some_and(|c| c == b'.' || c == b'#' || c.is_ascii_alphanumeric() || c == b'_') =>
             {
                 if self.try_inline_attr_span(events, text_start) {
                     return true;
@@ -1166,6 +1171,17 @@ impl<'a> InlineState<'a> {
             if self.is_word_char_after(after_close) {
                 return false;
             }
+            // Constrained monospace has a stricter close assertion than the other
+            // quotes: Asciidoctor's `(?![\w"'`])` also forbids `"`, `'` and a
+            // backtick immediately after the closing tick. Without this, a backtick
+            // that is really the start of a typographic right single quote (`` `' ``)
+            // is mistaken for a monospace close, e.g. `` the `'00s ... werewolves`' ``
+            // would wrongly fold into <code> instead of rendering two `’` apostrophes.
+            if marker == b'`'
+                && matches!(self.input.as_bytes().get(after_close), Some(b'"' | b'\'' | b'`'))
+            {
+                return false;
+            }
 
             self.flush_text(*text_start, start_pos, events);
             events.push(Event::Start(tag));
@@ -1212,7 +1228,14 @@ impl<'a> InlineState<'a> {
 
                 self.flush_text(*text_start, start_pos, events);
                 events.push(Event::Start(tag));
-                events.push(Event::Text(Cow::Borrowed(inner)));
+                // Superscript/subscript content undergoes the full normal
+                // substitution group in Asciidoctor (attributes, quotes,
+                // replacements, macros): `^a{sp}b^` → `<sup>a b</sup>`,
+                // `^*x*^` → `<sup><strong>x</strong></sup>`, `^a--b^` em-dash,
+                // `^url[t]^` a link. Reparse the inner span rather than emitting
+                // it verbatim.
+                let mut inner_parser = InlineState::new(inner, self.subs, self.options);
+                inner_parser.parse_inline(events);
                 events.push(Event::End(tag_end));
 
                 self.pos = close_pos + 1;
@@ -2859,8 +2882,23 @@ impl<'a> InlineState<'a> {
             None => return false,
         };
 
+        // Mirror Asciidoctor `parse_quoted_text_attributes`: only the first
+        // positional attribute is considered, and an attrlist that does NOT use the
+        // `.`/`#` shorthand is taken verbatim as a single role — dots are NOT split
+        // (`[a.b]##x##` → role "a.b", whereas shorthand `[.a.b]` → roles "a b").
         let attr_content = &self.input[after_bracket..bracket_close];
-        let (id, roles) = Self::parse_inline_shorthand(attr_content);
+        let first_positional = attr_content
+            .split(',')
+            .next()
+            .unwrap_or(attr_content)
+            .trim();
+        let (id, roles) = if first_positional.is_empty() {
+            (None, Vec::new())
+        } else if first_positional.starts_with('.') || first_positional.starts_with('#') {
+            Self::parse_inline_shorthand(first_positional)
+        } else {
+            (None, vec![first_positional])
+        };
 
         // Must have at least an id or a role
         if id.is_none() && roles.is_empty() {
@@ -2932,7 +2970,15 @@ impl<'a> InlineState<'a> {
             return true;
         }
 
-        // Constrained: [.class]#text# / [.class]_text_ etc.
+        // Constrained: [.class]#text# / [.class]_text_ etc. Unlike the unconstrained
+        // form (which may appear mid-word), the constrained `[attrlist]` prefix is
+        // bound by the same opening boundary as the bare quote: the character before
+        // `[` must not be a word character (`word[role]#x#` stays literal — verified
+        // vs Asciidoctor; `hel[x]##lo##` mid-word DOES match as it is unconstrained).
+        if self.is_word_char_before(start_pos) {
+            return false;
+        }
+
         let content_start = after_close_bracket + 1;
         if content_start >= self.input.len() {
             return false;
@@ -5099,11 +5145,35 @@ mod tests {
     }
 
     #[test]
-    fn test_non_shorthand_bracket_not_span() {
-        // [text]#foo# — content doesn't start with . or # → not a span
+    fn test_non_shorthand_bracket_is_role_span() {
+        // [text]#foo# — a bare-word attrlist is taken verbatim as the role
+        // (Asciidoctor: <span class="text">foo</span>).
         let events = parse("[text]#foo#");
         assert_eq!(events, vec![
-            Event::Text(Cow::Borrowed("[text]")),
+            Event::Start(Tag::InlineSpan { id: None, roles: vec![Cow::Borrowed("text")] }),
+            Event::Text(Cow::Borrowed("foo")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_bareword_role_not_split_on_dot() {
+        // [a.b]##x## — bare word (no leading shorthand) → one role "a.b", dots NOT
+        // split (contrast shorthand [.a.b] → roles "a b").
+        let events = parse("[a.b]##x##");
+        assert_eq!(events, vec![
+            Event::Start(Tag::InlineSpan { id: None, roles: vec![Cow::Borrowed("a.b")] }),
+            Event::Text(Cow::Borrowed("x")),
+            Event::End(TagEnd::InlineSpan),
+        ]);
+    }
+
+    #[test]
+    fn test_bareword_role_rejected_after_word_char() {
+        // word[role]#foo# — word char before `[` blocks the span (stays literal).
+        let events = parse("word[role]#foo#");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("word[role]")),
             Event::Start(Tag::Highlight),
             Event::Text(Cow::Borrowed("foo")),
             Event::End(TagEnd::Highlight),

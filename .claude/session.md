@@ -1,5 +1,76 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят седьмая) — Фаза 3: monospace close-граница `` `' ``, sup/sub субституции, bare-word role-span
+
+Запрос «продолжи». Ветка **`fix/monospace-close-boundary-quote-tick`** —
+ЗАКОММИЧЕНА (`c1d183a`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 56-й закрыт сам (мерж 56-й УЖЕ выполнен И запушен —
+origin/master == master == 088c30d (334), дерево чисто, ветки fix/* удалены).
+base-бинарь /tmp/adoc_base обновлён до 334 (master HEAD) ПЕРЕД фиксом.
+
+### Выбор задачи
+nearmiss на 334 (10 Different). Кандидаты с малым |Δ|: table (Δ1, ДВА корня +
+огромный сдвиг), troubleshoot (Δ−4, вложенные backtick→литерал, архитектурно),
+**text (249, Δ−5)**. diffone text: первый diff @459 (apos-блок) — ВСЁ до него
+идентично. Оказался ТРИ корня в одном файле, ВСЕ нужны для флипа.
+
+### Реальная семантика (исходник asciidoctor.rb QUOTE_SUBS/REPLACEMENTS + пробы /tmp/apostest)
+- **Корень A — monospace close-граница**: constrained monospace `` `…` `` имеет
+  более строгое закрытие чем прочие quotes — `(?![\w"'`])`: закрывающий backtick
+  НЕ может сопровождаться `"`, `'` ИЛИ `` ` ``. Без этого `` `' `` (backtick+апостроф
+  = типографский правый апостроф `’`, REPLACEMENTS строка 504 `[/\\?`'/, '&#8217;']`)
+  ошибочно матчится как закрытие monospace: `` the `'00s … werewolves`' `` сворачивало
+  4 строки в `<code>`. Пробы: `` `'00s and werewolves`' ``→два `’`; `` `code`' ``→`` `code’ ``
+  (первый backtick литерал); `` `bar`" ``→литерал. Одиночный `` `' `` у нас УЖЕ
+  работал (apply_typographic_replacements строка 122).
+- **Корень B — sup/sub субституции**: superscript/subscript `^…^`/`~…~` (unconstrained,
+  `\S+?`) получают ПОЛНУЮ normal-группу (attributes/quotes/replacements/macros):
+  `^a{sp}b^`→`<sup>a b</sup>`, `^*z*^`→`<sup><strong>`, `^a--b^`→em-dash, `^url[t]^`→link,
+  `^(C)^`→©. Наш `try_simple_pair` эмитил сырой `Event::Text` — `{sp}` не резолвился.
+- **Корень C — bare-word role-span**: `parse_quoted_text_attributes` — attrlist без
+  `.`/`#` шортхенда берётся ВЕРБАТИМ как одна роль (`{role => str}`): `[big]##O##`→
+  `<span class="big">`, `[a.b]##x##`→role "a.b" (точки НЕ делятся, в отличие от
+  shorthand `[.a.b]`→"a b"). Только первый позиционный (split по `,`: `[r1,r2]`→r1).
+  **Constrained** `[role]#x#` требует opening word-границу (`word[role]#x#`→литерал;
+  `[big]#O#nce`→литерал — close перед word-символом); **unconstrained** `##…##` может
+  mid-word (`hel[x]##lo##rld`→span). Наш диспетч триггерил attr-span только на `[.`/`[#`.
+
+### Что сделано (3 точки в ПАРСЕРЕ inline.rs)
+- `try_constrained`: monospace-специфичный close-чек (`marker == b'`'` && after_close
+  ∈ `"'``) → return false.
+- `try_simple_pair` (sup/sub): `Event::Text(inner)` → рекурсивный реран
+  `InlineState::new(inner, self.subs, self.options).parse_inline`.
+- Диспетч attr-span (@551): гейт расширен на bare-word (peek(1) alnum/`_`, не только
+  `.`/`#`); `try_inline_attr_span` — первый позиционный (split `,` + trim), bare-word →
+  одна роль вербатим (без split по `.`); `is_word_char_before` перенесён в
+  CONSTRAINED-ветку (unconstrained mid-word сохраняется).
+- Тесты: +3 parser (обновлён `test_non_shorthand_bracket_not_span`→`_is_role_span`
+  [кодировал баг], +`_not_split_on_dot`, +`_rejected_after_word_char`), +3 html
+  (bareword-role, backtick-apostrophe, superscript-full-subs).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 501→503, html 417→420);
+  compat parsing-lab 233/233.
+- text.adoc diffone: **0 diffs** (был 249). Все пробы apostest IDENTICAL.
+- **Корпус: Identical 334→335 (+1 ФЛИП, text.adoc 249→0)**. Blast (base 334): РОВНО
+  1 флип; бонус document-attributes-ref 6363→953 closer (фиксы B/C применимы шире);
+  **0 регрессий, 0 FARTHER**.
+
+### Что дальше
+- nearmiss на 335 (9 Different): counters (136, Δ9 — мульти-root: verbatim `{counter:}`
+  АРХИТЕКТУРНО + listing мис-классифицирован как admonition-warning @142), data
+  (181, Δ77 — CSV/DSV `,===`, мульти-root), troubleshoot-unconstrained-formatting
+  (212, Δ−4 — вложенные backtick→литерал, архитектурно), align-by-cell (371, Δ−16 —
+  inline `<n>`/`^+` в backtick), table (597, Δ1 — ДВА корня: `|=== <1>` не точный
+  делимитер + callout-list-item рвёт параграф + огромный сдвиг),
+  character-replacement-ref (625, Δ113), syntax-quick-reference (2788, Δ−31 —
+  мульти-root), document-attributes-ref (953, Δ — было 6363, ОСТАЛИСЬ корни),
+  outline (6647, Δ — МУЛЬТИ-root).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56 (без изменений).
+
+---
+
 ## Сессия (2026-06-14, пятьдесят шестая) — Фаза 3: double-plus passthrough `++…++` применяет specialchars (экранирует `<>&`), не raw
 
 Запрос «продолжи». Ветка **`fix/double-plus-passthrough-specialchars`** —
