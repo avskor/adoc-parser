@@ -958,7 +958,7 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Hard break: ` +` at end of string or before `\n`
+            // Hard break: ` +` before `\n`, or at a true line edge (end of top-level input)
             b' ' if has_post_replacements && self.check_hard_break() => {
                 self.flush_text(*text_start, self.pos, events);
                 self.advance_by(2); // skip ` +`
@@ -1143,11 +1143,21 @@ impl<'a> InlineState<'a> {
     }
 
     fn check_hard_break(&self) -> bool {
-        self.pos + 2 <= self.input.len()
-            && self.input.as_bytes()[self.pos] == b' '
-            && self.input.as_bytes()[self.pos + 1] == b'+'
-            && (self.pos + 2 == self.input.len()
-                || self.input.as_bytes()[self.pos + 2] == b'\n')
+        let bytes = self.input.as_bytes();
+        if self.pos + 2 > self.input.len() || bytes[self.pos] != b' ' || bytes[self.pos + 1] != b'+'
+        {
+            return false;
+        }
+        if self.pos + 2 == self.input.len() {
+            // ` +` at end of input is a hard break only at a true line/paragraph edge.
+            // Asciidoctor applies the line-break replacement after spans are rendered, so a
+            // trailing ` +` inside a reparsed inline span is bounded by its closing tag, not
+            // by `$` (`` `x +` `` → `<code>x +</code>`, never `<code>x<br></code>`). Inner
+            // reparses leave `edges_are_line_boundaries` false; top-level text sets it true.
+            self.edges_are_line_boundaries
+        } else {
+            bytes[self.pos + 2] == b'\n'
+        }
     }
 
     fn is_word_char_before(&self, pos: usize) -> bool {
@@ -4084,6 +4094,31 @@ mod tests {
             _ => None,
         }).collect();
         assert!(text.contains('\u{2014}'), "x--y inside monospace should form an em-dash, got {events:?}");
+    }
+
+    #[test]
+    fn test_monospace_edge_trailing_space_plus_stays_literal() {
+        // A hard break is ` +` at a true line edge. Asciidoctor applies the line-break
+        // replacement after spans are rendered, so a trailing ` +` inside a span is bounded
+        // by the closing `</code>`, not by `$` → it stays literal, never a `<br>`
+        // (`` `x +` `` → <code>x +</code>, `` ` + +` `` → <code> + +</code>).
+        for input in ["`x +`", "` + +`", "`+ +`"] {
+            let events = parse(input);
+            assert!(
+                !events.iter().any(|e| matches!(e, Event::HardBreak)),
+                "{input:?} should not produce a hard break, got {events:?}"
+            );
+        }
+        // But ` +` at a true line/paragraph edge (top-level input) is still a hard break.
+        assert!(
+            parse("line one +").iter().any(|e| matches!(e, Event::HardBreak)),
+            "trailing ` +` at a line edge should be a hard break"
+        );
+        // And ` +\n` mid-content (a real newline) stays a hard break even inside a span.
+        assert!(
+            parse("`a +\nb`").iter().any(|e| matches!(e, Event::HardBreak)),
+            "` +` before a newline should be a hard break even inside monospace"
+        );
     }
 
     #[test]

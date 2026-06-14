@@ -3857,6 +3857,19 @@ fn test_monospace_replacements_and_char_refs_html() {
 }
 
 #[test]
+fn test_monospace_trailing_space_plus_not_hard_break_html() {
+    // A hard break is ` +` at a true line edge. Asciidoctor applies the line-break
+    // replacement after spans render, so a trailing ` +` inside a span is bounded by
+    // `</code>`, not `$` — it stays literal, never `<br>` (`` ` + +` `` → <code> + +</code>).
+    let html = to_html("a `x +` and `` + +`` here");
+    assert!(html.contains("<code>x +</code>"), "trailing ` +` literal in monospace. Got: {html}");
+    assert!(html.contains("<code> + +</code>"), "` + +` literal in unconstrained monospace. Got: {html}");
+    assert!(!html.contains("<br>"), "no hard break inside monospace spans. Got: {html}");
+    // A real line-edge ` +` still produces <br>.
+    assert!(to_html("plain line +").contains("<br>"), "line-edge ` +` is a hard break");
+}
+
+#[test]
 fn test_builtin_attr_doctype() {
     let html = to_html("{doctype}");
     assert!(html.contains("article"), "doctype should be article. Got: {html}");

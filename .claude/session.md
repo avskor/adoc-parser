@@ -1,5 +1,72 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят шестая) — Фаза 3: ` +` hard-break только на реальном крае строки (не в reparsed-спанах)
+
+Запрос «продолжи». Ветка **`fix/outline-escape-and-monospace-hardbreak`** —
+ЗАКОММИЧЕНА. **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 65-й закрыт сам (мерж 65-й УЖЕ выполнен И запушен —
+origin/master == master == a9bfe05 (342), дерево чисто, веток нет). base-бинарь
+/tmp/adoc_base пересобран из master HEAD (342).
+
+### Выбор задачи
+nearmiss на 342: остались ТОЛЬКО 2 Different, ОБА мульти-root spec/каталог-файлы:
+**outline (6647, Δ−3)**, syntax-quick-reference (2788, Δ−31). Выбран outline (ближе
+по дельте, конкретные корни из session-заметок 65-й). Кластеризация diff'ов (gap>8):
+3 корня — @2041 (escape `\*`, изолирован, 1 diff), @2707 (` +` hard-break в monospace,
+каскад ~4600), @4545 (cross-span strong, каскад). Выбран hard-break: каскад + чистый,
+contained, давний «отложенный баг» (`` `x +` ``→`<br>`, упомянут в TODO/session многих сессий).
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+- **Hard-break** = ` +` на РЕАЛЬНОМ крае строки. asciidoctor применяет line-break
+  replacement ПОСЛЕ рендера спанов, поэтому трейлинг ` +` внутри спана ограничен
+  закрывающим тегом (`</code>`), а НЕ `$`: `` `x +` ``→`<code>x +</code>`,
+  `` `` + +`` ``→`<code> + +</code>`, `` `z +` ``→`<code>z +</code>` (все литералы, БЕЗ `<br>`).
+  Top-level одиночная строка `foo +` (end-of-string) → `<br>` (проба `<p>...plus<br></p>`).
+  `+\n` mid-string (реальный newline) → `<br>` всегда, даже внутри monospace.
+- Корень в нашем коде: `check_hard_break` матчил ` +` на end-of-string БЕЗУСЛОВНО —
+  но reparsed-контент спана попадает в end-of-string на искусственном крае. Та же
+  проблема, что у spaced em-dash (`edges_are_line_boundaries`).
+
+### Что сделано
+- **ПАРСЕР** inline.rs `check_hard_break`: end-of-string случай (` +` без следующего
+  байта) теперь даёт hard-break ТОЛЬКО при `self.edges_are_line_boundaries` (true
+  лишь top-level, false во всех inner-reparse). Случай ` +\n` (mid-string newline) —
+  без изменений (безусловно). Зеркало em-dash-границ из `fix/monospace-replacements-subs`.
+- +1 parser (`test_monospace_edge_trailing_space_plus_stays_literal`: `` `x +` ``/
+  `` ` + +` ``/`` `+ +` `` без HardBreak; `line one +` И `` `a +\nb` `` — с HardBreak),
+  +1 html (`test_monospace_trailing_space_plus_not_hard_break_html`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 519→520, html 429→430);
+  parsing-lab 233/233.
+- **Корпус: Identical 342 (БЕЗ флипа)**. blast (base 342): **outline 6647→4814 closer,
+  0 регрессий, 0 других файлов изменено** (фикс широкий — все reparsed-спаны с
+  трейлинг ` +`, но в корпусе затронут только outline).
+- Это корректный фикс + схлопывание крупнейшего каскада outline. Флипа нет: остаются
+  2 АРХИТЕКТУРНЫХ корня (см. ниже).
+
+### Что дальше — outline остаток (2 корня, ОБА архитектурные, флип заблокирован)
+- **@2041 escape `\*`** (изолирован, 1 diff): `` (`\* is an asterisk`) `` — asciidoctor
+  СОХРАНЯЕТ `\` когда маркер НЕ образует валидную разметку (`\*` без закрывающей `*` →
+  литерал `\*`; `\*bold*` валидный → `\` съеден). Наш blanket-escape (inline.rs ~952)
+  съедает `\` перед `*`/`` ` ``/`_`/`#`/... БЕЗУСЛОВНО (баг и в обычном тексте: `\* x`→`* x`).
+  Фикс: съедать `\` лишь при валидном спане (consume-on-match). РИСК (validity-чек должен
+  совпасть с regexp asciidoctor) + НИЗКИЙ ROI: в корпусе НЕТ других файлов с этим багом
+  (всего 2 Different — оба хвост), дал бы ≤1 diff, флип заблокирован @4545. ОТЛОЖЕН.
+  Безопасный путь если делать: KEEP `\` только когда `find_closing_*`=None (нет спана
+  заведомо → asciidoctor тоже сохраняет → 0 регрессий vs current).
+- **@4545 cross-span strong** (каскад 4813 diff, стр.727): `` `[1-9][0-9]*.` `` —
+  asciidoctor парсит `[0-9]*` как constrained strong с РОЛЬЮ "0-9" (`[...]` перед `*` =
+  attrlist), причём `<strong class="0-9">` тянется ЧЕРЕЗ границы code-спанов (открыт в
+  3-м `<code>`, закрыт в последнем — невалидно-вложенный HTML). Артефакт line-level
+  QUOTES-пасса asciidoctor (strong матчится по всей строке поверх monospace). Наша
+  рекурсивная/изолированная модель спанов это НЕ воспроизведёт без слома модели. ГЛУБОКО
+  АРХИТЕКТУРНЫЙ, блокирует флип outline. ОТЛОЖЕН.
+- **syntax-quick-reference** (2788, Δ−31): не разведан, мульти-root.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят пятая) — Фаза 3: emphasis leading-edge подавляет strong/mono + docyear/localyear
 
 Запрос «продолжи». Ветка **`fix/emphasis-leading-edge-suppresses-strong-mono`** —
