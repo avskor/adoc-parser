@@ -2300,6 +2300,31 @@ fn test_superscript_content_full_subs_html() {
 }
 
 #[test]
+fn test_smart_quote_double_backtick_literal_html() {
+    // A monospace phrase inside curved quotes needs THREE backtick pairs. With two
+    // pairs (`"``end points``"`) the inner single backticks stay literal — constrained
+    // monospace cannot open at the smart-quote leading edge. Three pairs leave an
+    // unconstrained `` ``…`` `` pair, which does become <code>.
+    assert_eq!(
+        to_html("\"``end points``\""),
+        "<div class=\"paragraph\">\n<p>\u{201C}`end points`\u{201D}</p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("\"```end points```\""),
+        "<div class=\"paragraph\">\n<p>\u{201C}<code>end points</code>\u{201D}</p>\n</div>\n"
+    );
+    // Emphasis/mark at the leading edge are suppressed the same way; strong is not.
+    assert_eq!(
+        to_html("\"`_em_ y`\""),
+        "<div class=\"paragraph\">\n<p>\u{201C}_em_ y\u{201D}</p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("\"`*b* y`\""),
+        "<div class=\"paragraph\">\n<p>\u{201C}<strong>b</strong> y\u{201D}</p>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_block_admonition_html() {
     let html = to_html("[NOTE]\n====\nThis is a note.\n====");
     assert!(html.contains("<div class=\"admonitionblock note\">"), "no admonitionblock note in:\n{html}");

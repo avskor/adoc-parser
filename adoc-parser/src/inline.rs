@@ -260,11 +260,29 @@ struct InlineState<'a> {
     /// em-dash at a true line edge. Top-level text sets this true; inner reparses leave
     /// it false (the default).
     edges_are_line_boundaries: bool,
+    /// True when `input` is the reparsed inner content of a smart-quote span
+    /// (`"`…`"` / `'`…`'`). In Asciidoctor's QUOTE_SUBS order the `:double`/`:single`
+    /// substitutions run *after* constrained strong (`*`) but *before* constrained
+    /// monospace (`` ` ``), emphasis (`_`) and mark (`#`). So at the span's leading
+    /// edge those three see the `;` that ends the emitted `&#8220;`/`&#8216;` and their
+    /// open assertion `(^|[^\w;:…])` fails — they stay literal — whereas strong has
+    /// already matched against the original backtick (which its open class allows).
+    /// This flag reproduces that asymmetry: a constrained `_`/`` ` ``/`#` open at
+    /// position 0 of the inner span is suppressed; `*`, all unconstrained markers and
+    /// super/subscript (no open assertion) are unaffected.
+    smart_quote_leading_edge: bool,
 }
 
 impl<'a> InlineState<'a> {
     fn new(input: &'a str, subs: SubstitutionSet, options: InlineOptions) -> Self {
-        Self { input, pos: 0, subs, options, edges_are_line_boundaries: false }
+        Self {
+            input,
+            pos: 0,
+            subs,
+            options,
+            edges_are_line_boundaries: false,
+            smart_quote_leading_edge: false,
+        }
     }
 
     fn remaining(&self) -> &'a str {
@@ -1148,6 +1166,18 @@ impl<'a> InlineState<'a> {
         let start_pos = self.pos;
 
         if self.is_word_char_before(start_pos) {
+            return false;
+        }
+
+        // At the leading edge of a smart-quote span, constrained monospace/emphasis/mark
+        // cannot open — they run after the `:double`/`:single` substitution, so they see
+        // the trailing `;` of the emitted `&#8220;`/`&#8216;`, which their open assertion
+        // forbids. Constrained strong (`*`) ran *before* that substitution and is exempt;
+        // it matched against the original backtick. See `smart_quote_leading_edge`.
+        if self.smart_quote_leading_edge
+            && start_pos == 0
+            && matches!(marker, b'`' | b'_' | b'#')
+        {
             return false;
         }
 
@@ -3049,6 +3079,7 @@ impl<'a> InlineState<'a> {
         events.push(Event::Text(Cow::Borrowed(open_q)));
 
         let mut inner_parser = InlineState::new(inner, self.subs, self.options);
+        inner_parser.smart_quote_leading_edge = true;
         inner_parser.parse_inline(events);
 
         events.push(Event::Text(Cow::Borrowed(close_q)));
@@ -4333,6 +4364,54 @@ mod tests {
             Event::Text(Cow::Borrowed("bold")),
             Event::End(TagEnd::Strong),
             Event::Text(Cow::Borrowed(" text")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_double_backtick_inner_literal() {
+        // `"``end points``"` → curved quotes with the inner single backticks left
+        // *literal*: constrained monospace cannot open at the smart-quote leading edge
+        // (it runs after the `:double` sub, seeing the `;` of `&#8220;`). Asciidoctor:
+        // `&#8220;`end points`&#8221;`. A *triple* pair would leave `` ``end points`` ``,
+        // which is unconstrained monospace and DOES become `<code>`.
+        let events = parse("\"``end points``\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("`end points`")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_edge_emphasis_mark_literal() {
+        // Constrained emphasis (`_`) and mark (`#`) are also suppressed at the leading
+        // edge, for the same substitution-order reason. Strong (`*`) is NOT — it runs
+        // before `:double` (covered by `test_smart_quotes_with_formatting`).
+        assert_eq!(parse("\"`_em_ x`\""), vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("_em_ x")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+        assert_eq!(parse("\"`#mk# x`\""), vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("#mk# x")),
+            Event::Text(Cow::Borrowed("\u{201D}")),
+        ]);
+    }
+
+    #[test]
+    fn test_smart_quotes_edge_suppression_is_leading_only() {
+        // The suppression is positional (leading edge only): a constrained monospace
+        // span later in the inner content, preceded by a real space, still opens.
+        let events = parse("\"`a `c` b`\"");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("\u{201C}")),
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
+            Event::Text(Cow::Borrowed("c")),
+            Event::End(TagEnd::Monospace),
+            Event::Text(Cow::Borrowed(" b")),
             Event::Text(Cow::Borrowed("\u{201D}")),
         ]);
     }
