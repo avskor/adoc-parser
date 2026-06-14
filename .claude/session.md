@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-14, пятьдесят девятая) — Фаза 3: single-plus passthrough `+…+` охватывает backtick'и
+
+Запрос «продолжи». Ветка **`fix/single-plus-passthrough-spans-backtick`** —
+ЗАКОММИЧЕНА. **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 58-й закрыт сам (мерж 58-й УЖЕ выполнен И запушен —
+origin/master == master == 4175727 (336), дерево чисто, ветки fix/* удалены;
+session.md 58-й устарел — «ОЖИДАЕТ авторизации», но фактически смержено).
+base-бинарь /tmp/adoc_base обновлён до 336 (master HEAD) ПЕРЕД фиксом.
+
+### Выбор задачи
+nearmiss на 336 (8 Different, все «трудный хвост»): counters (136 — мульти-root:
+verbatim `{counter:}` + listing↔admonition + include'ы), data (181 — CSV/DSV),
+**align-by-cell (371, Δ−16)**, table (597, ДВА корня), character-replacement-ref
+(625), document-attributes-ref (953 — docyear/localyear интринсики + inline),
+syntax-quick-reference (2788), outline (6647). diffone align-by-cell: ВСЕ 371 diff
+идут ПОДРЯД с @153 = ОДИН каскадный рассинхрон, повторяется в строках 37/52/99 →
+**single-root** (хоть и архитектурный). Прочие — мульти-root. Since Different=8 и все
+здесь, флип требует полного закрытия файла → выбран single-root align-by-cell.
+
+### Реальная семантика (проба /tmp/abc.adoc строки 37 vs asciidoctor)
+- `` (`<n>+`) or duplication (`+<n>*+`), place the `+^+` `` → asciidoctor сворачивает
+  ВСЁ в ОДИН `<code>&lt;n&gt;`) or duplication (`&lt;n&gt;*`), place the `^+</code>`.
+- **Корень — порядок субституций asciidoctor**: single-plus passthrough `+…+`
+  извлекается ГЛОБАЛЬНО ДО quotes/monospace, НЕжадно слева-направо, и контент МОЖЕТ
+  включать backtick'и. Здесь `+…+` пары съедают внутренние backtick'и ₂₃₄₅ (как
+  литералы), поэтому внешний `` ` `` матчится от ₁ до ₆. `<n>`→specialchars, `^+`
+  литерал. (Модель проверена: реконструкция байт-в-байт == вывод asciidoctor.)
+- Наш парсер посимвольный: `` `<n>+` `` сворачивался в отдельный `<code>` (backtick₂
+  закрывал). Inner-reparse monospace (try_constrained:1224) УЖЕ корректно обрабатывает
+  `+…+` как passthrough — нужно лишь научить СКАН закрывающего маркера пропускать
+  single-plus регионы (как он уже пропускает `++`/`+++`/`pass:[]`).
+
+### Что сделано (1 корень, ПАРСЕР inline.rs)
+- Хелпер `single_plus_span_len(s, i)` — зеркало `try_single_plus_passthrough`: не
+  `++`/`+++`; open `+` не после word-char НИ backslash (`` `\+` `` экранирован —
+  span-cells регрессия!); контент-первый ≠ space; close `+` по constrained-правилу
+  (не после `+`/space, не перед `+`/word); `pass:[]` внутри пропускается.
+- `find_closing_constrained` И `find_closing_unconstrained`: ветка `b==b'+'` теперь
+  пробует `passthrough_span_len` (++/+++), затем `single_plus_span_len` — пропуск
+  региона. Симметрично существующему пропуску ++/+++/pass:.
+- Тесты: +2 parser (`_spans_backtick` [a +`b`+ c→один code], `_escaped_plus_does_not_
+  span_backtick` [`\+` + `n+`→два code]), +1 html (align-by-cell-строка + escaped guard).
+
+### Статус (верифицировано)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 506→508, html 421→422);
+  compat parsing-lab 233/233.
+- align-by-cell diffone: **0 diffs** (был 371), len ref==our==550.
+- span-cells: регрессия 0→2 (escaped `\+`) НАЙДЕНА blast'ом и ИСПРАВЛЕНА (backslash
+  guard) → снова 0.
+- **Корпус: Identical 336→337 (+1 ФЛИП, align-by-cell 371→0)**. Blast (base 336):
+  РОВНО 1 флип; **0 регрессий, 0 FARTHER**.
+
+### Что дальше
+- nearmiss на 337 (7 Different): counters (136 — мульти-root: verbatim `{counter:}` НЕ
+  резолвить [архитектурно, препроцессор резолвит в document-order до классификации
+  verbatim] + `[source]`-параграф counter-ref + listing↔admonition + include'ы), data
+  (181 — CSV/DSV `,===`, мульти-root), table (597, Δ1 — ДВА корня + огромный сдвиг),
+  character-replacement-ref (625, Δ113), document-attributes-ref (953 — docyear/
+  localyear интринсики [НЕдетерминированы от даты — рискованно] + inline @6257),
+  syntax-quick-reference (2788, мульти-root), outline (6647, МУЛЬТИ-root spec).
+- Pre-existing — см. сессии 36/38/40/42/43/44/45/46/47/48/49/50/51/52/53/54/55/56/57/58.
+
+---
+
 ## Сессия (2026-06-14, пятьдесят восьмая) — Фаза 3: ведущий край smart-quote подавляет constrained mono/em/mark
 
 Запрос «продолжи». Ветка **`fix/curved-quote-double-backtick-literal`** —
