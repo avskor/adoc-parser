@@ -3902,6 +3902,25 @@ fn test_monospace_replacements_and_char_refs_html() {
 }
 
 #[test]
+fn test_escaped_marker_no_span_keeps_backslash_html() {
+    // A backslash before a constrained marker with no closing marker ahead keeps the
+    // backslash literal, because the span never forms (Asciidoctor strips `\` only on a
+    // real match). `` `\* literal` `` is the corpus case from spec/outline.adoc: the
+    // monospace content reparses in isolation, so the lone `*` finds no partner.
+    let html = to_html("mono `\\* literal` here");
+    assert!(html.contains("<code>\\* literal</code>"), "lone `\\*` kept in monospace. Got: {html}");
+    // A genuine escaped span still drops the backslash (closing marker present): the
+    // construct would have matched, so `\` is consumed and the marks stay literal.
+    let html = to_html("mono `\\*bold*` here");
+    assert!(html.contains("<code>*bold*</code>"), "escaped would-be strong drops `\\`. Got: {html}");
+    assert!(!html.contains("<strong>"), "escaped strong is not emphasized. Got: {html}");
+    // Same rule in prose: a lone escaped marker keeps its backslash.
+    let html = to_html("an \\_lone underscore");
+    assert!(html.contains("\\_lone"), "lone `\\_` kept in prose. Got: {html}");
+    assert!(!html.contains("<em>"), "no emphasis from lone `\\_`. Got: {html}");
+}
+
+#[test]
 fn test_monospace_trailing_space_plus_not_hard_break_html() {
     // A hard break is ` +` at a true line edge. Asciidoctor applies the line-break
     // replacement after spans render, so a trailing ` +` inside a span is bounded by

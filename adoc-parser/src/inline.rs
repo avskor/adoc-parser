@@ -949,6 +949,29 @@ impl<'a> InlineState<'a> {
                 true
             }
 
+            // `\*`/`\_`/`` \` `` with no closing marker of the same kind ahead: the
+            // constrained span cannot form, so Asciidoctor keeps the backslash literal.
+            // Its quote regexps capture an optional leading `\` (`\\?`) and only strip it
+            // when the construct actually matches (`\*bold*` → `*bold*`, escaped span); a
+            // marker that never closes (`\* is an asterisk`, `` `\* literal` ``) is left
+            // untouched, backslash and all. The blanket arm below still drops the backslash
+            // for the would-be-span case — adding only the keep-it case here is
+            // regression-safe: `find_closing_constrained` returning None means no marker can
+            // close the span, so Asciidoctor cannot have matched it either.
+            b'\\' if has_quotes
+                && self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`'))
+                && self
+                    .find_closing_constrained(self.input.as_bytes()[self.pos + 1], self.pos + 2)
+                    .is_none() =>
+            {
+                self.flush_text(*text_start, self.pos, events);
+                let lit_start = self.pos;
+                self.advance_by(2); // backslash + marker both stay literal
+                events.push(Event::Text(Cow::Borrowed(&self.input[lit_start..self.pos])));
+                *text_start = self.pos;
+                true
+            }
+
             // Backslash escape: \* \_ \` \# \^ \~ \{ \[ \< \\
             b'\\' if self.peek_at(1).is_some_and(|c| matches!(c, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'{' | b'[' | b'<' | b'\\' | b'\'')) => {
                 self.flush_text(*text_start, self.pos, events);
@@ -3689,6 +3712,28 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("hello ")),
             Event::Text(Cow::Borrowed("`not code` world")),
+        ]);
+    }
+
+    #[test]
+    fn test_escaped_marker_no_span_keeps_backslash() {
+        // No closing marker of the same kind ahead → the constrained span can't form,
+        // so Asciidoctor keeps the leading backslash literal (its quote regexps strip
+        // `\` only when the construct matches). Contrast test_escaped_bold/italic/
+        // monospace above, where a closing marker exists and the backslash is dropped.
+        assert_eq!(parse("\\* is an asterisk"), vec![
+            Event::Text(Cow::Borrowed("\\*")),
+            Event::Text(Cow::Borrowed(" is an asterisk")),
+        ]);
+        assert_eq!(parse("an \\_lone underscore"), vec![
+            Event::Text(Cow::Borrowed("an ")),
+            Event::Text(Cow::Borrowed("\\_")),
+            Event::Text(Cow::Borrowed("lone underscore")),
+        ]);
+        assert_eq!(parse("a \\`lone tick"), vec![
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Text(Cow::Borrowed("\\`")),
+            Event::Text(Cow::Borrowed("lone tick")),
         ]);
     }
 
