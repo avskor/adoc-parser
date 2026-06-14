@@ -206,8 +206,8 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-4/N) уже СМЕРЖЕНА в master (e9ce613). **1 новый коммит
-`7d13f7c` на ветке (MERGE+ПУШ ждут авторизации):**
+снять gate → flip outline. Phase 2 (1-4/N) уже СМЕРЖЕНА в master (e9ce613). **(5/N) СМЕРЖЕНА
+`--no-ff` + ЗАПУШЕНА (master `7995142`), ветка удалена; коммиты `7d13f7c`+`01391c2`:**
 - [x] **(5/N) curved smart quotes `:double`/`:single`** (`subst/quotes.rs`) — пассы `"`​`…`​`"`→`“…”`
   и `'`​`…`​`'`→`‘…’`, идут ПОСЛЕ strong, ДО monospace (слот QUOTE_SUBS). Curly-символ — leaf-Text
   сентинель (`TagToken::SmartQuote{text,opening}`, литерал-char как legacy, НЕ `&#8220;`-entity) →

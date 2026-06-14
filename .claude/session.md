@@ -3,9 +3,9 @@
 ## Сессия (2026-06-15, 74-я) — РЕРАЙТ inline, Фаза 2 (5/N): curved smart quotes `:double`/`:single` пасс за гейтом
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-curved-quotes`** (off master `e9ce613`, 343) —
-**1 коммит `7d13f7c`, НЕ смержена, НЕ запушена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master
-+ `git push` + удаление ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `e9ce613` (343).
-**ВАЖНО:** Phase 2 (4/N) attributes уже СМЕРЖЕНА в master между сессиями (`e9ce613`).
+**СМЕРЖЕНА `--no-ff` в master + ЗАПУШЕНА (master `7995142`), ветка удалена** (по авторизации
+«merge and push»). Коммиты `7d13f7c` (код) + `01391c2` (docs). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН
+из master HEAD `e9ce613` (343). **ВАЖНО:** Phase 2 (4/N) attributes уже СМЕРЖЕНА в master ранее (`e9ce613`).
 
 ### Решение по объёму (data-driven пивот с macros)
 Изначально завёл ветку `-macros` (план: самый большой пасс), но FORCE-карта показала ДВА файла в
