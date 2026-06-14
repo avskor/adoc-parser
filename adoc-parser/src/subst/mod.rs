@@ -122,11 +122,11 @@ pub(crate) fn try_parse<'a>(
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
 /// Implemented so far: passthrough extract/restore, `attributes` (`{name}` /
-/// `{set:…}`, unresolved leaf events mirroring legacy), `quotes`,
-/// `replacements`, `post_replacements`. The remaining passes (specialchars,
-/// macros, char references, escapes, curved smart quotes) are not yet ported;
-/// inputs that need them diverge from legacy and are rejected by the gate (or
-/// surface as diffs under `force()`).
+/// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
+/// `:double`/`:single` curved smart quotes), `replacements`,
+/// `post_replacements`. The remaining passes (specialchars, macros, char
+/// references, escapes) are not yet ported; inputs that need them diverge from
+/// legacy and are rejected by the gate (or surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted first so the protected content is opaque to
@@ -402,6 +402,50 @@ mod tests {
             // reference beside replacements (apostrophe untouched between)
             "don't {name} and don't",
             "{name} -- dash",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the `:double`/`:single` curved smart quotes ported, the pipeline must
+    /// reproduce legacy on every `"`…`"`/`'`…`'` form: the separate curly-quote
+    /// `Text` events, the leading-edge suppression of constrained
+    /// monospace/emphasis/mark (but not strong/superscript/subscript), the
+    /// positional (leading-only) nature of that suppression, nesting, and the
+    /// unclosed/empty non-matches.
+    #[test]
+    fn reproduces_legacy_on_smart_quote_inputs() {
+        let cases = [
+            // bare double / single, in isolation and in a sentence
+            "\"`text`\"",
+            "'`text`'",
+            "He said \"`hello`\" to her",
+            // strong opens at the leading edge (runs before :double)
+            "\"`*bold* text`\"",
+            // monospace/emphasis/mark suppressed at the leading edge
+            "\"``end points``\"",
+            "\"`_em_ x`\"",
+            "\"`#mk# x`\"",
+            // suppression is positional: a later span (after a space) still opens
+            "\"`a `c` b`\"",
+            // nested single-outer / double-inner
+            "'`outer \"`inner`\" end`'",
+            // unclosed and empty stay literal (no span)
+            "\"`unclosed",
+            "\"``\"",
+            "'``'",
+            // smart quotes beside other spans and replacements
+            "*bold* and \"`quote`\" and `code`",
+            "\"`don't worry`\"",
+            "see \"`there`\" -> *go*",
+            // a bare double-quote that is not a smart quote stays literal
+            "say \"hello\" plainly",
+            "it's a 'plain' word",
         ];
         for c in cases {
             assert_eq!(

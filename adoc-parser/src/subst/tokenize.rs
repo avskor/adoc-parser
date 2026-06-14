@@ -112,6 +112,18 @@ pub(super) enum TagToken {
         name: String,
         value: String,
     },
+    /// A curved/smart quote character (`“`/`”`/`‘`/`’`) produced by the
+    /// `:double`/`:single` quote substitution, restored as a literal `Text`
+    /// event (the legacy parser emits the character directly, not the `&#8220;`
+    /// entity). `opening` marks the LEFT quote so the constrained
+    /// monospace/emphasis/mark passes can suppress an immediate open right after
+    /// it — mirroring the legacy `smart_quote_leading_edge`: those quotes run
+    /// after `:double`/`:single` and see the boundary it leaves, which their open
+    /// assertion forbids.
+    SmartQuote {
+        text: &'static str,
+        opening: bool,
+    },
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -177,6 +189,13 @@ impl Work {
     pub(super) fn attr_set_sentinel(&mut self, name: String, value: String) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::AttrSet { name, value });
+        sentinel(idx)
+    }
+
+    /// Register a smart/curved quote leaf and return its sentinel string.
+    pub(super) fn smart_quote_sentinel(&mut self, text: &'static str, opening: bool) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::SmartQuote { text, opening });
         sentinel(idx)
     }
 }
@@ -285,6 +304,9 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                         name: Cow::Owned(name.clone()),
                         value: Cow::Owned(value.clone()),
                     });
+                }
+                Some(TagToken::SmartQuote { text, .. }) => {
+                    events.push(Event::Text(Cow::Borrowed(text)));
                 }
                 None => {}
             }

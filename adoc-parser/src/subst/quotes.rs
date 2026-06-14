@@ -13,16 +13,17 @@
 //! `<`/`>` of a spliced tag in Asciidoctor), which falls out naturally because
 //! they are neither alphanumeric nor `_`.
 //!
-//! ## Phase 1 scope
+//! ## Scope
 //!
 //! Implemented: strong/monospace/emphasis/mark (constrained + unconstrained,
-//! with `[attrlist]` prefixes) and superscript/subscript. **Not** implemented
-//! (left for later phases; the engine's caller falls back to the legacy parser
-//! whenever the result would differ): curved smart quotes `"`…`"`/`'`…`'`,
-//! passthrough extraction, specialchars, attributes, replacements, macros,
-//! post-replacements, and escape (`\`) handling.
+//! with `[attrlist]` prefixes), superscript/subscript, and curved smart quotes
+//! `"`…`"`/`'`…`'` (the `:double`/`:single` substitutions, run between strong
+//! and monospace so the leading-edge suppression of monospace/emphasis/mark
+//! falls out of the pass order). **Not** implemented here (handled by other
+//! passes or left for later phases; the engine's caller falls back to the legacy
+//! parser whenever the result would differ): macros and escape (`\`) handling.
 
-use super::tokenize::{sentinel_end, utf8_char_len, SpanKind, Work, TAG_LEAD};
+use super::tokenize::{sentinel_end, utf8_char_len, SpanKind, TagToken, Work, TAG_LEAD, TAG_TAIL};
 
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -33,6 +34,12 @@ pub(super) fn run_all(work: &mut Work) {
     // strong
     pass_unconstrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
     pass_constrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
+    // curved smart quotes `"`…`"` / `'`…`'` — run after strong and before
+    // monospace (Asciidoctor `QUOTE_SUBS` order). Strong opening before this pass
+    // is why strong is *not* suppressed at a smart-quote leading edge, while the
+    // monospace/emphasis/mark passes below it are.
+    pass_smart_quotes(work, b'"', "\u{201C}", "\u{201D}");
+    pass_smart_quotes(work, b'\'', "\u{2018}", "\u{2019}");
     // monospace (runs before emphasis/mark)
     pass_unconstrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
     pass_constrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
@@ -257,10 +264,14 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
         }
 
         // bare M…M (not the first of a doubled marker — that is the
-        // unconstrained pass's job)
+        // unconstrained pass's job). A constrained monospace/emphasis/mark cannot
+        // open at the leading edge of a smart quote (mirrors the legacy
+        // `smart_quote_leading_edge`): they run after `:double`/`:single`, so the
+        // byte before them is that pass's opening-quote sentinel.
         if open_boundary
             && bytes[i] == marker
             && bytes.get(i + 1).copied() != Some(marker)
+            && !smart_quote_leading_edge(&work.tags, bytes, marker, i)
         {
             let content_start = i + 1;
             if content_start < bytes.len()
@@ -325,6 +336,113 @@ fn find_attr_close(bytes: &[u8], lbrack: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// Curved/smart quotes: `quote`+`` ` `` … `` ` ``+`quote` → an opening curly
+/// `quote` text, the (already strong-processed) inner content, and a closing
+/// curly `quote` text. Mirrors the legacy `try_smart_quotes`: there is no
+/// open-boundary assertion, the close is the first `` ` ``+`quote` after the
+/// (non-empty) content, and the curly characters are emitted as literal `Text`.
+fn pass_smart_quotes(work: &mut Work, quote: u8, open_curly: &'static str, close_curly: &'static str) {
+    let old = std::mem::take(&mut work.buf);
+    let bytes = old.as_bytes();
+    let mut out = String::with_capacity(old.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            out.push_str(&old[i..end]);
+            i = end;
+            continue;
+        }
+
+        if bytes[i] == quote && bytes.get(i + 1).copied() == Some(b'`') {
+            let content_start = i + 2;
+            if let Some(close_pos) = find_smart_quote_close(bytes, quote, content_start)
+                && close_pos > content_start
+            {
+                out.push_str(&work.smart_quote_sentinel(open_curly, true));
+                out.push_str(&old[content_start..close_pos]);
+                out.push_str(&work.smart_quote_sentinel(close_curly, false));
+                i = close_pos + 2; // skip closing `` ` `` + `quote`
+                continue;
+            }
+        }
+
+        let len = utf8_char_len(bytes[i]);
+        out.push_str(&old[i..i + len]);
+        i += len;
+    }
+
+    work.buf = out;
+}
+
+/// Find the `` ` ``+`quote` that closes a smart quote at or after `search_start`,
+/// skipping sentinel regions. Mirrors `find_smart_quote_close`.
+fn find_smart_quote_close(bytes: &[u8], quote: u8, search_start: usize) -> Option<usize> {
+    let mut i = search_start;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            i = sentinel_end(bytes, i);
+            continue;
+        }
+        if bytes[i] == b'`' && bytes.get(i + 1).copied() == Some(quote) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// True when a constrained monospace/emphasis/mark marker at position `i` is
+/// immediately preceded by a smart-quote *opening* sentinel and so must not open
+/// (the legacy `smart_quote_leading_edge`). Strong (`*`) ran before the smart
+/// quote pass and is never affected; superscript/subscript have no open
+/// assertion and use a different path.
+fn smart_quote_leading_edge(tags: &[TagToken], bytes: &[u8], marker: u8, i: usize) -> bool {
+    if !matches!(marker, b'`' | b'_' | b'#') {
+        return false;
+    }
+    match sentinel_index_before(bytes, i) {
+        Some(idx) => matches!(tags.get(idx), Some(TagToken::SmartQuote { opening: true, .. })),
+        None => false,
+    }
+}
+
+/// If buffer position `i` is immediately preceded by a complete sentinel
+/// (`TAG_LEAD <decimal> TAG_TAIL`), return the sentinel's tag index. Returns
+/// `None` for any malformed sequence (never produced by this engine).
+fn sentinel_index_before(bytes: &[u8], i: usize) -> Option<usize> {
+    if i == 0 || bytes[i - 1] != TAG_TAIL {
+        return None;
+    }
+    let tail = i - 1;
+    let mut j = tail;
+    loop {
+        if j == 0 {
+            return None;
+        }
+        j -= 1;
+        match bytes[j] {
+            TAG_LEAD => {
+                let digits = &bytes[j + 1..tail];
+                if digits.is_empty() {
+                    return None;
+                }
+                let mut idx = 0usize;
+                for &d in digits {
+                    if !d.is_ascii_digit() {
+                        return None;
+                    }
+                    idx = idx * 10 + (d - b'0') as usize;
+                }
+                return Some(idx);
+            }
+            d if d.is_ascii_digit() => {}
+            _ => return None,
+        }
+    }
 }
 
 /// `marker…marker` superscript/subscript: no boundary assertion, content must be
