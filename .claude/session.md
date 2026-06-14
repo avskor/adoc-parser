@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят седьмая) — Фаза 3: a-ячейка = embedded-документ + Markdown thematic breaks → ФЛИП syntax-quick-reference
+
+Запрос «продолжи». Ветка **`fix/acell-nested-doc-header-content-div`** —
+ЗАКОММИЧЕНА (`519149f`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 66-й закрыт сам (мерж 66-й УЖЕ выполнен И запушен —
+origin/master == master == fde83c0 (342), дерево чисто, веток нет). base-бинарь
+/tmp/adoc_base пересобран из master HEAD (342) через временный worktree.
+
+### Выбор задачи
+nearmiss на 342: остались ТОЛЬКО 2 Different, ОБА мульти-root spec/каталог-файлы:
+syntax-quick-reference (2788, Δ−31, НЕ разведан), outline (4814, Δ4, 2 архитектурных
+корня отложены 66-й). Выбран syntax-quick-reference.
+
+### Разведка (diffone)
+Первый diff @6: asciidoctor `<div id="content">`, мы — `<div id="preamble">` сразу,
+без content-обёртки. count: у нас content×1 (но встроен в текст `:summary: AsciiDoc is
+<div id="content">` на стр.1810!) + preamble×2; у asciidoctor по 1. Корень контекстный
+(не в минимальной пробе — преамбула/IMPORTANT/CRLF дают content-div корректно).
+Локализовано: исходник 1101-1124 — `[%collapsible.result]` example с таблицей
+`[.unstyled]\n|===\na|\n:url-home:...`. Ячейка `a|` парсится вложенным `Parser::new`
+через ТОТ ЖЕ `self` (общий footnote/xref-стейт). Её ведущие атрибут-записи дают
+ложный `TagEnd::Header` → перезаписывает `content_start`/`preamble_start` родителя
+(content-div вставляется ПОСЛЕ ячейки) + эмитит лишний `<div id="header">` в ячейке.
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+- **a-ячейка = embedded-документ**: asciidoctor для неё header div НЕ выдаёт, ведущие
+  атрибут-записи резолвятся (`{url-home}`→ссылка) но НЕ образуют `#header`.
+- **Markdown thematic breaks**: asciidoctor распознаёт `---`/`***`/`___` и spaced-формы
+  (`- - -`/`* * *`/`-  -  -`) как `<hr>` по regexp `^ {0,3}([-*_])( *)\1\2\1$` — РОВНО
+  3 маркера (4=`----` listing, 2=`--` open), одинаковые промежутки, 0-3 ведущих пробела,
+  rstrip. Все 15 граничных кейсов пройдены пробами. mid-paragraph (без пустой строки до)
+  — ВСЕ формы (включая `'''`) поглощаются как текст; наш парсер рвёт параграф на любом
+  thematic — известная предсуществующая дивергенция (block.rs:2379, коммент 2390-2391),
+  в корпусе не регрессирует.
+
+### Что сделано
+- **РЕНДЕРЕР** lib.rs: поле `cell_render_depth: usize` (init 0). events.rs:
+  инкремент/декремент вокруг вложенного `Parser::new(&raw)` цикла ячейки (TagEnd::TableCell,
+  CellStyle::AsciiDoc); гейт `Tag::Header` start (`depth>0` → `return`, no-op) и
+  `TagEnd::Header` (новый guard-арм `if depth>0` → пусто). Атрибут-записи идут отдельным
+  Event::Attribute — резолв не ломается.
+- **ПАРСЕР** scanner.rs: `is_thematic_break` = `trim()=="'''" || is_markdown_thematic_break`.
+  Новый приватный `is_markdown_thematic_break` (точный разбор regexp asciidoctor по байтам).
+  Диспетчер (block.rs:1248 scan_leaf_blocks) проверяет thematic ДО delimited(1260)/list(1264) —
+  3-символьные формы не коллидируют с 4-симв. делимитерами и 2-симв. `--`.
+- +3 теста: scanner `test_is_thematic_break` (8 valid + 7 invalid границ), html
+  `test_markdown_thematic_breaks` (7 форм + 4 negative), html
+  `test_asciidoc_cell_leading_attribute_entries_no_header_html` (standalone: header→content→
+  preamble порядок, ячейка без header div, ровно 1 content+1 preamble, `{url-home}` резолвится).
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 520→521, html 430→432);
+  parsing-lab 233/233.
+- syntax-quick-reference diffone: **2788 → 33 (после cell-фикса) → 0 (после thematic, байт-в-байт)**.
+- **Корпус: Identical 342→343 (+1 ФЛИП)**. blast (base 342): **РОВНО 1 флип
+  (syntax-quick-reference 2788→0), 0 регрессий, 0 FARTHER**.
+
+### Что дальше
+- nearmiss на 343: останется ТОЛЬКО outline (4814) — 2 архитектурных корня (@2041
+  escape `\*`, @4545 cross-span strong), ОБА отложены 66-й как глубоко архитектурные/
+  низкий ROI. Других Different-файлов нет. Дальнейший рост Identical требует одного из
+  этих архитектурных корней (см. заметки 66-й) ИЛИ расширения корпуса.
+
+---
+
 ## Сессия (2026-06-14, шестьдесят шестая) — Фаза 3: ` +` hard-break только на реальном крае строки (не в reparsed-спанах)
 
 Запрос «продолжи». Ветка **`fix/outline-escape-and-monospace-hardbreak`** —

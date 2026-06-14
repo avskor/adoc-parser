@@ -202,7 +202,16 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## Свежий baseline корпуса (2026-06-09, ПОСЛЕ stem-mathjax-docinfo)
+## АКТУАЛЬНО (2026-06-14, после 67-й сессии): Identical **343 / 344**
+
+Осталось РОВНО 1 Different — `spec/outline.adoc` (4814 diff): 2 глубоко архитектурных
+корня (escape `\*` @2041, cross-span strong @4545), ОБА отложены (см. .claude/session.md
+66-я). Других Different-файлов нет → дальнейший рост Identical требует одного из этих
+архитектурных корней ИЛИ расширения корпуса. Методология/скрипты — в memory
+[[compat_corpus_methodology]]. Ветка 67-й `fix/acell-nested-doc-header-content-div`
+(`519149f`) ОЖИДАЕТ мержа/пуша.
+
+## Свежий baseline корпуса (2026-06-09, ПОСЛЕ stem-mathjax-docinfo) — УСТАРЕЛ, см. блок выше
 
 `/mnt/c/tmp/adoc-test/` 344 файла: **Identical 204, Different 140, Errors 0** (после
 stem-mathjax-docinfo; `python3 compare_full.py`, release-бинарь). **COMPAT-DIFF.md
