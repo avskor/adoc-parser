@@ -469,13 +469,19 @@ pub fn parse_checklist_marker(text: &str) -> (Option<bool>, &str) {
 }
 
 pub fn is_table_delimiter(line: &str) -> bool {
-    // Asciidoctor accepts a pipe followed by THREE OR MORE `=` (`|===`, `|====`, …);
-    // the rest of the line after the pipe must be all `=` (no trailing content).
-    // Open and close delimiters need not be the same length. Only the pipe separator
-    // is supported here — CSV/DSV tables (`,===`/`:===`/`!===`) are not parsed.
-    match line.trim().strip_prefix('|') {
-        Some(rest) => rest.len() >= 3 && rest.bytes().all(|b| b == b'='),
-        None => false,
+    // Asciidoctor accepts a prefix char followed by THREE OR MORE `=` (`|===`,
+    // `|====`, …); the rest of the line after the prefix must be all `=` (no
+    // trailing content). Open and close delimiters need not be the same length.
+    // The prefix selects the cell format: `|` PSV (native), `,` CSV, `:` DSV
+    // (`table_delimiter_format` maps the prefix to the format). `!===` (nested
+    // tables) is not parsed.
+    let trimmed = line.trim();
+    match trimmed.as_bytes().first() {
+        Some(b'|' | b',' | b':') => {
+            let rest = &trimmed[1..];
+            rest.len() >= 3 && rest.bytes().all(|b| b == b'=')
+        }
+        _ => false,
     }
 }
 
@@ -1694,6 +1700,13 @@ mod tests {
         assert!(!is_table_delimiter("|")); // pipe alone is not a delimiter
         assert!(!is_table_delimiter("|=== x")); // trailing content disqualifies
         assert!(!is_table_delimiter(""));
+        // CSV (`,===`) and DSV (`:===`) shorthand delimiters
+        assert!(is_table_delimiter(",==="));
+        assert!(is_table_delimiter("  :====  "));
+        assert!(!is_table_delimiter(",==")); // need at least 3 equals
+        assert!(!is_table_delimiter(":")); // colon alone is not a delimiter
+        assert!(!is_table_delimiter(":name: value")); // attribute entry, not a delimiter
+        assert!(!is_table_delimiter("!===")); // nested-table delimiter not parsed
     }
 
     fn cell(content: &str) -> CellSpec<'_> {

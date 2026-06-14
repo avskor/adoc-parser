@@ -1722,8 +1722,14 @@ impl<'a> BlockScanner<'a> {
             self.advance();
         }
 
-        // Check for CSV/DSV/TSV format
-        let format = block_attrs.table_format();
+        // Check for CSV/DSV/TSV format. A shorthand delimiter prefix selects the
+        // format directly (`,===` → CSV, `:===` → DSV); `|===` defers to the
+        // `format=` attribute (Native unless overridden).
+        let format = match opening_delim.as_bytes().first() {
+            Some(b',') => TableFormat::Csv,
+            Some(b':') => TableFormat::Dsv,
+            _ => block_attrs.table_format(),
+        };
         if format != TableFormat::Native {
             return self.scan_delimited_format_table(&content_lines, block_attrs, format, title_events);
         }
@@ -2160,7 +2166,7 @@ impl<'a> BlockScanner<'a> {
     fn scan_delimited_format_table(
         &mut self,
         content_lines: &[&'a str],
-        block_attrs: BlockAttributes,
+        mut block_attrs: BlockAttributes,
         format: TableFormat,
         title_events: Vec<Event<'a>>,
     ) -> Option<Event<'a>> {
@@ -2197,6 +2203,13 @@ impl<'a> BlockScanner<'a> {
         } else {
             rows[0].len()
         };
+
+        // Synthesize a cols attribute for format tables without explicit cols=
+        // so the renderer generates <colgroup> with equal-width columns (mirror
+        // of the native-table path in scan_table).
+        if block_attrs.table_cols_count().is_none() && num_cols > 0 {
+            block_attrs.named.insert("cols".to_string(), num_cols.to_string());
+        }
 
         // Determine header/footer; %noheader suppresses implicit promotion
         let has_header = block_attrs.has_option("header")
@@ -4381,6 +4394,51 @@ mod tests {
             Event::End(TagEnd::TableBody),
             Event::End(TagEnd::Table),
         ]);
+    }
+
+    #[test]
+    fn test_csv_shorthand_delimiter_routes_to_format_and_synthesizes_cols() {
+        // A bare `,===` delimiter selects CSV format directly (no format= attr);
+        // the format-table path synthesizes a cols attribute (here "2") so the
+        // renderer can emit a <colgroup>, mirroring the native-table path.
+        let input = ",===\nA,B\nC,D\n,===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::BlockMetadata { style: None, id: None, roles: vec![], options: vec![], named: vec![(Cow::Owned("cols".into()), Cow::Owned("2".into()))], subs: None },
+            Event::Start(Tag::Table),
+            Event::Start(Tag::TableBody),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("A")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("B")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::Start(Tag::TableRow),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("C")),
+            Event::End(TagEnd::TableCell),
+            Event::Start(Tag::TableCell { colspan: 1, rowspan: 1, style: CellStyle::Default, halign: HAlign::Left, valign: VAlign::Top }),
+            Event::Text(Cow::Borrowed("D")),
+            Event::End(TagEnd::TableCell),
+            Event::End(TagEnd::TableRow),
+            Event::End(TagEnd::TableBody),
+            Event::End(TagEnd::Table),
+        ]);
+    }
+
+    #[test]
+    fn test_dsv_shorthand_delimiter_routes_to_format() {
+        // `:===` selects DSV format (colon field separator).
+        let input = ":===\nA:B\n:===";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let texts: Vec<_> = events.iter().filter_map(|e| match e {
+            Event::Text(t) => Some(t.as_ref()),
+            _ => None,
+        }).collect();
+        assert_eq!(texts, vec!["A", "B"]);
+        assert!(events.iter().any(|e| matches!(e, Event::Start(Tag::Table))));
     }
 
     #[test]
