@@ -1,5 +1,64 @@
 # Session context
 
+## Сессия (2026-06-14, шестьдесят третья) — Фаза 3: вложенная таблица `!===` (разделитель `!`)
+
+Запрос «продолжи». Ветка **`fix/nested-table-bang-delimiter`** — ЗАКОММИЧЕНА
+(`05c0c8d`). **НЕ смержена, НЕ запушена — ОЖИДАЕТ явной авторизации на
+`git merge --no-ff` в master + `git push origin master` + удаление ветки.**
+Старт: housekeeping 62-й закрыт сам (мерж 62-й УЖЕ выполнен И запушен —
+origin/master == master == 5cc8e7a (339), дерево чисто, веток нет).
+base-бинарь /tmp/adoc_base пересобран из master HEAD (339).
+
+### Выбор задачи
+nearmiss на 339 (5 Different): **table (37, Δ15)** — ближайший к флипу; остаток =
+ровно Root 2 из 62-й (вложенная `!===`-таблица). Прочее архитектурное/мульти-root:
+character-replacement-ref (625), document-attributes-ref (953),
+syntax-quick-reference (2788), outline (6647). Выбран table.
+
+### Реальная семантика (пробы asciidoctor 2.0.23)
+- **Nested в a-ячейке**: `[cols="2,1"]` `!===` → полноценная таблица, `!` — разделитель
+  ячеек, cols 66.6666%/33.3334%, implicit header (blank после 1-й строки) Col1/Col2,
+  body C11/C12. a-ячейка УЖЕ ре-парсится рекурсивно (`Parser::new(&raw)`), рендер
+  вложенной таблицы (colgroup-ширины через `parse_col_widths`/`format_col_width`) УЖЕ
+  готов — не хватало лишь распознавания `!===` сканером.
+- **Top-level `!===`** (edge, НЕ в корпусе): asciidoctor «missing leading separator»
+  (ждёт `|`, не `!`) — наш парсер распознаёт `!`-разделитель безусловно; регрессий нет,
+  т.к. top-level `!===` в корпусе отсутствует.
+- Все 4 вхождения `!===` в корпусе: table.adoc (цель), delimited.adoc (содержимое
+  обычной `|`-ячейки — НЕ блочно-сканируется, безопасно), nested.adoc/outline.adoc
+  (внутри `` `!===` `` inline-литерала, безопасно).
+
+### Что сделано (ПАРСЕР)
+- **scanner.rs**: `is_table_delimiter` принимает префикс `!` (4-й к `|`/`,`/`:`); сплиттер/
+  escape параметризованы байтом разделителя — `find_unescaped_sep`/`split_unescaped_sep`/
+  `unescape_cell_sep` + `parse_table_cells_with_sep(line, sep)`. `|`-обёртка
+  `parse_table_cells` оставлена ТЕСТ-ОНЛИ (`#[cfg(test)]` — иначе dead-code в lib-сборке,
+  ловит `clippy --workspace`); `unescape_cell_pipes` удалена (0 вызовов).
+- **block.rs** `scan_table`: разделитель из первого байта `opening_delim` (`!`→`b'!'`,
+  иначе `b'|'`), формат для `!` остаётся Native (это PSV, не CSV/DSV); `sep` протащен в
+  цикл PSV (`parse_table_cells_with_sep` + `unescape_cell_sep`).
+
+### Статус (верифицировано)
+- clippy --workspace 0; test --workspace зелёное (parser 513→515, html 426→427);
+  parsing-lab 233/233.
+- table.adoc diffone: **37→0 (ФЛИП, байт-в-байт)**, len ref==our==690.
+- **Корпус: Identical 339→340 (+1 ФЛИП)**. blast (base 339): **РОВНО 1 флип, 0 регрессий,
+  0 FARTHER**; delimited.adoc (риск, `!===` как содержимое `|`-ячейки) остался 0 diffs.
+- Тесты: +1 scanner (`test_parse_table_cells_bang_separator` + расширен
+  `test_is_table_delimiter`: `!===`/`!====`/негативы `!==`/`!`), +1 parser
+  (`test_bang_delimiter_nested_table_splits_on_bang`), +1 html
+  (`test_nested_bang_table_inside_asciidoc_cell_html`).
+
+### Что дальше
+- nearmiss на 340 (4 Different, ВСЕ архитектурные/мульти-root): character-replacement-ref
+  (625, Δ113 — m-колонка `<code>`-наследование, кластер), document-attributes-ref (953,
+  Δ−3 — docyear/localyear date-интринсики [риск] + inline-в-link), syntax-quick-reference
+  (2788, мульти-root), outline (6647, Δ3 — `\*` экранирование + `+` hard-break, мульти-root).
+- **Pre-existing шире (НЕ трогал)**: unordered/ordered list-маркер (`*`/`.`) после строки
+  параграфа БЕЗ blank — asciidoctor поглощает в параграф, мы прерываем (см. 62-ю).
+
+---
+
 ## Сессия (2026-06-14, шестьдесят вторая) — Фаза 3: callout-маркер не прерывает top-level параграф
 
 Запрос «продолжи». Ветка **`fix/callout-marker-no-paragraph-interrupt`** — ЗАКОММИЧЕНА
