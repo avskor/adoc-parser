@@ -39,6 +39,7 @@
 //! returns the raw new-engine result, so a `blast` run measures how faithfully
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
+mod passthrough;
 mod post_replacements;
 mod quotes;
 mod replacements;
@@ -119,12 +120,18 @@ pub(crate) fn try_parse<'a>(
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
-/// Implemented so far: `quotes`, `replacements`, `post_replacements`. The
-/// remaining passes (passthrough extract/restore, specialchars, attributes,
-/// macros) are not yet ported; inputs that need them diverge from legacy and
-/// are rejected by the gate (or surface as diffs under `force()`).
+/// Implemented so far: passthrough extract/restore, `quotes`, `replacements`,
+/// `post_replacements`. The remaining passes (specialchars, attributes, macros,
+/// char references, escapes, curved smart quotes) are not yet ported; inputs
+/// that need them diverge from legacy and are rejected by the gate (or surface
+/// as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
+    // Passthroughs are extracted first so the protected content is opaque to
+    // every later pass (mirrors Asciidoctor's `extract_passthroughs`). It is
+    // unconditional: the legacy parser runs `+…+`/`pass:[…]` regardless of the
+    // subs flags, and the engine only runs when QUOTES is present anyway.
+    passthrough::extract(&mut work, subs);
     if subs.has(SubstitutionSet::QUOTES) {
         quotes::run_all(&mut work);
     }
@@ -134,7 +141,15 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     if subs.has(SubstitutionSet::POST_REPLACEMENTS) {
         post_replacements::run(&mut work);
     }
-    tokenize::tokenize(work)
+    let events = tokenize::tokenize(work);
+    // Mirror `parse_legacy`'s empty-result guard: a buffer that tokenizes to no
+    // events (e.g. an empty `++++` passthrough) becomes a single literal `Text`
+    // of the original input.
+    if events.is_empty() {
+        vec![Event::Text(std::borrow::Cow::Owned(text.to_string()))]
+    } else {
+        events
+    }
 }
 
 #[cfg(test)]
@@ -270,6 +285,64 @@ mod tests {
             "`m` +\nnext",
             // break combined with replacements
             "don't stop +\ngo",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With passthrough extraction ported, the pipeline must reproduce legacy on
+    /// every `+…+`/`++…++`/`+++…+++`/`pass:[…]` form and its interaction with the
+    /// surrounding quotes. Extraction runs first, so the protected content is
+    /// opaque to the quote passes.
+    #[test]
+    fn reproduces_legacy_on_passthrough_inputs() {
+        let cases = [
+            // single / double / triple plus, bare
+            "+single+",
+            "++double++",
+            "+++triple+++",
+            // raw vs escaped content (renderer escapes Text, not InlinePassthrough)
+            "+a <b> c+",
+            "++a <b> c++",
+            "+++a <b> c+++",
+            // empty double-plus, and the surrounding text split it preserves
+            "a++++b",
+            "++++",
+            // constrained open/close rules: word-before, space-after, inner '+'
+            "C+a+ stays literal",
+            "+ a+ stays literal",
+            "+a+b+",
+            "x + y (not a span)",
+            // bare pass macro, raw verbatim, including empty
+            "pass:[<raw>]",
+            "pass:[]",
+            "before pass:[x] after",
+            // pass macro embedded in a single-plus span
+            "+pass:[x]+",
+            "+a pass:[<b>] c+",
+            // passthrough inside / beside quote spans
+            "`+mono pass+`",
+            "*pass:[x]*",
+            "+x+*y*",
+            "a +b+ c and *d*",
+            "see ++raw++ and _em_",
+            // passthrough beside replacements (em-dash / apostrophe untouched inside)
+            "++a -- b++ then c -- d",
+            "+don't+ and don't",
+            // hard-break `+` must NOT be claimed by single-plus (the legacy parser
+            // consumes ` +\n` at the space before the `+` can open) — the image-ref
+            // table-cell pattern that surfaced this
+            "`id=x` +\n(or `+[[x]]+` or `[#x]` more)",
+            "foo +\n+bar+ baz",
+            "a +\nb +\nc",
+            // but a `+` whose content starts with `\n` and has NO leading space is
+            // a genuine single-plus span (no hard-break interception)
+            "+\nfoo+",
         ];
         for c in cases {
             assert_eq!(

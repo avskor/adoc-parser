@@ -267,6 +267,32 @@ pub(crate) fn parse_legacy<'a>(
     }
 }
 
+/// Map a pass-macro subs spec to a substitution set. Single-letter aliases
+/// follow Asciidoctor's SUB_HINTS (`a`/`c`/`m`/`n`/`p`/`q`/`r`/`v`); full
+/// names share `subs=` parsing. Unknown names are ignored (Asciidoctor
+/// warns and skips them, still consuming the macro). Shared with the
+/// sequential-pass passthrough extractor ([`crate::subst`]).
+pub(crate) fn pass_spec_to_subs(spec: &str) -> SubstitutionSet {
+    let mut set = SubstitutionSet::NONE;
+    for token in spec.split(',') {
+        let flags = match token {
+            "a" => Some(SubstitutionSet::ATTRIBUTES),
+            "c" => Some(SubstitutionSet::SPECIALCHARS),
+            "m" => Some(SubstitutionSet::MACROS),
+            "n" => crate::attributes::sub_name_to_flags("normal"),
+            "p" => Some(SubstitutionSet::POST_REPLACEMENTS),
+            "q" => Some(SubstitutionSet::QUOTES),
+            "r" => Some(SubstitutionSet::REPLACEMENTS),
+            "v" => crate::attributes::sub_name_to_flags("verbatim"),
+            _ => crate::attributes::sub_name_to_flags(token),
+        };
+        if let Some(f) = flags {
+            set.add(f);
+        }
+    }
+    set
+}
+
 struct InlineState<'a> {
     input: &'a str,
     pos: usize,
@@ -1631,7 +1657,7 @@ impl<'a> InlineState<'a> {
                 // content sits between "pass:SPEC[" and the trailing "]"
                 let content = &inner[i + 5 + spec_len + 1..i + skip - 1];
                 if !spec.is_empty()
-                    && Self::pass_spec_to_subs(spec).has(SubstitutionSet::SPECIALCHARS)
+                    && pass_spec_to_subs(spec).has(SubstitutionSet::SPECIALCHARS)
                 {
                     events.push(Event::Text(Cow::Borrowed(content)));
                 } else {
@@ -1876,37 +1902,12 @@ impl<'a> InlineState<'a> {
             events.push(Event::InlinePassthrough(Cow::Borrowed(inner)));
         } else {
             let spec = &self.input[start_pos + 5..start_pos + 5 + spec_len];
-            self.push_pass_spec_content(inner, Self::pass_spec_to_subs(spec), events);
+            self.push_pass_spec_content(inner, pass_spec_to_subs(spec), events);
         }
 
         self.pos = new_pos;
         *text_start = self.pos;
         true
-    }
-
-    /// Map a pass-macro subs spec to a substitution set. Single-letter aliases
-    /// follow Asciidoctor's SUB_HINTS (`a`/`c`/`m`/`n`/`p`/`q`/`r`/`v`); full
-    /// names share `subs=` parsing. Unknown names are ignored (Asciidoctor
-    /// warns and skips them, still consuming the macro).
-    fn pass_spec_to_subs(spec: &str) -> SubstitutionSet {
-        let mut set = SubstitutionSet::NONE;
-        for token in spec.split(',') {
-            let flags = match token {
-                "a" => Some(SubstitutionSet::ATTRIBUTES),
-                "c" => Some(SubstitutionSet::SPECIALCHARS),
-                "m" => Some(SubstitutionSet::MACROS),
-                "n" => crate::attributes::sub_name_to_flags("normal"),
-                "p" => Some(SubstitutionSet::POST_REPLACEMENTS),
-                "q" => Some(SubstitutionSet::QUOTES),
-                "r" => Some(SubstitutionSet::REPLACEMENTS),
-                "v" => crate::attributes::sub_name_to_flags("verbatim"),
-                _ => crate::attributes::sub_name_to_flags(token),
-            };
-            if let Some(f) = flags {
-                set.add(f);
-            }
-        }
-        set
     }
 
     /// Emit `pass:SPEC[content]`: the content is reparsed with exactly the

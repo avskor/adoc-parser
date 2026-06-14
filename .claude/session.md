@@ -1,5 +1,74 @@
 # Session context
 
+## Сессия (2026-06-15, 72-я) — РЕРАЙТ inline, Фаза 2: passthrough extract/restore пасс за гейтом
+
+Запрос «продолжи». Ветка **`feat/subst-phase2-passthrough`** (off master `296834b`, 343) —
+**1 коммит `691a208`, НЕ смержена, НЕ запушена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в
+master + `git push` + удаление ветки. base-бинарь `/tmp/adoc_base` собран из master HEAD `296834b`
+(343). **ВАЖНО:** Phase 2 (1-2/N replacements+post_replacements) уже СМЕРЖЕНА в master между
+сессиями (это и есть `296834b`).
+
+### Контекст
+Фаза 0 (toggle) + Фаза 1 (quotes-пайплайн) + Фаза 2 (1-2/N replacements+post_replacements) — в master.
+Фаза 2 = перенести ОСТАЛЬНЫЕ пассы asciidoctor (`subs=normal`: **passthrough-extract** → specialchars →
+quotes → attributes → replacements → macros → post_replacements → restore), довести FORCE-движок до
+байт-идентичности, в финале СНЯТЬ gate → flip outline. См. [[proj_sequential_quotes_rewrite]], план
+`~/.claude/plans/greedy-yawning-pumpkin.md`.
+
+### Сделано (1 коммит, passthrough — FIRST в пайплайне, фундамент)
+- **`subst/passthrough.rs`** (НОВЫЙ): `extract(work, subs)` сканит буфер L→R (первый пасс, сентинелов
+  ещё нет), извлекает `+++/++/+/bare pass:[]` в `TagToken::Passthrough(Vec<PassPiece{text,raw}>)` →
+  сентинел. Контент опакен для quotes/replacements/post (сентинел-байты non-word). Зеркалит legacy:
+  - **try_triple_plus** → raw piece (InlinePassthrough); **try_double_plus** → !raw piece (Text,
+    специалчарс-escape рендерером), `++++`→пусто (но сентинел-слот остаётся → сохраняет split текста);
+  - **try_single_plus** → `single_plus_pieces` (порт push_single_plus_content: literal Text + embedded
+    `pass:[]`→raw, spec'd-с-specialchars→Text); открытие constrained (prev не word, content не space,
+    closing skip pass-региона);
+  - **try_pass_macro** ТОЛЬКО bare (spec_len==0)→raw; spec'd ОТЛОЖЕН (re-runs subs → non-leaf events,
+    не лезет в PassPiece) → None → текст остаётся → gate отклоняет.
+- **tokenize.rs**: `PassPiece{text:String, raw:bool}`, `TagToken::Passthrough(Vec<PassPiece>)`,
+  `Work::passthrough_sentinel`, arm в tokenize (raw→InlinePassthrough Owned, !raw→Text Owned).
+- **mod.rs**: `passthrough::extract(&mut work, subs)` ПЕРВЫМ (безусловно — legacy гонит `+`/`pass:`
+  независимо от флагов, движок и так только при QUOTES). run_pipeline теперь зеркалит empty-guard
+  parse_legacy: пустые события → `[Text(input)]` (нужно для `++++`).
+- **РЕФАКТОР inline.rs**: `pass_spec_to_subs` вынесена из `impl InlineState` в `pub(crate) fn`
+  модульного уровня (нужна single_plus_pieces для SPECIALCHARS-членства; DRY против дрейфа).
+
+### Ключевой баг, найденный blast'ом и исправленный: hard-break ` +\n`
+image-ref FORCE 129→520 (FARTHER) обнажил: в legacy ` +\n` перехватывается как hard-break НА ПРОБЕЛЕ
+(handle_inline_formatting/check_hard_break, гейт has_post_replacements) ДО того, как passthrough
+увидит `+`. В моём ПОСЛЕДОВАТЕЛЬНОМ пайплайне passthrough идёт ПЕРВЫМ, post_replacements — ПОСЛЕДНИМ
+→ single-plus жадно хватал hard-break `+` (`` `id` +\n(or `+[[x]]+`... `` → склейка). Фикс: в
+try_single_plus guard `prev==space && next=='\n'` → None (оставить ` +\n` для post_replacements),
+ГЕЙТНУТ на POST_REPLACEMENTS (без него legacy открывает single-plus с content=`\nfoo`). После фикса
+image-ref ушёл из FARTHER, верность 91→92.
+
+### Верификация
+- clippy 0, test --workspace зелёное (parser 530→531, html 433), parsing-lab 233/233 (+1 subst-тест
+  `reproduces_legacy_on_passthrough_inputs`, 10 subst-тестов всего).
+- **blast toggle-off 343, toggle-on 343** (гейт держит, 0 регрессий, 0 flips, airtight).
+- **FORCE (blast_force.py): 85 → 92** raw-идентичных, **0 REGR**, 7 FLIP, 31 closer, 6 FARTHER.
+  FARTHER (add-columns +1, duplicate-cells, id 545→574, troubleshoot-unconstrained 490→553,
+  footnote 87→176, outline 7384→7481) — ЭКСПЕКТЕД каскады отложенных macros/attr. diffone footnote:
+  @125 `<<ex-footnote>>` литерал (xref отложен), НЕ баг passthrough. 0 REGR = ни один ранее-идеальный
+  файл не сломан.
+
+### Дальше (ОСТАЛОСЬ Фаза 2, по убыванию фундаментальности)
+1. **attributes** `{name}` — СНАЧАЛА проверить: legacy эмитит `Event::AttributeReference` (резолв в
+   рендерере) или резолвит инлайн? От этого зависит, что эмитить токенизатору. Донор: handle_inline_macro
+   `{`-арм, char_ref. Скорее всего отдельный `TagToken::AttrRef(name)` → Event::AttributeReference.
+2. **macros** — САМОЕ большое: link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email,
+   много типов событий → overhaul токенизатора (нужны leaf-токены с произвольными Event). Донор:
+   `handle_inline_macro` (inline.rs ~390). Возможно `TagToken::Macro(Vec<Event<'static>>)`.
+3. **char-refs** (`&#167;` survival — legacy InlinePassthrough при specialchars+replacements),
+   **escape `\*`/`\pass:`**, **curved smart-quotes** `"…"`/`'…'`, **spec'd `pass:SPEC[]`**.
+   specialchars — NO-OP (Event::Text сырой).
+4. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545 overlap) при 343.
+- Скрипты корпуса: `blast.py` (toggle-off), `blast_toggle.py` (toggle-on gate), `blast_force.py`
+  (FORCE), `diffone.py <file> <limit>` (с ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1 для FORCE-диффа).
+
+---
+
 ## Сессия (2026-06-14, 71-я) — РЕРАЙТ inline, Фаза 2 НАЧАТА: replacements + post_replacements пассы за гейтом
 
 Запрос «начни фазу 2». Ветка **`feat/subst-phase2-passes`** (off master `9cc1c2c`, 343) —
