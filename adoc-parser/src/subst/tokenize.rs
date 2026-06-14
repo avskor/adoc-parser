@@ -124,6 +124,15 @@ pub(super) enum TagToken {
         text: &'static str,
         opening: bool,
     },
+    /// A backslash-escaped literal character (or short pattern) produced by the
+    /// [`super::escape`] pass — the backslash is dropped and the escaped
+    /// character left literal (`\{name}` → `{name}`, `\*bold*` → `*bold*`). Unlike
+    /// every other token, a `Literal` does NOT start a fresh `Text` event: the
+    /// tokenizer flushes the text accumulated *before* it and then *seeds* the
+    /// pending run with this text, so the literal COALESCES with the following
+    /// run into one `Text` event — mirroring the legacy parser, which drops the
+    /// backslash and leaves the escaped character in the next text flush.
+    Literal(String),
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -198,6 +207,13 @@ impl Work {
         self.tags.push(TagToken::SmartQuote { text, opening });
         sentinel(idx)
     }
+
+    /// Register an escaped-literal leaf and return its sentinel string.
+    pub(super) fn literal_sentinel(&mut self, text: String) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::Literal(text));
+        sentinel(idx)
+    }
 }
 
 fn sentinel(idx: usize) -> String {
@@ -250,21 +266,33 @@ pub(super) fn sentinel_end(bytes: &[u8], i: usize) -> usize {
     if j < bytes.len() { j + 1 } else { bytes.len() }
 }
 
+/// Flush the accumulated literal run as a single `Text` event (no-op when empty).
+fn flush_pending<'a>(events: &mut Vec<Event<'a>>, pending: &mut String) {
+    if !pending.is_empty() {
+        events.push(Event::Text(Cow::Owned(std::mem::take(pending))));
+    }
+}
+
 /// Turn a finished working buffer into an event stream. Sentinels become
 /// `Start`/`End` events (in appearance order, unbalanced); literal runs become
 /// owned `Text` events.
+///
+/// Literal text is accumulated into `pending` so that a [`TagToken::Literal`]
+/// (an escaped character) coalesces with the surrounding run into one `Text`
+/// event: it flushes whatever preceded it, then seeds `pending` so the following
+/// run merges with it. Every other token flushes `pending` first.
 pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
     let Work { buf, tags } = work;
     let bytes = buf.as_bytes();
     let mut events = Vec::new();
+    let mut pending = String::new();
     let mut i = 0;
     let mut text_start = 0;
 
     while i < bytes.len() {
         if bytes[i] == TAG_LEAD {
-            if text_start < i {
-                events.push(Event::Text(Cow::Owned(buf[text_start..i].to_string())));
-            }
+            // Fold the literal run preceding this sentinel into `pending`.
+            pending.push_str(&buf[text_start..i]);
             // Parse the decimal index up to TAG_TAIL.
             let mut j = i + 1;
             let mut idx = 0usize;
@@ -273,16 +301,26 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                 j += 1;
             }
             match tags.get(idx) {
+                // A literal flushes the preceding run, then seeds `pending` so
+                // the following run merges with it into one `Text` event.
+                Some(TagToken::Literal(s)) => {
+                    flush_pending(&mut events, &mut pending);
+                    pending.push_str(s);
+                }
                 Some(TagToken::Open { kind, id, roles }) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::Start(kind.into_tag(id.clone(), roles.clone())));
                 }
                 Some(TagToken::Close(kind)) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::End(kind.into_end()));
                 }
                 Some(TagToken::HardBreak) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::HardBreak);
                 }
                 Some(TagToken::Passthrough(pieces)) => {
+                    flush_pending(&mut events, &mut pending);
                     for p in pieces {
                         let text = Cow::Owned(p.text.clone());
                         events.push(if p.raw {
@@ -293,6 +331,7 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                     }
                 }
                 Some(TagToken::AttrRef { name, trailing_brackets }) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::AttributeReference {
                         name: Cow::Owned(name.clone()),
                         fallback: None,
@@ -300,15 +339,17 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                     });
                 }
                 Some(TagToken::AttrSet { name, value }) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::Attribute {
                         name: Cow::Owned(name.clone()),
                         value: Cow::Owned(value.clone()),
                     });
                 }
                 Some(TagToken::SmartQuote { text, .. }) => {
+                    flush_pending(&mut events, &mut pending);
                     events.push(Event::Text(Cow::Borrowed(text)));
                 }
-                None => {}
+                None => flush_pending(&mut events, &mut pending),
             }
             i = j + 1;
             text_start = i;
@@ -317,9 +358,8 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
         }
     }
 
-    if text_start < bytes.len() {
-        events.push(Event::Text(Cow::Owned(buf[text_start..].to_string())));
-    }
+    pending.push_str(&buf[text_start..]);
+    flush_pending(&mut events, &mut pending);
 
     events
 }
