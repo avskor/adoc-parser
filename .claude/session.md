@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-15, 80-я) — РЕРАЙТ inline, Фаза 2 (11/N): macros (3/N) — inline image
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-image`** (off master `3739f30`, 343) — **НЕ
+закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push` +
+удаление ветки. link (10/N) к началу сессии УЖЕ смержена (`3739f30`). base-бинарь `/tmp/adoc_base`
+ПЕРЕСОБРАН из master HEAD `3739f30` (legacy-эталон; blast_toggle подтвердил base 343).
+
+### Выбор задачи (data-driven, FORCE near-miss)
+По плану 79-й следующий пункт — **macros (3/N+) image/footnote/icon/UI/stem/anchor/index-term**. FORCE
+near-miss (base, 33 non-identical): кандидаты image.adoc (100 diff), footnote.adoc (283), id.adoc (115),
+stem.adoc (5). Взял **inline image**: 100 diff = ЧИСТО литеральный макрос (diffone: `image:play.png[]`
+оставался текстом), самодостаточный leaf, идеально ложится на `TagToken::Macro`. footnote ОТЛОЖЕН
+(stateful — реестр/нумерация/ref-def/список внизу = отдельная сессия, выше риск).
+
+### Архитектура (image = простейший leaf-макрос)
+- **НЕТ label re-parse** (в отличие от xref/link): alt/width/height/align/float/link/role/title —
+  СТРОКОВЫЕ поля `Tag::InlineImage`, не события. `Start(InlineImage)`+`End` строятся напрямую.
+- **Триггер `i` + guard `!src[i..].starts_with("image::")`** — зеркало dispatch'а легаси (`image::` =
+  блочный образ, инлайн-парсер оставляет литералом). `image:` и `irc://` (autolink) оба байт-`i`, но
+  префиксы непересекающиеся → порядок ветвей нерелевантен.
+- **target БЕЗ empty-guard** — донор `try_inline_image` его не имеет (`image:[alt]` матчится), зеркалю точно.
+- span-guard declined при сентинеле (`image:x[+raw+]` — passthrough в attrs). Tag-поля = `Cow::Owned`
+  (== Cow::Borrowed легаси по PartialEq → gate adopts).
+
+### Сделано (1 логический коммит, 2 файла)
+- **macros.rs**: импорт `parse_image_attrs`; ветка `image:` в `extract` (с `image::`-guard, перед `<<`);
+  `try_image(src,start)` (зеркало `try_inline_image`); хелпер `owned(&str)->Cow<'static>` для опц. полей.
+  Doc-комментарий модуля: image добавлен в (3/N), убран из «remaining»; `extract`-doc обобщён.
+- **mod.rs**: +тест `reproduces_legacy_on_image_inputs` (19 кейсов).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 540→541, html 433, render-core 15,
+  parsing-lab 233/233); subst 19 тестов (+1 image).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight).
+- **FORCE (blast_force, base `3739f30`-legacy): Identical 311→312.** **FLIP image.adoc 100→0**
+  (байт-в-байт с asciidoctor), closer id.adoc 115→113, **0 REGR, 0 FARTHER.** force_nearmiss 33→32.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **macros (4/N+)** — footnote (stateful! реестр+нумерация+список, донор try_footnote_macro 1954)/
+   icon (1830)/UI kbd|btn|menu (1722/1745/1806, за `:experimental:`)/stem (1854)/anchor `[[id]]`/`[[[bib]]]`
+   (try_anchor 2671, try_bibliography_anchor 2629)/index-term `((…))`/`indexterm:` (try_index_term 2772).
+   Reuse `TagToken::Macro` + (для label-несущих) label-reparse.
+2. **escape `\macro`** (`\xref:`/`\link:`/`\image:`/…) — порт `inline_macro_escape_len` (inline.rs 1174)
+   в escape.rs: drop `\`, Literal(macro-text). Дешёвый FORCE-win (escaped = литерал, impl не нужен).
+3. **escape маркеров+`\+` ВНУТРИ пассов** (отложено с 8/N — doubled-формы, `\\MM`).
+4. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>
+  <limit>` (FORCE-дифф под `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1`), `/tmp/force_nearmiss.py`.
+
+---
+
 ## Сессия (2026-06-15, 79-я) — РЕРАЙТ inline, Фаза 2 (10/N): macros (2/N) — link-семейство
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-links`** (off master `4a69fc7`, 343) — **НЕ

@@ -202,12 +202,33 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 79-я сессия): РЕРАЙТ inline — Фаза 2 (10/N) macros (2/N) link-семейство (ветка `feat/subst-phase2-macros-links`)
+## АКТУАЛЬНО (2026-06-15, 80-я сессия): РЕРАЙТ inline — Фаза 2 (11/N) macros (3/N) inline image (ветка `feat/subst-phase2-macros-image`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-9/N) уже СМЕРЖЕНА в master (`4a69fc7`). **(10/N) НЕ закоммичена,
+снять gate → flip outline. Phase 2 (1-10/N) уже СМЕРЖЕНА в master (`3739f30`). **(11/N) НЕ закоммичена,
 ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(11/N) macros (3/N) — inline image** (`image:target[attrs]` → `InlineImage`-тег). Самый
+  большой clean-FORCE кандидат (image.adoc 100 diff = чисто литеральный макрос). **`subst/macros.rs`**:
+  - `try_image` (зеркало `try_inline_image`): find `[`/`]`, `bracket_end>bracket_start`, target БЕЗ
+    empty-guard (донор без него — `image:[alt]` матчится), `parse_image_attrs(content)` (reuse из
+    attributes.rs). **Leaf без label re-parse** — alt/width/height/align/float/link/role/title =
+    строковые поля тега, не события; `Start(InlineImage)`+`End` строятся напрямую. Хелпер `owned(&str)`.
+  - **Триггер `i` + guard `!starts_with("image::")`** (зеркало dispatch'а: `image::` = блочный, инлайн
+    оставляет литералом). span-guard declined при сентинеле (`image:x[+raw+]`). Tag-поля = `Cow::Owned`
+    (== Borrowed легаси, gate ОК). Failed → advance 1 байт.
+  - **mod.rs**: doc обновлён; +тест `reproduces_legacy_on_image_inputs` (19 кейсов: bare/explicit/
+    quoted alt, positional w/h, named attrs, attr-ref target литерал, `image::` блок-форма, invalid, span).
+- **Гейт:** blast_toggle **343→343, 0 изменённых файлов** (airtight). **FORCE (base `3739f30`-legacy):
+  Identical 311→312, FLIP image.adoc 100→0 (байт-в-байт с asciidoctor), closer id.adoc 115→113,
+  0 REGR, 0 FARTHER.** force_nearmiss 33→32.
+- clippy 0, test --workspace зелёное (parser 540→541, html 433, render-core 15), parsing-lab 233/233
+  (19 subst-тестов, +1 image).
+- **Дальше Фаза 2:** macros (4/N+) footnote/icon/UI(kbd/btn/menu)/stem/anchor(`[[id]]`/`[[[bib]]]`)/
+  index-term(`((…))`); escape `\macro` (порт `inline_macro_escape_len`); marker-escape ВНУТРИ пассов
+  (отложено 8/N); снять gate → flip outline.
+
+### (АРХИВ 79-й) Phase 2 (10/N) macros (2/N) link-семейство — СМЕРЖЕНА в master `3739f30`
 - [x] **(10/N) macros (2/N) — link-семейство** (`link:url[attrs]`, `mailto:email[attrs]`, bare
   URL-автолинк `http`/`https`/`ftp`/`irc` (+`[label]` форма), email-автолинк `user@host.tld`). Reuse
   инфры cross-ref (`TagToken::Macro` + label-reparse). **`subst/macros.rs`**:
