@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-15, 81-я) — РЕРАЙТ inline, Фаза 2 (12/N): macros (4/N) — leaf-макросы icon + STEM
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-leaf`** (off master, 343) — **НЕ закоммичена,
+НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push` + удаление ветки.
+image (11/N) к началу сессии УЖЕ смержена (master HEAD `a0c56a6`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН
+из чистого master (legacy-эталон; blast_toggle подтвердил base 343, blast_force base 312).
+
+### Выбор задачи
+По плану следующий пункт — macros (4/N+): footnote/icon/UI(kbd|btn|menu)/stem/anchor/index-term. Взял
+**leaf-макросы icon + STEM** — структурно идентичны inline image (leaf, БЕЗ label re-parse, БЕЗ options).
+UI (kbd/btn/menu) ОТЛОЖЕН: нужен проброс `InlineOptions.experimental` через `run_pipeline`/`extract`
+(рефактор сигнатуры + рекурсивные вызовы push_label/build_cross_reference) — отдельный инкремент.
+footnote ОТЛОЖЕН (stateful). При experimental=off (дефолт) UI и так литерал → gate не страдает.
+
+### Архитектура (icon/stem = leaf, как image)
+- **icon** (`try_icon`, зеркало `try_icon_macro`+`parse_target_bracket_macro`): триггер `i`+`icon:`,
+  `name`→`Tag::Icon`, attrlist (если непуст)→ОДИН raw `Text`. Empty-name → decline; `]` = первый после `[`.
+- **STEM** (`try_stem`, зеркало `try_stem_macro`+`parse_bracket_macro_escaped`): три написания
+  `stem:[`/`latexmath:[`/`asciimath:[` (триггеры `s`/`l`/`a`, `[` сразу после `:` → target пуст),
+  variant→`Tag::Stem`, content→ОДИН raw `Text`. **`\]`-escape**: `]` за `\` не закрывает, все `\]`→`]`.
+  Escape-пасс НЕ трогает `\]` (blanket-арм оставляет `\` литералом) → escaped-bracket доживает до macros.
+- **span_has_sentinel guard** на обоих (как у image): если escape/passthrough/char-ref что-то лифтнул
+  изнутри (`stem:[\{a}]`, `\--` внутри) → decline, gate fallback. Tag-поля `Cow::Owned` (==Borrowed по
+  PartialEq → adopt). НЕТ left-boundary (как у легаси): `prefixicon:x[]` матчит icon в середине слова —
+  ОБА движка одинаково (равенство держится).
+
+### Сделано (1 логический коммит, 2 файла)
+- **macros.rs**: ветки `icon:`/`stem:[`/`latexmath:[`/`asciimath:[` в `extract` (после image, перед `<<`);
+  `try_icon(src,start)` и `try_stem(src,start,prefix_len,variant)`. Doc-комментарий модуля: leaf-макросы
+  добавлены в (4/N), UI помечены как требующие проброса experimental.
+- **mod.rs**: +тест `reproduces_legacy_on_leaf_macro_inputs` (22 кейса: icon bare/attrs/invalid, 3 STEM
+  написания, `\]`-escape, mid-word match, span-wrap); doc-комментарии `run_pipeline` обновлены.
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное; subst 20 тестов (+1 leaf).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight-инвариант: вывод ≡ legacy).
+- **FORCE (blast_force, base чистый master): Identical 312→313.** **FLIP stem.adoc 5→0** (байт-в-байт),
+  **0 REGR, 0 FARTHER.** 0 паник на 344. STEM-проба `stem:[x^2+y^2]`/`latexmath:[\sqrt{a}]` = байт-в-байт
+  asciidoctor. icon-macro.adoc НЕ флипнул: пред-существующее РЕНДЕРЕР-расхождение (font `<i class="fa">`
+  vs текстовый `[heart]` при отсутствии `:icons: font` у эталона) — есть и в base, к subst НЕ относится;
+  события icon ≡ legacy (unit-тест + 0 REGR).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- **macros (5/N+)**: UI kbd|btn|menu (нужен проброс `InlineOptions.experimental` через pipeline — см.
+  выше), anchor (`[[id]]`/`[[[bib]]]` 2629/2671), index-term (`((…))`/`indexterm:`/`indexterm2:` 2772),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954). escape `\macro` (порт
+  `inline_macro_escape_len` в escape.rs — дешёвый FORCE-win), escape маркеров doubled/`\\MM` (отложено
+  с 8/N). specialchars = NO-OP. ФИНАЛ: снять gate → flip outline при 343 неизменных.
+
+---
+
 ## Сессия (2026-06-15, 80-я) — РЕРАЙТ inline, Фаза 2 (11/N): macros (3/N) — inline image
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-image`** (off master `3739f30`, 343) — **НЕ

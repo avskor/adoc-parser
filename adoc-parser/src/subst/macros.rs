@@ -11,13 +11,19 @@
 //!   and bare email autolinks (`user@host.tld`) → a `Link` tag;
 //! - **inline image** (3/N) — the `image:target[attrs]` macro → an `InlineImage`
 //!   tag (a leaf carrying the parsed image attributes; the `image::` block form is
-//!   left to the block scanner).
+//!   left to the block scanner);
+//! - **leaf macros** (4/N) — the `icon:name[attrs]` macro → an `Icon` tag, and the
+//!   STEM family (`stem:[…]` / `latexmath:[…]` / `asciimath:[…]`) → a `Stem` tag.
+//!   Like the inline image these carry no re-parsed label: the name/variant goes on
+//!   the tag and the attrlist / math content becomes a single raw `Text` event.
+//!   The STEM content honours the `\]` escape (unescaped to `]`).
 //!
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro families — footnote/icon/UI/stem/anchor/index-term —
-//! are ported in subsequent phases.)
+//! it. (The remaining macro families — footnote/UI/anchor/index-term — are ported
+//! in subsequent phases; the experimental UI macros — `kbd:`/`btn:`/`menu:` — need
+//! the `:experimental:` option threaded through the pipeline, deferred with them.)
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -118,6 +124,52 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // scanner owns — the inline pass leaves it literal).
         if bytes[i] == b'i' && src[i..].starts_with("image:") && !src[i..].starts_with("image::") {
             if let Some((events, end)) = try_image(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // icon:name[attrs]
+        if bytes[i] == b'i' && src[i..].starts_with("icon:") {
+            if let Some((events, end)) = try_icon(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // stem:[content] / latexmath:[content] / asciimath:[content] (the three
+        // STEM-macro spellings; each requires the `[` directly after the colon, so
+        // there is no target part).
+        if bytes[i] == b's' && src[i..].starts_with("stem:[") {
+            if let Some((events, end)) = try_stem(&src, i, 5, "stem") {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'l' && src[i..].starts_with("latexmath:[") {
+            if let Some((events, end)) = try_stem(&src, i, 10, "latexmath") {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'a' && src[i..].starts_with("asciimath:[") {
+            if let Some((events, end)) = try_stem(&src, i, 10, "asciimath") {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -398,6 +450,83 @@ fn try_image(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// Owning conversion helper for the optional `&str` image-attribute fields.
 fn owned(s: &str) -> Cow<'static, str> {
     Cow::Owned(s.to_string())
+}
+
+/// At an `icon:` (caller guarantees the prefix), try to match `icon:name[attrs]`.
+/// Mirror of [`crate::inline::InlineState::try_icon_macro`] (and its
+/// `parse_target_bracket_macro` helper). The inline icon is a *leaf* macro: the
+/// name becomes the tag and the attrlist text (when non-empty) a single raw
+/// `Text` event — neither is re-parsed through the engine. The closing `]` is the
+/// first one after the `[`; an empty name declines.
+fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 5..]; // after "icon:"
+    let bracket_start = rest.find('[')?;
+    let name = &rest[..bracket_start];
+    if name.is_empty() {
+        return None;
+    }
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let attrs = &rest[bracket_start + 1..bracket_end];
+    let end = start + 5 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Icon {
+        name: Cow::Owned(name.to_string()),
+    })];
+    if !attrs.is_empty() {
+        events.push(Event::Text(Cow::Owned(attrs.to_string())));
+    }
+    events.push(Event::End(TagEnd::Icon));
+    Some((events, end))
+}
+
+/// At a STEM-macro prefix (`stem:[` / `latexmath:[` / `asciimath:[`, caller
+/// guarantees the `[` follows directly), try to match the bracketed content.
+/// Mirror of [`crate::inline::InlineState::try_stem_macro`] (and its
+/// `parse_bracket_macro_escaped` helper): a `]` immediately preceded by `\` does
+/// not close the macro, and every `\]` in the content is unescaped to `]`
+/// (Asciidoctor's `(.*?[^\\])?\]` rule). A *leaf* macro carrying the variant; the
+/// (unescaped) content becomes a single raw `Text` event, not re-parsed. The
+/// escape pass leaves `\]` untouched (its blanket arm keeps the backslash
+/// literal), so the escaped bracket survives intact to here; any escape/
+/// passthrough/char-ref the earlier passes *did* lift from inside trips the
+/// sentinel guard and declines.
+fn try_stem(
+    src: &str,
+    start: usize,
+    prefix_len: usize,
+    variant: &str,
+) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + prefix_len..]; // starts with '[' (dispatch guaranteed)
+    let bytes = rest.as_bytes();
+    let mut i = 1;
+    let bracket_end = loop {
+        let off = bytes[i..].iter().position(|&b| b == b']')?;
+        let at = i + off;
+        if bytes[at - 1] == b'\\' {
+            i = at + 1;
+        } else {
+            break at;
+        }
+    };
+    let end = start + prefix_len + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let inner = &rest[1..bracket_end];
+    let content = inner.replace("\\]", "]"); // no-op when no escaped bracket
+    let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Stem {
+        variant: Cow::Owned(variant.to_string()),
+    })];
+    if !content.is_empty() {
+        events.push(Event::Text(Cow::Owned(content)));
+    }
+    events.push(Event::End(TagEnd::Stem));
+    Some((events, end))
 }
 
 /// Whether an autolink scheme (`http://`/`https://`/`ftp://`/`irc://`) begins at
