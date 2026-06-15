@@ -27,6 +27,11 @@
 //! - **`\{`/`\[`/`\<`/`\'`** — the attribute-ref / bracket / `<` / apostrophe is
 //!   kept literal. These are safe because none of them is a *closing* span
 //!   marker: hiding one inside a `Literal` cannot tear an enclosing span apart.
+//! - **`\&#…;`** — an escaped character reference (`\&#174;`, `\&copy;`): the
+//!   backslash drops and the reference becomes a `Text` event (escaped `&`),
+//!   restored as a [`CharRef`](super::tokenize::TagToken::CharRef) leaf with
+//!   `raw = false`. Sealing it here also stops [`super::char_refs`] from treating
+//!   it as a *surviving* (passthrough) reference.
 //!
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
@@ -43,9 +48,9 @@
 //!   them belongs with the quote passes (their natural, span-aware home).
 //! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
 //! - macro escapes `\pass:SPEC[…]`, `\link:`, `\footnote:`, `\((…))`,
-//!   `\https://…`, and character references `\&#…;` — these need the
-//!   not-yet-ported macros/char-reference passes.
+//!   `\https://…` — these need the not-yet-ported macros pass.
 
+use super::char_refs::char_ref_len;
 use super::tokenize::{utf8_char_len, Work};
 
 /// Apply backslash escapes across the raw working buffer (run before any pass
@@ -80,10 +85,23 @@ pub(super) fn run(work: &mut Work) {
             }
             Some(m) => {
                 let plen = typographic_escape_len(bytes, i);
+                let cref = if m == b'&' { char_ref_len(bytes, i + 1) } else { 0 };
                 if plen > 0 {
                     // Typographic pattern (arm: bypass `replacements`).
                     out.push_str(&work.literal_sentinel(old[i + 1..i + 1 + plen].to_string()));
                     i += 1 + plen;
+                } else if cref > 0 {
+                    // `\&#174;` / `\&copy;` — escaped character reference: drop the
+                    // backslash and keep the reference as a literal `Text` event
+                    // (renderer escapes its `&` to `&amp;`), mirroring the legacy
+                    // `char_ref_len_at` escape arm. Emitting it as a `CharRef`
+                    // leaf with `raw = false` reproduces both the escaping AND the
+                    // separate `Text` event the legacy parser pushes for the
+                    // reference (it is NOT coalesced, unlike a `Literal`). Sealing
+                    // it here also keeps the bare-reference survival pass from
+                    // re-extracting this `&` as an `InlinePassthrough`.
+                    out.push_str(&work.char_ref_sentinel(old[i + 1..i + 1 + cref].to_string(), false));
+                    i += 1 + cref;
                 } else if (m == b'"' || m == b'\'') && bytes.get(i + 2).copied() == Some(b'`') {
                     // `\"`` `` / `\'`` `` — smart-quote opener: quote + backtick literal.
                     out.push_str(&work.literal_sentinel(old[i + 1..i + 3].to_string()));
