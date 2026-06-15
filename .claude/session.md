@@ -1,5 +1,58 @@
 # Session context
 
+## Сессия (2026-06-15, 82-я) — РЕРАЙТ inline, Фаза 2 (13/N): macros (5/N) — anchor + index-term
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-anchor-index`** (off master `f1226b6`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. leaf icon+STEM (12/N) к началу сессии УЖЕ смержена (master HEAD `f1226b6`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master (blast_toggle base 343, blast_force base 313).
+
+### Выбор задачи
+ОСТАЛОСЬ macros (5/N+): UI kbd|btn|menu (нужен проброс experimental — НЕ leaf), anchor, index-term,
+footnote (stateful). Взял **anchor + index-term** — обе семьи чистые leaf (id/label/term verbatim, БЕЗ
+re-parse, `subs` не нужен), структурно как icon/image. Объединил в один инкремент (прецедент 12/N: icon+STEM
+вместе). footnote ОТЛОЖЕН (stateful), UI ОТЛОЖЕН (experimental-проброс).
+
+### Архитектура (anchor + index-term = leaf)
+- **anchor** (macros.rs): `try_anchor` (`[[id]]`/`[[id,label]]` — comma: id.trim_end / label.trim_start,
+  пустой label дроп через `.then`), `try_bibliography_anchor` (`[[[id]]]` — оба компонента .trim(), пустой
+  label ОСТАЁТСЯ `Some` — отличие от plain anchor, зеркалю донор), `try_anchor_macro` (`anchor:id[label]` —
+  target `\S+`, whitespace/empty→decline). Диспетч `[`: фаерит ТОЛЬКО при `bytes[i+1]==[` (одиночный `[` =
+  quotes attrlist `[.role]#x#`, отд. пасс ПОЗЖЕ — macros не трогает); `[[[` (bib) проверяется ПЕРЕД `[[`.
+- **index-term** (macros.rs): `try_index_term` (`((…))`; `index_term_close` non-greedy `(.+?)\)\)(?!\))` —
+  `))` со следующим `)` сползает на 1; форма по enclosing-скобкам контента: both→`ConcealedIndexTerm`,
+  только-leading→`Text("(")`+flow `IndexTerm`, только-trailing→flow+`Text(")")`, neither→flow), `try_indexterm`
+  (`indexterm:[p,s,t]`→Concealed), `try_indexterm2` (`indexterm2:[term]`→flow). Helper `concealed_index_term`
+  (splitn(3,',') trim). Литеральный `(`/`)` = свой `Text`-event в Macro-leaf (токенайзер НЕ коалесцирует
+  события macro-leaf — flush_pending + push раздельно → ≡ legacy flush_text+push).
+- **span_has_sentinel guard** на ВСЕХ 6 (как у image/icon/stem): сентинель внутри (passthrough/escape/char-ref
+  лифтнул из id/term) → decline, gate fallback (содержимое verbatim разошлось бы с legacy). Tag-поля
+  `Cow::Owned` (==Borrowed по PartialEq → adopt). Failure-advance `+1` (как легаси для всех этих; anchor_macro
+  легаси +7 но эквивалентно — внутри «anchor:» нет macro-старта).
+
+### Сделано (1 логический коммит, 2 файла)
+- **macros.rs**: армы `indexterm2:`/`indexterm:` (после icon), `anchor:` (перед asciimath), `[[[`/`[[` и `((`
+  (после `<<`); функции try_anchor/try_bibliography_anchor/try_anchor_macro/index_term_close/try_index_term/
+  try_indexterm/try_indexterm2 + helper concealed_index_term. Doc-комментарий модуля: (5/N) anchor+index-term.
+- **mod.rs**: +2 теста `reproduces_legacy_on_anchor_inputs` (19 кейсов) / `reproduces_legacy_on_index_term_inputs`
+  (18 кейсов); doc-комментарии `run_pipeline` обновлены.
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 544 = +2, html 433); subst 22 теста.
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE (base чистый master): Identical 313→325 (+12 FLIP), 0 REGR, 0 паник.** Флипы: document-attributes-ref
+  5751→0, lexicon 498→0, span-cells 275→0, id 113→0, custom-attributes 82→0, bibliography 19→0, add-columns/
+  add-cells-and-rows/release-and-progress/pass-macro/CONTRIBUTING/attribute-terms→0. **outline FARTHER 4797→5487**
+  — ЭКСПЕКТЕД каскад (anchor/index-term теперь извлекаются, но прочие отложенные фичи расходятся; gate отклоняет).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- **macros (6/N+)**: UI kbd|btn|menu (нужен проброс `InlineOptions.experimental` через pipeline — НЕ leaf),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954). escape `\macro` (порт
+  `inline_macro_escape_len` в escape.rs — дешёвый FORCE-win), escape маркеров doubled/`\\MM` (отложено с 8/N).
+  specialchars = NO-OP. ФИНАЛ: снять gate → flip outline при 343 неизменных.
+
+---
+
 ## Сессия (2026-06-15, 81-я) — РЕРАЙТ inline, Фаза 2 (12/N): macros (4/N) — leaf-макросы icon + STEM
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-leaf`** (off master, 343) — **НЕ закоммичена,

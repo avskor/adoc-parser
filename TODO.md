@@ -202,12 +202,43 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 81-я сессия): РЕРАЙТ inline — Фаза 2 (12/N) macros (4/N) leaf-макросы icon + STEM (ветка `feat/subst-phase2-macros-leaf`)
+## АКТУАЛЬНО (2026-06-15, 82-я сессия): РЕРАЙТ inline — Фаза 2 (13/N) macros (5/N) anchor + index-term (ветка `feat/subst-phase2-macros-anchor-index`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-11/N) уже СМЕРЖЕНА в master (`a0c56a6`). **(12/N) НЕ закоммичена,
+снять gate → flip outline. Phase 2 (1-12/N) уже СМЕРЖЕНА в master (`f1226b6`). **(13/N) НЕ закоммичена,
 ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(13/N) macros (5/N) — anchor + index-term** (обе семьи leaf: id/label/term verbatim, БЕЗ
+  re-parse, `subs` не нужен; объединены как icon+STEM в 12/N). **`subst/macros.rs`**:
+  - **anchor:** `try_anchor` (`[[id]]`/`[[id,label]]` — comma: id.trim_end / label.trim_start, пустой
+    label дроп), `try_bibliography_anchor` (`[[[id]]]` — оба .trim(), пустой label ОСТАЁТСЯ `Some` —
+    отличие от plain, зеркалю донор), `try_anchor_macro` (`anchor:id[label]` — target `\S+`,
+    whitespace/empty→decline). Диспетч `[`: фаерит ТОЛЬКО при следующем `[` (одиночный `[` = quotes
+    attrlist, отд. пасс ПОЗЖЕ — macros не трогает); `[[[` (bib) проверяется ПЕРЕД `[[`.
+  - **index-term:** `try_index_term` (`((…))`; `index_term_close` non-greedy `(.+?)\)\)(?!\))` — `))` с
+    последующим `)` сползает на 1; форма по enclosing-скобкам: both→`ConcealedIndexTerm`, leading-only→
+    `Text("(")`+flow `IndexTerm`, trailing-only→flow+`Text(")")`, neither→flow), `try_indexterm`
+    (`indexterm:[p,s,t]`→Concealed), `try_indexterm2` (`indexterm2:[term]`→flow). Helper
+    `concealed_index_term` (splitn(3,',') trim). Литеральный `(`/`)` = свой `Text` в Macro-leaf
+    (токенайзер НЕ коалесцирует события macro-leaf → ≡ legacy flush_text+push).
+  - **span_has_sentinel guard** на всех 6 (как image/icon/stem). Tag-поля `Cow::Owned` (== Borrowed, gate
+    ОК). Failure-advance `+1` (как легаси; anchor_macro донор +7, но эквивалентно — внутри «anchor:» нет
+    macro-старта).
+  - **mod.rs**: doc обновлён; +2 теста `reproduces_legacy_on_anchor_inputs` (19) /
+    `reproduces_legacy_on_index_term_inputs` (18).
+- **Гейт:** blast_toggle **343→343, 0 изменённых файлов** (airtight). **FORCE (base чистый master):
+  Identical 313→325 (+12 FLIP), 0 REGR, 0 паник.** Флипы: document-attributes-ref 5751→0, lexicon 498→0,
+  span-cells 275→0, id 113→0, custom-attributes 82→0, bibliography 19→0 + add-columns/add-cells/pass-macro/
+  CONTRIBUTING/release-and-progress/attribute-terms. **outline FARTHER 4797→5487** — ЭКСПЕКТЕД каскад
+  (anchor/index извлекаются, прочие отложенные фичи расходятся; gate отклоняет).
+- clippy 0, test --workspace зелёное (parser 544 = +2, html 433; 22 subst-теста).
+- **Дальше Фаза 2:** macros (6/N+) UI(kbd/btn/menu — проброс experimental, НЕ leaf)/footnote(STATEFUL);
+  escape `\macro` (порт `inline_macro_escape_len`); marker-escape ВНУТРИ пассов (отложено 8/N);
+  снять gate → flip outline.
+
+### (АРХИВ 81-й) Phase 2 (12/N) macros (4/N) leaf-макросы icon + STEM — СМЕРЖЕНА в master `f1226b6`
+- [x] **(12/N) macros (4/N) — leaf-макросы icon + STEM** (оба leaf как image: НЕТ label re-parse, НЕТ
+  options). **`subst/macros.rs`**:
 - [x] **(12/N) macros (4/N) — leaf-макросы icon + STEM** (оба leaf как image: НЕТ label re-parse, НЕТ
   options). **`subst/macros.rs`**:
   - `try_icon` (зеркало `try_icon_macro`+`parse_target_bracket_macro`): триггер `i`+`icon:`, `name`→
