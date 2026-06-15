@@ -1,5 +1,62 @@
 # Session context
 
+## Сессия (2026-06-15, 79-я) — РЕРАЙТ inline, Фаза 2 (10/N): macros (2/N) — link-семейство
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-links`** (off master `4a69fc7`, 343) — **НЕ
+закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push` +
+удаление ветки. cross-ref (9/N) к началу сессии УЖЕ смержена (`4a69fc7`). base-бинарь `/tmp/adoc_base` =
+legacy-эталон (legacy неизменен → валиден без пересборки; blast_toggle подтвердил base 343).
+
+### Выбор задачи (по плану 78-й)
+Следующий пункт плана — **macros (2/N) link/url/mailto/autolink/email**. Это связный «link»-срез: строит
+поверх инфры cross-ref (`TagToken::Macro` + label-reparse), флипает nav/URL-кластеры по всему корпусу.
+
+### Сделано (1 логический коммит, 3 точки + тест)
+- **inline.rs**: `url_encode_into` → `pub(crate)` (reuse для mailto query-encode).
+- **macros.rs**: в `extract` добавлены триггеры `l`(link:)/`m`(mailto:)/`h`/`f`/`i`(scheme)/`@`(email);
+  failed-макрос advance 1 байт. Новые функции (зеркала legacy-доноров):
+  - `try_link` (зеркало `try_link_macro` 2059, plain-форма; `++url++` отложена через span-guard),
+  - `try_mailto` (зеркало `try_mailto_macro` 2154; `?subject=&body=` через `url_encode_into`),
+  - `scheme_at`/`at_autolink_boundary` (по ПРЕДЫДУЩЕМУ байту: whitespace/`<>()[];`/start; extracted-конструкт
+    оставляет TAG_TAIL = non-boundary, совпадает с legacy-видом позиции),
+  - `try_autolink` (зеркало `try_autolink` 2480; trailing-punct strip только для bare, `[label]` форма),
+  - `try_email` (зеркало `try_email_autolink` 2556; backward-scan local part в `src`, стоп на non-local
+    байте — TAG_LEAD/TAG_TAIL естественно ограничивают; возвращает `local_start` → caller делает
+    `out.truncate(out.len()-(i-local_start))` перед splice, т.к. local part уже скопирована в `out`),
+  - `build_link`/`push_label` (общие; `push_label` пуст для "" — зеркало `push_macro_label("")`).
+  - `parse_link_attrs` (reuse из attributes.rs): `^`-blank-window/role/window/nofollow/subject/body.
+- **mod.rs**: doc run_pipeline + macros-комментарий обновлены; +тест `reproduces_legacy_on_link_inputs`.
+
+### Ключевые инварианты (для будущих macro-сессий)
+- **email truncate безопасен:** local-part байты `[A-Za-z0-9._+-]` НЕ содержат `:`/`/`/`<` → НИ ОДИН макрос
+  не сработал внутри local-run в этом проходе → `out`-хвост байт-в-байт == `src[local_start..i]`. Сентинели
+  прошлых пассов (0x01/0x02) НЕ local-part → backward-scan стопает до них (== legacy `text_start`).
+- **Tag::Link поля = Cow::Owned** (== Cow::Borrowed легаси по PartialEq → gate ОК), как у cross-ref.
+- **`++url++` форма link declined:** к macros-time passthrough уже сентинель → span_has_sentinel → None →
+  gate fb на legacy (который её рендерит). Дешёвый отложенный кейс, не баг.
+
+### Верификация (airtight, огромный FORCE-прирост)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 539→540, html 433, render-core 15,
+  parsing-lab 233/233); subst 18 тестов (+1 link, 40 кейсов).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight).
+- **FORCE (blast_force, base legacy): Identical 111→311 (+200!).** 200 FLIP, 21 closer, **4 FARTHER, 0 REGR**.
+  Link даёт +57 поверх cross-ref baseline (254→311). FARTHER: 3 файла (page-breaks/attribute-terms/
+  span-cells) — **0 моих триггеров** (каскад cross-ref `` `<<<` ``/отложенного, мой код не трогал) +
+  pass-macro.adoc (отложенный `link:++url++[]`). force_nearmiss 90→33.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **macros (3/N+)** — image/footnote/icon/UI(kbd/btn/menu)/stem/anchor(`[[id]]`/`[[[bib]]]`)/index-term(`((…))`).
+   Доноры: try_inline_image 2276, try_footnote_macro 1954, try_icon_macro 1830, try_stem_macro 1854,
+   try_kbd/btn/menu 1722/1745/1806, try_anchor 2671, try_bibliography_anchor 2629, try_index_term 2772.
+2. **link `++url++` форма** (passthrough-in-URL) — спец-обработка, если понадобится флип pass-macro.adoc.
+3. **escape `\macro`** (`\xref:`/`\link:`/…) — порт `inline_macro_escape_len` (inline.rs 1174) в escape.rs.
+4. **escape маркеров+`\+` ВНУТРИ пассов** (отложено с 8/N — doubled-формы, `\\MM`).
+5. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>
+  <limit>` (FORCE-дифф под `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1`), `/tmp/force_nearmiss.py`.
+
+---
+
 ## Сессия (2026-06-15, 78-я) — РЕРАЙТ inline, Фаза 2 (9/N): macros (1/N) — cross-reference (`xref:` + `<<>>`)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros`** (off master `713d62b`, 343) — **НЕ

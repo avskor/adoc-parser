@@ -148,7 +148,7 @@ pub(crate) fn apply_typographic_replacements<'a>(
 /// Percent-encode `s` into `buf` the way Asciidoctor encodes mailto query
 /// values (Ruby `ERB::Util.url_encode`): every byte outside `A-Za-z0-9_.~-`
 /// becomes `%XX` with uppercase hex; a space is `%20`, not `+`.
-fn url_encode_into(buf: &mut String, s: &str) {
+pub(crate) fn url_encode_into(buf: &mut String, s: &str) {
     for &b in s.as_bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'~' | b'-' => {
