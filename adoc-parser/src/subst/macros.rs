@@ -17,13 +17,20 @@
 //!   Like the inline image these carry no re-parsed label: the name/variant goes on
 //!   the tag and the attrlist / math content becomes a single raw `Text` event.
 //!   The STEM content honours the `\]` escape (unescaped to `]`).
+//! - **anchor + index-term** (5/N) — the anchor family (`[[id]]` / `[[id,label]]`,
+//!   the `[[[id]]]` bibliography form, and the `anchor:id[label]` macro) → an
+//!   `Anchor` tag / a `BibliographyAnchor` event; and the index-term family (the
+//!   `((term))` flow / `(((primary, secondary)))` concealed shorthand, the
+//!   `indexterm:[…]` concealed macro, and the `indexterm2:[term]` flow macro) →
+//!   `IndexTerm` / `ConcealedIndexTerm` events. All are leaves: the id/label/term
+//!   text is stored verbatim, never re-parsed.
 //!
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro families — footnote/UI/anchor/index-term — are ported
-//! in subsequent phases; the experimental UI macros — `kbd:`/`btn:`/`menu:` — need
-//! the `:experimental:` option threaded through the pipeline, deferred with them.)
+//! it. (The remaining macro families — footnote and the experimental UI macros
+//! `kbd:`/`btn:`/`menu:`, which need the `:experimental:` option threaded through
+//! the pipeline — are ported in subsequent phases.)
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -145,6 +152,33 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             continue;
         }
 
+        // indexterm2:[term] (the "flow" macro form — the term renders in place).
+        // Checked before `indexterm:` because the two prefixes diverge only at the
+        // `2`, so the order is immaterial; mirroring the legacy dispatch keeps it
+        // obvious.
+        if bytes[i] == b'i' && src[i..].starts_with("indexterm2:") {
+            if let Some((events, end)) = try_indexterm2(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // indexterm:[primary, secondary, tertiary] (the concealed macro form).
+        if bytes[i] == b'i' && src[i..].starts_with("indexterm:") {
+            if let Some((events, end)) = try_indexterm(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
         // stem:[content] / latexmath:[content] / asciimath:[content] (the three
         // STEM-macro spellings; each requires the `[` directly after the colon, so
         // there is no target part).
@@ -168,6 +202,18 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             i += 1;
             continue;
         }
+        // anchor:id[xreflabel] (the inline-anchor macro form of `[[id]]`).
+        if bytes[i] == b'a' && src[i..].starts_with("anchor:") {
+            if let Some((events, end)) = try_anchor_macro(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
         if bytes[i] == b'a' && src[i..].starts_with("asciimath:[") {
             if let Some((events, end)) = try_stem(&src, i, 10, "asciimath") {
                 out.push_str(&work.macro_sentinel(events));
@@ -187,6 +233,45 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
                 continue;
             }
             // Not a valid cross reference → advance past one '<'.
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // Bibliography anchor `[[[id]]]` / `[[[id, label]]]` and the plain anchor
+        // `[[id]]` / `[[id,xreflabel]]`. Only the `[[`-doubled form is a macro; a
+        // single `[` opens the quotes attrlist span (`[.role]#x#`, handled later by
+        // the quotes pass), so the dispatch fires solely on a following `[`. The
+        // triple-bracket bibliography form is checked first (it is a superset).
+        if bytes[i] == b'[' && bytes.get(i + 1) == Some(&b'[') {
+            if bytes.get(i + 2) == Some(&b'[') {
+                if let Some((events, end)) = try_bibliography_anchor(&src, i) {
+                    out.push_str(&work.macro_sentinel(events));
+                    i = end;
+                    continue;
+                }
+            } else if let Some((events, end)) = try_anchor(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            // Not a valid anchor → advance past one '[' (mirrors the legacy
+            // `pos += 1` so the second `[` is re-examined on the next iteration).
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // Index term: concealed `(((primary, secondary)))` or flow `((term))`. One
+        // pattern (Asciidoctor `\(\((.+?)\)\)(?!\))`); the matched content's own
+        // enclosing parens decide the form.
+        if bytes[i] == b'(' && bytes.get(i + 1) == Some(&b'(') {
+            if let Some((events, end)) = try_index_term(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            // Not a valid index term → advance past one '('.
             out.push_str(&src[i..i + 1]);
             i += 1;
             continue;
@@ -527,6 +612,222 @@ fn try_stem(
     }
     events.push(Event::End(TagEnd::Stem));
     Some((events, end))
+}
+
+/// At a `[[` (caller guarantees the doubled bracket and that it is not the
+/// `[[[` bibliography form), try to match the anchor `[[id]]` / `[[id,xreflabel]]`.
+/// Mirror of [`crate::inline::InlineState::try_anchor`]. A *leaf* macro: the id and
+/// xreflabel are stored verbatim on the tag (never re-parsed), so the
+/// `Start(Anchor)`/`End` pair is built directly. The comma form trims the id's
+/// trailing whitespace and the label's leading whitespace, dropping an empty label.
+fn try_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 2..]; // after "[["
+    let close = rest.find("]]")?;
+    let content = &rest[..close];
+    if content.is_empty() {
+        return None;
+    }
+    let (id, label) = match content.split_once(',') {
+        Some((i, l)) => {
+            let l = l.trim_start();
+            (i.trim_end(), (!l.is_empty()).then(|| l.to_string()))
+        }
+        None => (content, None),
+    };
+    if id.is_empty() {
+        return None;
+    }
+    let end = start + 2 + close + 2;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events = vec![
+        Event::Start(Tag::Anchor {
+            id: Cow::Owned(id.to_string()),
+            label: label.map(Cow::Owned),
+        }),
+        Event::End(TagEnd::Anchor),
+    ];
+    Some((events, end))
+}
+
+/// At a `[[[` (caller guarantees the triple bracket), try to match the
+/// bibliography anchor `[[[id]]]` / `[[[id, label]]]`. Mirror of
+/// [`crate::inline::InlineState::try_bibliography_anchor`]. A *leaf* emitting a
+/// standalone `BibliographyAnchor` event. With a comma, both id and label are
+/// fully trimmed and an *empty* label is still `Some` (unlike the plain anchor),
+/// matching the donor.
+fn try_bibliography_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let after_open = start + 3; // after "[[["
+    let rest = &src[after_open..];
+    let close = rest.find("]]]")?;
+    let content = &rest[..close];
+    if content.is_empty() {
+        return None;
+    }
+    let (id, label) = if let Some((i, l)) = content.split_once(',') {
+        let id = i.trim();
+        if id.is_empty() {
+            return None;
+        }
+        (id, Some(l.trim().to_string()))
+    } else {
+        (content, None)
+    };
+    let end = after_open + close + 3;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events = vec![Event::BibliographyAnchor {
+        id: Cow::Owned(id.to_string()),
+        label: label.map(Cow::Owned),
+    }];
+    Some((events, end))
+}
+
+/// At an `anchor:` (caller guarantees the prefix), try to match the inline-anchor
+/// macro `anchor:id[]` / `anchor:id[xreflabel]` — equivalent to `[[id]]`. Mirror of
+/// [`crate::inline::InlineState::try_anchor_macro`]. The target is a run of
+/// non-whitespace characters (Asciidoctor `\S+`); the bracket content is the
+/// xreflabel (reference text, never rendered in place), stored verbatim. A *leaf*.
+fn try_anchor_macro(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 7..]; // after "anchor:"
+    let bracket = rest.find('[')?;
+    let id = &rest[..bracket];
+    if id.is_empty() || id.contains(char::is_whitespace) {
+        return None;
+    }
+    let close = rest[bracket + 1..].find(']')?;
+    let label_text = &rest[bracket + 1..bracket + 1 + close];
+    let end = start + 7 + bracket + 1 + close + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events = vec![
+        Event::Start(Tag::Anchor {
+            id: Cow::Owned(id.to_string()),
+            label: (!label_text.is_empty()).then(|| Cow::Owned(label_text.to_string())),
+        }),
+        Event::End(TagEnd::Anchor),
+    ];
+    Some((events, end))
+}
+
+/// Closing `))` position for an index term, relative to the content start. Mirror
+/// of [`crate::inline::InlineState::index_term_close`] (Asciidoctor's non-greedy
+/// `(.+?)\)\)(?!\))`): the first `))` whose follower is yet another `)` slides
+/// forward by one, extending the content (`a)))` → content `a)`).
+fn index_term_close(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    let mut close = rest.find("))")?;
+    while bytes.get(close + 2) == Some(&b')') {
+        close += 1;
+    }
+    if close == 0 { None } else { Some(close) }
+}
+
+/// At a `((` (caller guarantees the doubled paren), try to match an index term.
+/// Mirror of [`crate::inline::InlineState::try_index_term`]: the matched content's
+/// own enclosing parens decide the form — both → concealed (comma-split) term, one
+/// → literal paren beside a flow term, neither → a plain flow term. A *leaf*: all
+/// pieces are stored verbatim, and a literal `(`/`)` becomes its own `Text` event
+/// just as the donor pushes it (the tokenizer emits the leaf's events without
+/// coalescing).
+fn try_index_term(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let after_open = start + 2; // after "(("
+    let rest = &src[after_open..];
+    let close = index_term_close(rest)?;
+    let content = &rest[..close];
+    let end = after_open + close + 2;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let starts = content.starts_with('(');
+    let ends = content.ends_with(')');
+    let events = if starts && ends {
+        let inner = &content[1..content.len() - 1];
+        concealed_index_term(inner)
+    } else if starts {
+        vec![
+            Event::Text(Cow::Borrowed("(")),
+            Event::IndexTerm {
+                text: Cow::Owned(content[1..].to_string()),
+            },
+        ]
+    } else if ends {
+        vec![
+            Event::IndexTerm {
+                text: Cow::Owned(content[..content.len() - 1].to_string()),
+            },
+            Event::Text(Cow::Borrowed(")")),
+        ]
+    } else {
+        vec![Event::IndexTerm {
+            text: Cow::Owned(content.to_string()),
+        }]
+    };
+    Some((events, end))
+}
+
+/// At an `indexterm:` (caller guarantees the prefix), try to match the concealed
+/// index-term macro `indexterm:[primary, secondary, tertiary]`. Mirror of
+/// [`crate::inline::InlineState::try_indexterm_macro`]: requires the `[` directly
+/// after the colon, splits the content into up to three trimmed terms, and emits a
+/// `ConcealedIndexTerm` (invisible in the flow). A *leaf*.
+fn try_indexterm(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 10..]; // after "indexterm:"
+    if !rest.starts_with('[') {
+        return None;
+    }
+    let bracket_end = rest.find(']')?;
+    let content = &rest[1..bracket_end];
+    if content.is_empty() {
+        return None;
+    }
+    let end = start + 10 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    Some((concealed_index_term(content), end))
+}
+
+/// At an `indexterm2:` (caller guarantees the prefix), try to match the flow
+/// index-term macro `indexterm2:[term]`. Mirror of
+/// [`crate::inline::InlineState::try_indexterm2_macro`]: the whole bracket content
+/// is the rendered term. A *leaf*.
+fn try_indexterm2(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 11..]; // after "indexterm2:"
+    if !rest.starts_with('[') {
+        return None;
+    }
+    let bracket_end = rest.find(']')?;
+    let content = &rest[1..bracket_end];
+    if content.is_empty() {
+        return None;
+    }
+    let end = start + 11 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events = vec![Event::IndexTerm {
+        text: Cow::Owned(content.to_string()),
+    }];
+    Some((events, end))
+}
+
+/// Build a `ConcealedIndexTerm` from the raw comma-separated term list (shared by
+/// the `(((…)))` shorthand and the `indexterm:[…]` macro). Up to three trimmed
+/// parts: primary, optional secondary, optional tertiary.
+fn concealed_index_term(inner: &str) -> Vec<Event<'static>> {
+    let mut parts = inner.splitn(3, ',');
+    let primary = parts.next().unwrap().trim();
+    let secondary = parts.next().map(|s| s.trim());
+    let tertiary = parts.next().map(|s| s.trim());
+    vec![Event::ConcealedIndexTerm {
+        primary: Cow::Owned(primary.to_string()),
+        secondary: secondary.map(|s| Cow::Owned(s.to_string())),
+        tertiary: tertiary.map(|s| Cow::Owned(s.to_string())),
+    }]
 }
 
 /// Whether an autolink scheme (`http://`/`https://`/`ftp://`/`irc://`) begins at

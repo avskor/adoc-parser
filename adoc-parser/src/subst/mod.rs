@@ -132,13 +132,14 @@ pub(crate) fn try_parse<'a>(
 /// `:double`/`:single` curved smart quotes), `macros` (so far the cross-reference
 /// family — `xref:target[label]` and `<<target>>` — with the label re-parsed via
 /// an inner `MACROS`-cleared pipeline) plus the link family (`link:`/`mailto:`
-/// macros and bare URL/email autolinks), the inline image (`image:`), and the leaf
-/// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), `replacements`,
-/// `post_replacements`. The remaining macro families (footnote/UI/anchor/
-/// index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`, which
-/// belong inside the quote/passthrough passes — are not yet ported; inputs that
-/// need them diverge from legacy and are rejected by the gate (or surface as diffs
-/// under `force()`).
+/// macros and bare URL/email autolinks), the inline image (`image:`), the leaf
+/// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), and the anchor
+/// (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
+/// `indexterm2:`) families, `replacements`, `post_replacements`. The remaining
+/// macro families (footnote and the experimental UI macros) — and the quote-marker
+/// escapes `\*`/`\_`/`` \` `` and `\+`, which belong inside the quote/passthrough
+/// passes — are not yet ported; inputs that need them diverge from legacy and are
+/// rejected by the gate (or surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
@@ -175,9 +176,11 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // macro would be declined. A label is re-parsed with MACROS cleared (mirroring
     // `push_macro_label`). Ported so far: the cross-reference family
     // (`xref:`/`<<>>`), the link family (`link:`/`mailto:`, bare URL/email
-    // autolinks), the inline image (`image:`), and the leaf macros `icon:` and the
-    // STEM family (`stem:`/`latexmath:`/`asciimath:`); the remaining macros are not,
-    // so their inputs diverge from legacy and the gate rejects them.
+    // autolinks), the inline image (`image:`), the leaf macros `icon:` and the
+    // STEM family (`stem:`/`latexmath:`/`asciimath:`), and the anchor
+    // (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
+    // `indexterm2:`) families; the remaining macros are not, so their inputs
+    // diverge from legacy and the gate rejects them.
     if subs.has(SubstitutionSet::MACROS) {
         macros::extract(&mut work, subs);
     }
@@ -928,6 +931,97 @@ mod tests {
             // mid-word — the engine must match at the same offset legacy does
             "prefixicon:x[]",
             "myasciimath:[x]",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the anchor family ported (`[[id]]` / `[[id,label]]`, the `[[[id]]]`
+    /// bibliography form, and the `anchor:id[label]` macro), the pipeline must
+    /// reproduce legacy on every form: the bare and labelled anchor (comma-split,
+    /// trimmed, empty-label dropped), the bibliography anchor (empty label kept as
+    /// `Some`), the anchor macro (whitespace target rejected), references mixed with
+    /// surrounding text and spans, and the invalid forms that stay literal. Each
+    /// leaf is opaque to the later quote/replacement passes.
+    #[test]
+    fn reproduces_legacy_on_anchor_inputs() {
+        let cases = [
+            // plain anchor: bare, labelled (trimmed), empty-label dropped
+            "[[anchor-id]]",
+            "[[id,Reference Text]]",
+            "[[id , spaced label ]]",
+            "[[id,]]",
+            "see [[here]] now",
+            // bibliography anchor: bare, labelled, empty label kept
+            "[[[biblio-ref]]]",
+            "[[[ref, Display Label]]]",
+            "[[[ref,]]]",
+            "[[[ Knuth1984 ]]]",
+            // anchor macro: bare, labelled, whitespace target → literal
+            "anchor:my-id[]",
+            "anchor:my-id[xreflabel]",
+            "anchor:bad id[x]",
+            // anchors beside / inside spans and mixed with text
+            "*x* [[a]] and [[b,c]]",
+            "before anchor:t[] after",
+            "[[a]]text",
+            // invalid → literal (unclosed, empty, single bracket left to quotes)
+            "[[unclosed",
+            "[[]]",
+            "[[[unclosed]]",
+            "anchor:noclose",
+            "[single]",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the index-term family ported (the `((term))` flow / `(((p, s)))`
+    /// concealed shorthand, the `indexterm:[…]` concealed macro, and the
+    /// `indexterm2:[term]` flow macro), the pipeline must reproduce legacy on every
+    /// form: the four shorthand shapes decided by enclosing parens (a one-sided
+    /// paren splits off a literal `Text`), the non-greedy `))` close that slides
+    /// over a trailing `)`, the comma-split concealed terms (up to three), and the
+    /// invalid forms that stay literal.
+    #[test]
+    fn reproduces_legacy_on_index_term_inputs() {
+        let cases = [
+            // flow shorthand: plain term
+            "((tigers))",
+            "see ((big cats)) here",
+            // concealed shorthand: both parens, comma-split
+            "(((Big cats, Tigers)))",
+            "(((a, b, c)))",
+            "((( spaced , terms )))",
+            // one-sided paren → literal paren beside a flow term
+            "(((leading)",
+            "((trailing)))",
+            // non-greedy close slides over a trailing `)`
+            "((a)))",
+            // concealed macro and flow macro
+            "indexterm:[Big cats, Tigers]",
+            "indexterm:[single]",
+            "indexterm2:[flow term]",
+            // mixed with surrounding text
+            "a ((term)) b",
+            "x indexterm:[y] z",
+            // invalid → literal (no close, empty, single paren left alone)
+            "((unclosed",
+            "(())",
+            "indexterm:[]",
+            "indexterm2:[]",
+            "indexterm:noclose",
+            "(single paren)",
         ];
         for c in cases {
             assert_eq!(
