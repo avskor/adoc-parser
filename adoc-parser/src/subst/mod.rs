@@ -132,11 +132,13 @@ pub(crate) fn try_parse<'a>(
 /// `:double`/`:single` curved smart quotes), `macros` (so far the cross-reference
 /// family — `xref:target[label]` and `<<target>>` — with the label re-parsed via
 /// an inner `MACROS`-cleared pipeline) plus the link family (`link:`/`mailto:`
-/// macros and bare URL/email autolinks), `replacements`, `post_replacements`. The
-/// remaining macro families (image/footnote/icon/UI/stem/anchor/index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`,
-/// which belong inside the quote/passthrough passes — are not yet ported; inputs
-/// that need them diverge from legacy and are rejected by the gate (or surface as
-/// diffs under `force()`).
+/// macros and bare URL/email autolinks), the inline image (`image:`), and the leaf
+/// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), `replacements`,
+/// `post_replacements`. The remaining macro families (footnote/UI/anchor/
+/// index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`, which
+/// belong inside the quote/passthrough passes — are not yet ported; inputs that
+/// need them diverge from legacy and are rejected by the gate (or surface as diffs
+/// under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
@@ -172,9 +174,10 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // event. Extracting `attributes` first would lift it into a sentinel and the
     // macro would be declined. A label is re-parsed with MACROS cleared (mirroring
     // `push_macro_label`). Ported so far: the cross-reference family
-    // (`xref:`/`<<>>`) and the link family (`link:`/`mailto:`, bare URL/email
-    // autolinks); the remaining macros are not, so their inputs diverge from legacy
-    // and the gate rejects them.
+    // (`xref:`/`<<>>`), the link family (`link:`/`mailto:`, bare URL/email
+    // autolinks), the inline image (`image:`), and the leaf macros `icon:` and the
+    // STEM family (`stem:`/`latexmath:`/`asciimath:`); the remaining macros are not,
+    // so their inputs diverge from legacy and the gate rejects them.
     if subs.has(SubstitutionSet::MACROS) {
         macros::extract(&mut work, subs);
     }
@@ -877,6 +880,54 @@ mod tests {
             // mixed with text and wrapped by a span
             "see image:a.png[A] and image:b.png[B]",
             "*image:a.png[A]*",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the leaf macros ported (`icon:name[attrs]` and the STEM family
+    /// `stem:[…]` / `latexmath:[…]` / `asciimath:[…]`), the pipeline must reproduce
+    /// legacy on every form: the bare and attrlist-bearing icon, the three STEM
+    /// spellings (empty and non-empty content), the `\]` escape inside STEM
+    /// content, the invalid forms that stay literal, and mixes with surrounding
+    /// text and spans. Each leaf is opaque to the later quote/replacement passes,
+    /// so neither the icon attrlist nor the math content is re-substituted.
+    #[test]
+    fn reproduces_legacy_on_leaf_macro_inputs() {
+        let cases = [
+            // icon: bare, attrlist (positional + named), mixed with text
+            "icon:heart[]",
+            "icon:heart[2x]",
+            "icon:heart[2x,role=red]",
+            "icon:tags[role=blue] ruby",
+            "see icon:a[] and icon:b[fw] here",
+            // icon: invalid → literal (no brackets, empty name, reversed brackets)
+            "icon:noclose",
+            "icon:[]",
+            "icon:a]b[c]",
+            // STEM: all three spellings, empty and non-empty content
+            "stem:[]",
+            "stem:[x^2]",
+            "latexmath:[\\sqrt{a}]",
+            "asciimath:[sqrt(b)]",
+            // STEM: `\]` escape inside content (does not close, unescaped to `]`)
+            "stem:[[a,b\\],[c,d\\]\\]]",
+            "latexmath:[f(x\\])]",
+            // STEM: no closing bracket → literal
+            "stem:[unterminated",
+            // leaf macros mixed with text and wrapped by a span
+            "before stem:[x] after",
+            "*icon:a[]*",
+            "`stem:[x^2]`",
+            // these macros have no left-boundary rule, so a prefix still matches
+            // mid-word — the engine must match at the same offset legacy does
+            "prefixicon:x[]",
+            "myasciimath:[x]",
         ];
         for c in cases {
             assert_eq!(

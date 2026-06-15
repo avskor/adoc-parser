@@ -202,12 +202,37 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 80-я сессия): РЕРАЙТ inline — Фаза 2 (11/N) macros (3/N) inline image (ветка `feat/subst-phase2-macros-image`)
+## АКТУАЛЬНО (2026-06-15, 81-я сессия): РЕРАЙТ inline — Фаза 2 (12/N) macros (4/N) leaf-макросы icon + STEM (ветка `feat/subst-phase2-macros-leaf`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-10/N) уже СМЕРЖЕНА в master (`3739f30`). **(11/N) НЕ закоммичена,
+снять gate → flip outline. Phase 2 (1-11/N) уже СМЕРЖЕНА в master (`a0c56a6`). **(12/N) НЕ закоммичена,
 ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(12/N) macros (4/N) — leaf-макросы icon + STEM** (оба leaf как image: НЕТ label re-parse, НЕТ
+  options). **`subst/macros.rs`**:
+  - `try_icon` (зеркало `try_icon_macro`+`parse_target_bracket_macro`): триггер `i`+`icon:`, `name`→
+    `Tag::Icon`, attrlist (если непуст)→ОДИН raw `Text`. Empty-name → decline; `]` = первый после `[`.
+  - `try_stem(src,start,prefix_len,variant)` (зеркало `try_stem_macro`+`parse_bracket_macro_escaped`):
+    3 написания `stem:[`/`latexmath:[`/`asciimath:[` (триггеры `s`/`l`/`a`, `[` сразу после `:` → target
+    пуст), variant→`Tag::Stem`, content→ОДИН raw `Text`. **`\]`-escape**: `]` за `\` не закрывает, все
+    `\]`→`]`. escape-пасс `\]` НЕ трогает (blanket-арм) → escaped-bracket доживает до macros.
+  - **span_has_sentinel guard** на обоих (escape/passthrough/char-ref лифт изнутри → decline, gate
+    fallback). Tag-поля `Cow::Owned` (== Borrowed легаси, gate ОК). НЕТ left-boundary (как у легаси):
+    `prefixicon:x[]` матчит icon в середине слова — ОБА движка одинаково.
+  - **mod.rs**: doc обновлён; +тест `reproduces_legacy_on_leaf_macro_inputs` (22 кейса).
+- **Гейт:** blast_toggle **343→343, 0 изменённых файлов** (airtight). **FORCE (base чистый master):
+  Identical 312→313, FLIP stem.adoc 5→0 (байт-в-байт с asciidoctor), 0 REGR, 0 FARTHER, 0 паник.**
+  icon-macro.adoc НЕ флипнул — пред-существующее РЕНДЕРЕР-расхождение (font icons vs текст без
+  `:icons: font`), к subst не относится; события icon ≡ legacy (unit-тест + 0 REGR).
+- clippy 0, test --workspace зелёное (20 subst-тестов, +1 leaf).
+- **UI kbd|btn|menu ОТЛОЖЕН:** нужен проброс `InlineOptions.experimental` через `run_pipeline`/`extract`
+  + рекурсивные `push_label`/`build_cross_reference` (рефактор сигнатуры) — отд. инкремент. При
+  experimental=off (дефолт) UI и так литерал → gate не страдает.
+- **Дальше Фаза 2:** macros (5/N+) UI(kbd/btn/menu, см. выше)/anchor(`[[id]]`/`[[[bib]]]`)/
+  index-term(`((…))`/`indexterm:`/`indexterm2:`)/footnote(STATEFUL); escape `\macro` (порт
+  `inline_macro_escape_len`); marker-escape ВНУТРИ пассов (отложено 8/N); снять gate → flip outline.
+
+### (АРХИВ 80-й) Phase 2 (11/N) macros (3/N) inline image — СМЕРЖЕНА в master `a0c56a6`
 - [x] **(11/N) macros (3/N) — inline image** (`image:target[attrs]` → `InlineImage`-тег). Самый
   большой clean-FORCE кандидат (image.adoc 100 diff = чисто литеральный макрос). **`subst/macros.rs`**:
   - `try_image` (зеркало `try_inline_image`): find `[`/`]`, `bracket_end>bracket_start`, target БЕЗ
@@ -224,9 +249,6 @@ asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до 
   0 REGR, 0 FARTHER.** force_nearmiss 33→32.
 - clippy 0, test --workspace зелёное (parser 540→541, html 433, render-core 15), parsing-lab 233/233
   (19 subst-тестов, +1 image).
-- **Дальше Фаза 2:** macros (4/N+) footnote/icon/UI(kbd/btn/menu)/stem/anchor(`[[id]]`/`[[[bib]]]`)/
-  index-term(`((…))`); escape `\macro` (порт `inline_macro_escape_len`); marker-escape ВНУТРИ пассов
-  (отложено 8/N); снять gate → flip outline.
 
 ### (АРХИВ 79-й) Phase 2 (10/N) macros (2/N) link-семейство — СМЕРЖЕНА в master `3739f30`
 - [x] **(10/N) macros (2/N) — link-семейство** (`link:url[attrs]`, `mailto:email[attrs]`, bare
