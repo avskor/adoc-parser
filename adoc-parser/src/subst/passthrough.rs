@@ -38,6 +38,26 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
     while i < bytes.len() {
         let b = bytes[i];
 
+        // Escaped single-plus passthrough `\+…+`: Asciidoctor folds the `\\?`
+        // escape into the passthrough match, so the backslash is honoured only
+        // when an unescaped `+…+` would form a single-plus passthrough here. When
+        // it would, drop the backslash and emit the opening `+` literal; the
+        // content and closing `+` are NOT extracted — they flow through the normal
+        // substitutions (`\+*b*+` → `+<strong>b</strong>+`), exactly as the
+        // escaped form renders. When it would not (`\+nopass`, `a\+b+c`), the `\+`
+        // is left for the [`super::escape`] pass to keep literal. The doubled
+        // (`\++`/`\+++`) and double-backslash (`\\+`) forms stay deferred.
+        if b == b'\\'
+            && bytes.get(i + 1).copied() == Some(b'+')
+            && bytes.get(i + 2).copied() != Some(b'+')
+            && (i == 0 || bytes[i - 1] != b'\\')
+            && try_single_plus(&src, bytes, i + 1, guard_hard_break).is_some()
+        {
+            out.push('+');
+            i += 2;
+            continue;
+        }
+
         // `+`-delimited passthroughs: +++ / ++ / + (triple retries as double,
         // mirroring `handle_inline_passthrough`).
         if b == b'+'

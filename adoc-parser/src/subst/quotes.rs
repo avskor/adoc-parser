@@ -19,9 +19,14 @@
 //! with `[attrlist]` prefixes), superscript/subscript, and curved smart quotes
 //! `"`…`"`/`'`…`'` (the `:double`/`:single` substitutions, run between strong
 //! and monospace so the leading-edge suppression of monospace/emphasis/mark
-//! falls out of the pass order). **Not** implemented here (handled by other
+//! falls out of the pass order). Each constrained/simple-pair pass also folds in
+//! Asciidoctor's `\\?` quote-marker escape (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`):
+//! the backslash is dropped only when an unescaped marker would open a span at
+//! that position (so it is span-aware, leaving `` `\` `` intact), otherwise the
+//! `\marker` is kept literal. The doubled-marker (`\MM…MM`) and double-backslash
+//! (`\\M`) forms stay deferred. **Not** implemented here (handled by other
 //! passes or left for later phases; the engine's caller falls back to the legacy
-//! parser whenever the result would differ): macros and escape (`\`) handling.
+//! parser whenever the result would differ): the macros pass.
 
 use super::tokenize::{sentinel_end, utf8_char_len, SpanKind, TagToken, Work, TAG_LEAD, TAG_TAIL};
 
@@ -131,6 +136,52 @@ fn find_closing_unconstrained(bytes: &[u8], marker: u8, search_start: usize) -> 
             return Some(i);
         }
         i += 1;
+    }
+    None
+}
+
+/// Detect whether a *bare* constrained span opens at the marker `bytes[i]`
+/// (`== marker`), returning the closing-marker position. This is the detection
+/// half of the bare-marker arm in [`pass_constrained`], factored out so the
+/// escape branch can reuse it: a `\marker…` is an escaped span (drop the
+/// backslash, keep the markers literal) only when an *unescaped* `marker…` would
+/// have opened a span here — exactly Asciidoctor's `\\?`-capture rule, where the
+/// escape is honoured only when the quote regex actually matches.
+fn constrained_open_close(tags: &[TagToken], bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
+    let open_boundary = i == 0 || !is_word(bytes[i - 1]);
+    if !open_boundary
+        || bytes.get(i + 1).copied() == Some(marker)
+        || smart_quote_leading_edge(tags, bytes, marker, i)
+    {
+        return None;
+    }
+    let content_start = i + 1;
+    if content_start >= bytes.len() || bytes[content_start] == b' ' {
+        return None;
+    }
+    let close_pos = find_closing_constrained(bytes, marker, content_start)?;
+    if !constrained_close_ok(bytes, marker, content_start, close_pos, true) {
+        return None;
+    }
+    Some(close_pos)
+}
+
+/// Detect whether a superscript/subscript simple pair opens at `bytes[i]`
+/// (`== marker`), returning the closing-marker position. Detection half of the
+/// arm in [`pass_simple_pair`], reused by the escape branch (see
+/// [`constrained_open_close`]).
+fn simple_pair_open_close(bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
+    let content_start = i + 1;
+    let mut j = content_start;
+    while j < bytes.len() {
+        if bytes[j] == TAG_LEAD {
+            j = sentinel_end(bytes, j);
+            continue;
+        }
+        if bytes[j] == marker && j > content_start {
+            return Some(j);
+        }
+        j += 1;
     }
     None
 }
@@ -248,6 +299,33 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
             continue;
         }
 
+        // Escaped marker `\M…` — Asciidoctor folds the `\\?` escape into this
+        // quote substitution, so the backslash is honoured only when an unescaped
+        // `M…` would open a span here. When it would (`\*bold*`), drop the
+        // backslash and emit the markers literal with the content left raw for the
+        // later passes (`\*_em_*` → `*<em>em</em>*`); when it would not
+        // (`\* not bold`, `\#tag`), keep `\M` literal. Restricted to a single
+        // (non-doubled) marker not itself preceded by a backslash — the `\\M…`
+        // and `\MM…MM` forms stay deferred and fall back through the gate.
+        if bytes[i] == b'\\'
+            && bytes.get(i + 1).copied() == Some(marker)
+            && bytes.get(i + 2).copied() != Some(marker)
+            && (i == 0 || bytes[i - 1] != b'\\')
+        {
+            let mpos = i + 1;
+            if let Some(close_pos) = constrained_open_close(&work.tags, bytes, mpos, marker) {
+                out.push(marker as char);
+                out.push_str(&old[mpos + 1..close_pos]);
+                out.push(marker as char);
+                i = close_pos + 1;
+            } else {
+                out.push('\\');
+                out.push(marker as char);
+                i += 2;
+            }
+            continue;
+        }
+
         let open_boundary = i == 0 || !is_word(bytes[i - 1]);
 
         // [attrlist]M…M (constrained: open boundary required)
@@ -268,23 +346,14 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
         // open at the leading edge of a smart quote (mirrors the legacy
         // `smart_quote_leading_edge`): they run after `:double`/`:single`, so the
         // byte before them is that pass's opening-quote sentinel.
-        if open_boundary
-            && bytes[i] == marker
-            && bytes.get(i + 1).copied() != Some(marker)
-            && !smart_quote_leading_edge(&work.tags, bytes, marker, i)
+        if bytes[i] == marker
+            && let Some(close_pos) = constrained_open_close(&work.tags, bytes, i, marker)
         {
-            let content_start = i + 1;
-            if content_start < bytes.len()
-                && bytes[content_start] != b' '
-                && let Some(close_pos) = find_closing_constrained(bytes, marker, content_start)
-                && constrained_close_ok(bytes, marker, content_start, close_pos, true)
-            {
-                out.push_str(&work.open_sentinel(bare_kind, None, Vec::new()));
-                out.push_str(&old[content_start..close_pos]);
-                out.push_str(&work.close_sentinel(bare_kind));
-                i = close_pos + 1;
-                continue;
-            }
+            out.push_str(&work.open_sentinel(bare_kind, None, Vec::new()));
+            out.push_str(&old[i + 1..close_pos]);
+            out.push_str(&work.close_sentinel(bare_kind));
+            i = close_pos + 1;
+            continue;
         }
 
         let len = utf8_char_len(bytes[i]);
@@ -461,30 +530,35 @@ fn pass_simple_pair(work: &mut Work, marker: u8, kind: SpanKind) {
             continue;
         }
 
-        if bytes[i] == marker {
-            let content_start = i + 1;
-            // first marker strictly after content_start (non-empty content),
-            // skipping sentinel regions
-            let mut j = content_start;
-            let mut close = None;
-            while j < bytes.len() {
-                if bytes[j] == TAG_LEAD {
-                    j = sentinel_end(bytes, j);
-                    continue;
-                }
-                if bytes[j] == marker && j > content_start {
-                    close = Some(j);
-                    break;
-                }
-                j += 1;
-            }
-            if let Some(close_pos) = close {
-                out.push_str(&work.open_sentinel(kind, None, Vec::new()));
-                out.push_str(&old[content_start..close_pos]);
-                out.push_str(&work.close_sentinel(kind));
+        // Escaped marker `\^…` / `\~…` — honour the escape only when an unescaped
+        // pair would form here (see the constrained-pass escape branch).
+        if bytes[i] == b'\\'
+            && bytes.get(i + 1).copied() == Some(marker)
+            && bytes.get(i + 2).copied() != Some(marker)
+            && (i == 0 || bytes[i - 1] != b'\\')
+        {
+            let mpos = i + 1;
+            if let Some(close_pos) = simple_pair_open_close(bytes, mpos, marker) {
+                out.push(marker as char);
+                out.push_str(&old[mpos + 1..close_pos]);
+                out.push(marker as char);
                 i = close_pos + 1;
-                continue;
+            } else {
+                out.push('\\');
+                out.push(marker as char);
+                i += 2;
             }
+            continue;
+        }
+
+        if bytes[i] == marker
+            && let Some(close_pos) = simple_pair_open_close(bytes, i, marker)
+        {
+            out.push_str(&work.open_sentinel(kind, None, Vec::new()));
+            out.push_str(&old[i + 1..close_pos]);
+            out.push_str(&work.close_sentinel(kind));
+            i = close_pos + 1;
+            continue;
         }
 
         let len = utf8_char_len(bytes[i]);

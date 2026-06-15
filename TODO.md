@@ -202,13 +202,47 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 76-я сессия): РЕРАЙТ inline — Фаза 2 (7/N) char-refs (ветка `feat/subst-phase2-marker-escape`)
+## АКТУАЛЬНО (2026-06-15, 77-я сессия): РЕРАЙТ inline — Фаза 2 (8/N) marker escape + `\+` span-aware (ветка `feat/subst-phase2-marker-escape-v2`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-6/N) уже СМЕРЖЕНА в master (`3fdb828`). **(7/N) НЕ
-закоммичена, ОЖИДАЕТ авторизации на commit+merge+push** (имя ветки историческое — пивот
-marker-escape→char-refs по FORCE-данным, как 74-я macros→curved-quotes):
+снять gate → flip outline. Phase 2 (1-7/N) уже СМЕРЖЕНА в master (`18aaacf`). **(8/N) НЕ
+закоммичена, ОЖИДАЕТ авторизации на commit+merge+push:**
+- [x] **(8/N) escape маркеров `\*`/`\_`/`` \` ``/`\#`/`\^`/`\~` + `\+` (span-aware, ВНУТРИ пассов)** —
+  модель asciidoctor `\\?`: backslash роняется ТОЛЬКО если на этой позиции образовался бы валидный
+  спан/passthrough (drop → литеральные маркеры, контент проходит остальные пассы:
+  `\*_em_*`→`*<em>em</em>*`, `\+*b*+`→`+<strong>b</strong>+`), иначе `\marker` остаётся литералом.
+  `open_boundary` удовлетворяется самим `\` (работает `word\*bold*`). **quotes.rs**: хелперы
+  `constrained_open_close`/`simple_pair_open_close` (детект-половина, без сентинелей); escape-ветки в
+  `pass_constrained` (`* _ ` #`) и `pass_simple_pair` (`^ ~`); bare-ветки отрефакторены на хелперы.
+  **passthrough.rs**: `\+…+` (валидный single-plus) → drop `\`, emit `+` литералом, контент через
+  нормальные субституции. **escape.rs/mod.rs**: docs (маркеры/`\+` теперь в своих пассах, не deferred).
+  **Гейт ВНУТРИ пассов обязателен** (НЕ escape-first): `\` внутри открытого спана (`` `\` ``) — контент,
+  escape-first спрятал бы закрывающий маркер → рвал спан (`` (`\`) and (`]`) ``).
+- **Исправлен баг legacy:** asciidoctor сохраняет `\#`/`\^`/`\~`/`\+` при отсутствии спана, legacy
+  ОШИБОЧНО ронял backslash — новый движок матчит asciidoctor (FORCE closer; gate отклоняет на transition,
+  т.к. событийно ≠ legacy). Также `\`+marker КОАЛЕСЦИРУЕТ литерал в один Text (legacy флашит порознь) —
+  HTML тот же, события ≠ → gate fallback (безвреден).
+- **ОТЛОЖЕНО:** doubled-формы (`\**`/`\##`/`\++`/`\+++`), `\\MM` — расходятся, редки (guard
+  `bytes[i+2]!=marker`/`!='+'` и `bytes[i-1]!='\\'`). Пре-существующее: `a\*b*c` (asciidoctor роняет,
+  движок сохраняет — close-assertion subtlety, НЕ тронуто моим изменением).
+- **Гейт:** toggle-on **343→343, 0 изменённых файлов** (airtight, нулевая регрессия корпуса).
+  **FORCE: subs.adoc 122→87** (closer −35, `\*Stars*`→`*Stars*` и др.), Identical 111→111, **0 flips**
+  (ровно как прогноз 76-й: marker-escape без near-miss). **span-cells 271→274 (+3) — АРТЕФАКТ
+  выравнивания ndiffs** (строка 18 `` (`\+`) `` теперь даёт корректный `<code>+</code>` == asciidoctor,
+  но +4 токена в файле, рассинхронизированном неподдержанным `[[id]]`-anchor, сдвигают позиционную
+  метрику; контент строго улучшен, проверено изолированно байт-в-байт). Единственная контент-правка —
+  одна строка, в плюс. НЕ контент-регрессия.
+- clippy 0, test --workspace зелёное (parser 536→538, html 433, render-core 15), parsing-lab 233/233
+  (+2 subst-теста `reproduces_legacy_on_marker_escape_inputs`/`marker_escape_matches_asciidoctor`,
+  renamed `escape_marker_left_untouched`→`marker_escape_does_not_tear_spans`; 18 subst всего).
+- **Дальше:** **macros** (САМОЕ большое — 9-diff кластер ~13 nav-файлов = xref/link/image/footnote/
+  icon/kbd/btn/menu/stem/anchor/autolink/email + `[[id]]` + `((…))`; leaf-токен `Vec<Event>`, RAW-
+  подстроки label, recursive sub-pipeline; донор `handle_inline_macro` inline.rs ~416; анализ 74-й) →
+  снять gate → flip outline.
+
+### (АРХИВ 76-й) Phase 2 (7/N) char-refs — СМЕРЖЕНА в master `18aaacf`
+(имя ветки историческое — пивот marker-escape→char-refs по FORCE-данным, как 74-я macros→curved-quotes):
 - [x] **(7/N) char-refs survival + escape `\&#…;`** (`subst/char_refs.rs` НОВЫЙ) — валидный `&…;`
   (named/decimal/hex, порт `char_ref_len_at`) → `TagToken::CharRef{text,raw}`. **survival**
   (`&#167;`/`&copy;`, raw=true) → `InlinePassthrough` (рендерер НЕ экранирует `&`); **escape**

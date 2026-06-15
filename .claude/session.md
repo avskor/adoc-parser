@@ -1,5 +1,79 @@
 # Session context
 
+## Сессия (2026-06-15, 77-я) — РЕРАЙТ inline, Фаза 2 (8/N): escape маркеров + `\+` span-aware (ВНУТРИ пассов)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-marker-escape-v2`** (off master `18aaacf`, 343)
+— **НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` +
+удаление ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `18aaacf` (включает 7/N char-refs).
+
+### Выбор задачи (по плану 76-й, НЕ data-driven пивот)
+FORCE near-miss: 1-diff subs-symbol-repl = `{empty}--{empty}` (не escape, отложен); большой кластер
+**9-diff = macros** (~13 nav: xref/link). Marker-escape **без near-miss** (глубокий корень в мульти-root
+файлах). Macros — отдельная многосессионная работа (RAW-подстроки label, leaf `Vec<Event>`). Взял
+**marker-escape** как пункт №1 плана: самодостаточный, ФУНДАМЕНТАЛЬНЫЙ для финала (без него снятие гейта
+даст регрессии на `\*`/`\_`/…), верифицируется как airtight через gate + FORCE.
+
+### Семантика asciidoctor (пробы /tmp/esc_probe*.adoc, ГЛАВНОЕ — цель рерайта = asciidoctor, НЕ legacy)
+Единое правило для ВСЕХ маркеров (`* _ ` # ^ ~`) и `\+`: `\`+marker роняет backslash **ТОЛЬКО если
+образуется валидный спан/passthrough на этой позиции** (drop → литеральные маркеры, контент проходит
+ОСТАЛЬНЫЕ пассы: `\*_em_*`→`*<em>em</em>*`, `\+*b*+`→`+<strong>b</strong>+`), иначе **сохраняет**
+`\marker`. `open_boundary` удовлетворяется самим `\` (работает `word\*bold*`→`word*bold*`). **Legacy
+ОШИБОЧНО всегда роняет `#`/`^`/`~`/`\+`** (`\# no mark`→`# no mark`) — новый движок матчит asciidoctor
+(`\# no mark`). Для `\+`: drop зависит от валидности single-plus (close-rule): `x\+y+ z`→`x+y+ z` (drop,
+close перед пробелом), `a\+b+c`→`a\+b+c` (keep, close перед word).
+
+### Сделано (1 логический коммит, 3 точки + docs)
+- **quotes.rs**: хелперы `constrained_open_close`/`simple_pair_open_close` (детект открытия БЕЗ
+  сентинелей); escape-ветки в `pass_constrained` (`* _ ` #`) и `pass_simple_pair` (`^ ~`) — при `\`+marker
+  (single, не doubled, `bytes[i-1]!='\\'`): валиден спан → emit marker+raw-content+marker, i=close+1;
+  иначе → emit `\`+marker, i+=2. Bare-ветки отрефакторены на те же хелперы (events байт-в-байт).
+- **passthrough.rs**: `\+…+` (валидный single-plus) → drop `\`, emit `+` литералом, i+=2 (контент/
+  закрывающий `+` идут через нормальные пассы). Guard `bytes[i+2]!='+'`, `bytes[i-1]!='\\'`.
+- **escape.rs/mod.rs/quotes.rs**: docs (маркеры/`\+` теперь обрабатываются в своих span-aware пассах,
+  больше не «deferred здесь»; escape.rs else-ветка по-прежнему держит `\marker` ДО quotes-пасса).
+
+### Почему ВНУТРИ пассов, а не escape-first (ключ)
+`\` внутри уже-открытого спана (`` `\` `` — контент `\`) — это контент, НЕ escape. escape-first спрятал
+бы закрывающий маркер → рвал спан (`` (`\`) and (`]`) ``, keyboard-macro +18 в 75-й). Span-aware: пасс
+СНАЧАЛА открывает спан (i прыгает за close), `\` внутри content так и не рассматривается как escape.
+escape.rs (flat, ПЕРЕД quotes) оставляет `\marker` нетронутым (else-ветка) → quote-пасс решает.
+
+### КОАЛЕСЦИРУЮЩЕЕ различие (важно для понимания гейта)
+`\`+marker даёт RAW-байты в буфере → КОАЛЕСЦИРУЮТ в ОДИН Text при tokenize. Legacy флашит текст вокруг
+escape порознь (`word\*bold*`: legacy `[Text("word"),Text("*bold*")]`, движок `[Text("word*bold*")]`).
+**HTML идентичен**, события ≠ → gate (сравнивает события) отклоняет → fallback на legacy (безвреден, тот
+же HTML). Поэтому gate adoption растёт, но blast_toggle=343→343 (HTML не меняется). Событийно-РАВНЫ
+legacy только escape-в-начале-рана простые кейсы (`\*bold*`, `\*_em_*`, `` `\*bold*` ``, `\+x+`) — они в
+`reproduces_legacy_on_marker_escape_inputs`; остальные (keeps, word-prefix) — в `marker_escape_matches_asciidoctor`.
+
+### Верификация (airtight по гейту)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 536→538, html 433, render-core 15);
+  parsing-lab 233/233. subst: 16→18 тестов (+2 marker-escape; renamed `escape_marker_left_untouched`→
+  `marker_escape_does_not_tear_spans`).
+- **blast toggle-on (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight, нулевая регрессия корпуса — НЕ
+  может регрессировать: valid-span `\`+marker сейчас даёт `\<strong>`≠legacy → не adopted; правлю только
+  эти → output тот же, что fallback давал).
+- **FORCE (blast_force, prev-new=base+env vs cur-new=мой+env): Identical 111→111, 0 flips** (ожидаемо,
+  без near-miss). **subs.adoc 122→87 closer −35** (`\*Stars*`→`*Stars*` реальный фикс). **span-cells
+  271→274 (+3) — АРТЕФАКТ позиционного ndiffs**: единственная контент-правка (строка 18 `` (`\+`) ``)
+  ТЕПЕРЬ даёт `<code>+</code>` == asciidoctor (изолированно байт-в-байт; base-FORCE был сломан
+  `<code>\`)...`), но +4 токена в файле, рассинхронизированном неподдержанным `[[id]]`-anchor (269→273
+  токенов), сдвигают позиционную метрику. НЕ контент-регрессия (diff base-FORCE↔cur-FORCE = ровно 1 строка, в плюс).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **macros** — САМОЕ большое (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email +
+   `[[id]]` + `((…))`; leaf-токен с произвольным `Vec<Event>`; держит 9-diff кластер ~13 nav-файлов +
+   outline cross-span). Донор `handle_inline_macro` inline.rs ~416-680. Анализ в 74-й (RAW-подстроки
+   label, recursive sub-pipeline label-subs с MACROS off).
+2. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- **ОТЛОЖЕНО (после macros или с ним):** doubled-формы (`\**`/`\##`/`\++`/`\+++`), `\\MM` double-backslash,
+  пре-существующий `a\*b*c` (asciidoctor роняет, движок сохраняет — close-assertion subtlety).
+- Скрипты в `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE — env наследуется
+  обоими бинарями subprocess'ом, => сравнивает prev-new vs cur-new, идеальная изоляция правки),
+  `/tmp/force_nearmiss.py`. base пересобирать из master HEAD в начале сессии (`cp target/release/adoc /tmp/adoc_base`).
+
+---
+
 ## Сессия (2026-06-15, 76-я) — РЕРАЙТ inline, Фаза 2 (7/N): char-refs survival + escape `\&#…;` за гейтом
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-marker-escape`** (off master `3fdb828`, 343)
