@@ -529,13 +529,12 @@ mod tests {
         }
     }
 
-    /// Quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`) are deferred: the
-    /// escape-first pass leaves the backslash untouched so it cannot hide an
-    /// enclosing span's closing marker (`` `\` `` must stay a `<code>\</code>`, not
-    /// tear the monospace apart). A `\` that is genuine span content therefore
-    /// flows through as ordinary text and the quote passes see it unchanged.
+    /// The quote-marker escape is span-aware (folded into each quote pass), so it
+    /// must never hide an *enclosing* span's closing marker: a `\` that is genuine
+    /// span content (`` `\` ``) leaves the monospace intact rather than tearing it
+    /// apart. This is the bug that ruled out an escape-FIRST pass.
     #[test]
-    fn escape_marker_left_untouched() {
+    fn marker_escape_does_not_tear_spans() {
         // `\` inside a monospace span is literal content — the span still forms.
         assert_eq!(
             pipeline("`\\`"),
@@ -546,8 +545,7 @@ mod tests {
             ]
         );
         // Two adjacent monospace spans around a literal backslash and bracket: the
-        // escape pass must not let the first span swallow the second (the bug the
-        // marker deferral fixes).
+        // first span must not swallow the second.
         assert_eq!(
             pipeline("(`\\`) (`]`)"),
             vec![
@@ -560,6 +558,88 @@ mod tests {
                 Event::Text("]".into()),
                 Event::End(TagEnd::Monospace),
                 Event::Text(")".into()),
+            ]
+        );
+    }
+
+    /// Quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`) and the single-plus
+    /// passthrough escape (`\+`) where Asciidoctor and the legacy parser AGREE:
+    /// an escaped marker that *would* open a span drops the backslash and keeps
+    /// the construct literal, while later passes still process the content
+    /// (`\*_em_*` → `*<em>em</em>*`, `\+*b*+` → `+<strong>b</strong>+`). The
+    /// `\*`/`\_`/`` \` `` no-close keeps match legacy too (its arm 1001).
+    /// Quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`) and the single-plus
+    /// passthrough escape (`\+`) where the new engine reproduces legacy at the
+    /// event level: an escaped marker that *would* open a span at the start of the
+    /// run drops the backslash and keeps the construct literal, while later passes
+    /// still process the content (`\*_em_*` → `*<em>em</em>*`,
+    /// `\+*b*+` → `+<strong>b</strong>+`).
+    #[test]
+    fn reproduces_legacy_on_marker_escape_inputs() {
+        let cases = [
+            // escaped span → dropped backslash, literal markers
+            "\\*bold*",
+            "\\_em_",
+            "\\`code`",
+            "\\#mark#",
+            "\\^sup^",
+            "\\~sub~",
+            // content between the escaped markers still gets substituted
+            "\\*_em_*",
+            "\\^*b*^",
+            // monospace wrapping an escaped strong (cross-pass)
+            "`\\*bold*`",
+            // single-plus passthrough escape: literal `+`, content substituted
+            "\\+x+",
+            "\\+*b*+",
+            "\\+a+ +b+",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// Marker escapes where the engine reproduces Asciidoctor but NOT the legacy
+    /// event stream — either because the new engine fixes a legacy bug (Asciidoctor
+    /// keeps `\#`/`\^`/`\~`/`\+` literal when no span/passthrough forms, but legacy
+    /// wrongly dropped the backslash) or because the literal coalesces into a single
+    /// `Text` where legacy split it (same HTML). Verified against the Asciidoctor
+    /// reference, so these assert the exact event vector rather than `legacy`.
+    #[test]
+    fn marker_escape_matches_asciidoctor() {
+        for (input, expected) in [
+            // `*`/`_`/`` ` `` with no closing marker → keep (HTML matches legacy,
+            // which splits the run; the engine coalesces it)
+            ("\\* not bold", "\\* not bold"),
+            ("\\_ not em", "\\_ not em"),
+            ("\\` not code", "\\` not code"),
+            // escape applies mid-word (the `\` is the boundary); drop + coalesce
+            ("word\\*bold*", "word*bold*"),
+            // `#`/`^`/`~`/`\+` no-span keeps — the legacy-bug fixes
+            ("\\# no mark", "\\# no mark"),
+            ("\\^ no sup", "\\^ no sup"),
+            ("\\~ no sub", "\\~ no sub"),
+            ("word\\#tag", "word\\#tag"),
+            ("\\+nopass", "\\+nopass"),
+            ("a\\+b+c", "a\\+b+c"),
+        ] {
+            assert_eq!(
+                pipeline(input),
+                vec![Event::Text(expected.into())],
+                "expected {expected:?} for {input:?}"
+            );
+        }
+        // `\#` inside a monospace span stays literal (legacy dropped it).
+        assert_eq!(
+            pipeline("`a \\# b`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("a \\# b".into()),
+                Event::End(TagEnd::Monospace),
             ]
         );
     }
@@ -673,4 +753,5 @@ mod tests {
             .is_none()
         );
     }
+
 }

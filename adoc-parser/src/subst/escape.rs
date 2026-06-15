@@ -33,19 +33,24 @@
 //!   `raw = false`. Sealing it here also stops [`super::char_refs`] from treating
 //!   it as a *surviving* (passthrough) reference.
 //!
+//! ## Handled by the quote / passthrough passes (their span-aware home):
+//!
+//! - **`\+` (single-plus)** — escaping a passthrough opener is folded into the
+//!   passthrough pass ([`super::passthrough`]), which runs before this one: a
+//!   `\+…+` whose `+…+` would form a single-plus passthrough drops the backslash
+//!   there. A `\+` that forms no passthrough is left for *this* pass's blanket
+//!   arm to keep literal. The `\++`/`\+++` doubled forms stay deferred.
+//! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — these
+//!   are folded into each quote substitution ([`super::quotes`]), exactly as
+//!   Asciidoctor folds the `\\?` capture: a backslash is only an escape at the
+//!   point a span would open, so a `\` already *inside* an open span (the content
+//!   of `` `\` ``) stays literal content. They CANNOT be handled in this
+//!   escape-FIRST pass, which would hide a span's closing marker and tear it
+//!   apart (`a (`\`) and (`]`) b`). The doubled-marker (`\MM…MM`) form stays
+//!   deferred.
+//!
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
-//! - **`\+`/`\++`/`\+++`** — escaping a passthrough opener has to happen *inside*
-//!   the passthrough pass (its `\\?` capture), which already ran by the time this
-//!   pass sees the buffer; an escape-first `\+` would also wrongly fire on a `+`
-//!   that opens a real span. Deferred to the passthrough pass.
-//! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — these
-//!   CANNOT be handled in an escape-FIRST pass. Asciidoctor folds the `\\?`
-//!   escape INTO each quote substitution, so a backslash is only an escape at the
-//!   point a span would open; a `\` already *inside* an open span (the content of
-//!   `` `\` ``) is literal content, and an escape-first scan that hid the span's
-//!   closing marker would tear the span apart (`a (`\`) and (`]`) b`). Porting
-//!   them belongs with the quote passes (their natural, span-aware home).
 //! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
 //! - macro escapes `\pass:SPEC[…]`, `\link:`, `\footnote:`, `\((…))`,
 //!   `\https://…` — these need the not-yet-ported macros pass.
