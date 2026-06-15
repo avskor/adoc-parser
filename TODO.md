@@ -202,12 +202,34 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 75-я сессия): РЕРАЙТ inline — Фаза 2 (6/N) escape `\` (ветка `feat/subst-phase2-escape`)
+## АКТУАЛЬНО (2026-06-15, 76-я сессия): РЕРАЙТ inline — Фаза 2 (7/N) char-refs (ветка `feat/subst-phase2-marker-escape`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-5/N) уже СМЕРЖЕНА в master (`5421e0e`). **(6/N) НЕ
-закоммичена, ОЖИДАЕТ авторизации на commit+merge+push:**
+снять gate → flip outline. Phase 2 (1-6/N) уже СМЕРЖЕНА в master (`3fdb828`). **(7/N) НЕ
+закоммичена, ОЖИДАЕТ авторизации на commit+merge+push** (имя ветки историческое — пивот
+marker-escape→char-refs по FORCE-данным, как 74-я macros→curved-quotes):
+- [x] **(7/N) char-refs survival + escape `\&#…;`** (`subst/char_refs.rs` НОВЫЙ) — валидный `&…;`
+  (named/decimal/hex, порт `char_ref_len_at`) → `TagToken::CharRef{text,raw}`. **survival**
+  (`&#167;`/`&copy;`, raw=true) → `InlinePassthrough` (рендерер НЕ экранирует `&`); **escape**
+  (`\&#174;`, в escape.rs, raw=false) → `Text` (drop `\`, рендерер экранирует) + печать `&` от
+  survival-пасса. ОБА — отдельные события (флашат pending, НЕ коалесцируют как `Literal`). Гейт
+  `SPECIALCHARS && REPLACEMENTS` (= legacy `preserve_char_refs`). **char-refs ДО quotes** —
+  иначе `#` внутри `&#167;` берётся mark-пассом за маркер (legacy потребляет ref атомарно).
+  **Открытие:** `apply_typographic_replacements` выдаёт ЛИТЕРАЛЬНЫЕ Unicode (`\u{2019}`), не entity
+  — потому source-char-refs требовали отдельного survival-пасса.
+- **ОТЛОЖЕНО (известное расхождение, гейт ловит fallback'ом):** патологический `#&#167;#` (mark
+  смежен с десятичным ref) — legacy хватает внутренний `#`, extract-first даёт целый ref. Редко.
+- **Гейт:** toggle-on **343→343**, **0 регрессий, 0 flips** (airtight). **FORCE 108 → 111** raw-идентичных,
+  **3 FLIP** (title-links 2→0, ui 1→0, toc-ref 1→0), 2 closer (subs-symbol-repl 3→1,
+  document-attributes-ref 6434→6433), **0 FARTHER, 0 REGR** (airtight). Остаток subs-symbol-repl @125 =
+  `{empty}--{empty}` (deferred attr-resolution, не char-ref).
+- clippy 0, test --workspace зелёное (parser 535→536, html 433, render-core 15), parsing-lab 233/233
+  (+1 subst-тест `reproduces_legacy_on_char_ref_inputs`, 16 subst всего).
+- **Дальше:** escape маркеров+`\+` span-aware (без near-miss, нужен для финала) → macros (САМОЕ
+  большое, 9-diff кластер ~13 nav-файлов = xref/link) → снять gate → flip outline.
+
+### (АРХИВ 75-й) Phase 2 (6/N) non-marker escape `\` — СМЕРЖЕНА в master `3fdb828`
 - [x] **(6/N) escape `\` (НЕ-маркерный)** (`subst/escape.rs` НОВЫЙ) — дроп backslash + `Literal`-сентинел
   для: типографики (`\--`/`\->`/`\=>`/`\<-`/`\<=`/`\...`/`\(C)`/`\(R)`/`\(TM)`), smart-quote openers
   (`\"`​`` ` ``/`\'`​`` ` ``), `\{`/`\[`/`\<`/`\'`. **tokenize.rs**: `TagToken::Literal(String)` —
@@ -218,7 +240,8 @@ asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до 
   `\` в буфере всегда top-level).
 - **ОТЛОЖЕНО (контекстные баги escape-flat-scan, найдены blast'ом):** маркеры `\*`/`\_`/`` \` ``/`\#`/
   `\^`/`\~` (промах `` (`\`) `` — пряли закрывающий маркер span'а → рвали span; их `\\?` принадлежит
-  ВНУТРЬ quote-пассов, span-aware); `\+` (требует `\\?` в passthrough-пассе); `\\`/macro/char-ref escape.
+  ВНУТРЬ quote-пассов, span-aware); `\+` (требует `\\?` в passthrough-пассе); `\\`/macro escape.
+  (char-ref escape `\&#…;` СДЕЛАН в 7/N.)
 - **Гейт:** toggle-off **343→343** (legacy не тронут), toggle-on **343→343**, **0 регрессий, 0 flips**
   (airtight). **FORCE-верность 107 → 108** raw-идентичных, **unresolved-references FLIP 1→0**, 3 closer
   (bibliography 12→11, subs 123→122, subs-symbol-repl 4→3), **0 FARTHER, 0 REGR** (airtight).
