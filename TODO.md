@@ -202,12 +202,35 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 78-я сессия): РЕРАЙТ inline — Фаза 2 (9/N) macros (1/N) cross-reference `xref:`+`<<>>` (ветка `feat/subst-phase2-macros`)
+## АКТУАЛЬНО (2026-06-15, 79-я сессия): РЕРАЙТ inline — Фаза 2 (10/N) macros (2/N) link-семейство (ветка `feat/subst-phase2-macros-links`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-8/N) уже СМЕРЖЕНА в master (`713d62b`). **(9/N) НЕ закоммичена,
+снять gate → flip outline. Phase 2 (1-9/N) уже СМЕРЖЕНА в master (`4a69fc7`). **(10/N) НЕ закоммичена,
 ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(10/N) macros (2/N) — link-семейство** (`link:url[attrs]`, `mailto:email[attrs]`, bare
+  URL-автолинк `http`/`https`/`ftp`/`irc` (+`[label]` форма), email-автолинк `user@host.tld`). Reuse
+  инфры cross-ref (`TagToken::Macro` + label-reparse). **`subst/macros.rs`**:
+  - `try_link` (зеркало `try_link_macro`, plain-форма), `try_mailto` (зеркало `try_mailto_macro` +
+    `?subject=&body=` query-encode через `url_encode_into` — открыл `pub(crate)` в inline.rs),
+    `try_autolink` (зеркало `try_autolink` + `at_autolink_boundary` по предыдущему байту + trailing-punct
+    strip + `[label]`), `try_email` (зеркало `try_email_autolink`: backward-scan local part, возвращает
+    `local_start` → caller **truncate`out`** на уже-скопированную local part перед splice сентинеля).
+  - **`build_link`/`push_label`** общие; `parse_link_attrs` (reuse из attributes.rs) для `^`-blank-window/
+    role/window/nofollow/subject/body. Tag::Link поля = `Cow::Owned` (== Borrowed легаси, gate ОК).
+  - **`link:++url++[]` (passthrough-in-URL) ОТЛОЖЕНА** — к macros-time `++url++` уже сентинель →
+    span-guard declined → gate fb на legacy. Триггеры `l`/`m`/`h`/`f`/`i`/`@` добавлены в `extract`.
+  - **mod.rs**: doc обновлён; +тест `reproduces_legacy_on_link_inputs` (40 кейсов).
+- **Гейт:** blast_toggle **343→343, 0 изменённых файлов** (airtight). **FORCE (base `4a69fc7`-legacy):
+  Identical 111→311 (+200 от cross-ref baseline 254; link даёт +57), 200 FLIP, 21 closer, 4 FARTHER,
+  0 REGR.** FARTHER: 3 файла БЕЗ link-триггеров (каскад cross-ref `` `<<<` ``/отложенного, мой код их не
+  трогал) + pass-macro.adoc (отложенный `link:++url++[]`). force_nearmiss 90→33.
+- clippy 0, test --workspace зелёное (parser 539→540, html 433, render-core 15), parsing-lab 233/233
+  (18 subst-тестов, +1 link).
+- **Дальше Фаза 2:** macros (3/N+) image/footnote/icon/UI/stem/anchor(`[[id]]`)/index-term; escape
+  `\macro` (порт `inline_macro_escape_len`); marker-escape ВНУТРИ пассов (отложено 8/N); снять gate → flip outline.
+
+### (АРХИВ 78-й) Phase 2 (9/N) macros (1/N) cross-reference `xref:`+`<<>>` — СМЕРЖЕНА в master `4a69fc7`
 - [x] **(9/N) macros (1/N) — cross-reference (`xref:target[label]` + `<<target>>`/`<<target,label>>`)** —
   первый срез macros (САМОЕ большое семейство, multi-session). Строит ВСЮ инфраструктуру macros:
   - **`TagToken::Macro(Vec<Event<'static>>)`** (tokenize.rs) — leaf держит Start+label-события+End как ОДНУ

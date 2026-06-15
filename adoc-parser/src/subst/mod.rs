@@ -131,9 +131,9 @@ pub(crate) fn try_parse<'a>(
 /// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
 /// `:double`/`:single` curved smart quotes), `macros` (so far the cross-reference
 /// family — `xref:target[label]` and `<<target>>` — with the label re-parsed via
-/// an inner `MACROS`-cleared pipeline), `replacements`, `post_replacements`. The
-/// remaining macro families (link/image/footnote/icon/UI/stem/anchor/autolink/
-/// email/index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`,
+/// an inner `MACROS`-cleared pipeline) plus the link family (`link:`/`mailto:`
+/// macros and bare URL/email autolinks), `replacements`, `post_replacements`. The
+/// remaining macro families (image/footnote/icon/UI/stem/anchor/index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`,
 /// which belong inside the quote/passthrough passes — are not yet ported; inputs
 /// that need them diverge from legacy and are rejected by the gate (or surface as
 /// diffs under `force()`).
@@ -166,14 +166,15 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     if subs.has(SubstitutionSet::SPECIALCHARS) && subs.has(SubstitutionSet::REPLACEMENTS) {
         char_refs::run(&mut work);
     }
-    // Cross-reference macros (`xref:target[label]` / `<<target>>`) are extracted
-    // next, BEFORE attributes: the legacy parser consumes a macro whole, so an
-    // attribute reference inside the target (`xref:{anchor}[]`) stays literal in
-    // the target rather than becoming its own event. Extracting `attributes`
-    // first would lift it into a sentinel and the macro would be declined. The
-    // label is re-parsed with MACROS cleared (mirroring `push_macro_label`). Only
-    // the cross-reference family is ported so far; the other macros are not, so
-    // their inputs diverge from legacy and the gate rejects them.
+    // Inline macros are extracted next, BEFORE attributes: the legacy parser
+    // consumes a macro whole, so an attribute reference inside the target
+    // (`xref:{anchor}[]`) stays literal in the target rather than becoming its own
+    // event. Extracting `attributes` first would lift it into a sentinel and the
+    // macro would be declined. A label is re-parsed with MACROS cleared (mirroring
+    // `push_macro_label`). Ported so far: the cross-reference family
+    // (`xref:`/`<<>>`) and the link family (`link:`/`mailto:`, bare URL/email
+    // autolinks); the remaining macros are not, so their inputs diverge from legacy
+    // and the gate rejects them.
     if subs.has(SubstitutionSet::MACROS) {
         macros::extract(&mut work, subs);
     }
@@ -760,6 +761,77 @@ mod tests {
             "a < b << c",
             // a non-macro 'xref' substring mid-word
             "prefixref:x[]",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the link macro family ported (`link:url[attrs]`, `mailto:email[attrs]`,
+    /// bare URL autolinks and email autolinks), the pipeline must reproduce legacy
+    /// on every form: the bare/text/named-attr link, the `^` blank-window
+    /// shorthand, the `mailto:` subject/body query encoding, the bare and
+    /// `[label]` autolink forms (with trailing-punctuation stripping and the
+    /// left-boundary rule), the backward-scanned email autolink, references mixed
+    /// with surrounding text and spans, and the invalid forms that stay literal.
+    #[test]
+    fn reproduces_legacy_on_link_inputs() {
+        let cases = [
+            // link macro: bare (text = target), explicit text, relative target
+            "link:http://example.com[]",
+            "link:http://example.com[Example]",
+            "link:/docs/intro.html[Intro]",
+            // link macro: named attrs, role, window, nofollow, `^` blank-window
+            "link:http://x.com[role=external]",
+            "link:http://x.com[Open,window=_blank]",
+            "link:http://x.com[Open,role=red]",
+            "link:http://x.com[Site,opts=nofollow]",
+            "link:http://x.com[New^]",
+            // link macro: attribute reference inside the (re-parsed) label
+            "link:http://x.com[{name}]",
+            // link macro mixed with text and wrapped by a span
+            "see link:http://x.com[here] now",
+            "*link:http://x.com[a]*",
+            // link macro: invalid → literal
+            "link:[]",
+            "link:noclose",
+            // mailto macro: bare, explicit text, subject, subject+body
+            "mailto:a@b.com[]",
+            "mailto:a@b.com[Mail me]",
+            "mailto:a@b.com[Mail,My Subject]",
+            "mailto:a@b.com[Mail,Subject Line,Body Text]",
+            "mailto:a@b.com[Mail,role=x]",
+            // bare URL autolinks, all four schemes
+            "http://example.com",
+            "https://example.com",
+            "ftp://example.com",
+            "irc://example.com",
+            // autolink mixed with text, trailing punctuation, parentheses
+            "see https://example.com here",
+            "https://example.com.",
+            "(https://example.com)",
+            "visit https://example.com, then leave",
+            // autolink URL[text] form (keeps trailing punctuation in the URL)
+            "https://example.com[Example]",
+            "https://example.com[]",
+            // not at a boundary → stays literal (mid-word scheme)
+            "ahttps://example.com",
+            // too-short scheme-only → literal
+            "http://",
+            // email autolink: simple, embedded, decline (no dot / no local part)
+            "user@example.com",
+            "Contact user@example.com today",
+            "a.b+c@sub.example.com",
+            "user@example.com.",
+            "a@b",
+            "@example.com",
+            // email autolink beside a span and a cross reference
+            "*x* user@example.com",
+            "user@example.com and xref:t[]",
         ];
         for c in cases {
             assert_eq!(

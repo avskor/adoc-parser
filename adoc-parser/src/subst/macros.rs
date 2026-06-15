@@ -1,13 +1,20 @@
 //! Inline-macro extraction pass (Asciidoctor `macros` sub).
 //!
-//! Phase 2 (macros, 1/N) implements the **cross-reference** constructs — the
-//! `xref:target[label]` macro and the `<<target>>` / `<<target,label>>` shorthand,
-//! both of which the legacy parser turns into a `CrossReference` tag. Every match
-//! is lifted out of the working buffer into a tag sentinel pointing at a
-//! [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
+//! Phase 2 (macros) ports the legacy inline macros into the sequential engine.
+//! So far implemented:
+//!
+//! - **cross-reference** (1/N) — `xref:target[label]` and the `<<target>>` /
+//!   `<<target,label>>` shorthand → a `CrossReference` tag;
+//! - **link family** (2/N) — the `link:url[attrs]` macro, the `mailto:email[attrs]`
+//!   macro (with `?subject=&body=` query encoding), bare URL autolinks
+//!   (`http://`/`https://`/`ftp://`/`irc://`, with the optional `[label]` form),
+//!   and bare email autolinks (`user@host.tld`) → a `Link` tag.
+//!
+//! Every match is lifted out of the working buffer into a tag sentinel pointing at
+//! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro families — link/image/footnote/icon/UI/stem/anchor/
-//! autolink/email/index-term — are ported in subsequent phases.)
+//! it. (The remaining macro families — image/footnote/icon/UI/stem/anchor/
+//! index-term — are ported in subsequent phases.)
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -43,7 +50,9 @@
 
 use std::borrow::Cow;
 
+use crate::attributes::parse_link_attrs;
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
+use crate::inline::url_encode_into;
 
 use super::tokenize::{sentinel_end, utf8_char_len, Work, TAG_LEAD};
 
@@ -78,6 +87,30 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             continue;
         }
 
+        // link:url[attrs]
+        if bytes[i] == b'l' && src[i..].starts_with("link:") {
+            if let Some((events, end)) = try_link(&src, i, subs) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // mailto:email[attrs]
+        if bytes[i] == b'm' && src[i..].starts_with("mailto:") {
+            if let Some((events, end)) = try_mailto(&src, i, subs) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
         // <<target>> / <<target,label>>
         if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'<') {
             if let Some((events, end)) = try_cross_ref(&src, i, subs) {
@@ -86,6 +119,34 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
                 continue;
             }
             // Not a valid cross reference → advance past one '<'.
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // Bare URL autolink (http://, https://, ftp://, irc://), optionally
+        // followed by a `[label]` attrlist.
+        if matches!(bytes[i], b'h' | b'f' | b'i') && scheme_at(&src, i) {
+            if let Some((events, end)) = try_autolink(&src, i, subs) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // Bare email autolink (user@host.tld): the local part has already been
+        // copied to `out`, so on a match we truncate it back off before splicing
+        // in the link sentinel.
+        if bytes[i] == b'@' {
+            if let Some((events, local_start, end)) = try_email(&src, i, subs) {
+                out.truncate(out.len() - (i - local_start));
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
             out.push_str(&src[i..i + 1]);
             i += 1;
             continue;
@@ -191,6 +252,284 @@ fn build_cross_reference(
     }
     events.push(Event::End(TagEnd::CrossReference));
     events
+}
+
+/// At a `link:` (caller guarantees the prefix), try to match `link:url[attrs]`.
+/// Mirror of [`crate::inline::InlineState::try_link_macro`] for the plain form.
+/// The legacy `link:++url++[…]` passthrough-in-URL variant is declined here: by
+/// macros-time the `++url++` is already a passthrough sentinel, so the span guard
+/// trips and the gate falls back to legacy (which still handles it).
+fn try_link(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 5..]; // after "link:"
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let url = &rest[..bracket_start];
+    let content = &rest[bracket_start + 1..bracket_end];
+    if url.is_empty() {
+        return None;
+    }
+    let end = start + 5 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let attrs = parse_link_attrs(content);
+    // An empty attrlist text marks a "bare" link (visible text = the target).
+    let is_bare = attrs.text.is_empty();
+    let label = (!is_bare).then_some(attrs.text);
+    let events = build_link(
+        url.to_string(),
+        attrs.window,
+        attrs.nofollow,
+        attrs.role,
+        is_bare,
+        label,
+        url,
+        subs,
+    );
+    Some((events, end))
+}
+
+/// At a `mailto:` (caller guarantees the prefix), try to match
+/// `mailto:email[attrs]`. Mirror of
+/// [`crate::inline::InlineState::try_mailto_macro`]: positional attrs 2/3 become
+/// `?subject=&body=` query parameters, percent-encoded. A mailto link is never
+/// "bare" (the visible text falls back to the email, not the `mailto:` URL).
+fn try_mailto(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 7..]; // after "mailto:"
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let email = &rest[..bracket_start];
+    let content = &rest[bracket_start + 1..bracket_end];
+    if email.is_empty() {
+        return None;
+    }
+    let end = start + 7 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
+    let attrs = parse_link_attrs(content);
+    let url = match (attrs.subject, attrs.body) {
+        (None, None) => base.to_string(),
+        (subject, body) => {
+            let mut u = String::from(base);
+            let mut sep = '?';
+            if let Some(s) = subject {
+                u.push(sep);
+                u.push_str("subject=");
+                url_encode_into(&mut u, s);
+                sep = '&';
+            }
+            if let Some(b) = body {
+                u.push(sep);
+                u.push_str("body=");
+                url_encode_into(&mut u, b);
+            }
+            u
+        }
+    };
+    let label = (!attrs.text.is_empty()).then_some(attrs.text);
+    let events = build_link(url, attrs.window, attrs.nofollow, attrs.role, false, label, email, subs);
+    Some((events, end))
+}
+
+/// Whether an autolink scheme (`http://`/`https://`/`ftp://`/`irc://`) begins at
+/// byte `i`.
+fn scheme_at(src: &str, i: usize) -> bool {
+    let rest = &src[i..];
+    rest.starts_with("http://")
+        || rest.starts_with("https://")
+        || rest.starts_with("ftp://")
+        || rest.starts_with("irc://")
+}
+
+/// Whether byte offset `i` is a valid left boundary for a bare autolink. Mirror of
+/// [`crate::inline::InlineState::at_autolink_boundary`]: the preceding character
+/// must be whitespace or one of `<>()[];`, or the start of the buffer. Boundary
+/// characters are all ASCII and never extracted into sentinels, so checking the
+/// preceding byte reproduces the legacy decision; an extracted construct leaves a
+/// `TAG_TAIL` byte (not a boundary), matching the legacy parser's non-boundary
+/// view of the same position. (A multibyte preceding char is treated as a
+/// non-boundary; a Unicode-whitespace boundary is rare and the gate declines it.)
+fn at_autolink_boundary(bytes: &[u8], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let prev = bytes[i - 1];
+    prev.is_ascii_whitespace() || matches!(prev, b'<' | b'>' | b'(' | b')' | b'[' | b']' | b';')
+}
+
+/// At an autolink scheme (caller guarantees `scheme_at`), try to match a bare URL
+/// autolink, optionally followed by a `[label]` attrlist. Mirror of
+/// [`crate::inline::InlineState::try_autolink`].
+fn try_autolink(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+    if !at_autolink_boundary(src.as_bytes(), start) {
+        return None;
+    }
+    let rest = &src[start..];
+    let url_end = rest
+        .find(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '<' || c == '>')
+        .unwrap_or(rest.len());
+    let mut url = &rest[..url_end];
+    if url.len() <= 8 {
+        return None;
+    }
+    // Trailing punctuation is stripped only from BARE urls — the `URL[text]` macro
+    // form keeps it. Check for the attrlist on the UNSTRIPPED url first.
+    let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+    if !bracket_follows {
+        while url.len() > 8
+            && matches!(
+                url.as_bytes()[url.len() - 1],
+                b'.' | b',' | b';' | b':' | b'!' | b'?' | b')'
+            )
+        {
+            url = &url[..url.len() - 1];
+        }
+    }
+    let url_len = url.len();
+    let after_url = &rest[url_len..];
+
+    // URL[text] form.
+    if after_url.starts_with('[')
+        && let Some(close) = after_url.find(']')
+    {
+        let end = start + url_len + close + 1;
+        if span_has_sentinel(src, start, end) {
+            return None;
+        }
+        let attrs = parse_link_attrs(&after_url[1..close]);
+        let is_bare = attrs.text.is_empty();
+        let label = (!is_bare).then_some(attrs.text);
+        let events = build_link(
+            url.to_string(),
+            attrs.window,
+            attrs.nofollow,
+            attrs.role,
+            is_bare,
+            label,
+            url,
+            subs,
+        );
+        return Some((events, end));
+    }
+
+    // Bare form.
+    let end = start + url_len;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events = build_link(url.to_string(), None, false, None, true, None, url, subs);
+    Some((events, end))
+}
+
+/// At an `@` (caller guarantees the byte), try to match a bare email autolink
+/// `user@host.tld`. Mirror of
+/// [`crate::inline::InlineState::try_email_autolink`]. Returns the link events,
+/// the start of the local part (so the caller can truncate the already-copied
+/// local part off `out`), and the index just past the domain. The backward scan
+/// stops at any non-local-part byte, which includes the `TAG_LEAD`/`TAG_TAIL`
+/// control bytes, so an earlier-pass sentinel bounds it exactly as the legacy
+/// `text_start` flush boundary would.
+fn try_email(
+    src: &str,
+    at_pos: usize,
+    subs: SubstitutionSet,
+) -> Option<(Vec<Event<'static>>, usize, usize)> {
+    let bytes = src.as_bytes();
+
+    // Backward scan for the local part (a-zA-Z0-9._+-).
+    let mut local_start = at_pos;
+    while local_start > 0 {
+        let b = bytes[local_start - 1];
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-') {
+            local_start -= 1;
+        } else {
+            break;
+        }
+    }
+    if local_start == at_pos {
+        return None; // empty local part
+    }
+
+    // Forward scan for the domain (a-zA-Z0-9.-), which must contain a dot.
+    let mut domain_end = at_pos + 1;
+    let mut has_dot = false;
+    while domain_end < bytes.len() {
+        let b = bytes[domain_end];
+        if b.is_ascii_alphanumeric() || b == b'-' {
+            domain_end += 1;
+        } else if b == b'.' {
+            has_dot = true;
+            domain_end += 1;
+        } else {
+            break;
+        }
+    }
+    if !has_dot {
+        return None;
+    }
+    let domain = &src[at_pos + 1..domain_end];
+    if domain.starts_with('.') || domain.starts_with('-') || domain.ends_with('.') || domain.ends_with('-')
+    {
+        return None;
+    }
+
+    let email = &src[local_start..domain_end];
+    // Asciidoctor does not mark email autolinks as bare.
+    let events = build_link(format!("mailto:{email}"), None, false, None, false, None, email, subs);
+    Some((events, local_start, domain_end))
+}
+
+/// Build the `Start(Link) … End` event sequence shared by the link macro, mailto
+/// macro, and URL/email autolinks. `label` (when `Some`) is re-parsed with
+/// `MACROS` cleared via [`push_label`], mirroring `push_macro_label`; otherwise
+/// `bare_text` is emitted as the visible text. The tag fields are owned `Cow`s
+/// (`== Cow::Borrowed` legacy by `PartialEq`, so the gate adopts).
+#[allow(clippy::too_many_arguments)]
+fn build_link(
+    url: String,
+    window: Option<&str>,
+    nofollow: bool,
+    role: Option<&str>,
+    is_bare: bool,
+    label: Option<&str>,
+    bare_text: &str,
+    subs: SubstitutionSet,
+) -> Vec<Event<'static>> {
+    let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Link {
+        url: Cow::Owned(url),
+        window: window.map(|w| Cow::Owned(w.to_string())),
+        nofollow,
+        is_bare,
+        role: role.map(|r| Cow::Owned(r.to_string())),
+    })];
+    match label {
+        Some(l) => push_label(l, subs, &mut events),
+        None => events.push(Event::Text(Cow::Owned(bare_text.to_string()))),
+    }
+    events.push(Event::End(TagEnd::Link));
+    events
+}
+
+/// Re-parse a macro label's raw text exactly as `push_macro_label` does — the
+/// engine's own pipeline with `MACROS` cleared (so a nested macro stays literal
+/// and recursion terminates). An empty label yields no events, matching
+/// `push_macro_label("")`. Callers only pass `Some(label)` for a non-empty label
+/// (an empty attrlist text routes through the bare branch), but the guard keeps
+/// the mirror exact.
+fn push_label(text: &str, subs: SubstitutionSet, events: &mut Vec<Event<'static>>) {
+    if text.is_empty() {
+        return;
+    }
+    let inner: Vec<Event<'static>> = super::run_pipeline(text, subs.without(SubstitutionSet::MACROS));
+    events.extend(inner);
 }
 
 /// Whether `src[start..end]` (a candidate macro span) contains a tag sentinel —
