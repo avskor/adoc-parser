@@ -40,6 +40,7 @@
 //! the new engine reproduces the legacy output (divergences show up as diffs).
 
 mod attributes;
+mod char_refs;
 mod escape;
 mod passthrough;
 mod post_replacements;
@@ -122,14 +123,15 @@ pub(crate) fn try_parse<'a>(
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
-/// Implemented so far: `escape` (non-marker `\`-prefixed literals — `\{`, `\+`,
-/// `\"`/`\'` smart-quote openers, `\[`/`\<`, typographic), passthrough
-/// extract/restore, `attributes` (`{name}` / `{set:…}`, unresolved leaf events
-/// mirroring legacy), `quotes` (including the `:double`/`:single` curved smart
-/// quotes), `replacements`, `post_replacements`. The remaining passes
-/// (specialchars, macros, char references) — and the quote-marker escapes
-/// `\*`/`\_`/`` \` `` etc., which belong inside the quote passes — are not yet
-/// ported; inputs that need them diverge from legacy and are rejected by the
+/// Implemented so far: `escape` (non-marker `\`-prefixed literals — `\{`, `\"`/
+/// `\'` smart-quote openers, `\[`/`\<`, typographic, and the `\&#…;` character-
+/// reference escape), passthrough extract/restore, character-reference survival
+/// (`&#167;` / `&copy;` → `InlinePassthrough`), `attributes` (`{name}` /
+/// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
+/// `:double`/`:single` curved smart quotes), `replacements`, `post_replacements`.
+/// The remaining passes (macros) — and the quote-marker escapes `\*`/`\_`/
+/// `` \` `` and `\+`, which belong inside the quote/passthrough passes — are not
+/// yet ported; inputs that need them diverge from legacy and are rejected by the
 /// gate (or surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
@@ -148,6 +150,18 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // capture). Running after passthrough means a `\` left in the buffer is always
     // top-level (passthrough-internal backslashes are already inside a sentinel).
     escape::run(&mut work);
+    // Valid character references (`&#167;` / `&copy;`) are extracted next, before
+    // the attribute/quote passes, into opaque survival leaves
+    // (`InlinePassthrough`, so the renderer does not escape the `&`). Extracting
+    // before quotes is what stops the `#` inside `&#…;` from being read as a mark
+    // marker, exactly as the legacy parser consumes the whole reference
+    // atomically. Gated on the legacy `preserve_char_refs` condition: both
+    // `specialcharacters` AND `replacements` active (a verbatim block has the
+    // former but not the latter, so it keeps references escaped). An escaped
+    // `\&#…;` was already sealed by `escape::run`, so it is not re-extracted here.
+    if subs.has(SubstitutionSet::SPECIALCHARS) && subs.has(SubstitutionSet::REPLACEMENTS) {
+        char_refs::run(&mut work);
+    }
     // Attribute references are extracted next, before quotes. The legacy parser
     // emits an unresolved `AttributeReference`; extracting `{name}[…]` up front
     // both reproduces that and protects a trailing `[brackets]` from being eaten
@@ -548,6 +562,59 @@ mod tests {
                 Event::Text(")".into()),
             ]
         );
+    }
+
+    /// With the character-reference survival pass (and the `\&#…;` escape) ported,
+    /// the pipeline must reproduce legacy on valid references (kept as raw
+    /// `InlinePassthrough`), invalid `&`s (left as escaped `Text`), references
+    /// inside quote spans, and the escaped form (dropped backslash, escaped
+    /// `Text`). Extraction runs before quotes, so a reference is opaque to the
+    /// surrounding span — but the `#`-bearing decimal/hex forms are kept away from
+    /// the `#` mark marker in these cases (where legacy and the engine agree).
+    #[test]
+    fn reproduces_legacy_on_char_ref_inputs() {
+        let cases = [
+            // bare valid references: named, decimal, hex (survival → passthrough)
+            "&#167;",
+            "&copy;",
+            "&#x2026;",
+            "&amp;",
+            "&#8217;",
+            // references mixed with surrounding text
+            "see &#167; here",
+            "a&#167;b",
+            "&#167; and &copy; both",
+            // invalid → stays escaped Text (too few digits/letters, no `;`, bare `&`)
+            "&#1;",
+            "&a;",
+            "&foo",
+            "Tom & Jerry",
+            "plain & text",
+            // references inside `*`/`` ` ``/`_` spans (markers that do not collide
+            // with the `#` inside a decimal/hex reference)
+            "*&#167;*",
+            "`&#167;`",
+            "_&copy;_",
+            "see *&#167;* and `&#x2026;`",
+            // escaped reference: backslash drops, reference becomes escaped Text
+            "\\&#174;",
+            "x\\&copy;y",
+            "\\&#x2026;",
+            "say \\&#167; not &#167;",
+            // reference beside a replacement (em-dash / apostrophe untouched)
+            "&#167; -- dash",
+            "don't &copy; me",
+            // a backslash before an INVALID reference stays literal
+            "\\&foo",
+            "\\& bare",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
     }
 
     /// The signature cross-span case: a constrained strong that opens inside one

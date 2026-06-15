@@ -1,5 +1,78 @@
 # Session context
 
+## Сессия (2026-06-15, 76-я) — РЕРАЙТ inline, Фаза 2 (7/N): char-refs survival + escape `\&#…;` за гейтом
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-marker-escape`** (off master `3fdb828`, 343)
+— имя ветки историческое (завёл под marker-escape, пивотнул на char-refs). **НЕ закоммичена, НЕ
+смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push` + удаление
+ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `3fdb828` (включает 6/N non-marker
+escape; прежний был от `5421e0e`).
+
+### Data-driven пивот: marker-escape → char-refs
+План 75-й сессии ставил следующим **escape маркеров** (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~` + `\+`
+span-aware). Но FORCE-карта (blast_force, base 108) показала: ВСЕ near-miss 1-3 diff — это **char-refs**,
+НЕ marker-escape (у marker-escape нет near-miss — это глубокий корень в мульти-root файлах). diffone:
+ui.adoc (1: `&#8942;`), toc-ref.adoc (1: `&#8211;`), title-links.adoc (2: `&#167;`) — все в составе
+343 (base diff=0, legacy их обрабатывает, мой движок — нет); subs-symbol-repl (3: `\&#8201;` escape +
+`{empty}--{empty}`). Пивотнул на char-refs (зеркало пивота 74-й сессии macros→curved-quotes): контейнерный,
+3 чистых флипа, низкий риск. Marker-escape остаётся следующим (см. «Дальше»).
+
+### Ключевое открытие (направление char-ref)
+`apply_typographic_replacements` (донор replacements-пасса) выдаёт **литеральные** Unicode-символы
+(`\u{2019}`/`\u{2014}`/…), НЕ entity. Значит char-refs ИЗ ИСХОДНИКА (`&#167;`) — отдельная проблема:
+legacy эмитит их как `InlinePassthrough` (рендерер НЕ экранирует `&`), мой движок оставлял в Text
+(рендерер → `&amp;#167;`). Два случая, ОБА — отдельные события (legacy флашит, НЕ коалесцирует как
+`Literal`): **survival** (`&#167;`→InlinePassthrough, raw) и **escape** (`\&#167;`→Text, drop `\`,
+рендерер экранирует — зеркало legacy arm ~975).
+
+### Сделано (1 логический коммит)
+- **tokenize.rs**: `TagToken::CharRef { text, raw }` (raw=true→InlinePassthrough, raw=false→Text);
+  флашит pending (отдельное событие, не коалесцирует). `Work::char_ref_sentinel(text, raw)`.
+- **subst/char_refs.rs** (НОВЫЙ): `run(work)` — скан буфера, скип сентинелей, валидный `&…;`
+  (`char_ref_len`, порт `char_ref_len_at` из inline.rs: named/decimal/hex) → `CharRef{raw=true}`.
+- **escape.rs**: арм `\&#…;` (m==`&` && char_ref_len(i+1)>0) → drop `\`, `CharRef{raw=false}` —
+  отдельный Text-event (рендерер экранирует `&`), И запечатывает `&` от survival-пасса. Импорт
+  `char_ref_len` из `char_refs`.
+- **mod.rs**: `mod char_refs;`, вызов `char_refs::run` ПОСЛЕ escape, ДО attributes, гейт
+  `SPECIALCHARS && REPLACEMENTS` (= legacy `preserve_char_refs`). +тест
+  `reproduces_legacy_on_char_ref_inputs` (survival named/dec/hex, invalid `&`, в `*`/`` ` ``/`_`-спанах,
+  escape, beside replacements).
+
+### Архитектурное решение: char-refs ДО quotes
+Извлекать char-refs ПЕРЕД quote-пассами обязательно: `#` внутри `&#167;` (десятичный/hex) иначе был
+бы взят mark-пассом за маркер. Legacy потребляет ref АТОМАРНО до рассмотрения маркера на той позиции.
+**Известное расхождение (НЕ в тестах, гейт ловит fallback'ом):** патологический `#&#167;#` — legacy
+mark хватает ВНУТРЕННИЙ `#` (`<mark>&</mark>167;#`), мой движок (extract-first) даёт `<mark>&#167;</mark>`.
+Редко; `&` ДО quotes лучше, чем после (после — расходился бы на частом `&#167; #x#`). `*`/`` ` ``/`_`/`"`-спаны
+безопасны (их маркеры не совпадают с `#` в ref).
+
+### Верификация (всё зелёное, airtight)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 535→536, html 433, render-core 15);
+  parsing-lab 233/233 (+1 subst-тест, 16 subst).
+- **blast toggle-on (гейт): 343→343**, 0 регрессий, 0 flips (airtight по построению).
+- **FORCE (blast_force): 108→111** raw-идентичных. 3 FLIP (title-links 2→0, ui 1→0, toc-ref 1→0),
+  2 closer (subs-symbol-repl 3→1, document-attributes-ref 6434→6433), **0 FARTHER, 0 REGR** (airtight).
+  Спот-чек: `*§ \&#167;*`/`` `&#x2026;` `` — new==legacy==asciidoctor байт-в-байт.
+- Остаток subs-symbol-repl @125 = `{empty}--{empty}`→`—` (deferred attribute-resolution + replacements,
+  НЕ char-ref, pre-existing).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **escape маркеров+`\+` ВНУТРИ пассов** (`\\?` в quote/passthrough-пассах, span-aware — модель
+   asciidoctor; даст `\*bold*`→`*bold*`, `\+x+`→`+x+` БЕЗ промахов `` (`\`) ``). Донор
+   `handle_inline_escape` inline.rs arms 1010 (KEEP `\` для `*_` `` ` `` без закрытия) + 1025 (DROP).
+   Без near-miss флипов (глубокий корень), но нужен для финала. Семантика single vs double backslash
+   (`\\*` defer), span-awareness — детали в анализе ниже по файлу (75-я).
+2. **macros** — САМОЕ большое (link/xref/image/footnote/icon/kbd/btn/menu/stem/anchor/autolink/email +
+   `[[id]]` + `((…))`; leaf с произвольным `Vec<Event>`; держит outline cross-span + 9-diff кластер
+   ~13 nav-файлов). Донор `handle_inline_macro` inline.rs 416-680. Анализ в 74-й.
+3. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты в `/mnt/c/tmp/adoc-test/`: `blast.py` (toggle-off), `blast_toggle.py` (гейт), `blast_force.py`
+  (FORCE), `diffone.py <file> <limit>` (FORCE-дифф с `ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1`),
+  `/tmp/force_nearmiss.py` (список non-identical FORCE по возрастанию diff). base пересобирать из
+  master HEAD в начале сессии. **9-diff кластер = macros** (xref/link не обрабатываются).
+
+---
+
 ## Сессия (2026-06-15, 75-я) — РЕРАЙТ inline, Фаза 2 (6/N): escape `\` пасс (не-маркерный) за гейтом
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-escape`** (off master `5421e0e`, 343) —

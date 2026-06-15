@@ -133,6 +133,16 @@ pub(super) enum TagToken {
     /// run into one `Text` event — mirroring the legacy parser, which drops the
     /// backslash and leaves the escaped character in the next text flush.
     Literal(String),
+    /// A valid HTML character reference (`&#167;` / `&copy;` / `&#x2026;`). `raw`
+    /// `true` (the bare-reference survival pass, [`super::char_refs`]) restores it
+    /// as an `InlinePassthrough` so the renderer emits the `&` verbatim; `raw`
+    /// `false` (an escaped `\&#…;`, handled by [`super::escape`]) restores it as a
+    /// `Text` event so the renderer escapes the `&` to `&amp;`. Both mirror the
+    /// legacy parser, which keeps a survived reference intact (passthrough) and
+    /// emits an escaped one as literal text. Unlike [`TagToken::Literal`], a
+    /// `CharRef` is a SEPARATE event — it flushes the pending run and does not
+    /// coalesce — exactly as the legacy parser emits each reference on its own.
+    CharRef { text: String, raw: bool },
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -212,6 +222,15 @@ impl Work {
     pub(super) fn literal_sentinel(&mut self, text: String) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::Literal(text));
+        sentinel(idx)
+    }
+
+    /// Register a character-reference leaf and return its sentinel string.
+    /// `raw` controls restoration: `true` → `InlinePassthrough` (verbatim `&`,
+    /// the survival pass), `false` → `Text` (escaped `&`, an escaped `\&#…;`).
+    pub(super) fn char_ref_sentinel(&mut self, text: String, raw: bool) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::CharRef { text, raw });
         sentinel(idx)
     }
 }
@@ -348,6 +367,15 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                 Some(TagToken::SmartQuote { text, .. }) => {
                     flush_pending(&mut events, &mut pending);
                     events.push(Event::Text(Cow::Borrowed(text)));
+                }
+                Some(TagToken::CharRef { text, raw }) => {
+                    flush_pending(&mut events, &mut pending);
+                    let t = Cow::Owned(text.clone());
+                    events.push(if *raw {
+                        Event::InlinePassthrough(t)
+                    } else {
+                        Event::Text(t)
+                    });
                 }
                 None => flush_pending(&mut events, &mut pending),
             }
