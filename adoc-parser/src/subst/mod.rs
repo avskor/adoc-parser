@@ -42,6 +42,7 @@
 mod attributes;
 mod char_refs;
 mod escape;
+mod macros;
 mod passthrough;
 mod post_replacements;
 mod quotes;
@@ -128,11 +129,14 @@ pub(crate) fn try_parse<'a>(
 /// reference escape), passthrough extract/restore, character-reference survival
 /// (`&#167;` / `&copy;` → `InlinePassthrough`), `attributes` (`{name}` /
 /// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
-/// `:double`/`:single` curved smart quotes), `replacements`, `post_replacements`.
-/// The remaining passes (macros) — and the quote-marker escapes `\*`/`\_`/
-/// `` \` `` and `\+`, which belong inside the quote/passthrough passes — are not
-/// yet ported; inputs that need them diverge from legacy and are rejected by the
-/// gate (or surface as diffs under `force()`).
+/// `:double`/`:single` curved smart quotes), `macros` (so far the cross-reference
+/// family — `xref:target[label]` and `<<target>>` — with the label re-parsed via
+/// an inner `MACROS`-cleared pipeline), `replacements`, `post_replacements`. The
+/// remaining macro families (link/image/footnote/icon/UI/stem/anchor/autolink/
+/// email/index-term) — and the quote-marker escapes `\*`/`\_`/`` \` `` and `\+`,
+/// which belong inside the quote/passthrough passes — are not yet ported; inputs
+/// that need them diverge from legacy and are rejected by the gate (or surface as
+/// diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
@@ -161,6 +165,17 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // `\&#…;` was already sealed by `escape::run`, so it is not re-extracted here.
     if subs.has(SubstitutionSet::SPECIALCHARS) && subs.has(SubstitutionSet::REPLACEMENTS) {
         char_refs::run(&mut work);
+    }
+    // Cross-reference macros (`xref:target[label]` / `<<target>>`) are extracted
+    // next, BEFORE attributes: the legacy parser consumes a macro whole, so an
+    // attribute reference inside the target (`xref:{anchor}[]`) stays literal in
+    // the target rather than becoming its own event. Extracting `attributes`
+    // first would lift it into a sentinel and the macro would be declined. The
+    // label is re-parsed with MACROS cleared (mirroring `push_macro_label`). Only
+    // the cross-reference family is ported so far; the other macros are not, so
+    // their inputs diverge from legacy and the gate rejects them.
+    if subs.has(SubstitutionSet::MACROS) {
+        macros::extract(&mut work, subs);
     }
     // Attribute references are extracted next, before quotes. The legacy parser
     // emits an unresolved `AttributeReference`; extracting `{name}[…]` up front
@@ -687,6 +702,64 @@ mod tests {
             // a backslash before an INVALID reference stays literal
             "\\&foo",
             "\\& bare",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the cross-reference macro family ported (`xref:target[label]` and the
+    /// `<<target>>` / `<<target,label>>` shorthand), the pipeline must reproduce
+    /// legacy on every form: the bracket-less / empty-bracket target-as-text case,
+    /// the explicit (re-parsed) label, the `#`-stripped and comma-trimmed
+    /// shorthand, references mixed with surrounding text and other spans, and the
+    /// invalid forms that stay literal. The macro leaf is opaque to the later
+    /// quote/replacement passes, so a span wrapping it reparses its content the
+    /// same way legacy does.
+    #[test]
+    fn reproduces_legacy_on_cross_reference_inputs() {
+        let cases = [
+            // xref macro: empty label → target as text; explicit label → re-parsed
+            "xref:target[]",
+            "xref:target.adoc[]",
+            "xref:ROOT:comments.adoc[]",
+            "xref:a.adoc#frag[]",
+            "xref:target[Some Label]",
+            "xref:target[*bold* label]",
+            "xref:target[a -- b]",
+            // attribute reference inside the label (re-parsed with attributes on)
+            "xref:target[{name}]",
+            // attribute reference inside the TARGET stays literal in the target
+            "xref:{anchor}[]",
+            // mixed with surrounding text and a sibling span
+            "see xref:there[] now",
+            "*before* xref:x[y] *after*",
+            "xref:a[] and xref:b[c]",
+            // a span wrapping a macro reparses the same way
+            "*xref:x[]*",
+            "`xref:x[]`",
+            // <<...>> shorthand: bare, labelled, #-stripped, trimmed
+            "<<id>>",
+            "<<id,label>>",
+            "<<#id>>",
+            "<< id , the label >>",
+            "<<id>> and <<other,text>>",
+            "text <<id>> more",
+            // both macro forms together
+            "<<a>> then xref:b[c]",
+            // invalid → stay literal (no brackets, empty target, reversed brackets,
+            // empty cross reference)
+            "xref:notarget",
+            "xref:[]",
+            "xref:a]b[c]",
+            "<<>>",
+            "a < b << c",
+            // a non-macro 'xref' substring mid-word
+            "prefixref:x[]",
         ];
         for c in cases {
             assert_eq!(

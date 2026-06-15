@@ -202,12 +202,38 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 77-я сессия): РЕРАЙТ inline — Фаза 2 (8/N) marker escape + `\+` span-aware (ветка `feat/subst-phase2-marker-escape-v2`)
+## АКТУАЛЬНО (2026-06-15, 78-я сессия): РЕРАЙТ inline — Фаза 2 (9/N) macros (1/N) cross-reference `xref:`+`<<>>` (ветка `feat/subst-phase2-macros`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
 asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-7/N) уже СМЕРЖЕНА в master (`18aaacf`). **(8/N) СМЕРЖЕНА
-`--no-ff` + ЗАПУШЕНА (master `8db6fcc`, коммит `f143140`), ветка удалена:**
+снять gate → flip outline. Phase 2 (1-8/N) уже СМЕРЖЕНА в master (`713d62b`). **(9/N) НЕ закоммичена,
+ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(9/N) macros (1/N) — cross-reference (`xref:target[label]` + `<<target>>`/`<<target,label>>`)** —
+  первый срез macros (САМОЕ большое семейство, multi-session). Строит ВСЮ инфраструктуру macros:
+  - **`TagToken::Macro(Vec<Event<'static>>)`** (tokenize.rs) — leaf держит Start+label-события+End как ОДНУ
+    owned-последовательность, в tokenize разворачивается (flush+push клонов). АТОМАРЕН — НЕ участвует в
+    cross-span overlap (в отличие от Open/Close span). `macro_sentinel`. `Event<'static>`→`Event<'a>` ковар.
+  - **`subst/macros.rs`** (НОВЫЙ) — `extract(work,subs)` скан L→R skip-сентинели; `try_xref`/`try_cross_ref`
+    (зеркала `try_xref_macro`/`try_cross_reference`: find `[`/`]`/`>>`, `#`-strip, comma trim, non-empty);
+    `build_cross_reference` (Start + label + End); failed-макрос advance 1 байт (легаси `pos+=1`).
+  - **Label re-parse = `push_macro_label`:** `super::run_pipeline(l, subs.without(MACROS))` (рекурсия конечна).
+    Пустой label → `Text(target)` (no-label, рендереру для unlabeled-xref placeholder); `<<a,>>` пустой
+    explicit → НЕТ событий (guard `!l.is_empty()`).
+  - **Порядок: macros ПЕРЕД attributes** (легаси потребляет макрос целиком → `{x}` в target литерал, НЕ
+    AttrRef), ПОСЛЕ passthrough/escape. **Sentinel-free span guard** (`xref:x[+raw+]` → declined → gate fb).
+  - **mod.rs**: `mod macros;` + вызов после char_refs гейт MACROS; +тест
+    `reproduces_legacy_on_cross_reference_inputs` (28 кейсов).
+- **Гейт:** toggle-on **343→343, 0 изменённых файлов** (airtight; nav-кластер УЖЕ identical под base —
+  легаси xref верен; gate адаптирует совпадающие события). **FORCE (base `713d62b`): Identical 111→254
+  (+143!), 143 FLIP, 37 closer, 10 FARTHER, 0 REGR** (xref/`<<>>` пронизывают весь корпус). FARTHER —
+  каскад отложенных макросов (faq.adoc: URL-макрос, не xref). force_nearmiss 233→90.
+- clippy 0, test --workspace зелёное (parser 538→539, html 433, render-core 15), parsing-lab 233/233
+  (17 subst-тестов, +1 cross-reference).
+- **Дальше Фаза 2:** macros (2/N) link/url/mailto/autolink/email (донор `try_link_macro` 2059,
+  `try_autolink` 2480, `parse_link_attrs`); (3/N+) image/footnote/icon/UI/stem/anchor(`[[id]]`)/index-term;
+  escape `\macro` (порт `inline_macro_escape_len`); затем снять gate → flip outline.
+
+### (АРХИВ 77-й) Phase 2 (8/N) marker escape + `\+` span-aware — СМЕРЖЕНА в master `8db6fcc` (коммит `f143140`)
 - [x] **(8/N) escape маркеров `\*`/`\_`/`` \` ``/`\#`/`\^`/`\~` + `\+` (span-aware, ВНУТРИ пассов)** —
   модель asciidoctor `\\?`: backslash роняется ТОЛЬКО если на этой позиции образовался бы валидный
   спан/passthrough (drop → литеральные маркеры, контент проходит остальные пассы:

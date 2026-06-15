@@ -143,6 +143,16 @@ pub(super) enum TagToken {
     /// `CharRef` is a SEPARATE event — it flushes the pending run and does not
     /// coalesce — exactly as the legacy parser emits each reference on its own.
     CharRef { text: String, raw: bool },
+    /// A complete inline macro (cross reference `xref:…[…]` / `<<…>>`, and — in
+    /// later phases — link/image/footnote/…), extracted by [`super::macros`] as a
+    /// single opaque leaf: its `Start` tag, its already-computed label events, and
+    /// its `End` tag, stored as one owned event sequence. The label was re-parsed
+    /// by an inner pipeline with `MACROS` disabled (mirroring the legacy
+    /// `push_macro_label`), so unlike a span `Open`/`Close` pair the label content
+    /// is NOT left in the buffer — the macro is atomic and cannot participate in
+    /// cross-span overlap, exactly as the legacy parser emits a macro and its
+    /// sub-parsed label together. Restored verbatim, opaque to every later pass.
+    Macro(Vec<Event<'static>>),
 }
 
 /// The mutable working state of the pipeline: the rewritten buffer plus the
@@ -231,6 +241,14 @@ impl Work {
     pub(super) fn char_ref_sentinel(&mut self, text: String, raw: bool) -> String {
         let idx = self.tags.len();
         self.tags.push(TagToken::CharRef { text, raw });
+        sentinel(idx)
+    }
+
+    /// Register a fully-formed inline-macro leaf (its `Start`, label events, and
+    /// `End`) and return its sentinel string.
+    pub(super) fn macro_sentinel(&mut self, events: Vec<Event<'static>>) -> String {
+        let idx = self.tags.len();
+        self.tags.push(TagToken::Macro(events));
         sentinel(idx)
     }
 }
@@ -376,6 +394,14 @@ pub(super) fn tokenize<'a>(work: Work) -> Vec<Event<'a>> {
                     } else {
                         Event::Text(t)
                     });
+                }
+                Some(TagToken::Macro(evs)) => {
+                    flush_pending(&mut events, &mut pending);
+                    // Each stored `Event<'static>` coerces to `Event<'a>` on push
+                    // (covariance: `'static` outlives `'a`).
+                    for e in evs {
+                        events.push(e.clone());
+                    }
                 }
                 None => flush_pending(&mut events, &mut pending),
             }

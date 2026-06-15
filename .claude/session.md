@@ -1,5 +1,81 @@
 # Session context
 
+## Сессия (2026-06-15, 78-я) — РЕРАЙТ inline, Фаза 2 (9/N): macros (1/N) — cross-reference (`xref:` + `<<>>`)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros`** (off master `713d62b`, 343) — **НЕ
+закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push` +
+удаление ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `713d62b` (включает 8/N
+marker-escape).
+
+### Выбор задачи (data-driven, FORCE-карта)
+По плану 77-й следующий крупный пункт — **macros** (САМОЕ большое, multi-session). FORCE near-miss (base):
+233 non-identical, доминирующий **9-diff кластер ≈13 nav-файлов = чистый `xref:target[]`/`[label]`**
+(движок оставлял макрос литералом). Взял **cross-reference (xref + `<<>>`)** как первый срез macros:
+строит ВСЮ инфраструктуру (leaf-токен + extract-пасс + recursive label-reparse + ordering), флипает
+кластер, самодостаточен. link/url/image/footnote/icon/UI/stem/anchor/autolink/email/index-term — отдельными
+сессиями (reuse инфры).
+
+### Архитектурная модель (КЛЮЧ для будущих macro-сессий)
+- **Порядок пайплайна:** passthrough → escape → char_refs → **macros** → attributes → quotes →
+  replacements → post_replacements. **macros ПЕРЕД attributes** (вопреки asciidoctor macros-после-attrs):
+  легаси потребляет макрос ЦЕЛИКОМ, поэтому `{anchor}` в target макроса (`xref:{anchor}[]`) остаётся
+  литералом в target, НЕ становится отдельным AttrRef. attributes-первым извлёк бы `{anchor}` в сентинель
+  → span макроса понёс бы его → declined. macros ПОСЛЕ passthrough/escape (чтобы `+xref+`/`\xref:`
+  были уже нейтрализованы/защищены).
+- **Leaf-токен `TagToken::Macro(Vec<Event<'static>>)`** (tokenize.rs): держит Start + label-события + End
+  как ОДНУ owned-последовательность, в tokenize разворачивается (flush_pending + push клонов). Опрозрачен
+  всем поздним пассам — макрос АТОМАРЕН, НЕ участвует в cross-span overlap (в отличие от Open/Close span).
+  `macro_sentinel(events)` регистратор. (`Event<'static>`→`Event<'a>` ковариантно на push.)
+- **Label re-parse = зеркало `push_macro_label`:** explicit label переразбирается через
+  `super::run_pipeline(l, subs.without(MACROS))` (MACROS off → вложенный макрос литерал, рекурсия конечна).
+  Пустой explicit label (`<<a,>>`) → НЕТ событий (как `push_macro_label("")=[]`, guard `!l.is_empty()`);
+  no-label форма (`xref:x[]`/`<<x>>`) → `Text(target)` (легаси None-ветка, ровно тот Text, что нужен
+  рендереру для auto-swap unlabeled-xref placeholder).
+- **Sentinel-free span guard:** если span макроса несёт сентинель (passthrough/escape/char-ref уже извлекли
+  оттуда RAW-текст — `xref:x[+raw+]`) → declined (gate fallback). Обычный случай (plain target, text/quote
+  label) сентинелей не несёт.
+- **Tag::CrossReference{target,label}:** рендерер юзает label ТОЛЬКО как `is_none()` (был ли explicit), текст
+  берёт из событий. target/label полей = Cow::Owned (== Cow::Borrowed легаси по PartialEq, gate ОК).
+
+### Сделано (1 логический коммит, 3 точки + тест)
+- **tokenize.rs**: `TagToken::Macro(Vec<Event<'static>>)` + арм в tokenize + `macro_sentinel`.
+- **macros.rs** (НОВЫЙ ~210 строк): `extract(work, subs)` скан L→R skip-сентинели; `try_xref` (зеркало
+  `try_xref_macro`: find `[`/`]`, `end<=start` reject, target non-empty), `try_cross_ref` (зеркало
+  `try_cross_reference`: find `>>`, comma split+trim, `#`-strip, content non-empty), `build_cross_reference`,
+  `span_has_sentinel`. Failed-макрос → advance past 'x'/'<' (легаси `pos+=1`).
+- **mod.rs**: `mod macros;`, вызов после char_refs ДО attributes гейт MACROS; doc run_pipeline обновлён;
+  +тест `reproduces_legacy_on_cross_reference_inputs` (28 кейсов: empty/explicit label, antora target,
+  `#frag`, attr в label/target, span вокруг макроса, `<<>>` bare/labelled/`#`-strip/trim, invalid формы,
+  mid-word `prefixref:`).
+
+### Верификация (airtight по гейту, огромный FORCE-прирост)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 538→539, html 433, render-core 15);
+  parsing-lab 233/233. subst 17 тестов (+1 cross-reference).
+- **blast toggle-on (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight — gate адаптирует совпадающий xref;
+  nav-кластер УЖЕ был identical под base, легаси xref корректен).
+- **FORCE (blast_force, base `713d62b`): Identical 111→254 (+143!).** 143 FLIP, 37 closer, **10 FARTHER,
+  0 REGR** (airtight-инвариант держится). xref/`<<>>` пронизывают ВЕСЬ корпус → +143, не только 13 nav.
+  FARTHER (+1…+15) — каскад отложенной фичи: спот-чек faq.adoc — диффы от URL-макроса
+  (`https://…[label]`, НЕ поддержан), сам xref верен. force_nearmiss 233→90 non-identical.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+1. **macros (2/N) — link/url/mailto:** `link:url[attrs]` (+`++url++` форма), URL-автолинк `https://…[label]`
+   (держит 9-diff quote.adoc + FARTHER-кластер faq/index/_requests), bare-автолинк http/https/ftp/irc,
+   email-автолинк, mailto query-encode. Донор `try_link_macro` 2059, `try_mailto_macro` 2154, `try_autolink`
+   2480, `try_email_autolink` 2556, `parse_link_attrs`. Reuse `TagToken::Macro` + label-reparse.
+2. **macros (3/N+) — image/footnote/icon/UI(kbd/btn/menu)/stem/anchor(`[[id]]`/`[[[bib]]]`)/index-term(`((…))`).**
+   Доноры: try_inline_image 2276, try_footnote_macro 1954, try_icon_macro 1830, try_stem_macro 1854,
+   try_kbd/btn/menu 1722/1745/1806, try_anchor 2671, try_bibliography_anchor 2629, try_index_term 2772.
+3. **escape `\macro`** (`\xref:`/`\link:`/…) — порт `inline_macro_escape_len` (inline.rs 1174) в escape.rs:
+   drop `\`, Literal(macro-text); guard span без сентинеля. Дешёвый FORCE-win (escaped форма = литерал,
+   impl макроса не нужен). СЕЙЧАС `\xref:` диверг → gate fallback (безвреден).
+4. **escape маркеров+`\+` ВНУТРИ пассов** (отложено с 8/N — doubled-формы, `\\MM`).
+5. **ФИНАЛ Фазы 2:** снять gate (или per-construct) → flip outline (cross-span @4545) при 343.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE base-vs-new обе под
+  env), `diffone.py <file> <limit>` (FORCE-дифф), `/tmp/force_nearmiss.py`. base пересобирать из master HEAD.
+
+---
+
 ## Сессия (2026-06-15, 77-я) — РЕРАЙТ inline, Фаза 2 (8/N): escape маркеров + `\+` span-aware (ВНУТРИ пассов)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-marker-escape-v2`** (off master `18aaacf`, 343)
