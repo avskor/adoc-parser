@@ -202,12 +202,36 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 82-я сессия): РЕРАЙТ inline — Фаза 2 (13/N) macros (5/N) anchor + index-term (ветка `feat/subst-phase2-macros-anchor-index`)
+## АКТУАЛЬНО (2026-06-15, 83-я сессия): РЕРАЙТ inline — Фаза 2 (14/N) escape `\macro` (ветка `feat/subst-phase2-macro-escape`)
 
-Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна
-asciidoctor в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале
-снять gate → flip outline. Phase 2 (1-12/N) уже СМЕРЖЕНА в master (`f1226b6`). **(13/N) НЕ закоммичена,
-ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` + удаление ветки:
+Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
+Phase 2 (1-13/N) уже СМЕРЖЕНА в master (`9c6a219`). **(14/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(14/N) escape `\name:target[…]`** (порт `inline_macro_escape_len`, дешёвый FORCE-win — escaped =
+  литерал, impl-движок не нужен). Скоуп = только 12 именованных макросов; `\https://`/`\((`/`\pass:` —
+  отд. code-path'ы, ОТЛОЖЕНЫ. **`subst/escape.rs`**:
+  - `run(work)` → `run(work, subs)` (+`macros_on`); новый арм `mlen>0` в `Some(m)` (после typographic,
+    перед cref — триггеры s/l/a/x/m/i/f не пересекаются с прочими): drop `\`, запечатать форму как leaf.
+  - `macro_escape_len(bytes,p)` — порт легаси (12 NAMES, reject `name::` блок-форма, target=non-ws до `[`,
+    скан до `]` inclusive; **+sentinel-guard**: TAG_LEAD/TAG_TAIL в скане → return 0 (decline, gate fb),
+    т.к. escape бежит после passthrough и target/content мог уже содержать сентинель).
+  - **некоалесцирующий leaf:** легаси-macro-escape пушит ОТДЕЛЬНЫЙ `Text` (`\link:u[t] more` → 2 события,
+    эмпирич. подтверждено). → `macro_sentinel(vec![Text(Owned)])` (атомарный), НЕ `literal_sentinel`
+    (коалесцирует → разошёлся бы на хвосте). Переиспользую `Macro`-токен.
+  - **mod.rs**: вызов `escape::run(&mut work, subs)`; doc run_pipeline + escape.rs модуль-doc; +тест
+    `reproduces_legacy_on_macro_escape_inputs` (24 кейса).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 325→326 (+1 FLIP), 0 REGR, 0
+  FARTHER, 0 паник.** FLIP `user-index.adoc` 4→0 (diffone FORCE = 0 diffs, 294=294). База = master-движок
+  `9c6a219` под FORCE (blast_* пробрасывает env во все subprocess'ы) → дельта чисто моя.
+- clippy 0 (фикс explicit_auto_deref), test --workspace зелёное (parser 544→545, html 433; 23 subst).
+- **Дальше Фаза 2:** escape `\https://` autolink (seal URL-экстент+boundary)/`\((` shorthand/`\pass:`/
+  `\\`-doubled/doubled-marker; macros (6/N+) UI(experimental-проброс)/footnote(STATEFUL); снять gate →
+  flip outline.
+
+### (АРХИВ 82-й) Phase 2 (13/N) macros (5/N) anchor + index-term — СМЕРЖЕНА в master `9c6a219`
+
+Phase 2 (1-12/N) уже СМЕРЖЕНА в master (`f1226b6`). **(13/N) СМЕРЖЕНА** (`9c6a219`):
 - [x] **(13/N) macros (5/N) — anchor + index-term** (обе семьи leaf: id/label/term verbatim, БЕЗ
   re-parse, `subs` не нужен; объединены как icon+STEM в 12/N). **`subst/macros.rs`**:
   - **anchor:** `try_anchor` (`[[id]]`/`[[id,label]]` — comma: id.trim_end / label.trim_start, пустой

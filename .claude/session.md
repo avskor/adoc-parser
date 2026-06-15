@@ -1,5 +1,60 @@
 # Session context
 
+## Сессия (2026-06-15, 83-я) — РЕРАЙТ inline, Фаза 2 (14/N): escape `\macro` (порт inline_macro_escape_len)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macro-escape`** (off master `9c6a219`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. anchor+index-term (13/N) к началу сессии УЖЕ смержена (master HEAD `9c6a219`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `9c6a219` (blast_toggle base 343, blast_force base 325 —
+base = master-движок под FORCE, т.к. blast_* пробрасывает env во ВСЕ subprocess'ы; дельта = чисто мой инкремент).
+
+### Выбор задачи
+По плану «Дальше» 82-й: escape `\macro` (порт `inline_macro_escape_len`) — помечен как ДЕШЁВЫЙ FORCE-win
+(escaped = литерал, impl-движок не нужен). Взял именно его. Корпус-данные: `\indexterm:`/`\indexterm2:`
+в `user-index.adoc` (handled), `\https://` ×4 (autolinks/links/subs) + `\((` ×1 (subs) — ОТЛОЖЕНЫ (отдельные
+code-path'ы: autolink нужен left-boundary look-back, `\((` — concealed-vs-flow). Скоуп = только
+`inline_macro_escape_len` (12 именованных макросов `name:target[…]`).
+
+### Архитектура (escape `\name:target[…]` = некоалесцирующий leaf)
+- **escape.rs**: `run(work)` → `run(work, subs)` (+ `macros_on = subs.has(MACROS)`, гейт как у легаси
+  `inline_macro_escape_len`). Новый арм в `Some(m)` (после typographic, перед cref — триггеры
+  s/l/a/x/m/i/f НЕ пересекаются с typographic/cref/smartquote/generic): `mlen>0` → drop `\`, запечатать
+  `old[i+1..i+1+mlen]` как leaf. Функция `macro_escape_len(bytes,p)` — порт легаси (12 NAMES, reject `name::`
+  блок-форма, target=non-ws до `[`, скан до `]` inclusive).
+- **КЛЮЧЕВОЕ — некоалесцирующий leaf:** легаси-macro-escape пушит ОТДЕЛЬНЫЙ `Text` (НЕ мёрджит с хвостом:
+  `\link:u[t] more` → `[Text("link:u[t]"), Text(" more")]` — эмпирически подтверждено probe-тестом). Поэтому
+  `macro_sentinel(vec![Text(Owned(form))])` (атомарный, flush_pending → push), НЕ `literal_sentinel`
+  (коалесцирует — разошёлся бы на хвостовом тексте). Переиспользую `Macro`-токен (opaque, verbatim, atomic).
+- **sentinel-guard в `macro_escape_len`:** escape бежит ПОСЛЕ passthrough → target/content мог уже содержать
+  сентинель (`\link:u[+pass+]`); встретив TAG_LEAD/TAG_TAIL в скане → return 0 (decline, gate fallback) —
+  легаси видел вербатим-исходник. Зеркало `span_has_sentinel`-стражей в macros.rs.
+- **mod.rs**: вызов `escape::run(&mut work, subs)`; doc run_pipeline + escape.rs модуль-doc (macro-escape в
+  Handled, уточнён Deferred: `\pass:` не плейн-литерал, `\https://`/`\((` — отд. code-path'ы).
+
+### Сделано (1 логический коммит, 2 файла, +170/-11)
+- **escape.rs**: импорты (`Cow`/`Event`/`SubstitutionSet`/`TAG_LEAD`/`TAG_TAIL`), сигнатура `run`, арм
+  `mlen>0`, функция `macro_escape_len`; модуль-doc.
+- **mod.rs**: вызов + doc; +тест `reproduces_legacy_on_macro_escape_inputs` (24 кейса: 12 имён, хвостовой
+  текст=отд. события, bare, attr-ref-like content, mid-word, в спане, `\image::` блок-форма, no-bracket).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0 (фикс explicit_auto_deref `*n`→`n`); cargo test --workspace зелёное (parser 544→545,
+  html 433); subst 23 теста (+1).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 325→326 (+1 FLIP), 0 REGR, 0 FARTHER, 0 паник.** FLIP `user-index.adoc` 4→0 (diffone
+  под FORCE = 0 diffs, 294=294). outline/subs/autolinks/links НЕ флипнули (прочие/отложенные расхождения).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- **escape (продолжение):** `\https://…` autolink (нужен seal URL-экстента + left-boundary; в sequential
+  нельзя просто drop `\` — autolink перевыстрелит), `\((…))` index-term shorthand (concealed-vs-flow),
+  `\pass:SPEC[…]` (drop `\`, но subs над контентом — НЕ плейн-литерал), `\\`-doubled, doubled-marker `\\MM`.
+- **macros (6/N+)**: UI kbd|btn|menu (проброс `InlineOptions.experimental` через pipeline — НЕ leaf),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954).
+- **ФИНАЛ Фазы 2:** снять gate → flip outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`.
+
+---
+
 ## Сессия (2026-06-15, 82-я) — РЕРАЙТ inline, Фаза 2 (13/N): macros (5/N) — anchor + index-term
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macros-anchor-index`** (off master `f1226b6`, 343) —
