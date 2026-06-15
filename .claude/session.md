@@ -3,8 +3,9 @@
 ## Сессия (2026-06-15, 77-я) — РЕРАЙТ inline, Фаза 2 (8/N): escape маркеров + `\+` span-aware (ВНУТРИ пассов)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-marker-escape-v2`** (off master `18aaacf`, 343)
-— **НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` + `git push` +
-удаление ветки. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из master HEAD `18aaacf` (включает 7/N char-refs).
+— **СМЕРЖЕНА `--no-ff` в master + ЗАПУШЕНА (master `8db6fcc`), ветка удалена** (по авторизации «merge
+and push»). Коммиты `f143140` (код+docs) + merge `8db6fcc`. base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из
+master HEAD `18aaacf` (включает 7/N char-refs).
 
 ### Выбор задачи (по плану 76-й, НЕ data-driven пивот)
 FORCE near-miss: 1-diff subs-symbol-repl = `{empty}--{empty}` (не escape, отложен); большой кластер
