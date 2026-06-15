@@ -842,6 +842,51 @@ mod tests {
         }
     }
 
+    /// With the inline-image macro ported, the pipeline must reproduce legacy on
+    /// the `image:target[attrs]` forms: bare (filename-derived alt), explicit alt,
+    /// positional width/height, named attrs (width/height/align/float/link/role/
+    /// title), quoted alt, an attribute-reference target left literal (attributes
+    /// run after macros), the `image::` block form left untouched, the invalid
+    /// forms that stay literal, and mixes with surrounding text and spans.
+    #[test]
+    fn reproduces_legacy_on_image_inputs() {
+        let cases = [
+            // bare: alt auto-generated from the filename by the renderer
+            "image:play.png[]",
+            "Click image:play.png[] to get the party started.",
+            // explicit alt (positional 0), quoted alt
+            "image:play.png[Play]",
+            "image:play.png[\"Play button\"]",
+            // positional width/height
+            "image:play.png[Play,200,100]",
+            // named attrs
+            "image:play.png[title=Pause]",
+            "image:play.png[alt=Go,width=50]",
+            "image:play.png[align=center]",
+            "image:play.png[float=left]",
+            "image:play.png[link=https://example.com]",
+            "image:play.png[role=icon]",
+            // path-style target (imagesdir-relative), left literal in the target
+            "image:macros:play.png[]",
+            "image:{imagesdir}/play.png[Go]",
+            // block form must NOT be treated as an inline image
+            "image::play.png[]",
+            // invalid → literal
+            "image:noclose",
+            "image:[]",
+            // mixed with text and wrapped by a span
+            "see image:a.png[A] and image:b.png[B]",
+            "*image:a.png[A]*",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1

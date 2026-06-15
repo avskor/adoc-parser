@@ -8,13 +8,16 @@
 //! - **link family** (2/N) — the `link:url[attrs]` macro, the `mailto:email[attrs]`
 //!   macro (with `?subject=&body=` query encoding), bare URL autolinks
 //!   (`http://`/`https://`/`ftp://`/`irc://`, with the optional `[label]` form),
-//!   and bare email autolinks (`user@host.tld`) → a `Link` tag.
+//!   and bare email autolinks (`user@host.tld`) → a `Link` tag;
+//! - **inline image** (3/N) — the `image:target[attrs]` macro → an `InlineImage`
+//!   tag (a leaf carrying the parsed image attributes; the `image::` block form is
+//!   left to the block scanner).
 //!
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro families — image/footnote/icon/UI/stem/anchor/
-//! index-term — are ported in subsequent phases.)
+//! it. (The remaining macro families — footnote/icon/UI/stem/anchor/index-term —
+//! are ported in subsequent phases.)
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -50,13 +53,13 @@
 
 use std::borrow::Cow;
 
-use crate::attributes::parse_link_attrs;
+use crate::attributes::{parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::url_encode_into;
 
 use super::tokenize::{sentinel_end, utf8_char_len, Work, TAG_LEAD};
 
-/// Extract every cross-reference macro from `work.buf` into sentinels.
+/// Extract every supported inline macro from `work.buf` into sentinels.
 pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
     let src = std::mem::take(&mut work.buf);
     let bytes = src.as_bytes();
@@ -102,6 +105,19 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // mailto:email[attrs]
         if bytes[i] == b'm' && src[i..].starts_with("mailto:") {
             if let Some((events, end)) = try_mailto(&src, i, subs) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // image:target[attrs] (but not the `image::` block form, which the block
+        // scanner owns — the inline pass leaves it literal).
+        if bytes[i] == b'i' && src[i..].starts_with("image:") && !src[i..].starts_with("image::") {
+            if let Some((events, end)) = try_image(&src, i) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -337,6 +353,51 @@ fn try_mailto(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Eve
     let label = (!attrs.text.is_empty()).then_some(attrs.text);
     let events = build_link(url, attrs.window, attrs.nofollow, attrs.role, false, label, email, subs);
     Some((events, end))
+}
+
+/// At an `image:` (caller guarantees the prefix and that it is not the `image::`
+/// block form), try to match `image:target[attrs]`. Mirror of
+/// [`crate::inline::InlineState::try_inline_image`]. The inline image is a *leaf*
+/// macro: unlike a link or cross-reference it carries no re-parsed label, only the
+/// parsed image-attribute fields, so the `Start(InlineImage)`/`End` pair is built
+/// directly (no `MACROS`-cleared sub-pipeline). An empty target is accepted — the
+/// donor has no such guard, so `image:[alt]` still matches (the renderer makes the
+/// `<img>` from the attrs). The tag fields are owned `Cow`s (`== Cow::Borrowed`
+/// legacy by `PartialEq`, so the gate adopts).
+fn try_image(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 6..]; // after "image:"
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let target = &rest[..bracket_start];
+    let content = &rest[bracket_start + 1..bracket_end];
+    let end = start + 6 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let a = parse_image_attrs(content);
+    let events = vec![
+        Event::Start(Tag::InlineImage {
+            target: Cow::Owned(target.to_string()),
+            alt: Cow::Owned(a.alt.to_string()),
+            width: a.width.map(owned),
+            height: a.height.map(owned),
+            align: a.align.map(owned),
+            float: a.float.map(owned),
+            link: a.link.map(owned),
+            role: a.role.map(owned),
+            title: a.title.map(owned),
+        }),
+        Event::End(TagEnd::InlineImage),
+    ];
+    Some((events, end))
+}
+
+/// Owning conversion helper for the optional `&str` image-attribute fields.
+fn owned(s: &str) -> Cow<'static, str> {
+    Cow::Owned(s.to_string())
 }
 
 /// Whether an autolink scheme (`http://`/`https://`/`ftp://`/`irc://`) begins at
