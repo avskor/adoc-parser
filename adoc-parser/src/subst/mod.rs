@@ -125,8 +125,9 @@ pub(crate) fn try_parse<'a>(
 /// each gated on its presence in `subs`) and tokenize the result.
 ///
 /// Implemented so far: `escape` (non-marker `\`-prefixed literals — `\{`, `\"`/
-/// `\'` smart-quote openers, `\[`/`\<`, typographic, and the `\&#…;` character-
-/// reference escape), passthrough extract/restore, character-reference survival
+/// `\'` smart-quote openers, `\[`/`\<`, typographic, the `\&#…;` character-
+/// reference escape, and the escaped inline-macro form `\name:target[…]`),
+/// passthrough extract/restore, character-reference survival
 /// (`&#167;` / `&copy;` → `InlinePassthrough`), `attributes` (`{name}` /
 /// `{set:…}`, unresolved leaf events mirroring legacy), `quotes` (including the
 /// `:double`/`:single` curved smart quotes), `macros` (so far the cross-reference
@@ -136,10 +137,12 @@ pub(crate) fn try_parse<'a>(
 /// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), and the anchor
 /// (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
 /// `indexterm2:`) families, `replacements`, `post_replacements`. The remaining
-/// macro families (footnote and the experimental UI macros) — and the quote-marker
-/// escapes `\*`/`\_`/`` \` `` and `\+`, which belong inside the quote/passthrough
-/// passes — are not yet ported; inputs that need them diverge from legacy and are
-/// rejected by the gate (or surface as diffs under `force()`).
+/// macro families (footnote and the experimental UI macros) — the remaining
+/// escape forms (the `\pass:`/`\https://` autolink / `\((` index-term escapes, and
+/// the `\\`-doubled forms) — and the quote-marker escapes `\*`/`\_`/`` \` `` and
+/// `\+`, which belong inside the quote/passthrough passes — are not yet ported;
+/// inputs that need them diverge from legacy and are rejected by the gate (or
+/// surface as diffs under `force()`).
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
@@ -156,7 +159,10 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // is opaque to those passes (mirrors Asciidoctor's per-substitution `\\?`
     // capture). Running after passthrough means a `\` left in the buffer is always
     // top-level (passthrough-internal backslashes are already inside a sentinel).
-    escape::run(&mut work);
+    // `subs` is threaded in for the macro-escape arm (`\link:u[t]` / `\indexterm:`
+    // …), which is gated on `MACROS` and seals the whole macro form so the later
+    // `macros` pass never fires on it.
+    escape::run(&mut work, subs);
     // Valid character references (`&#167;` / `&copy;`) are extracted next, before
     // the attribute/quote passes, into opaque survival leaves
     // (`InlinePassthrough`, so the renderer does not escape the `&`). Extracting
@@ -1022,6 +1028,59 @@ mod tests {
             "indexterm2:[]",
             "indexterm:noclose",
             "(single paren)",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
+    /// With the escaped inline-macro form ported (`\name:target[…]` for each of the
+    /// twelve macro names), the pipeline must reproduce legacy: the backslash drops
+    /// and the whole macro form stays literal as its OWN `Text` event (so trailing
+    /// text does NOT coalesce with it), the `macros` pass never fires on it, the
+    /// block-macro `\image::…` is rejected (backslash stays), an unbracketed form is
+    /// not an escape, and the escape applies mid-word and inside a span.
+    #[test]
+    fn reproduces_legacy_on_macro_escape_inputs() {
+        let cases = [
+            // each macro name escaped → dropped backslash, literal macro form
+            "\\link:http://x.com[Site]",
+            "\\xref:target[label]",
+            "\\mailto:a@b.com[Mail]",
+            "\\image:play.png[Play]",
+            "\\icon:heart[2x]",
+            "\\stem:[x^2]",
+            "\\latexmath:[\\sqrt a]",
+            "\\asciimath:[sqrt b]",
+            "\\indexterm2:[primary]",
+            "\\indexterm:[primary, secondary, tertiary]",
+            "\\footnote:[a note]",
+            "\\anchor:my-id[]",
+            // the escaped macro is its OWN Text event — trailing/leading text does
+            // not coalesce with it (two/three separate Text events)
+            "\\link:u[t] more",
+            "before \\indexterm2:[primary] after",
+            // bare (nothing after) → one Text event
+            "\\link:u[t]",
+            // content that looks like an attribute ref stays literal inside the form
+            "\\link:u[{name}]",
+            // mid-word: the backslash is the boundary, the macro form still matches
+            "word\\link:u[t]",
+            "see \\image:a.png[A] now",
+            // escaped macro inside a span (only-content-in-span)
+            "`\\indexterm2:[primary]`",
+            "*\\link:u[t]*",
+            // NOT an escape: block-macro `::` form (backslash stays literal)
+            "\\image::play.png[]",
+            // NOT an escape: no closing bracket (backslash stays, macro declines too)
+            "\\link:noclose",
+            "\\xref:notarget",
+            // a non-macro name after the backslash is unaffected (blanket arm)
+            "\\notamacro:x[y]",
         ];
         for c in cases {
             assert_eq!(

@@ -32,6 +32,15 @@
 //!   restored as a [`CharRef`](super::tokenize::TagToken::CharRef) leaf with
 //!   `raw = false`. Sealing it here also stops [`super::char_refs`] from treating
 //!   it as a *surviving* (passthrough) reference.
+//! - **`\name:target[…]`** — an escaped inline macro (`\link:u[t]`,
+//!   `\indexterm2:[term]`, …, the names from
+//!   [`crate::inline::InlineState::inline_macro_escape_len`]): the backslash drops
+//!   and the whole macro form stays literal, sealed as a
+//!   [`Macro`](super::tokenize::TagToken::Macro) leaf (one standalone `Text`
+//!   event, NOT a coalescing `Literal` — the legacy parser emits the escaped
+//!   macro as its own event). Gated on `MACROS`. Sealing it here stops the later
+//!   [`super::macros`] pass from firing on the form. The block-macro `\image::…`
+//!   and any form whose target/content already holds a sentinel are declined.
 //!
 //! ## Handled by the quote / passthrough passes (their span-aware home):
 //!
@@ -52,15 +61,27 @@
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
 //! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
-//! - macro escapes `\pass:SPEC[…]`, `\link:`, `\footnote:`, `\((…))`,
-//!   `\https://…` — these need the not-yet-ported macros pass.
+//! - the pass-macro escape `\pass:SPEC[…]` (Asciidoctor drops the backslash and
+//!   skips extraction but still runs the remaining subs over the content — not a
+//!   plain literal),
+//! - the `\https://…` autolink escape (relies on a left-boundary look-back) and
+//!   the `\((…))` index-term-shorthand escape (concealed-vs-flow logic) — distinct
+//!   code paths from the `\name:target[…]` macro escape handled above.
+
+use std::borrow::Cow;
+
+use crate::event::{Event, SubstitutionSet};
 
 use super::char_refs::char_ref_len;
-use super::tokenize::{utf8_char_len, Work};
+use super::tokenize::{utf8_char_len, Work, TAG_LEAD, TAG_TAIL};
 
 /// Apply backslash escapes across the raw working buffer (run before any pass
 /// that inserts sentinels).
-pub(super) fn run(work: &mut Work) {
+///
+/// `subs` gates the macro-escape arm on `MACROS` (mirroring the legacy
+/// `inline_macro_escape_len`, which is a no-op without it).
+pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
+    let macros_on = subs.has(SubstitutionSet::MACROS);
     let old = std::mem::take(&mut work.buf);
     let bytes = old.as_bytes();
     let mut out = String::with_capacity(old.len());
@@ -91,10 +112,27 @@ pub(super) fn run(work: &mut Work) {
             Some(m) => {
                 let plen = typographic_escape_len(bytes, i);
                 let cref = if m == b'&' { char_ref_len(bytes, i + 1) } else { 0 };
+                let mlen = if macros_on { macro_escape_len(bytes, i + 1) } else { 0 };
                 if plen > 0 {
                     // Typographic pattern (arm: bypass `replacements`).
                     out.push_str(&work.literal_sentinel(old[i + 1..i + 1 + plen].to_string()));
                     i += 1 + plen;
+                } else if mlen > 0 {
+                    // `\name:target[…]` — an escaped inline macro (`\link:u[t]`,
+                    // `\indexterm2:[term]`, …): drop the backslash and keep the WHOLE
+                    // macro form literal, so the not-yet-run `macros` pass never fires
+                    // on it. Mirrors the legacy `inline_macro_escape_len` arm.
+                    //
+                    // Stored as a `Macro` leaf (one standalone `Text` event) rather
+                    // than a coalescing `Literal`: the legacy parser pushes the
+                    // escaped macro as its OWN `Text` event, so it does NOT merge with
+                    // the following run (`\link:u[t] more` → two `Text`s). A
+                    // `Literal` would coalesce and diverge. `macro_escape_len` already
+                    // declined any form whose target/content was contaminated by an
+                    // earlier sentinel (so the leaf text is the verbatim source).
+                    let macro_text = old[i + 1..i + 1 + mlen].to_string();
+                    out.push_str(&work.macro_sentinel(vec![Event::Text(Cow::Owned(macro_text))]));
+                    i += 1 + mlen;
                 } else if cref > 0 {
                     // `\&#174;` / `\&copy;` — escaped character reference: drop the
                     // backslash and keep the reference as a literal `Text` event
@@ -179,4 +217,66 @@ fn typographic_escape_len(bytes: &[u8], backslash: usize) -> usize {
         }
         _ => 0,
     }
+}
+
+/// Length of an escaped inline-macro form `name:target[…]` beginning at `p` (the
+/// byte right after the backslash), or 0 if none. Port of
+/// [`crate::inline::InlineState::inline_macro_escape_len`]: a recognised name
+/// (`link:`/`xref:`/`image:`/… — each uniquely delimited by its colon), a
+/// non-whitespace target up to an opening `[`, and a closing `]` somewhere after
+/// it; the returned length spans `p` through that `]` inclusive.
+///
+/// The block-macro form `name::` is rejected (so `\image::play.png[]` is not
+/// treated as an escaped inline image — it stays a literal backslash). Unlike the
+/// legacy scan over raw input, this runs after passthrough/escape/char-ref
+/// extraction, so the target or bracketed content may already hold a sentinel; a
+/// sentinel byte inside either run means the would-be literal text no longer
+/// matches the source the legacy parser kept verbatim, so the match is declined
+/// (returns 0) and the gate falls back to legacy.
+fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
+    if p >= bytes.len() {
+        return 0;
+    }
+    // Longest-first is not required (each name is uniquely delimited by its
+    // colon), but keep indexterm2 before indexterm for clarity.
+    const NAMES: [&[u8]; 12] = [
+        b"stem:", b"latexmath:", b"asciimath:", b"link:", b"xref:", b"mailto:",
+        b"icon:", b"indexterm2:", b"indexterm:", b"footnote:", b"image:", b"anchor:",
+    ];
+    let rest = &bytes[p..];
+    let Some(name_len) = NAMES.iter().find_map(|n| rest.starts_with(n).then_some(n.len())) else {
+        return 0;
+    };
+    // Reject the block-macro form `name::` (e.g. image::target[]).
+    if rest.get(name_len) == Some(&b':') {
+        return 0;
+    }
+    // Target: a run of non-whitespace characters up to the opening bracket. A
+    // sentinel byte here means an earlier pass lifted part of the target into a
+    // leaf — decline (the legacy parser saw verbatim source).
+    let mut i = name_len;
+    while let Some(&c) = rest.get(i) {
+        if matches!(c, b'[' | b' ' | b'\t' | b'\n') {
+            break;
+        }
+        if c == TAG_LEAD || c == TAG_TAIL {
+            return 0;
+        }
+        i += 1;
+    }
+    // Require an opening bracket immediately, then a closing bracket after it.
+    if rest.get(i) != Some(&b'[') {
+        return 0;
+    }
+    i += 1; // past '['
+    while let Some(&c) = rest.get(i) {
+        if c == b']' {
+            return i + 1; // length from p to the closing ']' inclusive
+        }
+        if c == TAG_LEAD || c == TAG_TAIL {
+            return 0;
+        }
+        i += 1;
+    }
+    0
 }
