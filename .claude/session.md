@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-16, 93-я) — РЕРАЙТ inline, Фаза 2 (24/N): footnote-макрос → FORCE 344/344 (весь корпус выровнен!)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-24`** (off master `0b58a8c`, 344) —
+ЗАКОММИЧЕНА (1 логический коммит), **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master +
+`git push` + удаление ветки. 23/N к началу сессии УЖЕ смержен (master HEAD `0b58a8c`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `0b58a8c` (gate_check toggle base 344, blast_force base 342).
+
+### Выбор задачи
+nearmiss под FORCE: остались 2 Different — **footnote.adoc (283 diff)** и include.adoc (375). footnote
+выбран: «STATEFUL» из заметок ОКАЗАЛОСЬ ложным страхом — реестр/нумерация/список живут в РЕНДЕРЕРЕ
+(`FootnoteRegistry`, рефактор R7-5), общем для обоих движков; для inline-парсера footnote — чистый **leaf**.
+
+### Корень — footnote НЕ был портирован в новый движок
+Legacy `try_footnote_macro` (inline.rs:1954) эмитит `Event::Footnote { id, text: raw }` /
+`Event::FootnoteRef { id }` — текст СЫРОЙ `Cow::Borrowed` (НЕ репарсится в inline; рендерер
+`render_footnotes` лишь `html_escape_text`). Новый движок не имел этого макроса → под FORCE
+`footnote:[...]` оставался ЛИТЕРАЛОМ + не было `<div id="footnotes">` → каскад 283 diff. Верифицировано:
+legacy(default) рендерит footnote.adoc **байт-в-байт == asciidoctor** (0 diff после normalize) → порт
+new==legacy даёт и gate-совместимость, и FORCE-флип.
+
+### Сделано (1 логический коммит, 2 файла, +~95/-3)
+- **macros.rs**: `try_footnote(src, start)` — зеркало legacy `try_footnote_macro`. id = всё до первого `[`
+  (named, non-empty) или None (`footnote:[`); content до первого `]`; `(Some id, content пуст)` → `FootnoteRef`,
+  иначе `Footnote{id, text}`. `end = start+9+id_len+1+bracket_end`. **`span_has_sentinel` guard** (как
+  try_stem/try_icon): footnote с passthrough/escape/char-ref внутри → declined → fallback. Dispatch-арм `b'f'`
+  + `starts_with("footnote:")` перед bare-`ftp://`-автолинком (footnote не satisfies `scheme_at`, порядок для
+  ясности). Docstring модуля: footnote (6/N) добавлен в список; UI kbd/btn/menu — единственный остаток.
+- **mod.rs**: тест `reproduces_legacy_on_footnote_inputs` (15 reproduction-кейсов: anon/named/ref, anon-empty=
+  defn-not-ref, first-`]`-скан с nested `[`, raw quote-маркеры не репарсятся, mixed+span, invalid-формы,
+  mid-word prefix) + 3 явных event-вектора (Footnote None / Footnote Some / FootnoteRef).
+- **Расхождения с asciidoctor `InlineFootnoteMacroRx`** (`\\?footnote(?:(ref):|:([\p{Word}-]+)?)\[(?:|(.*?[^\\]))\](?!</a>)`)
+  задокументированы: id `[\p{Word}-]+` vs «всё до `[`»; `\]`-escape в контенте; форма `footnoteref:`.
+  footnote.adoc их не использует → mirror legacy даёт оба свойства.
+
+### Верификация (airtight, чистый двойной flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 553→554, html 433, html_output 36,
+  html-tests 6/6/1, parsing-lab 1, render-core 15, integration 25).
+- **gate_check toggle: 344 файла, 0 различий base≡new** (airtight, нет утечки гейта — вывод toggle-on = legacy).
+- **FORCE: Identical 342→344 (+2 FLIP: footnote 283→0, include 375→0), 0 REGR, 0 FARTHER, 0 паник.**
+  include.adoc флипнул как БОНУС: содержит 1 footnote в прозе (строка 20), каскадивший 375 diff.
+- **🎯 ВЕСЬ КОРПУС 344/344 байт-идентичен asciidoctor под FORCE.** footnote был последним контентным
+  пробелом на файловой гранулярности.
+
+### ⚠ ИНФРА — fmt-гейт rust-quality-gates ОТКЛЮЧЁН (решение пользователя 2026-06-16)
+Без изменений с 91/92-й. Fmt-блок закомментирован в ОБЕИХ копиях `pre-commit-cargo.sh`; clippy активен.
+Bypass залипшего хука: `git commit --no-edit`. [[proj_quality_gate_hooks]].
+
+### Дальше — Фаза 2 контентно ЗАВЕРШЕНА; остаётся ФИНАЛ
+- **FORCE 344/344** — на файловой гранулярности больше нечего флипать.
+- **Единственный непортированный inline-конструкт: UI-макросы `kbd:`/`btn:`/`menu:`** (нужен проброс
+  `InlineOptions.experimental` через run_pipeline/extract + рекурсивные push_label). НИ ОДИН файл корпуса НЕ
+  ставит `:experimental:` → 0 FORCE-diff (оба движка оставляют литералом). НО для снятия гейта (Фаза 3,
+  новый движок = единственный путь) они ОБЯЗАНЫ быть портированы, иначе документы с `:experimental:` сломаются.
+- **ФИНАЛ (Фаза 3): снять gate** — swap дефолта (`ADOC_QUOTES_SEQUENTIAL` → on), удалить legacy quotes +
+  edge-флаги; outline флипает в DEFAULT-режиме. ПРЕДУСЛОВИЕ: портировать UI-макросы.
+- **cross-span остатки** (gated, fallback, вывод корректен): `*x*-- y` em-dash после close-span;
+  escape `\\` bare / `\\pass:`/`\\https` doubled (pre-existing-deferred).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file> [N]`,
+  `nearmiss.py`, `gate_check.py KEY=VAL`. CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+  Регулярки: `ruby -e 'require "asciidoctor"; puts Asciidoctor::InlineFootnoteMacroRx.source'`.
+
+---
+
 ## Сессия (2026-06-16, 92-я) — РЕРАЙТ inline, Фаза 2 (23/N): bare-autolink внутри constrained-спана (cookbook-кластер → 0)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-23`** (off master `7647483`, 344) —

@@ -202,7 +202,36 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 92-я сессия): РЕРАЙТ inline — Фаза 2 (23/N) bare-autolink внутри constrained-спана (ветка `feat/subst-phase2-next-23`)
+## АКТУАЛЬНО (2026-06-16, 93-я сессия): РЕРАЙТ inline — Фаза 2 (24/N) footnote-макрос → FORCE 344/344 (ветка `feat/subst-phase2-next-24`)
+
+Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.
+Phase 2 (1-23/N) уже СМЕРЖЕНА в master (`0b58a8c`). **(24/N) ЗАКОММИЧЕНА на ветке, ОЖИДАЕТ
+авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(24/N) footnote-макрос** (macros-пасс). Выбор по nearmiss под FORCE: остались 2 Different —
+  footnote.adoc(283) и include.adoc(375). footnote — «STATEFUL» из заметок ЛОЖНЫЙ страх: реестр/нумерация/
+  foot-список в РЕНДЕРЕРЕ (`FootnoteRegistry`, R7-5), общем для движков; для inline footnote = чистый **leaf**.
+  - **Корень:** legacy `try_footnote_macro` (inline.rs:1954) эмитит `Event::Footnote{id,text:raw}`/`FootnoteRef`
+    — текст СЫРОЙ (НЕ репарсится; рендерер `render_footnotes` лишь `html_escape_text`). Новый движок не имел
+    макроса → под FORCE `footnote:[...]` ЛИТЕРАЛ + нет `<div id="footnotes">` → каскад 283. legacy(default)
+    рендерит footnote.adoc байт-в-байт == asciidoctor → порт new==legacy даёт и gate, и FORCE-флип.
+  - **Фикс (macros.rs):** `try_footnote(src,start)` — зеркало legacy. id = всё до первого `[` (named) / None;
+    content до первого `]`; `(Some id, пусто)`→`FootnoteRef`, иначе `Footnote`. `end=start+9+id_len+1+bracket_end`.
+    `span_has_sentinel` guard. Dispatch `b'f'`+`starts_with("footnote:")` перед bare-`ftp://`-армом.
+  - **mod.rs:** тест `reproduces_legacy_on_footnote_inputs` (15 кейсов + 3 event-вектора). Расхождения с
+    `InlineFootnoteMacroRx` (id `[\p{Word}-]+`, `\]`-escape, `footnoteref:`) задокументированы — корпус не юзает.
+  - clippy 0; test --workspace зелёное (parser 553→554). **gate_check toggle 344, 0 различий base≡new** (airtight).
+    **FORCE: Identical 342→344 (+2 FLIP: footnote 283→0, include 375→0 — include имел 1 footnote в прозе),
+    0 REGR, 0 FARTHER.** 🎯 **ВЕСЬ КОРПУС 344/344 под FORCE.**
+- **Дальше — Фаза 2 контентно ЗАВЕРШЕНА.** Единственный непортированный inline-конструкт: UI kbd|btn|menu
+  (нужен `InlineOptions.experimental` через pipeline + рекурсивные push_label — НЕ leaf). НИ ОДИН файл корпуса
+  не ставит `:experimental:` → 0 FORCE-diff, НО для снятия гейта ОБЯЗАТЕЛЬНЫ. cross-span остатки (gated, корректны):
+  `*x*-- y` em-dash после close; escape `\\`/`\\pass:`/`\\https` doubled. **ФИНАЛ (Фаза 3): снять gate** (swap
+  дефолта, удалить legacy quotes+edge-флаги) → outline флип в DEFAULT; ПРЕДУСЛОВИЕ — портировать UI-макросы.
+
+---
+
+## (2026-06-16, 92-я сессия): РЕРАЙТ inline — Фаза 2 (23/N) bare-autolink внутри constrained-спана (ветка `feat/subst-phase2-next-23`)
 
 Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.
