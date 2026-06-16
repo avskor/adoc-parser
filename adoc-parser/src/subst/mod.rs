@@ -1291,6 +1291,50 @@ mod tests {
         }
     }
 
+    /// With the passthrough-protected link target ported, the pipeline must
+    /// reproduce legacy on the `link:++url++[…]` forms: the URL is extracted as a
+    /// passthrough leaf first, then the link macro reconstructs it. Covers the
+    /// corpus cases (special chars `[a b]` in the URL, repeating `__`), bare and
+    /// explicit-label forms, a plain-link regression guard, and surrounding text.
+    /// A passthrough in the *label* (not the URL) is a decline — the engine cannot
+    /// re-parse a label that already holds a sentinel, so the gate falls back to
+    /// legacy; that is asserted separately below.
+    #[test]
+    fn reproduces_legacy_on_link_passthrough_url_inputs() {
+        let cases = [
+            // corpus: special characters in the URL, explicit label
+            "link:++https://example.org/?q=[a b]++[URL with special characters]",
+            // corpus: repeating underscores, bare (text defaults to the target)
+            "link:++https://example.org/now_this__link_works.html++[]",
+            "For example, link:++https://example.org/now_this__link_works.html++[].",
+            // protected space, explicit label and bare
+            "link:++http://x.com/a b++[Spaced]",
+            "link:++http://x.com/a b++[]",
+            // plain link with no passthrough → unchanged (regression guard)
+            "link:http://example.com[Example]",
+            "see link:http://x.com[here] now",
+            // surrounded by a span
+            "*link:++http://x.com/a b++[a]*",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+        // A passthrough sentinel in the LABEL declines (the engine can't re-parse a
+        // label that already holds a sentinel): the gate falls back to legacy.
+        assert!(
+            try_parse(
+                "link:http://x.com[++raw__text++]",
+                SubstitutionSet::NORMAL,
+                InlineOptions::default()
+            )
+            .is_none()
+        );
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1
