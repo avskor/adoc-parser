@@ -25,6 +25,10 @@
 //!   `IndexTerm` / `ConcealedIndexTerm` events. All are leaves: the id/label/term
 //!   text is stored verbatim, never re-parsed.
 //!
+//! This pass also folds in the **escaped autolink** `\http://…` (the escape pass's
+//! span-aware home for it): the backslash drops where an unescaped autolink could
+//! open and the URL stays literal text. See [`escaped_autolink_boundary`].
+//!
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
@@ -274,6 +278,26 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             // Not a valid index term → advance past one '('.
             out.push_str(&src[i..i + 1]);
             i += 1;
+            continue;
+        }
+
+        // Escaped bare autolink `\http://…` (also `https`/`ftp`/`irc`): drop the
+        // backslash so the URL stays literal text. The backslash is NOT copied to
+        // `out` but is LEFT in `src`, so when the scheme is re-examined on the next
+        // iteration the autolink arm below sees `\` as the preceding byte, fails
+        // `at_autolink_boundary`, and declines to link — exactly the legacy
+        // `handle_inline_escape` arm, whose dropped-but-retained backslash likewise
+        // blocks the URL. Fires only where an unescaped autolink could open: at a
+        // real boundary (start / whitespace / `<>()[];`) OR immediately inside a
+        // constrained quote span that opens here (`` `\http…` `` / `*\http…*`), the
+        // pre-`quotes` stand-in for Asciidoctor's `>`-after-`<code>` boundary.
+        // Without one (`word\http…`, `\\http…`) the backslash stays literal.
+        if bytes[i] == b'\\'
+            && matches!(bytes.get(i + 1), Some(b'h' | b'f' | b'i'))
+            && scheme_at(&src, i + 1)
+            && escaped_autolink_boundary(work, bytes, i)
+        {
+            i += 1; // drop the backslash; the scheme is left literal below
             continue;
         }
 
@@ -854,6 +878,39 @@ fn at_autolink_boundary(bytes: &[u8], i: usize) -> bool {
     }
     let prev = bytes[i - 1];
     prev.is_ascii_whitespace() || matches!(prev, b'<' | b'>' | b'(' | b')' | b'[' | b']' | b';')
+}
+
+/// Whether the backslash at `i` (followed by an autolink scheme) should drop —
+/// i.e. an unescaped autolink would be allowed to open at `i`. Mirror of the
+/// legacy [`crate::inline::InlineState::handle_inline_escape`] `\https://` arm
+/// (`autolink_scheme_at` + `at_autolink_boundary`), extended for the constrained
+/// quote case the legacy parser reaches via recursion.
+///
+/// The backslash drops when it sits at a real autolink boundary (start /
+/// whitespace / `<>()[];`), OR immediately after a constrained quote marker that
+/// actually opens a span here. The latter is the pre-`quotes` stand-in for
+/// Asciidoctor's `>`-after-`<code>` boundary: `quotes` runs after `macros`, so
+/// the `<code>`/`<strong>`/… tag that would precede the URL is not materialised
+/// yet — but the quote-span detectors ([`super::quotes::constrained_open_close`]
+/// / [`super::quotes::simple_pair_open_close`]) report whether the span forms,
+/// which is exactly when that boundary would exist. The span-formation check also
+/// keeps the backslash literal when the marker opens no span (`a*\http…`,
+/// `` a`\http… ``), matching Asciidoctor and the legacy parser.
+fn escaped_autolink_boundary(work: &Work, bytes: &[u8], i: usize) -> bool {
+    if at_autolink_boundary(bytes, i) {
+        return true;
+    }
+    if i == 0 {
+        return false;
+    }
+    let marker = bytes[i - 1];
+    match marker {
+        b'`' | b'*' | b'_' | b'#' => {
+            super::quotes::constrained_open_close(&work.tags, bytes, i - 1, marker).is_some()
+        }
+        b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, i - 1, marker).is_some(),
+        _ => false,
+    }
 }
 
 /// At an autolink scheme (caller guarantees `scheme_at`), try to match a bare URL
