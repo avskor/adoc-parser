@@ -1,5 +1,69 @@
 # Session context
 
+## Сессия (2026-06-16, 89-я) — РЕРАЙТ inline, Фаза 2 (20/N): escape `\((…))` index-term + `\\MM…MM` doubled-marker
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next`** (off master `408bae9`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. passthrough-URL link (19/N) к началу сессии УЖЕ смержен (master HEAD `408bae9`).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `408bae9` (blast_toggle base 343, blast_force base 336).
+
+### Выбор задачи
+nearmiss под FORCE: ближайший — **subs.adoc (86 diff)**, len_delta=-4. ДВА корня escape: (1) строка 20
+`\((DD AND CC) OR (DD AND EE))` — index-term-shorthand escape (1 diff @36); (2) строка 27 `\\__func__` —
+doubled-backslash перед unconstrained-маркером (даёт каскад +4 → ~85 позиционных diff @46+). Оба = единственные
+кейсы своих паттернов в корпусе (`\((` только subs:20; `\\**` ещё в outline:1487 но ВНУТРИ passthrough `+…+`
+→ escape-пасс его не видит). Каскад чисто позиционный (хвост @119+ = сдвиг `<pre>`-блока на 4).
+
+### Корень
+- sequential escape-пасс (`subst/escape.rs`) НЕ обрабатывал обе формы (числились в Deferred). Под FORCE:
+  `\((…))` → `\DD…EE` (movавил скобки, оставил `\`); `\\__func__` → `\\<em>func</em>` (оставил `\\`, курсивил).
+- **legacy** (`inline.rs::handle_inline_escape`): index-арм (~876) — `\((` + `index_term_close` (первый `))`,
+  жадно поглощает trailing `)`); non-concealed → `Text("((…))")`; `\(((…)))` concealed → `Text("("), IndexTerm,
+  Text(")")`. doubled-арм (~917) — `\\MM` + `find_closing_unconstrained` → `Text("MM")`, inner reparse, `Text("MM")`
+  (оба backslash дропаются, контент течёт). asciidoctor: те же выводы (пробы p1/p2/p5 байт-в-байт).
+
+### Сделано (1 логический коммит — ОЖИДАЕТ, 2 файла)
+- **subst/escape.rs**: импорт `sentinel_end`. `let quotes_on`. Index-арм в `Some(m)` (перед generic `\{`/`\[`):
+  `index_escape(old,bytes,i,macros_on)` → `Macro`-leaf (своё событие, НЕ коалесцирующий Literal — как legacy
+  отдельный Text); деклайн при sentinel в контенте. `Some(b'\\')`-арм: `doubled_marker_escape(old,bytes,i,
+  quotes_on)` → open-`MM` `Macro`-leaf + RAW inner в `out` (течёт через char_refs/macros/attributes/quotes/
+  replacements) + close-`MM` `Macro`-leaf; иначе старый fallback `\\` литерал. Хелперы: `index_escape`,
+  `index_term_close` (порт), `doubled_marker_escape`, `find_closing_unconstrained` (порт; над escape-буфером —
+  passthrough УЖЕ сентинели, скип через `sentinel_end`). Doc-модуль: обе формы перенесены Deferred→Handled.
+- **subst/mod.rs**: doc run_pipeline (убран `\((`/`\\`-doubled из не-портированных); +тест
+  `reproduces_legacy_on_index_and_doubled_marker_escape_inputs` (16 кейсов: non-concealed/concealed/no-close
+  index, doubled `__`/`**`/`##`/<двойной бэктик>, inner-с-разметкой `\\__a*b*c__`/`*b*`, regression-guards
+  неэскейпленных форм).
+
+### КЛЮЧЕВОЕ — `Macro`-leaf даёт точное совпадение событий (гейт АДОПТИТ)
+`Literal`-сентинель КОАЛЕСЦИРует с соседним текстом (`\{name}` → один Text); но legacy для `\((…))`/`\\MM`
+пушит маркеры ОТДЕЛЬНЫМИ Text-событиями. Поэтому `macro_sentinel(vec![Text(..)])` (как macro-escape арм 18/N) —
+flush pending + своё событие, НЕ seed. Для plain-inner (`func`) поток событий = legacy событие-в-событие → гейт
+адоптит subs.adoc (не просто деклайн-фоллбэк). Inner-с-разметкой течёт через те же пассы (boundary у сентинеля
+= boundary у legacy-reparse-края для constrained-кейсов; em-dash на краю inner — потенциальный дайвердж, не в
+корпусе, гейт ловит).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 550→551, html 433, compat 233/parsing-lab 1,
+  render-core 15, integration 25). Пробы p_esc (p1 `\((…))`/p2 `\\__func__`/p5 `\((Two Words))`) — asciidoctor==FORCE;
+  гейт==legacy байт-в-байт.
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 336→337 (+1 FLIP subs.adoc 86→0, byte-identical 128=128), 0 REGR, 0 FARTHER, 0 паник.**
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 337 (FORCE): page-breaks(88), java/index(183), software-development-cookbook(183),
+  java/monitoring(185), footnote(283), include(375); outline(5487 — cross-span финал).
+- **escape:** `\\` (bare escaped backslash → legacy дропает первый, второй литерал = `\`; sequential оставляет
+  `\\` → деклайн), `\\pass:`/`\\https` doubled (дом — passthrough/macros пассы). Все pre-existing-deferred.
+- **macros (N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf), footnote (STATEFUL —
+  реестр/нумерация/список = отд. сессия, донор 1954).
+- **cross-span:** `*x*-- y` em-dash после close-span; A1 bare-autolink-in-mono; **ФИНАЛ:** снять gate → flip
+  outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env). CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+
+---
+
 ## Сессия (2026-06-16, 88-я) — РЕРАЙТ inline, Фаза 2 (19/N): passthrough-защищённый URL в `link:++url++[…]`
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-link-passthrough-url`** (off master `ba712cd`, 343) —

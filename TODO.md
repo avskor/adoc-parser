@@ -202,12 +202,39 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 88-я сессия): РЕРАЙТ inline — Фаза 2 (19/N) passthrough-защищённый URL `link:++url++[…]` (ветка `feat/subst-phase2-link-passthrough-url`)
+## АКТУАЛЬНО (2026-06-16, 89-я сессия): РЕРАЙТ inline — Фаза 2 (20/N) escape `\((…))` index-term + `\\MM…MM` doubled-marker (ветка `feat/subst-phase2-next`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-18/N) уже СМЕРЖЕНА в master (`ba712cd`). **(19/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+Phase 2 (1-19/N) уже СМЕРЖЕНА в master (`408bae9`). **(20/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
 commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(20/N) escape `\((…))` index-term shorthand + `\\MM…MM` doubled-marker** (escape-пасс). Выбор по
+  nearmiss под FORCE: ближайший subs.adoc (86 diff, len_delta=-4). ДВА корня escape, оба уникальны в корпусе
+  (`\((` только subs:20; `\\**` в outline:1487 — внутри passthrough `+…+`, escape-пасс не видит):
+  - строка 20 `\((DD AND CC) OR (DD AND EE))` — 1 diff @36; строка 27 `\\__func__` — каскад +4 (@46+).
+  - **Корень:** обе формы числились Deferred в `subst/escape.rs`. FORCE: `\((…))`→`\DD…EE`; `\\__func__`→
+    `\\<em>func</em>`. **legacy** (`inline.rs::handle_inline_escape`): index-арм (~876) `\((`+`index_term_close`
+    (первый `))`, жадно поглощает trailing `)`) → non-concealed `Text("((…))")`, `\(((…)))` concealed →
+    `Text("("),IndexTerm,Text(")")`; doubled-арм (~917) `\\MM`+`find_closing_unconstrained` → `Text("MM")`,
+    inner reparse, `Text("MM")` (оба `\` дропаются, контент течёт). **asciidoctor** == legacy (пробы p1/p2/p5).
+  - **Фикс (escape.rs):** index-арм в `Some(m)` → `index_escape()` → `Macro`-leaf (своё событие, НЕ
+    коалесцирующий `Literal` — как legacy отдельный Text; декл при sentinel в контенте). `Some(b'\\')`-арм →
+    `doubled_marker_escape()` → open-`MM` `Macro`-leaf + RAW inner в `out` (течёт через char_refs/macros/
+    attributes/quotes/replacements) + close-`MM` `Macro`-leaf; иначе старый `\\`-литерал fallback. Порт
+    `index_term_close`/`find_closing_unconstrained` (над escape-буфером — passthrough уже сентинели, скип
+    `sentinel_end`). КЛЮЧЕВОЕ: `Macro`-leaf даёт точное совпадение событий с legacy для plain-inner → гейт
+    АДОПТИТ subs.adoc (не просто fallback). Обе формы перенесены Deferred→Handled в doc-модуле.
+  - **mod.rs**: +тест `reproduces_legacy_on_index_and_doubled_marker_escape_inputs` (16 кейсов).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 336→337 (+1 FLIP subs.adoc 86→0,
+  byte-identical 128=128), 0 REGR, 0 FARTHER, 0 паник.** Пробы p_esc: p1/p2/p5 asciidoctor==FORCE, гейт==legacy.
+- clippy 0; test --workspace зелёное (parser 550→551, html 433, compat 233, render-core 15, integration 25).
+- **Дальше Фаза 2:** escape `\\` bare / `\\pass:`/`\\https` doubled (pre-existing deferred); macros (N+) UI
+  (experimental-проброс)/footnote(STATEFUL); cross-span close-span em-dash; A1 bare-autolink-in-mono; снять
+  gate → flip outline. nearmiss на 337: page-breaks(88), java/index(183), footnote(283), include(375).
+
+### (АРХИВ 88-й) Phase 2 (19/N) passthrough-защищённый URL `link:++url++[…]` — СМЕРЖЕНА в master `408bae9`
+
+Phase 2 (1-18/N) в master (`ba712cd`). **(19/N) смержена `408bae9`:**
 - [x] **(19/N) passthrough-защищённый URL `link:++url++[…]`** (macros-пасс). Выбор по nearmiss под FORCE:
   ближайший url.adoc (21 diff) — позиционный каскад от утечки строки 80
   `link:++https://example.org/?q=[a b]++[…]` (единственный «живой» `link:++…++` в корпусе; прочие 3 — в
