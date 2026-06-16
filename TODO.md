@@ -202,12 +202,38 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 86-я сессия): РЕРАЙТ inline — Фаза 2 (17/N) em-dash на границе attr-ref/attr-set сентинеля (ветка `feat/subst-phase2-emdash-attrref-boundary`)
+## АКТУАЛЬНО (2026-06-16, 87-я сессия): РЕРАЙТ inline — Фаза 2 (18/N) spec'd pass-макрос `pass:SPEC[…]` (ветка `feat/subst-phase2-pass-spec-macro`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-16/N) уже СМЕРЖЕНА в master (`e25f45c`). **(17/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+Phase 2 (1-17/N) уже СМЕРЖЕНА в master (`a16596b`). **(18/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
 commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(18/N) spec'd pass-макрос `pass:SPEC[…]`** (passthrough-пасс). Выбор по nearmiss под FORCE: ближайший
+  format-column-content.adoc (8 diff, утечка `pass:q[` вокруг `[cols=…]`). Один корень — флипает 4 файла.
+  - **Корень:** `try_pass_macro` обрабатывал только bare `pass:[…]` (`spec_len==0`); spec'd `pass:SPEC[…]` был
+    отложен (`return None`) → обёртка `pass:q[`/`]` течёт литералом, `#e#` ловит quotes-пасс → `pass:q[<mark>e</mark>]`.
+  - **asciidoctor:** `extract_passthroughs` извлекает `pass:SPEC[text]` первым пассом, применяет к контенту
+    spec'd субституции, запечатывает результат. **legacy** `push_pass_spec_content`: inner reparse + `Text→
+    InlinePassthrough` когда `!set.has(SPECIALCHARS)`.
+  - **Фикс (passthrough.rs):** dispatch-арм после bare-формы; `try_pass_spec_macro` (parse + spec_len!=0 +
+    контент до первого `]`; `spec→pass_spec_to_subs`); `pass_spec_events` (inner `run_pipeline(content,set)` +
+    `Text→InlinePassthrough` без SPECIALCHARS; пустой контент → `Vec::new()`). Seal через `macro_sentinel`
+    (атомарный leaf). spec'd pass ВСТАВЛЯЕТ сентинель = flush-граница в обоих движках → mid-run/in-span
+    совпадают (в отличие от escaped `\pass:` 17/N).
+  - **mod.rs**: +тест `reproduces_legacy_on_pass_spec_macro_inputs` (19 кейсов).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 331→335 (+4 FLIP), 0 REGR, 0 FARTHER,
+  0 паник.** Флипы: revision-line 220→0, pass 135→0, align-by-column 20→0, format-column-content 8→0 (диффы —
+  позиционный каскад от утёкшей обёртки). 11 проб asciidoctor==FORCE==legacy.
+- clippy 0; test --workspace зелёное (parser 548→549, html 433, compat 233, render-core 15).
+- **edge-case (НЕ в корпусе):** `pass:r[--]` (`--` на краю контента) — inner run_pipeline гонит replacements
+  `(true,true)` → em-dash, legacy `edges=false` → литерал → gate declines (safe). Нужен проброс edge-флага если встретится.
+- **Дальше Фаза 2:** escape `\((…))` index-term shorthand/`\\`/`\\MM` doubled-marker; macros (6/N+) UI
+  (experimental-проброс)/footnote(STATEFUL); cross-span close-span em-dash; A1 bare-autolink-in-mono; снять
+  gate → flip outline. nearmiss на 335: url(21), subs(86), page-breaks(88), footnote(283), include(375).
+
+### (АРХИВ 86-й) Phase 2 (17/N) em-dash на границе attr-ref/attr-set сентинеля — СМЕРЖЕНА в master `a16596b`
+
+Корпус неизменен **343/344** (гейт держит). Phase 2 (1-16/N) в master (`e25f45c`). **(17/N) смержена `a16596b`:**
 - [x] **(17/N) em-dash на границе attr-ref/attr-set сентинеля** (FORCE-fix replacements-пасса). Выбор по
   nearmiss под FORCE: ближайший 1-diff = subs-symbol-repl.adoc (`@125 exp='—' got='--'`, `|{empty}--{empty}`).
   - **Корень:** asciidoctor резолвит `{empty}`→"" в attributes ДО replacements → `--` на границах → spaced
