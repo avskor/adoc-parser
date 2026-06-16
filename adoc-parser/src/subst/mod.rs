@@ -1140,6 +1140,54 @@ mod tests {
         }
     }
 
+    /// With the escaped autolink `\http://…` folded into the `macros` pass, the
+    /// pipeline must reproduce legacy: the backslash drops and the URL stays
+    /// literal text where an unescaped autolink could open — at a real boundary or
+    /// immediately inside a constrained quote span that opens here. Without such a
+    /// boundary (`word\http…`, `a*\http…`, `` a`\http… ``, `\httpx://…`) the
+    /// backslash stays literal.
+    ///
+    /// Cases keep the escape at a flush boundary (input start or a span edge): the
+    /// legacy parser flushes text AT the backslash, so a mid-run bare escape
+    /// (`before \http://x`) splits the text one event differently (the URL flows
+    /// into a fresh run) while the flat engine merges it into one Text — the gate
+    /// declines that and falls back (HTML identical). The `\\http://…`
+    /// double-backslash form (legacy drops one backslash, Asciidoctor keeps both)
+    /// is likewise excluded.
+    #[test]
+    fn reproduces_legacy_on_autolink_escape_inputs() {
+        let cases = [
+            // bare at input start (flush boundary), every scheme + a query string
+            "\\https://example.org",
+            "\\http://example.org/x?source=home",
+            "\\ftp://files.example.org",
+            "\\irc://chat.example.org",
+            // the corpus pattern: escaped autolink inside a monospace span (the
+            // span edge is the flush boundary, so the drop matches legacy)
+            "`\\https://example.org/x?source=home`",
+            "the `\\https://example.org` link",
+            // inside other constrained spans that open at the marker
+            "*\\https://example.org*",
+            "_\\https://example.org_",
+            "#\\https://example.org#",
+            // NOT a drop: a marker that opens no span keeps the backslash literal
+            "a*\\https://example.org",
+            "a`\\https://example.org",
+            // NOT a drop: a word boundary before the backslash
+            "word\\https://example.org",
+            // NOT an autolink scheme → backslash stays literal (blanket arm)
+            "\\httpx://example.org",
+            "\\hello world",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1

@@ -62,13 +62,19 @@
 //!   escape-FIRST pass, which would hide a span's closing marker and tear it
 //!   apart (`a (`\`) and (`]`) b`). The doubled-marker (`\MM…MM`) form stays
 //!   deferred.
+//! - **`\https://…` (`http`/`https`/`ftp`/`irc`) autolink escape** — folded into
+//!   the [`super::macros`] pass (the autolink's home): the backslash drops only
+//!   where an unescaped autolink could open (a real boundary, or immediately
+//!   inside a constrained quote span). It needs the left-boundary look-back AND,
+//!   for the `` `\http…` `` form, the span-formation check that only the macros
+//!   pass has the context for. Handling it in this escape-FIRST pass would drop
+//!   the backslash without that context.
 //!
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
 //! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
-//! - the `\https://…` autolink escape (relies on a left-boundary look-back) and
-//!   the `\((…))` index-term-shorthand escape (concealed-vs-flow logic) — distinct
-//!   code paths from the `\name:target[…]` macro escape handled above.
+//! - the `\((…))` index-term-shorthand escape (concealed-vs-flow logic) — a
+//!   distinct code path from the `\name:target[…]` macro escape handled above.
 
 use std::borrow::Cow;
 

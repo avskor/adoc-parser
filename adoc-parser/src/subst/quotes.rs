@@ -147,7 +147,12 @@ fn find_closing_unconstrained(bytes: &[u8], marker: u8, search_start: usize) -> 
 /// backslash, keep the markers literal) only when an *unescaped* `marker…` would
 /// have opened a span here — exactly Asciidoctor's `\\?`-capture rule, where the
 /// escape is honoured only when the quote regex actually matches.
-fn constrained_open_close(tags: &[TagToken], bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
+///
+/// `pub(super)` so the `macros` pass can reuse it: an escaped autolink
+/// (`` `\http…` ``) drops its backslash only when the preceding marker actually
+/// opens a constrained span here — the pre-`quotes` equivalent of Asciidoctor's
+/// `>`-after-`<code>` autolink boundary.
+pub(super) fn constrained_open_close(tags: &[TagToken], bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
     let open_boundary = i == 0 || !is_word(bytes[i - 1]);
     if !open_boundary
         || bytes.get(i + 1).copied() == Some(marker)
@@ -169,8 +174,8 @@ fn constrained_open_close(tags: &[TagToken], bytes: &[u8], i: usize, marker: u8)
 /// Detect whether a superscript/subscript simple pair opens at `bytes[i]`
 /// (`== marker`), returning the closing-marker position. Detection half of the
 /// arm in [`pass_simple_pair`], reused by the escape branch (see
-/// [`constrained_open_close`]).
-fn simple_pair_open_close(bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
+/// [`constrained_open_close`]) and by the `macros` pass's escaped-autolink arm.
+pub(super) fn simple_pair_open_close(bytes: &[u8], i: usize, marker: u8) -> Option<usize> {
     let content_start = i + 1;
     let mut j = content_start;
     while j < bytes.len() {

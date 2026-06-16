@@ -202,7 +202,36 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 84-я сессия): РЕРАЙТ inline — Фаза 2 (15/N) escape `\pass:SPEC[…]` (ветка `feat/subst-phase2-pass-escape`)
+## АКТУАЛЬНО (2026-06-16, 85-я сессия): РЕРАЙТ inline — Фаза 2 (16/N) escaped autolink `\http://…` (ветка `feat/subst-phase2-autolink-escape`)
+
+Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
+Phase 2 (1-15/N) уже СМЕРЖЕНА в master (`05454b4`). **(16/N) ЗАКОММИЧЕНА (`468e7ad`), НЕ смержена, ОЖИДАЕТ
+авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(16/N) escaped autolink `\http://…`** (also https/ftp/irc; порт легаси `handle_inline_escape` арма).
+  Выбор по nearmiss под FORCE: ближайший 1-diff = links.adoc (`` `\https://…` `` in-backtick, строка 17).
+  - **Дом — MACROS-пасс** (НЕ escape.rs): порядок тут passthrough→escape→char_refs→**macros→attributes→
+    quotes** (macros ДО quotes). Автолинк живёт в macros; escape.rs blanket оставляет `\http` литералом.
+  - **Механизм (зеркало легаси):** дропнуть `\` (не копировать в out), ОСТАВИТЬ в src → autolink-арм на
+    scheme видит `\` в src через `at_autolink_boundary` → не линкует → URL течёт литералом.
+  - **Boundary `escaped_autolink_boundary`:** дроп когда (1) real boundary (start/ws/`<>()[];`) ИЛИ
+    (2) `bytes[i-1]`=маркер `` ` ``/`*`/`_`/`#`/`^`/`~` И спан СФОРМИРУЕТСЯ (`quotes::constrained_open_close`/
+    `simple_pair_open_close` reused, `pub(super)`). (2) = pre-quotes стенд-ин asciidoctor `>`-после-`<code>`.
+    Спан-чек = нет over-fire на `a*\http`/`` a`\http `` (маркер не открывает спан).
+  - **Исключены:** `\\http` (легаси дропает один `\`, asciidoctor оба → gate declines), mid-run после текста
+    (`before \http` — легаси 2 Text, flat-движок 1 → событийно расходится, HTML идентичен, gate declines).
+  - **mod.rs**: +тест `reproduces_legacy_on_autolink_escape_inputs` (15 кейсов). escape.rs: doc-перенос.
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 329→330 (+1 FLIP links.adoc 1→0
+  байт-в-байт), subs.adoc closer 87→86, 0 REGR, 0 FARTHER, 0 паник.**
+- clippy 0, test --workspace зелёное (parser 546→547, html 433, compat 233, render-core 15).
+- **A1 pre-existing gap (НЕ в скоупе):** bare autolink В монопространстве (`` `http://x` `` без `\`) не
+  автолинкуется (macros до quotes) → `<code>http://x</code>` vs asciidoctor `<code><a>`. Дом — autolink ПОСЛЕ
+  quotes (реордер). Крупнее одного арма.
+- **Дальше Фаза 2:** escape `\((…))` index-term shorthand (leaf, 1 кейс subs.adoc:20)/`\\`/`\\MM`
+  doubled-marker (дом — quote-пассы); A1 bare-autolink-in-mono; macros (6/N+) UI(experimental-проброс)/
+  footnote(STATEFUL); снять gate → flip outline.
+
+### (АРХИВ 84-й) Phase 2 (15/N) escape `\pass:SPEC[…]` — СМЕРЖЕНА в master `05454b4`
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.

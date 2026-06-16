@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-16, 85-я) — РЕРАЙТ inline, Фаза 2 (16/N): escaped autolink `\http://…` (autolink escape)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-autolink-escape`** (off master `05454b4`, 343) —
+**ЗАКОММИЧЕНА (`468e7ad`), НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master + `git push`
++ удаление ветки. pass-escape (15/N) к началу сессии УЖЕ смержена (master HEAD `05454b4`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `05454b4` (blast_toggle base 343, blast_force base 329).
+
+### Выбор задачи
+nearmiss под FORCE дал 15 Different. Ближайший 1-diff = **links.adoc** (`` `\https://…` `` in-backtick,
+строка 17 — единственный diff; строка 123 `\https://` в `[source]`/`----` verbatim, не считается).
+Второй 1-diff = subs-symbol-repl (em-dash `—` vs `--`, replacements, НЕ escape — отложен). Корпус-survey
+`\http`: 4 места — autolinks.adoc:71 + links.adoc:123 (оба verbatim, ОК), links.adoc:17 (in-backtick →
+flip), subs.adoc:23 (bare space, в paragraph → subs.adoc closer не flip). Взял escaped autolink целиком.
+
+### Архитектура (escaped `\http://…` — дом в MACROS-пассе, НЕ escape.rs)
+- **ПОЧЕМУ macros, а не escape.rs:** порядок пайплайна тут = passthrough → escape → char_refs →
+  **macros (191) → attributes → quotes (202)** (macros ПЕРЕД quotes, вопреки asciidoctor). Автолинк живёт
+  в macros. escape.rs blanket-арм оставляет `\http` литералом (advance только за `\`) → доживает до macros.
+- **МЕХАНИЗМ (зеркало легаси):** при `\`+scheme дропнуть `\` (НЕ копировать в out), но ОСТАВИТЬ в src →
+  следующая итерация на scheme `h`: `at_autolink_boundary(scheme_pos)` видит `\` в src → не автолинкует →
+  URL течёт литералом. Точно как легаси `handle_inline_escape` (advance_by(1), input хранит `\`).
+- **BOUNDARY-условие `escaped_autolink_boundary(work,bytes,i)`:** дропнуть когда (1) `at_autolink_boundary`
+  (start/ws/`<>()[];`) ИЛИ (2) `bytes[i-1]` = constrained-маркер `` ` ``/`*`/`_`/`#` И
+  `quotes::constrained_open_close(...)`=Some, ИЛИ (3) `^`/`~` И `quotes::simple_pair_open_close(...)`=Some.
+  Случай (2)/(3) = pre-quotes стенд-ин для asciidoctor `>`-после-`<code>` (quotes ещё не пробежал, тег не
+  материализован, но детектор спана говорит, СФОРМИРУЕТСЯ ли он). Проверка спан-формирования = НЕТ over-fire
+  на `a*\http` (нет закрытия `*`) и `` a`\http `` (backtick после word) — совпадает с asciidoctor и легаси.
+- **`\\http` (doubled) и mid-run после текста ИСКЛЮЧЕНЫ:** `\\http` — легаси дропает один `\`, asciidoctor
+  держит оба (pre-existing legacy bug); мой движок держит оба (=asciidoctor) → gate declines vs legacy →
+  fallback (нет корпус-кейса). mid-run `before \http://x` — легаси `flush_text` НА бэкслеше → 2 Text
+  (URL в свежем ране), мой flat-движок мёржит в 1 Text → событийно расходится, HTML идентичен, gate declines.
+- **A1 НЕ трогаю (pre-existing gap):** bare автолинк ВНУТРИ монопространства (`` `http://x` `` без `\`) не
+  автолинкуется новым движком (macros до quotes, backtick не boundary) → `<code>http://x</code>` vs
+  asciidoctor `<code><a>`. Это не escape, отдельный gap (нужен autolink-после-quotes / реордер). НЕ в скоупе.
+
+### Сделано (1 логический коммит `468e7ad`, 4 файла, +122/-6)
+- **quotes.rs**: `constrained_open_close`/`simple_pair_open_close` → `pub(super)` (+doc «reused by macros»).
+- **macros.rs**: новый `\`-арм (перед autolink-армом) + хелпер `escaped_autolink_boundary` + модуль-doc.
+- **escape.rs**: doc — `\https://…` перенесён из Deferred в «Handled by the macros pass».
+- **mod.rs**: +тест `reproduces_legacy_on_autolink_escape_inputs` (15 кейсов).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0 (всё-таргетный `concat!`-warning в adoc-html lib-test — PRE-EXISTING, не мой файл);
+  cargo test --workspace зелёное (parser 546→547, html 433, compat 233/233, render-core 15).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 329→330 (+1 FLIP links.adoc 1→0 байт-в-байт), subs.adoc closer 87→86, 0 REGR,
+  0 FARTHER, 0 паник.**
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- **escape (продолжение):** `\((…))` index-term shorthand (чистый leaf как 14/N, concealed-vs-flow; 1
+  корпус-кейс subs.adoc:20, не флипнет в одиночку — субс.adoc 86 diffs), `\\`/`\\MM` doubled-marker
+  (дом — quote-пассы, отложено с 8/N), `\\http` doubled (pre-existing legacy bug, asciidoctor держит оба).
+- **A1 — bare autolink в монопространстве** (`` `http://x` ``): pre-existing gap (macros до quotes). Дом —
+  autolink-детект ПОСЛЕ quotes (реордер или спец-обработка в quotes/macros). Архитектурно крупнее одного арма.
+- **macros (6/N+)**: UI kbd|btn|menu (проброс `InlineOptions.experimental` через pipeline — НЕ leaf),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954).
+- **ФИНАЛ Фазы 2:** снять gate → flip outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env). base пересобирать из master HEAD (`cargo build --release -p adoc-cli`).
+
+---
+
 ## Сессия (2026-06-16, 84-я) — РЕРАЙТ inline, Фаза 2 (15/N): escape `\pass:SPEC[…]` (порт pass_escape_prefix_len)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-pass-escape`** (off master `b9f03ff`, 343) —
