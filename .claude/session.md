@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-16, 84-я) — РЕРАЙТ inline, Фаза 2 (15/N): escape `\pass:SPEC[…]` (порт pass_escape_prefix_len)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-pass-escape`** (off master `b9f03ff`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. escape `\macro` (14/N) к началу сессии УЖЕ смержена (master HEAD `b9f03ff`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `b9f03ff` (blast_toggle base 343, blast_force base 326).
+
+### Выбор задачи
+nearmiss под FORCE (`ADOC_QUOTES_SEQUENTIAL=1 ADOC_SUBST_FORCE=1 python3 nearmiss.py`) дал пять 1-diff
+файлов. **ТРИ** флипает escaped pass-макрос: attribute-entry-substitutions.adoc, footnote.adoc,
+literal-monospace.adoc — все `` `\pass:[]` ``/`` `\pass:c[]` `` (в монопространстве). Текущий баг под FORCE:
+passthrough-пасс извлекал `pass:[]` как passthrough → оставался голый `\` → `<code>\</code>`. Прочие 1-diff:
+links.adoc (`\https://` in-backtick — ОТЛОЖЕН: нужен seal URL-экстента + left-boundary, дом — macros-пасс
+ПОСЛЕ quotes, где монопространство уже сентинелизировано), subs-symbol-repl.adoc (em-dash `—` vs `--` —
+replacements, не escape). `\pass:` выбран как escape БЕЗ зависимости от левой границы → работает и in-backtick.
+
+### Архитектура (escaped `\pass:SPEC[…]` — дом в PASSTHROUGH-пассе, НЕ escape.rs)
+- **Почему passthrough, а не escape.rs:** escaped pass — НЕ плейн-литерал. Легаси (`handle_inline_escape`
+  арм `pass_escape_prefix_len`) дропает `\`, оставляет `pass:SPEC[` литералом, а содержимое `[...]`+`]`
+  ТЕЧЁТ через остальные subs (`\pass:c[*b*]` → `pass:c[<strong>b</strong>]`). Passthrough бежит ПЕРВЫМ и
+  иначе извлёк бы `pass:[]` целиком — поэтому escape принадлежит туда (как уже сделанный `\+` escape).
+- **passthrough.rs**: новый арм в `extract()` (после `\+`-арма, перед `+`-passthroughs): `b==\\` +
+  guard `(i==0 || bytes[i-1] != \\)` + `pass_escape_prefix_len(src, i+1)` → `out.push_str(pass:SPEC[)`
+  (дроп `\`), `i += 1 + prefix_len`, continue. Содержимое после `[` сканируется тем же циклом и
+  последующими пассами как обычный текст. Helper `pass_escape_prefix_len` (порт легаси: `pass:` +
+  опц. lowercase spec + `[`, длина = `5 + spec_len + 1`; reuse `scanner::pass_spec_len`).
+- **`\\pass:` doubled ОТЛОЖЕН** (guard `bytes[i-1] != \\` гасит второй бэкслеш — как у `\+`). Поведение
+  `\\pass:` НЕ изменилось моим коммитом (verified трассировкой: первый `\` копируется, второй не фаерит).
+- **escape.rs**: только doc — `\pass:` перенесён из «Deferred» в «Handled by the quote/passthrough passes».
+
+### КЛЮЧЕВОЕ — gate-эквивалентность на границе flush
+tokenize коалесцирует сырой текст в `pending` до сентинеля; мой `\pass:` сентинель НЕ вставляет →
+непрерывный Text. Легаси делает `flush_text` В ПОЗИЦИИ бэкслеша. ⇒ совпадает event-в-event ТОЛЬКО когда
+escape стоит на границе flush (начало input ИЛИ край спана — пустой split). Bare `\pass:` mid-run после
+текста того же рана (`before \pass:[x]`) даёт 1 Text vs легаси 2 Text — gate DECLINES, fallback (HTML
+идентичен, adjacent-text мержится). **Все 3 корпусных кейса — in-backtick (escape в начале спана) → gate
+ADOPTS.** Тест включает только boundary-кейсы; mid-run исключён (документирован).
+
+### Сделано (1 логический коммит, 3 файла, +99/-3)
+- **passthrough.rs** (код+doc+helper), **escape.rs** (doc), **mod.rs** (+тест
+  `reproduces_legacy_on_pass_escape_inputs`, 14 кейсов: bare/spec пустые, content-flow quotes/specialchars,
+  in-backtick корпус-паттерн, no-bracket→не-escape, non-`pass:` имя).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 545→546, html 433, compat 233/233); subst 24 теста (+1).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 326→329 (+3 FLIP), 0 REGR, 0 FARTHER, 0 паник.** Флипы ровно предсказанные:
+  attribute-entry-substitutions 1→0, footnote 1→0, literal-monospace 1→0. Все 4 пробы байт-в-байт с asciidoctor.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- **escape (продолжение):** `\https://…` autolink (in-backtick — нужен seal URL-экстента + left-boundary,
+  дом — macros-пасс после quotes; bare-форма проще, но links.adoc расходится именно на in-backtick),
+  `\((…))` index-term shorthand (чистый leaf как 14/N, concealed-vs-flow; 1 корпус-кейс subs.adoc, не флипнет
+  в одиночку), `\\`/`\\MM` doubled-marker (дом — quote-пассы, отложено с 8/N).
+- **macros (6/N+)**: UI kbd|btn|menu (проброс `InlineOptions.experimental` через pipeline — НЕ leaf),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954).
+- **ФИНАЛ Фазы 2:** снять gate → flip outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env = ранжир near-flip файлов нового движка).
+
+---
+
 ## Сессия (2026-06-15, 83-я) — РЕРАЙТ inline, Фаза 2 (14/N): escape `\macro` (порт inline_macro_escape_len)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-macro-escape`** (off master `9c6a219`, 343) —

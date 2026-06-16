@@ -49,6 +49,11 @@
 //!   `\+…+` whose `+…+` would form a single-plus passthrough drops the backslash
 //!   there. A `\+` that forms no passthrough is left for *this* pass's blanket
 //!   arm to keep literal. The `\++`/`\+++` doubled forms stay deferred.
+//! - **`\pass:SPEC[…]`** — the escaped pass macro is also folded into the
+//!   passthrough pass: the backslash drops and the `pass:SPEC[` prefix is kept
+//!   literal while the bracketed content flows through the remaining subs (it is
+//!   NOT a verbatim leaf), so it cannot be handled here as a plain literal. The
+//!   `\\pass:` double-backslash form stays deferred.
 //! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — these
 //!   are folded into each quote substitution ([`super::quotes`]), exactly as
 //!   Asciidoctor folds the `\\?` capture: a backslash is only an escape at the
@@ -61,9 +66,6 @@
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
 //! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
-//! - the pass-macro escape `\pass:SPEC[…]` (Asciidoctor drops the backslash and
-//!   skips extraction but still runs the remaining subs over the content — not a
-//!   plain literal),
 //! - the `\https://…` autolink escape (relies on a left-boundary look-back) and
 //!   the `\((…))` index-term-shorthand escape (concealed-vs-flow logic) — distinct
 //!   code paths from the `\name:target[…]` macro escape handled above.
