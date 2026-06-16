@@ -7,11 +7,17 @@
 //! rewrites the string before a later type (e.g. monospace) scans it — the
 //! mechanism behind cross-span overlap.
 //!
-//! Boundary rules are ported verbatim from the legacy recursive parser
-//! (`crate::inline`), which already encodes Asciidoctor's open/close
+//! Boundary rules are ported from the legacy recursive parser
+//! (`crate::inline`), which already encodes most of Asciidoctor's open/close
 //! assertions. Sentinel bytes count as non-word boundary characters (like the
 //! `<`/`>` of a spliced tag in Asciidoctor), which falls out naturally because
-//! they are neither alphanumeric nor `_`.
+//! they are neither alphanumeric nor `_`. The one place the engine is *more*
+//! Asciidoctor-faithful than legacy is the constrained-span close search (see
+//! [`find_valid_close_constrained`]): legacy stops at the first inner marker and
+//! abandons the span if it cannot close, whereas Asciidoctor's lazy
+//! `(\S|\S.*?\S)` absorbs that marker and keeps scanning for a later valid
+//! close. The Phase-1 gate mediates the difference (it falls back to legacy on
+//! any divergence); it only surfaces under `ADOC_SUBST_FORCE`.
 //!
 //! ## Scope
 //!
@@ -123,6 +129,34 @@ fn find_closing_constrained(bytes: &[u8], marker: u8, search_start: usize) -> Op
     None
 }
 
+/// Find the first *valid* constrained closing `marker` for content starting at
+/// `content_start`, looping past candidate markers that fail
+/// [`constrained_close_ok`]. This mirrors Asciidoctor's lazy `(\S|\S.*?\S)`
+/// content capture: a marker preceded by whitespace (content would end in a
+/// space) or whose trailing lookahead `(?!\p{Word}…)` fails is *not* a close —
+/// the `.` in `.*?` absorbs it into the content and the regex keeps scanning for
+/// a later marker. The legacy parser stops at the first marker and abandons the
+/// span when that one is invalid, so this is strictly more Asciidoctor-faithful;
+/// the difference is mediated by the Phase-1 gate (which falls back to legacy on
+/// any divergence) and only surfaces under `ADOC_SUBST_FORCE`.
+fn find_valid_close_constrained(
+    bytes: &[u8],
+    marker: u8,
+    content_start: usize,
+    mono_extra: bool,
+) -> Option<usize> {
+    let mut from = content_start;
+    while let Some(pos) = find_closing_constrained(bytes, marker, from) {
+        if constrained_close_ok(bytes, marker, content_start, pos, mono_extra) {
+            return Some(pos);
+        }
+        // This marker cannot close the span — keep scanning past it (find the
+        // next marker strictly after `pos`).
+        from = pos;
+    }
+    None
+}
+
 /// Find the index of the unconstrained closing `marker``marker` at or after
 /// `search_start`, skipping sentinel regions.
 fn find_closing_unconstrained(bytes: &[u8], marker: u8, search_start: usize) -> Option<usize> {
@@ -164,11 +198,7 @@ pub(super) fn constrained_open_close(tags: &[TagToken], bytes: &[u8], i: usize, 
     if content_start >= bytes.len() || bytes[content_start] == b' ' {
         return None;
     }
-    let close_pos = find_closing_constrained(bytes, marker, content_start)?;
-    if !constrained_close_ok(bytes, marker, content_start, close_pos, true) {
-        return None;
-    }
-    Some(close_pos)
+    find_valid_close_constrained(bytes, marker, content_start, true)
 }
 
 /// Detect whether a superscript/subscript simple pair opens at `bytes[i]`
@@ -391,10 +421,7 @@ fn attrlist_constrained(
     if content_start >= bytes.len() || bytes[content_start] == b' ' {
         return None;
     }
-    let close_pos = find_closing_constrained(bytes, marker, content_start)?;
-    if !constrained_close_ok(bytes, marker, content_start, close_pos, false) {
-        return None;
-    }
+    let close_pos = find_valid_close_constrained(bytes, marker, content_start, false)?;
     Some((id, roles, content_start, close_pos))
 }
 

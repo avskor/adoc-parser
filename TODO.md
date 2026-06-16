@@ -202,7 +202,40 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 90-я сессия): РЕРАЙТ inline — Фаза 2 (21/N) xref-target первый-символ `[\p{Word}#/.:{]` (ветка `feat/subst-phase2-next-21`)
+## АКТУАЛЬНО (2026-06-16, 91-я сессия): РЕРАЙТ inline — Фаза 2 (22/N) constrained-close ищет валидный маркер циклом (ветка `feat/subst-phase2-next-22`)
+
+Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
+Phase 2 (1-21/N) уже СМЕРЖЕНА в master (`2d3ef70`). **(22/N) ЗАКОММИЧЕНА на ветке (`89e5f7d`), ОЖИДАЕТ
+авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(22/N) constrained-close: цикл до валидного маркера** (quotes-пасс). Выбор по nearmiss под FORCE:
+  ближайший outline.adoc (2 diff, len_delta=0) — финальный cross-span остаток, строка 877
+  `` ** *SDR* … table `head` or `header; `foot` or `footer`. `` (7 бэктиков, нечёт).
+  - **Корень:** asciidoctor `monospaced constrained: …`(\S|\S.*?\S)`(?![\p{Word}"'`])` — lazy `.*?` (где `.`
+    матчит backtick) ПОГЛОЩАЕТ маркер, который не может закрыть (контент кончился бы пробелом / close за
+    word/`"'`backtick) и ищет следующий валидный. Наш `find_closing_constrained`+один `constrained_close_ok`
+    брал ПЕРВЫЙ маркер, при провале — отменял спан (как и legacy: легаси-баг, asciidoctor нет). На
+    `` `header; `foot` ``: бэктик после `header; ` за пробелом → невалид → у нас спан рвётся (`` `header; `` лит +
+    `<code>foot</code>`); asciidoctor поглощает → `<code>header; \`foot</code>`.
+  - **Фикс (quotes.rs):** хелпер `find_valid_close_constrained(bytes,marker,content_start,mono_extra)` — цикл над
+    `find_closing_constrained`, пропускающий кандидаты, проваливающие `constrained_close_ok` (`from=pos`, строго
+    растёт). `constrained_open_close` и `attrlist_constrained` зовут его. Doc-модуль обновлён.
+  - **mod.rs**: `constrained_close_search_matches_asciidoctor` — (1) raw `pipeline()`==asciidoctor event-векторы
+    (пробел-перед-close ×2, word-после-close `` `a`b` ``→`<code>a`b</code>`); (2) `try_parse().is_none()` gate-decline;
+    (3) regression-цикл `pipeline()==legacy()`.
+  - **КЛЮЧЕВОЕ:** движок СТРОЖЕ/вернее legacy здесь → new≠legacy → gate-фоллбэк (0 changed); FORCE==asciidoctor.
+- **Гейт:** gate_check toggle **344 файла, 0 различий base≡new** (airtight); blast_toggle 344→344.
+  **FORCE: Identical 338→339 (+1 FLIP outline.adoc 2→0), 0 REGR, 0 FARTHER, 0 паник.** outline ПОЛНОСТЬЮ выровнен.
+- clippy 0; test --workspace зелёное (parser 551→552, html 433, render-core 15, parsing-lab 1, integration 25,
+  html-tests 6/6/1, html_output 36).
+- **⚠ ИНФРА:** fmt-гейт `rust-quality-gates` (`pre-commit-cargo.sh`, `cargo fmt --all -- --check`) ОТКЛЮЧЁН (решение
+  пользователя): сам master не проходит (1169 блоков, ~35 файлов hand-formatted, rustfmt 1.9.0). Fmt-блок
+  закомментирован в ОБЕИХ копиях скрипта; clippy-гейт активен. `git --no-verify` не обходит (хук харнесса).
+- **Дальше Фаза 2:** escape `\\` bare/`\\pass:`/`\\https` doubled (pre-existing); macros (N+) UI/footnote(STATEFUL);
+  cross-span em-dash/autolink-in-mono; **снять gate**. nearmiss на 339: java/index(183), sdc(183),
+  java/monitoring(185), footnote(283), include(375). outline под FORCE → 0.
+
+### (АРХИВ 90-й) Phase 2 (21/N) xref-target первый-символ `[\p{Word}#/.:{]` — СМЕРЖЕНА в master `2d3ef70` (ветка `feat/subst-phase2-next-21`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
