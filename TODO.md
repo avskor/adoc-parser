@@ -202,12 +202,40 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 89-я сессия): РЕРАЙТ inline — Фаза 2 (20/N) escape `\((…))` index-term + `\\MM…MM` doubled-marker (ветка `feat/subst-phase2-next`)
+## АКТУАЛЬНО (2026-06-16, 90-я сессия): РЕРАЙТ inline — Фаза 2 (21/N) xref-target первый-символ `[\p{Word}#/.:{]` (ветка `feat/subst-phase2-next-21`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-19/N) уже СМЕРЖЕНА в master (`408bae9`). **(20/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
-commit + `git merge --no-ff` + `git push` + удаление ветки:
+Phase 2 (1-20/N) уже СМЕРЖЕНА в master (`377850c`). **(21/N) ЗАКОММИЧЕНА на ветке, ОЖИДАЕТ авторизации** на
+`git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(21/N) xref-target первый-символ `[\p{Word}#/.:{]`** (macros-пасс). Выбор по nearmiss под FORCE:
+  ближайший page-breaks.adoc (88 diff, len_delta=4). Корень — строка 3 `` `<<<`, shown in <<ex-page-break>> ``:
+  плоский macros-пасс (бежит ДО quotes) видел `<<` в `<<<` и жадно матчил `>>` из реального `<<ex-page-break>>`
+  → ложный гигантский xref, каскад 88. Legacy корректен (рекурсия: backtick поглощает `<<<` ДО проверки `<<`).
+  - **Корень:** `macros.rs::try_cross_ref` НЕ проверял первый символ (как и legacy). asciidoctor
+    `InlineXrefMacroRx` (`ruby -e 'require"asciidoctor";puts Asciidoctor::InlineXrefMacroRx.source'`):
+    `&lt;&lt;([\p{Word}#/.:{].*?)&gt;&gt;` — первый символ цели ОБЯЗАН `[\p{Word}#/.:{]` (НЕ `[\w":]`:
+    `"` НЕвалиден; `.`/`/`/`{` валидны). Пробы: `<<<`→нет, `<<#foo>>`→да, `<<"a">>`→нет, `<<<b>>`→`&lt;`+`#b`.
+  - **Фикс (macros.rs):** хелпер `xref_target_start_ok` (`is_alphanumeric()||c∈{_#/.:{}`); guard в `try_cross_ref`
+    после empty-check. Диспетчер на `None` сдвигает на ОДИН `<` → `<<<b>>` матчит на втором `<<` (`<` лит + `#b`).
+  - **mod.rs**: `reproduces_legacy_on_cross_reference_inputs` — `<< id , the label >>`(пробел, расходится)
+    → `<<id , the label >>`; +reproduction `<<<`/`` `<<<` ``; +decline-блок (`try_parse==None`): пробел/`-`/`"`/`<<<b>>`.
+  - **КЛЮЧЕВОЕ:** ограничение СТРОЖЕ legacy (legacy линкует `<< foo>>`/`<<"a">>`/`<<-y>>`) → на пермиссивных
+    формах new≠legacy → gate-фоллбэк (0 changed); под FORCE new==asciidoctor (флипает page-breaks). 0 регрессий
+    by construction (asciidoctor использует то же ограничение → движение К нему).
+- **Гейт:** gate_check toggle **344 файла, 0 различий base≡new** (airtight); blast_toggle 343→343.
+  **FORCE: Identical 337→338 (+1 FLIP page-breaks 88→0), 0 REGR, 0 FARTHER, 0 паник. БОНУС: outline 5487→2**
+  (каскад `<<<` коллапсировал — cross-span финал-файл почти выровнен; остаток 2 diff @5268, строка 877
+  `` `head` or `header; `foot` `` — alternating backtick boundary, отдельный корень).
+- clippy 0; test --workspace зелёное (parser 551, html 433, render-core 15, parsing-lab 1, integration 25,
+  html-tests 6/6/1, html_output 36). Пробы FORCE==asciidoctor байт-в-байт (`` x `<<<` y ``/`<<<b>>`/`<<#anchor>>`).
+- **Дальше Фаза 2:** outline остаток (backtick boundary @877); escape `\\` bare/`\\pass:`/`\\https` doubled
+  (pre-existing); macros (N+) UI/footnote(STATEFUL); cross-span em-dash/autolink-in-mono; снять gate.
+  nearmiss на 338: java/index(183), sdc(183), java/monitoring(185), footnote(283), include(375).
+
+### (АРХИВ 89-й) Phase 2 (20/N) escape `\((…))` index-term + `\\MM…MM` doubled-marker — СМЕРЖЕНА в master `377850c`
+
+Phase 2 (1-19/N) в master (`408bae9`). **(20/N) смержена `377850c`:**
 - [x] **(20/N) escape `\((…))` index-term shorthand + `\\MM…MM` doubled-marker** (escape-пасс). Выбор по
   nearmiss под FORCE: ближайший subs.adoc (86 diff, len_delta=-4). ДВА корня escape, оба уникальны в корпусе
   (`\((` только subs:20; `\\**` в outline:1487 — внутри passthrough `+…+`, escape-пасс не видит):

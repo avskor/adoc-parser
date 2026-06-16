@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-16, 90-я) — РЕРАЙТ inline, Фаза 2 (21/N): xref-target первый-символ `[\p{Word}#/.:{]` (`<<<` декль)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-21`** (off master `377850c`, 343) —
+ЗАКОММИЧЕНА на ветке (1 логический коммит), **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff`
+в master + `git push` + удаление ветки. 20/N (escape `\((…))` + `\\MM…MM`) к началу сессии УЖЕ смержен
+(master HEAD `377850c`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `377850c`
+(blast_toggle base 343, blast_force base 337).
+
+### Выбор задачи
+nearmiss под FORCE (7 Different): ближайший — **page-breaks.adoc (88 diff)**, len_delta=4. Корень — строка 3
+`` `<<<` ``, shown in <<ex-page-break>>``: наш плоский macros-пасс (бежит ДО quotes) видел `<<` в `<<<`
+и жадно матчил `>>` из реального `<<ex-page-break>>` → гигантский ложный xref, каскад 88 diff. Legacy
+корректен (рекурсивно: backtick-monospace поглощает `<<<` ДО проверки `<<`; внутри reparse нет `>>`).
+
+### Корень
+- `macros.rs::try_cross_ref` НЕ проверял первый символ цели (как и legacy `inline.rs::try_cross_reference`).
+  asciidoctor `InlineXrefMacroRx`: `&lt;&lt;([\p{Word}#/.:{].*?)&gt;&gt;` — первый символ ОБЯЗАН быть
+  `[\p{Word}#/.:{]` (word/`#`/`/`/`.`/`:`/`{`). Реальная регулярка получена через
+  `ruby -e 'require "asciidoctor"; puts Asciidoctor::InlineXrefMacroRx.source'` (НЕ `[\w":]` — `"` НЕвалиден,
+  `.`/`/`/`{` валидны). Пробы asciidoctor: `<<<`→нет, `<<#foo>>`→да, `<<"a">>`→нет, `<<.x>>`/`<</p>>`→да,
+  `<<<b>>`→`&lt;`+xref`#b` (матч на ВТОРОМ `<<`).
+
+### Сделано (1 логический коммит — ОЖИДАЕТ merge, 2 файла, +55/-3)
+- **macros.rs**: хелпер `xref_target_start_ok(content)` (`c.is_alphanumeric() || c∈{_#/.:{}`}` — `\p{Word}`
+  аппроксимирован Unicode-alnum+`_`); guard в `try_cross_ref` после empty-check (`!xref_target_start_ok → None`).
+  Диспетчер на `None` сдвигает на ОДИН `<`, поэтому `<<<b>>` матчит на втором `<<` (`<` литерал + xref `#b`).
+  Docstring модуля (cross-reference) + `try_cross_ref` обновлены.
+- **mod.rs**: тест `reproduces_legacy_on_cross_reference_inputs` — кейс `<< id , the label >>` (ведущий пробел,
+  теперь расходится) ЗАМЕНЁН на `<<id , the label >>` (валиден); +reproduction `<<<` / `` `<<<` `` (оба = legacy);
+  +блок decline-ассертов (`try_parse==None`) для asciidoctor-faithful расхождений: `<< …>>` пробел / `<<-y>>` /
+  `<<"a">>` / `a <<<b>>`.
+
+### КЛЮЧЕВОЕ — ограничение строже legacy → gate-фоллбэк, FORCE→asciidoctor
+Legacy БОЛЕЕ пермиссивен (линкует `<< foo>>`/`<<"a">>`/`<<-y>>`/`a <<<b>>`), т.к. достигает `<<` только
+top-level (внутри спана — рекурсия съедает раньше). Новый движок зеркалил legacy; теперь зеркалит asciidoctor.
+На пермиссивных формах new≠legacy → gate возвращает None → фоллбэк на legacy (вывод корректен, 0 changed).
+Под FORCE new совпадает с asciidoctor (это и флипает page-breaks). asciidoctor ИСПОЛЬЗУЕТ это ограничение →
+движение К нему, 0 FORCE-регрессий by construction.
+
+### Верификация (airtight, чистый flip + бонус)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 551, html 433, render-core 15, parsing-lab 1,
+  integration 25, html-tests 6/6/1, html_output 36). Пробы FORCE==asciidoctor байт-в-байт
+  (`` x `<<<` y ``, `<<<b>>`, `see <<#anchor>> and `<<<``).
+- **gate_check toggle: 344 файла, 0 различий base≡new** (airtight). blast_toggle 343→343, 0 changed.
+- **FORCE: Identical 337→338 (+1 FLIP page-breaks 88→0), 0 REGR, 0 FARTHER, 0 паник.**
+- **БОНУС: outline.adoc 5487→2** (массивный каскад `<<<` коллапсировал — это cross-span финал-файл).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 338 (FORCE): java/index(183), software-development-cookbook(183), java/monitoring(185),
+  footnote(283), include(375). outline → УЖЕ 2 (cross-span финал почти выровнен).
+- **outline остаток (2 diff @5268, строка 877):** `` `head` or `header; `foot` or `footer` `` — alternating
+  backtick-monospace boundary с `;`-разделителем (отдельный cross-span quote корень, НЕ xref).
+- **escape:** `\\` (bare escaped backslash → legacy дропает первый); `\\pass:`/`\\https` doubled (pre-existing).
+- **macros (N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf), footnote (STATEFUL —
+  реестр/нумерация/список = отд. сессия, донор 1954).
+- **cross-span:** `*x*-- y` em-dash после close-span; A1 bare-autolink-in-mono; **ФИНАЛ:** снять gate.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file> [N]`
+  (под FORCE-env!), `nearmiss.py` (под FORCE-env), `gate_check.py KEY=VAL` (прямой base≡new). CLI:
+  `adoc [--no-standalone] file`. base пересобирать из master HEAD. Регулярки asciidoctor:
+  `ruby -e 'require "asciidoctor"; puts Asciidoctor::InlineXrefMacroRx.source'`.
+
+---
+
 ## Сессия (2026-06-16, 89-я) — РЕРАЙТ inline, Фаза 2 (20/N): escape `\((…))` index-term + `\\MM…MM` doubled-marker
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next`** (off master `408bae9`, 343) —

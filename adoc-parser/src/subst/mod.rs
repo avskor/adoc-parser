@@ -805,13 +805,21 @@ mod tests {
             // a span wrapping a macro reparses the same way
             "*xref:x[]*",
             "`xref:x[]`",
-            // <<...>> shorthand: bare, labelled, #-stripped, trimmed
+            // <<...>> shorthand: bare, labelled, #-stripped, trimmed (the target
+            // begins with a valid `[\p{Word}#/.:{]` char, so legacy and the engine
+            // agree).
             "<<id>>",
             "<<id,label>>",
             "<<#id>>",
-            "<< id , the label >>",
+            "<<id , the label >>",
             "<<id>> and <<other,text>>",
             "text <<id>> more",
+            // three `<` cannot open a cross reference: the inner `<<` target would
+            // begin with `<`, so the whole run stays literal (both engines) — bare
+            // and inside a `` `…` `` monospace span (the `page-breaks.adoc` case,
+            // where the span must survive so `<<<` renders as `<code>&lt;&lt;&lt;`).
+            "<<<",
+            "`<<<`",
             // both macro forms together
             "<<a>> then xref:b[c]",
             // invalid → stay literal (no brackets, empty target, reversed brackets,
@@ -829,6 +837,23 @@ mod tests {
                 pipeline(c),
                 legacy(c),
                 "new engine diverged from legacy for {c:?}"
+            );
+        }
+        // Asciidoctor's `InlineXrefMacroRx` rejects a `<<target>>` whose target does
+        // NOT begin with `[\p{Word}#/.:{]`. The legacy parser has no such guard and
+        // links these (it only reaches a top-level `<<`, never one buried inside a
+        // span), so the engine now diverges and the gate falls back to legacy —
+        // asserted via `try_parse` returning `None`. Under `force()` the engine
+        // instead matches Asciidoctor (no link), which is what flips `page-breaks`.
+        for c in [
+            "<< id , the label >>", // leading space
+            "<<-y>>",               // leading dash
+            "<<\"a\">>",            // leading quote
+            "a <<<b>>",             // inner `<<` matches at `b` → `<` literal + `#b`
+        ] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
+                "gate should decline (diverge from legacy) for {c:?}"
             );
         }
     }
