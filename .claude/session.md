@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-16, 88-я) — РЕРАЙТ inline, Фаза 2 (19/N): passthrough-защищённый URL в `link:++url++[…]`
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-link-passthrough-url`** (off master `ba712cd`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. spec'd pass-макрос (18/N) к началу сессии УЖЕ смержен (master HEAD `ba712cd`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `ba712cd` (blast_toggle base 343, blast_force base 335).
+
+### Выбор задачи
+nearmiss под FORCE: ближайший — **url.adoc (21 diff)**, len_delta=2. Все 21 — позиционный каскад от утечки
+строки 80 `link:++https://example.org/?q=[a b]++[URL with special characters]`. Единственный «живой»
+`link:++…++` в корпусе (остальные 3 — link-macro/ts-url-format/pass-macro — внутри `[source]`/`----`
+verbatim, inline-subs не бегут, 0 diff). mailto/xref passthrough-формы в корпусе отсутствуют.
+
+### Корень
+- `try_link` отклонял `link:++url++[…]` намеренно (старый doc): к macros-времени `++url++` уже
+  passthrough-сентинель (`try_double_plus` → `Passthrough(vec![PassPiece{raw:false}])`), `span_has_sentinel`
+  → `None` → под gate откат на legacy (корректный), под FORCE отката нет → `link:…[…]` течёт литералом.
+- **legacy** (`inline.rs::try_link_macro` ~2067): спец-кейс `rest.strip_prefix("++")` → URL = вербатим-текст
+  между `++…++`, emitted `Cow::Borrowed(url)`; label reparse через `push_macro_label`. URL в href вербатим
+  (`[a b]` НЕ percent-кодируется — рендерер не экранирует href ссылки).
+- **asciidoctor**: общий механизм — `extract_passthroughs` извлекает `++url++` первым пассом → плейсхолдер,
+  затем `link:PLACEHOLDER[…]` матчится, плейсхолдер восстанавливается в URL. Legacy спец-кейс = узкое
+  приближение этого.
+
+### Сделано (1 логический коммит — ОЖИДАЕТ, 2 файла, +~75/-17)
+- **macros.rs**: `try_link` получил параметр `work: &Work`; старый whole-span `span_has_sentinel`-guard
+  заменён на точечный — (1) sentinel в LABEL → decline (движок не репарсит label с sentinel-байтами;
+  как и раньше), (2) URL-часть = ровно один passthrough-сентинель → `passthrough_url(work, url_part)`
+  реконструирует вербатим-URL из пьес leaf'а → `Cow::Owned`, иначе `Cow::Borrowed(plain)`. Новая функция
+  `passthrough_url` (lone-sentinel guard через `sentinel_end`, парс idx, матч `TagToken::Passthrough` → join
+  `p.text`). Импорт `TagToken`. Doc `try_link` переписан (legacy спец-кейс + asciidoctor-механизм).
+- **mod.rs**: +тест `reproduces_legacy_on_link_passthrough_url_inputs` (8 reproduction-кейсов: `[a b]`/`__`/
+  space-protected, bare/label, plain-link regression-guard, в span; +отдельная gate-decline ассерта для
+  passthrough-в-LABEL `link:http://x.com[++raw__text++]` — `try_parse` == None, движок не репарсит label).
+
+### КЛЮЧЕВОЕ — gate-эквивалентность через РЕЗОЛВ сентинеля (не decline)
+В отличие от прочих макросов (где sentinel в спане = decline), здесь URL-сентинель РЕЗОЛВИТСЯ: legacy
+`++`-спец-кейс даёт ровно `Start(Link{url}), <label events>, End(Link)`, и subst после резолва пьес даёт
+то же (`Cow::Owned==Cow::Borrowed` по PartialEq, label reparse тот же `run_pipeline` minus MACROS). Generalize
+legacy узкого `++`-only на любую passthrough-форму (= asciidoctor); прочие plus-формы (triple `+++` legacy
+declines; single `+` другой путь) под gate расходятся → fallback → 0 changed, под FORCE не в корпусе.
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 549→550, html 433, compat 233, render-core 15,
+  parsing-lab 1). Пробы p_url1 (label+`[a b]`)/p_url2 (bare+`__`) — asciidoctor==FORCE байт-в-байт.
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 335→336 (+1 FLIP url.adoc 21→0, diffone 216=216 байт-в-байт), 0 REGR, 0 FARTHER, 0 паник.**
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 336 (FORCE): **subs(86)**, page-breaks(88), java/index(183), software-development-cookbook(183),
+  java/monitoring(185), footnote(283), include(375); outline(5487 — cross-span финал).
+- **escape:** `\((…))` index-term shorthand (leaf, 1 кейс subs.adoc:20); `\\`/`\\MM` doubled-marker;
+  `\\http`/`\\pass:` doubled (pre-existing legacy bug).
+- **macros (6/N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf), footnote (STATEFUL —
+  реестр/нумерация/список = отд. сессия, донор 1954).
+- **cross-span:** `*x*-- y` em-dash после close-span; A1 bare-autolink-in-mono; **ФИНАЛ:** снять gate → flip
+  outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env). CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+
+---
+
 ## Сессия (2026-06-16, 87-я) — РЕРАЙТ inline, Фаза 2 (18/N): spec'd pass-макрос `pass:SPEC[…]`
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-pass-spec-macro`** (off master `a16596b`, 343) —

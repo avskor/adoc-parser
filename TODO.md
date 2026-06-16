@@ -202,12 +202,39 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 87-я сессия): РЕРАЙТ inline — Фаза 2 (18/N) spec'd pass-макрос `pass:SPEC[…]` (ветка `feat/subst-phase2-pass-spec-macro`)
+## АКТУАЛЬНО (2026-06-16, 88-я сессия): РЕРАЙТ inline — Фаза 2 (19/N) passthrough-защищённый URL `link:++url++[…]` (ветка `feat/subst-phase2-link-passthrough-url`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-17/N) уже СМЕРЖЕНА в master (`a16596b`). **(18/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+Phase 2 (1-18/N) уже СМЕРЖЕНА в master (`ba712cd`). **(19/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
 commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(19/N) passthrough-защищённый URL `link:++url++[…]`** (macros-пасс). Выбор по nearmiss под FORCE:
+  ближайший url.adoc (21 diff) — позиционный каскад от утечки строки 80
+  `link:++https://example.org/?q=[a b]++[…]` (единственный «живой» `link:++…++` в корпусе; прочие 3 — в
+  `[source]`/`----` verbatim).
+  - **Корень:** `try_link` намеренно отклонял passthrough-в-URL — к macros-времени `++url++` уже
+    passthrough-сентинель (`Passthrough{raw:false}`), старый `span_has_sentinel` → `None`. Под gate откат на
+    legacy (корректный), под FORCE отката нет → `link:…[…]` течёт литералом.
+  - **legacy** (`try_link_macro` ~2067): спец-кейс `rest.strip_prefix("++")` → URL = вербатим-текст между
+    `++…++`, emitted `Cow::Borrowed`; label reparse `push_macro_label`. **asciidoctor:** общий
+    `extract_passthroughs`→placeholder→`link:placeholder[…]`→restore (legacy = узкое приближение).
+  - **Фикс (macros.rs):** `try_link` получил `work: &Work`; whole-span guard → точечный: sentinel в LABEL →
+    decline (как раньше), URL-часть = ровно 1 passthrough-сентинель → `passthrough_url(work, url_part)`
+    реконструирует вербатим-URL из пьес leaf'а (`Cow::Owned`), иначе `Cow::Borrowed(plain)`. КЛЮЧЕВОЕ:
+    URL-сентинель РЕЗОЛВИТСЯ (не decline) — events == legacy → gate adopts; generalize `++`-only на любую
+    passthrough-форму (= asciidoctor), прочие plus-формы под gate расходятся → fallback.
+  - **mod.rs**: +тест `reproduces_legacy_on_link_passthrough_url_inputs` (8 reproduction-кейсов + gate-decline
+    ассерта для passthrough-в-LABEL).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 335→336 (+1 FLIP url.adoc 21→0,
+  diffone 216=216), 0 REGR, 0 FARTHER, 0 паник.** Пробы p_url1/p_url2 asciidoctor==FORCE байт-в-байт.
+- clippy 0; test --workspace зелёное (parser 549→550, html 433, compat 233, render-core 15).
+- **Дальше Фаза 2:** escape `\((…))` index-term shorthand/`\\`/`\\MM` doubled-marker; macros (6/N+) UI
+  (experimental-проброс)/footnote(STATEFUL); cross-span close-span em-dash; A1 bare-autolink-in-mono; снять
+  gate → flip outline. nearmiss на 336: subs(86), page-breaks(88), java/index(183), footnote(283), include(375).
+
+### (АРХИВ 87-й) Phase 2 (18/N) spec'd pass-макрос `pass:SPEC[…]` — СМЕРЖЕНА в master `ba712cd`
+
+Phase 2 (1-17/N) в master (`a16596b`). **(18/N) смержена `ba712cd`:**
 - [x] **(18/N) spec'd pass-макрос `pass:SPEC[…]`** (passthrough-пасс). Выбор по nearmiss под FORCE: ближайший
   format-column-content.adoc (8 diff, утечка `pass:q[` вокруг `[cols=…]`). Один корень — флипает 4 файла.
   - **Корень:** `try_pass_macro` обрабатывал только bare `pass:[…]` (`spec_len==0`); spec'd `pass:SPEC[…]` был
