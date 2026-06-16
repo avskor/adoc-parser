@@ -202,12 +202,41 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 91-я сессия): РЕРАЙТ inline — Фаза 2 (22/N) constrained-close ищет валидный маркер циклом (ветка `feat/subst-phase2-next-22`)
+## АКТУАЛЬНО (2026-06-16, 92-я сессия): РЕРАЙТ inline — Фаза 2 (23/N) bare-autolink внутри constrained-спана (ветка `feat/subst-phase2-next-23`)
 
 Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
-в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-21/N) уже СМЕРЖЕНА в master (`2d3ef70`). **(22/N) ЗАКОММИЧЕНА на ветке (`89e5f7d`), ОЖИДАЕТ
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.
+Phase 2 (1-22/N) уже СМЕРЖЕНА в master (`7647483`). **(23/N) ЗАКОММИЧЕНА на ветке, ОЖИДАЕТ
 авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(23/N) bare-autolink внутри constrained-спана** (macros-пасс). Выбор по nearmiss под FORCE: кластер
+  cookbook java/index(183)+sdc(183)+java/monitoring(185) — общий корень monitoring.adoc:37
+  `` `http://localhost:8080/actuator` `` (bare URL внутри monospace).
+  - **Корень:** в asciidoctor subs-порядок quotes→macros: `` `url` `` → `<code>url</code>`, затем macros-пасс
+    автолинкует URL (левая граница — `>` от `<code>`, правая — `<` от `</code>`). Наш движок гонит macros ДО
+    quotes, поэтому: (1) `try_autolink` проверял только `at_autolink_boundary` (предыдущий байт), backtick не
+    граница → НЕ линковал; (2) даже залинковав, URL-скан жадно съедал ещё-литеральный закрывающий маркер.
+    legacy корректен (рекурсивный reparse контента спана).
+  - **Фикс (macros.rs):** `escaped_autolink_boundary`→`autolink_open_boundary` (обёртка), новая
+    `autolink_url_limit(work,bytes,i)` → `Some(close)` при открытии constrained-спана (стенд-ин для `<` от
+    `</code>`), `Some(len)` при обычной границе, `None` иначе. `try_autolink` берёт `work`+лимит, скан URL
+    капается `(limit-start).min(rest.len())`. Escaped-арм зовёт ту же обёртку (поведение неизменно).
+  - **mod.rs**: `reproduces_legacy_on_bare_autolink_in_span_inputs` — 10 кейсов (URL=весь спан / `` ` ``*_#^~ /
+    URL в середине спана / trailing-punct / `` word`url` `` не-спан). pipeline()==legacy() (гейт принимает).
+  - **КЛЮЧЕВОЕ:** new теперь СОВПАДАЕТ с legacy → gate ПРИНИМАЕТ (вывод и так был верен через фоллбэк, 0 changed);
+    FORCE==asciidoctor → флип. Замечание: bare-email внутри `<code>` — legacy И FORCE линкуют, asciidoctor нет
+    (предсуществующее расхождение legacy↔asciidoctor, путь `try_email` не трогался).
+- **Гейт:** gate_check toggle **344 файла, 0 различий base≡new** (airtight); blast_toggle 344→344.
+  **FORCE: Identical 339→342 (+3 FLIP: monitoring 185→0, java/index 183→0, sdc 183→0), 0 REGR, 0 FARTHER, 0 паник.**
+- clippy --workspace 0; test --workspace зелёное (parser 552→553, html 433, render-core 15, parsing-lab 1,
+  integration 25, html-tests 6/6/1, html_output 36).
+- **⚠ ИНФРА:** fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН (решение пользователя 2026-06-16); clippy-гейт активен.
+- **Дальше Фаза 2:** escape `\\` bare/`\\pass:`/`\\https` doubled (pre-existing); macros (N+) UI/footnote(STATEFUL);
+  cross-span `*x*-- y` em-dash после close-span; **снять gate**. nearmiss на 342: footnote(283 — STATEFUL),
+  include(375). bare-autolink-in-mono ВЫРОВНЕН.
+
+### (АРХИВ 91-й) Phase 2 (22/N) constrained-close ищет валидный маркер циклом — СМЕРЖЕНА в master `7647483` (ветка `feat/subst-phase2-next-22`)
+
+Phase 2 (1-21/N) уже СМЕРЖЕНА в master (`2d3ef70`). **(22/N) смержена `7647483`:**
 - [x] **(22/N) constrained-close: цикл до валидного маркера** (quotes-пасс). Выбор по nearmiss под FORCE:
   ближайший outline.adoc (2 diff, len_delta=0) — финальный cross-span остаток, строка 877
   `` ** *SDR* … table `head` or `header; `foot` or `footer`. `` (7 бэктиков, нечёт).
