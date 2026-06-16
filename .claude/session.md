@@ -1,5 +1,70 @@
 # Session context
 
+## Сессия (2026-06-16, 92-я) — РЕРАЙТ inline, Фаза 2 (23/N): bare-autolink внутри constrained-спана (cookbook-кластер → 0)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-23`** (off master `7647483`, 344) —
+ЗАКОММИЧЕНА, **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff` в master + `git push` + удаление
+ветки. 22/N к началу сессии УЖЕ смержен (master HEAD `7647483`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН
+из чистого master `7647483` (blast_toggle base 344, blast_force base 339).
+
+### Выбор задачи
+nearmiss под FORCE (5 Different): кластер cookbook — java/index(183)+software-development-cookbook(183)+
+java/monitoring(185), общий корень. monitoring.adoc:37 `` `http://localhost:8080/actuator`. `` — bare URL
+внутри monospace constrained-спана. (index/cookbook включают monitoring.) Остаток: footnote(283 STATEFUL),
+include(375).
+
+### Корень — macros гонится ДО quotes, URL не видит границы `<code>`
+- asciidoctor subs-порядок `quotes → … → macros`: `` `url` `` → `<code>url</code>`, ЗАТЕМ macros-пасс
+  автолинкует URL (`InlineLinkRx` левая граница включает `>` от `<code>`; правая `[^\s\[\]<]` → `<` от
+  `</code>`). Наш `subst/mod.rs::run_pipeline` гонит `macros::extract` ДО `quotes::run_all` (макросы
+  запечатываются в сентинели ПЕРЕД quotes). Поэтому на момент macros маркеры спана ещё литералы:
+  (1) `try_autolink` проверял только `at_autolink_boundary` (предыдущий байт ∈ ws/`<>()[];`/start) — backtick
+  НЕ граница → bare-URL внутри `` `…` `` НЕ линковался; (2) даже залинковав, URL-скан (терминаторы
+  ws/`[`/`]`/`<`/`>`) жадно съедал бы ещё-литеральный закрывающий backtick (`http://x\``).
+- legacy КОРРЕКТЕН (рекурсивный reparse контента спана: URL в начале → `at_autolink_boundary` i==0 → линк;
+  маркеры уже сняты, скан не съедает). Пробы asciidoctor==legacy байт-в-байт на mono/bold/italic/mark/sup/sub.
+- Замечание: bare-email внутри `<code>` (`` `bob@example.com` ``) — legacy И наш FORCE линкуют (mailto),
+  asciidoctor НЕТ. Предсуществующее расхождение legacy↔asciidoctor; путь `try_email` НЕ трогался.
+
+### Сделано (1 логический коммит, 2 файла, +~64/-30)
+- **macros.rs**: `escaped_autolink_boundary` → `autolink_open_boundary` (теперь обёртка
+  `autolink_url_limit(...).is_some()`, общая для bare- и escaped-арма). Новая
+  `autolink_url_limit(work,bytes,i) -> Option<usize>`: `at_autolink_boundary` → `Some(bytes.len())` (без
+  лимита); открытие constrained-спана (`constrained_open_close`/`simple_pair_open_close` на `` ` ``*_#/^~) →
+  `Some(close)` — позиция закрывающего маркера, стенд-ин для `<` от `</code>`; иначе `None`. `try_autolink`
+  берёт `work`+лимит, скан капается `(limit-start).min(rest.len())` (терминаторы как раньше). Escaped-арм
+  зовёт ту же обёртку (поведение неизменно — backslash не маркер → `_=>None` на следующей итерации).
+- **mod.rs**: тест `reproduces_legacy_on_bare_autolink_in_span_inputs` (10 кейсов: URL=весь спан monitoring,
+  `` ` ``/`*`/`_`/`#`/`^`/`~`, URL в середине спана, trailing-punct, `` word`url` `` не-спан). pipeline()==legacy().
+
+### КЛЮЧЕВОЕ — new теперь СОВПАДАЕТ с legacy → gate ПРИНИМАЕТ
+Раньше new (no-autolink) ≠ legacy (autolink) → гейт деклайнил → фоллбэк на legacy (вывод и так верен).
+Теперь new == legacy (оба линкуют) → гейт принимает; гейтированный вывод НЕ меняется (0 changed, был верен
+через фоллбэк). Под FORCE new == asciidoctor → флип. Движение К asciidoctor, 0 FORCE-регрессий by construction.
+
+### Верификация (airtight, чистый тройной flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 552→553, html 433, html_output 36,
+  html-tests 6/6/1, parsing-lab 1, render-core 15, integration 25).
+- **gate_check toggle: 344 файла, 0 различий base≡new** (airtight, нет утечки гейта). blast_toggle 344→344.
+- **FORCE: Identical 339→342 (+3 FLIP: monitoring 185→0, java/index 183→0, sdc 183→0), 0 REGR, 0 FARTHER, 0 паник.**
+
+### ⚠ ИНФРА — fmt-гейт rust-quality-gates ОТКЛЮЧЁН (решение пользователя 2026-06-16)
+PreToolUse-хук `pre-commit-cargo.sh` гонял `cargo fmt --all -- --check` по всему репо; сам master не проходит
+(1169 блоков, ~35 файлов hand-formatted, rustfmt 1.9.0). Fmt-блок ЗАКОММЕНТИРОВАН в ОБЕИХ копиях скрипта;
+clippy-гейт ОСТАЁТСЯ активен. Bypass залипшего хука: `git commit --no-edit`. [[proj_quality_gate_hooks]].
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 342 (FORCE): footnote(283 — STATEFUL: реестр/нумерация/список, отд. сессия, донор 1954),
+  include(375). cookbook-кластер ВЫРОВНЕН; bare-autolink-in-mono закрыт.
+- **escape:** `\\` bare (legacy дропает первый); `\\pass:`/`\\https` doubled (pre-existing-deferred).
+- **macros (N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf).
+- **cross-span:** `*x*-- y` em-dash после close-span; **ФИНАЛ:** снять gate.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file> [N]`,
+  `nearmiss.py`, `gate_check.py KEY=VAL`. CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+  Регулярки: `ruby -e 'require "asciidoctor"; puts Asciidoctor::InlineLinkRx.source'`.
+
+---
+
 ## Сессия (2026-06-16, 91-я) — РЕРАЙТ inline, Фаза 2 (22/N): constrained-close ищет валидный маркер циклом (outline → 0)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-22`** (off master `2d3ef70`, 344) —
