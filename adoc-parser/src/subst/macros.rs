@@ -74,7 +74,7 @@ use crate::attributes::{parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::url_encode_into;
 
-use super::tokenize::{sentinel_end, utf8_char_len, Work, TAG_LEAD};
+use super::tokenize::{sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
 
 /// Extract every supported inline macro from `work.buf` into sentinels.
 pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
@@ -109,7 +109,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 
         // link:url[attrs]
         if bytes[i] == b'l' && src[i..].starts_with("link:") {
-            if let Some((events, end)) = try_link(&src, i, subs) {
+            if let Some((events, end)) = try_link(&src, i, subs, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -432,24 +432,49 @@ fn build_cross_reference(
 }
 
 /// At a `link:` (caller guarantees the prefix), try to match `link:url[attrs]`.
-/// Mirror of [`crate::inline::InlineState::try_link_macro`] for the plain form.
-/// The legacy `link:++url++[…]` passthrough-in-URL variant is declined here: by
-/// macros-time the `++url++` is already a passthrough sentinel, so the span guard
-/// trips and the gate falls back to legacy (which still handles it).
-fn try_link(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+/// Mirror of [`crate::inline::InlineState::try_link_macro`].
+///
+/// The legacy parser also has a `link:++url++[…]` special case: a passthrough
+/// wraps a URL whose special characters (`[`, ` `, repeating `__`) would
+/// otherwise break the macro or trip another sub. By macros-time that `++url++`
+/// is already a [`TagToken::Passthrough`] leaf, so the URL part of the span is a
+/// lone sentinel. When it is, [`passthrough_url`] reconstructs the verbatim URL
+/// from the leaf and the link is built with it — reproducing the legacy special
+/// case (Asciidoctor's general `extract_passthroughs`-then-match mechanism). Any
+/// other sentinel shape in the span (a sentinel inside the *label*, or a URL part
+/// that is more than one bare passthrough sentinel) declines, so the gate falls
+/// back to legacy.
+fn try_link(
+    src: &str,
+    start: usize,
+    subs: SubstitutionSet,
+    work: &Work,
+) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "link:"
     let bracket_start = rest.find('[')?;
     let bracket_end = rest.find(']')?;
     if bracket_end <= bracket_start {
         return None;
     }
-    let url = &rest[..bracket_start];
+    let url_part = &rest[..bracket_start];
     let content = &rest[bracket_start + 1..bracket_end];
-    if url.is_empty() {
+    if url_part.is_empty() {
         return None;
     }
     let end = start + 5 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
+    // The label is re-parsed by the engine, which cannot run over sentinel bytes,
+    // so a sentinel in the label declines (mirrors the old whole-span guard).
+    if content.as_bytes().contains(&TAG_LEAD) {
+        return None;
+    }
+    // The URL is normally plain text; the one sentinel form supported is a
+    // passthrough-protected target (`link:++url++[…]`), reconstructed verbatim.
+    let url: Cow<str> = if url_part.as_bytes().contains(&TAG_LEAD) {
+        Cow::Owned(passthrough_url(work, url_part)?)
+    } else {
+        Cow::Borrowed(url_part)
+    };
+    if url.is_empty() {
         return None;
     }
     let attrs = parse_link_attrs(content);
@@ -463,10 +488,39 @@ fn try_link(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event
         attrs.role,
         is_bare,
         label,
-        url,
+        &url,
         subs,
     );
     Some((events, end))
+}
+
+/// If `url_part` is exactly one passthrough sentinel, reconstruct the verbatim URL
+/// the legacy `link:++url++[…]` special case used. An earlier pass already lifted
+/// the `++url++` (or any other passthrough form) out of the buffer into a
+/// [`TagToken::Passthrough`] leaf, so the URL is the concatenation of the leaf's
+/// verbatim pieces — Asciidoctor's restored target. Returns `None` when `url_part`
+/// is not a lone sentinel (e.g. text surrounds it, or two sentinels) or the
+/// sentinel is not a passthrough, so the caller declines and the gate falls back.
+fn passthrough_url(work: &Work, url_part: &str) -> Option<String> {
+    let bytes = url_part.as_bytes();
+    if bytes.first() != Some(&TAG_LEAD) {
+        return None;
+    }
+    let end = sentinel_end(bytes, 0);
+    if end != bytes.len() {
+        return None; // text surrounds the sentinel within the URL part
+    }
+    let idx: usize = url_part[1..end - 1].parse().ok()?;
+    match work.tags.get(idx)? {
+        TagToken::Passthrough(pieces) => {
+            let mut url = String::new();
+            for p in pieces {
+                url.push_str(&p.text);
+            }
+            Some(url)
+        }
+        _ => None,
+    }
 }
 
 /// At a `mailto:` (caller guarantees the prefix), try to match
