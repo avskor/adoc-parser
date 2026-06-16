@@ -1,5 +1,75 @@
 # Session context
 
+## Сессия (2026-06-16, 86-я) — РЕРАЙТ inline, Фаза 2 (17/N): em-dash на границе attr-ref/attr-set сентинеля
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-emdash-attrref-boundary`** (off master `e25f45c`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. autolink-escape (16/N) к началу сессии УЖЕ смержена (master HEAD `e25f45c`). base-бинарь
+`/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `e25f45c` (blast_toggle base 343, blast_force base 330).
+
+### Выбор задачи
+nearmiss под FORCE: ближайший 1-diff = **subs-symbol-repl.adoc** (`@125 exp='—' got='--'`, строка 27
+`|{empty}--{empty}`). Прочие 1-diff отсутствуют (следующий 8-diff format-column-content). Взял em-dash на
+границе attr-ref — чистый flip, зеркалит legacy, НЕ трогает cross-span quote-проблему.
+
+### Корень (диагностика пробами)
+- asciidoctor резолвит `{empty}`→"" в пассе **attributes ДО replacements** → `--` оказывается на границах
+  строки/между словами → spaced em-dash `&#8201;—&#8201;` (thin-em-thin). `a{empty}--{empty}b` →
+  `a&#8212;&#8203;b` (word-вариант). Оба нормализуются в `—`.
+- Наш движок НЕ резолвит attr-ref (эмитит `AttributeReference`, рендерер резолвит) → `{empty}` = **сентинель**.
+  replacements гонялся по ВСЕМУ буферу `(true,true)`; внутренний `--` окружён сентинель-байтами (как `<>`) →
+  не граница → НЕТ em-dash. Под FORCE `--`, под gate откат на legacy ` — ` (gate DECLINES).
+- **Legacy механизм** (`inline.rs` flush_text ~1059): attr-ref = отдельное событие, **разбивает Text-ран**;
+  край разрыва = граница (`left=start!=0`, `right=end<len`). Quote-контент — изолированный репарс
+  `edges_are_line_boundaries=false` → НЕ граница. Так legacy различает `{empty}--{empty}` (em-dash) и
+  `*--*` (литерал внутри strong) БЕЗ различения типов сентинелей — за счёт рекурсии. Плоский движок держит
+  оба в одном буфере → различие только в ТИПЕ сентинеля (attr-ref vs quote).
+
+### Архитектура фикса (subst/replacements.rs — split-by-attr-ref, REUSE legacy-функции)
+- **Минимальный зеркалящий фикс:** разбить буфер на сегменты по **AttrRef/AttrSet** сентинелям (единственные,
+  что в legacy разбивают Text-ран); применить `apply_typographic_replacements(seg, true, true)` посегментно;
+  сентинели сохранить ВЕРБАТИМ между сегментами. Края сегментов у attr-ref-разрывов → реальные `^`/`$`
+  (флаги функции) → em-dash формируется. Quote/passthrough/macro-сентинели остаются ВНУТРИ сегмента → их
+  `<tag>`-не-граничная трактовка цела (`*--*`, `*--*{empty}` → `--` литерал).
+- **Fast-path:** буфер БЕЗ attr-ref/attr-set = один сегмент = весь буфер `(true,true)` → байт-в-байт прежнее
+  поведение (no regression by construction; нет лишней аллокации для частого случая plain-text).
+- **НЕ копирует флаговую consume-логику в shared-функцию:** spaced em-dash при `i==0` сегмента `copy_end=0`
+  (не съедает байт слева), сентинель ВНЕ сегмента → цел. Попытка крутить boundary-булевы в общей функции
+  дропнула бы `bytes[i-1]` (= attr-ref TAG_TAIL) при `copy_end=i-1` → порча сентинеля. Поэтому split, а не флаг.
+- **Cross-span quote-граница НЕ в скоупе:** `*x*-- y` (legacy формирует em-dash после close-span, у нас close-
+  сентинель не-граница) — pre-existing divergence, БЫЛА и до меня (whole-buffer тоже не давал em-dash) →
+  gate DECLINES, 0 REGR. Отдельная cross-span задача (дом — open vs close различение).
+
+### Сделано (1 логический коммит — ОЖИДАЕТ, 2 файла)
+- **subst/replacements.rs**: `run()` переписан (fast-path + split-loop); хелперы `apply_segment`,
+  `has_boundary_sentinel`, `is_boundary_sentinel` (парсит idx сентинеля, матч `AttrRef|AttrSet`); модуль-doc
+  «Attribute-reference sentinels are run boundaries». Импорт `{sentinel_end, TagToken, Work, TAG_LEAD}`.
+- **subst/mod.rs**: +тест `reproduces_legacy_on_attr_ref_emdash_boundary_inputs` (19 кейсов: attr-ref/attr-set
+  em-dash, real-spaces, `*--*{empty}` span-литерал, ellipsis/(C)/arrow рядом, apostrophe на краю, trailing-bracket
+  `{url}[x]`, interleaved `{a}--{b}--{c}`).
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0 (pre-existing `concat!` в adoc-html lib-тесте — не мой файл); cargo test --workspace
+  зелёное (parser 547→548, html 433, compat 233, render-core 15, parsing-lab 1).
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 330→331 (+1 FLIP subs-symbol-repl.adoc 1→0, diffone byte-identical 295=295), 0 REGR,
+  0 FARTHER, 0 паник.** subs.adoc 86 без изменений (его diffs — callouts, не em-dash). 11 проб legacy==FORCE.
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 331 (FORCE): format-column-content (8), align-by-column (20), url (21), subs (86), page-breaks
+  (88), pass (135), revision-line (220), footnote (283), include (375); outline (5487 — cross-span финал).
+- **escape:** `\((…))` index-term shorthand (leaf, 1 кейс subs.adoc:20, не флипнет в одиночку);
+  `\\`/`\\MM` doubled-marker (дом — quote-пассы, отложено с 8/N); `\\http` doubled (pre-existing legacy bug).
+- **macros (6/N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` через pipeline — НЕ leaf),
+  footnote (STATEFUL — реестр/нумерация/список = отд. сессия, донор 1954).
+- **cross-span замены:** `*x*-- y` em-dash после close-span (open vs close различение сентинеля) — pre-existing.
+- **A1 — bare autolink в монопространстве** (`` `http://x` ``): pre-existing gap (macros до quotes), реордер.
+- **ФИНАЛ Фазы 2:** снять gate → flip outline (cross-span @4545) при 343 неизменных.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env). CLI: `adoc [--no-standalone] file` (НЕ `-s`). base пересобирать из master HEAD.
+
+---
+
 ## Сессия (2026-06-16, 85-я) — РЕРАЙТ inline, Фаза 2 (16/N): escaped autolink `\http://…` (autolink escape)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-autolink-escape`** (off master `05454b4`, 343) —

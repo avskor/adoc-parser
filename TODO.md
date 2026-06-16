@@ -202,12 +202,39 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 85-я сессия): РЕРАЙТ inline — Фаза 2 (16/N) escaped autolink `\http://…` (ветка `feat/subst-phase2-autolink-escape`)
+## АКТУАЛЬНО (2026-06-16, 86-я сессия): РЕРАЙТ inline — Фаза 2 (17/N) em-dash на границе attr-ref/attr-set сентинеля (ветка `feat/subst-phase2-emdash-attrref-boundary`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-15/N) уже СМЕРЖЕНА в master (`05454b4`). **(16/N) ЗАКОММИЧЕНА (`468e7ad`), НЕ смержена, ОЖИДАЕТ
-авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+Phase 2 (1-16/N) уже СМЕРЖЕНА в master (`e25f45c`). **(17/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(17/N) em-dash на границе attr-ref/attr-set сентинеля** (FORCE-fix replacements-пасса). Выбор по
+  nearmiss под FORCE: ближайший 1-diff = subs-symbol-repl.adoc (`@125 exp='—' got='--'`, `|{empty}--{empty}`).
+  - **Корень:** asciidoctor резолвит `{empty}`→"" в attributes ДО replacements → `--` на границах → spaced
+    em-dash. Наш движок эмитит `AttributeReference`-сентинель (резолв в рендерере); replacements гонялся по
+    ВСЕМУ буферу `(true,true)` → `--` окружён сентинель-байтами (как `<>`) → не граница → НЕТ em-dash под FORCE.
+  - **Legacy:** attr-ref = отд. событие, разбивает Text-ран; край разрыва = граница (`start!=0`/`end<len`).
+    Quote-контент — изолированный репарс `edges=false` → не граница. Различает контекст рекурсией, не типом.
+  - **Фикс (subst/replacements.rs):** разбить буфер на сегменты по **AttrRef/AttrSet** сентинелям, применить
+    `apply_typographic_replacements(seg,true,true)` посегментно, сентинели сохранить вербатим между сегментами.
+    Края сегментов у attr-ref → реальные `^`/`$` → em-dash. Quote/passthrough/macro-сентинели остаются ВНУТРИ
+    сегмента → не-граница цела (`*--*`/`*--*{empty}` → `--` литерал). Fast-path (нет attr-ref = весь буфер 1
+    сегмент `(true,true)`) → байт-в-байт прежнее, без лишней аллокации. REUSE legacy-функции (split, не флаг —
+    consume-логика `copy_end=i-1` дропнула бы сентинель-байт).
+  - **mod.rs**: +тест `reproduces_legacy_on_attr_ref_emdash_boundary_inputs` (19 кейсов).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 330→331 (+1 FLIP subs-symbol-repl.adoc
+  1→0 байт-в-байт 295=295), 0 REGR, 0 FARTHER, 0 паник.** subs.adoc 86 без изменений (его diffs — callouts).
+- clippy 0 (pre-existing `concat!` в adoc-html lib-тесте — не мой файл); test --workspace зелёное (parser
+  547→548, html 433, compat 233, render-core 15).
+- **Cross-span НЕ в скоупе:** `*x*-- y` (legacy формирует em-dash после close-span; у нас close-сентинель не-
+  граница) — pre-existing divergence (была и до фикса), gate DECLINES → 0 REGR. Дом — open vs close различение.
+- **Дальше Фаза 2:** escape `\((…))` index-term shorthand (leaf, 1 кейс subs.adoc:20)/`\\`/`\\MM` doubled-marker;
+  macros (6/N+) UI(experimental-проброс)/footnote(STATEFUL); cross-span close-span em-dash; A1 bare-autolink-
+  in-mono; снять gate → flip outline. nearmiss на 331: format-column-content(8), align-by-column(20), url(21).
+
+### (АРХИВ 85-й) Phase 2 (16/N) escaped autolink `\http://…` — СМЕРЖЕНА в master `e25f45c`
+
+Корпус неизменен **343/344** (гейт держит). Phase 2 (1-15/N) в master (`05454b4`). **(16/N) смержена `e25f45c`:**
 - [x] **(16/N) escaped autolink `\http://…`** (also https/ftp/irc; порт легаси `handle_inline_escape` арма).
   Выбор по nearmiss под FORCE: ближайший 1-diff = links.adoc (`` `\https://…` `` in-backtick, строка 17).
   - **Дом — MACROS-пасс** (НЕ escape.rs): порядок тут passthrough→escape→char_refs→**macros→attributes→
