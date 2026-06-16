@@ -4,7 +4,11 @@
 //! So far implemented:
 //!
 //! - **cross-reference** (1/N) — `xref:target[label]` and the `<<target>>` /
-//!   `<<target,label>>` shorthand → a `CrossReference` tag;
+//!   `<<target,label>>` shorthand → a `CrossReference` tag. The `<<…>>` target
+//!   must begin with `[\p{Word}#/.:{]` (Asciidoctor's `InlineXrefMacroRx`), so a
+//!   leading `<` (`<<<`), `"`, `-`, or space declines and the angle brackets stay
+//!   literal; the legacy parser lacks this guard but never reaches a `<<` inside a
+//!   span, so the gate falls back to legacy on the divergent forms;
 //! - **link family** (2/N) — the `link:url[attrs]` macro, the `mailto:email[attrs]`
 //!   macro (with `?subject=&body=` query encoding), bare URL autolinks
 //!   (`http://`/`https://`/`ftp://`/`irc://`, with the optional `[label]` form),
@@ -365,6 +369,17 @@ fn try_xref(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event
     Some((build_cross_reference(target, label, subs), end))
 }
 
+/// Whether `content` begins with a character Asciidoctor accepts as the first
+/// byte of a cross-reference / `xref:` target: `[\p{Word}#/.:{]` (a word char —
+/// approximated as a Unicode alphanumeric or `_` — or one of `#`, `/`, `.`, `:`,
+/// `{`). An empty string, or a leading `<`/`"`/`-`/space, is rejected.
+fn xref_target_start_ok(content: &str) -> bool {
+    matches!(
+        content.chars().next(),
+        Some(c) if c.is_alphanumeric() || matches!(c, '_' | '#' | '/' | '.' | ':' | '{')
+    )
+}
+
 /// At a `<<` (caller guarantees the prefix), try to match `<<target>>` /
 /// `<<target,label>>`. Mirror of
 /// [`crate::inline::InlineState::try_cross_reference`].
@@ -378,6 +393,18 @@ fn try_cross_ref(
     let close = rest.find(">>")?;
     let content = &rest[..close];
     if content.is_empty() {
+        return None;
+    }
+    // Asciidoctor's `InlineXrefMacroRx` requires the target to begin with
+    // `[\p{Word}#/.:{]`; a leading `<` (so `<<<` declines and stays literal text,
+    // e.g. inside a `` `<<<` `` monospace span), `"`, `-`, or whitespace is not a
+    // valid cross-reference start. The legacy recursive parser has no such guard,
+    // but it never reaches a `<<` buried inside a constrained span (the span is
+    // consumed and re-parsed first), so on those forms the gate falls back to
+    // legacy while `force()` now matches Asciidoctor. The dispatcher advances by a
+    // single `<` on `None`, so a later valid `<<` in the same run still matches
+    // (`<<<b>>` → literal `<` + xref `#b`).
+    if !xref_target_start_ok(content) {
         return None;
     }
     let end = after_open + close + 2;
