@@ -138,8 +138,8 @@ pub(crate) fn try_parse<'a>(
 /// (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
 /// `indexterm2:`) families, `replacements`, `post_replacements`. The remaining
 /// macro families (footnote and the experimental UI macros) — the remaining
-/// escape forms (the `\pass:`/`\https://` autolink / `\((` index-term escapes, and
-/// the `\\`-doubled forms) — and the quote-marker escapes `\*`/`\_`/`` \` `` and
+/// escape forms (the `\pass:`/`\https://` autolink escapes, and the bare `\\`
+/// escaped backslash) — and the quote-marker escapes `\*`/`\_`/`` \` `` and
 /// `\+`, which belong inside the quote/passthrough passes — are not yet ported;
 /// inputs that need them diverge from legacy and are rejected by the gate (or
 /// surface as diffs under `force()`).
@@ -1333,6 +1333,45 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// The `\((…))` index-term-shorthand escape and the `\\MM…MM` doubled-marker
+    /// escape (subs.adoc lines 20 and 27): the engine must reproduce legacy's
+    /// event stream so the gate adopts them, and (under FORCE) render the literal
+    /// `((…))` / `__…__` Asciidoctor emits.
+    #[test]
+    fn reproduces_legacy_on_index_and_doubled_marker_escape_inputs() {
+        let cases = [
+            // corpus: escaped non-concealed index term — whole `((…))` literal
+            "\\((DD AND CC) OR (DD AND EE)) is not interpreted as a flow index term.",
+            "\\((Two Words)) plain.",
+            "pre \\((x)) post",
+            // escaped concealed `\(((…)))` — literal parens around a flow term
+            "\\(((primary, secondary))) text",
+            // no closing `))` ahead → the backslash stays literal (no escape forms)
+            "\\((no close here",
+            "\\(( only one open ) here",
+            // corpus: doubled-marker escape — `__func__` literal, marks kept
+            "The text \\\\__func__ will appear with two underscores",
+            "\\\\__func__",
+            "lead \\\\**bold marks** tail",
+            "\\\\##hi## there",
+            "\\\\``code`` here",
+            // doubled marker whose content still receives substitutions
+            "\\\\__a*b*c__",
+            "x \\\\__ *b* __ y",
+            // regression guards: the unescaped forms are unchanged
+            "((Two Words)) plain index term",
+            "__func__ stays emphasised",
+            "**bold** and ((term))",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
     }
 
     /// The signature cross-span case: a constrained strong that opens inside one

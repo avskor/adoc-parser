@@ -41,6 +41,19 @@
 //!   macro as its own event). Gated on `MACROS`. Sealing it here stops the later
 //!   [`super::macros`] pass from firing on the form. The block-macro `\image::…`
 //!   and any form whose target/content already holds a sentinel are declined.
+//! - **`\((…))`** — an escaped index-term shorthand (gated on `MACROS`): the
+//!   backslash drops and the whole `((…))` match stays literal (a `Macro` leaf —
+//!   its own `Text` event, not coalesced), or — for `\(((…)))` — literal parens
+//!   around a FLOW index term of the inner text. Sealing it here stops the later
+//!   [`super::macros`] pass from reading the `((…))` as an index term. Declined
+//!   when the content already holds a sentinel.
+//! - **`\\MM…MM`** — a doubled backslash before an unconstrained marker pair
+//!   (`**`/`__`/`##`/<double backtick>, gated on `QUOTES`): both backslashes drop;
+//!   the open and close marker pairs are sealed as their own `Text` events (`Macro`
+//!   leaves) while the content between them is left in the buffer to flow through
+//!   the remaining passes (`\\__func__` → `__func__`, `\\__a*b*c__` →
+//!   `__a<strong>b</strong>c__`). Mirrors Asciidoctor's cascading gsub (the
+//!   unconstrained pass strips one backslash, the constrained pass the other).
 //!
 //! ## Handled by the quote / passthrough passes (their span-aware home):
 //!
@@ -72,16 +85,16 @@
 //!
 //! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
 //!
-//! - `\\` (escaped backslash, and the `\\**`/`\\pass:` double-backslash forms),
-//! - the `\((…))` index-term-shorthand escape (concealed-vs-flow logic) — a
-//!   distinct code path from the `\name:target[…]` macro escape handled above.
+//! - `\\` (a bare escaped backslash with no following marker), and the
+//!   `\\pass:`/`\\https://` double-backslash forms (their non-doubled siblings
+//!   live in the passthrough/macros passes, so the doubled form does too).
 
 use std::borrow::Cow;
 
 use crate::event::{Event, SubstitutionSet};
 
 use super::char_refs::char_ref_len;
-use super::tokenize::{utf8_char_len, Work, TAG_LEAD, TAG_TAIL};
+use super::tokenize::{sentinel_end, utf8_char_len, Work, TAG_LEAD, TAG_TAIL};
 
 /// Apply backslash escapes across the raw working buffer (run before any pass
 /// that inserts sentinels).
@@ -90,6 +103,7 @@ use super::tokenize::{utf8_char_len, Work, TAG_LEAD, TAG_TAIL};
 /// `inline_macro_escape_len`, which is a no-op without it).
 pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
     let macros_on = subs.has(SubstitutionSet::MACROS);
+    let quotes_on = subs.has(SubstitutionSet::QUOTES);
     let old = std::mem::take(&mut work.buf);
     let bytes = old.as_bytes();
     let mut out = String::with_capacity(old.len());
@@ -110,12 +124,28 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                 out.push('\\');
                 i += 1;
             }
-            // `\\` — escaped backslash and the `\\**`/`\\pass:` forms are not yet
-            // ported; leave BOTH backslashes literal (re-examining the second as
-            // an escape introducer would mis-handle the deferred cases).
+            // `\\MM…MM` — a doubled backslash before an unconstrained marker pair
+            // (`**`/`__`/`##`/<double backtick>): both backslashes drop, the open
+            // and close marker pairs stay literal (each its own `Text` event, like
+            // the legacy parser) while the content between them flows through the
+            // remaining passes. Mirrors Asciidoctor's cascading gsub: the
+            // unconstrained pass strips one backslash, the constrained pass the
+            // other (`\\__func__` → `__func__`, `\\__a*b*c__` →
+            // `__a<strong>b</strong>c__`). Gated on QUOTES, like the legacy arm.
+            // The remaining `\\` forms (escaped backslash, `\\pass:`, `\\https`)
+            // are not yet ported and keep BOTH backslashes literal.
             Some(b'\\') => {
-                out.push_str("\\\\");
-                i += 2;
+                if let Some((consumed, open, inner, close)) =
+                    doubled_marker_escape(&old, bytes, i, quotes_on)
+                {
+                    out.push_str(&work.macro_sentinel(vec![Event::Text(Cow::Owned(open.to_string()))]));
+                    out.push_str(inner); // raw inner content flows through later passes
+                    out.push_str(&work.macro_sentinel(vec![Event::Text(Cow::Owned(close.to_string()))]));
+                    i += consumed;
+                } else {
+                    out.push_str("\\\\");
+                    i += 2;
+                }
             }
             Some(m) => {
                 let plen = typographic_escape_len(bytes, i);
@@ -157,6 +187,17 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                     // `\"`` `` / `\'`` `` — smart-quote opener: quote + backtick literal.
                     out.push_str(&work.literal_sentinel(old[i + 1..i + 3].to_string()));
                     i += 3;
+                } else if let Some((consumed, evs)) = index_escape(&old, bytes, i, macros_on) {
+                    // `\((…))` — escaped index-term shorthand: drop the backslash
+                    // and keep the whole `((…))` match literal (a non-concealed
+                    // term), or — for `\(((…)))` — literal parens around a FLOW
+                    // index term of the inner text (Asciidoctor "escape concealed
+                    // index term, but process nested flow index term"). Sealed as a
+                    // `Macro` leaf so it is its OWN event (the legacy parser pushes
+                    // the escaped match as a separate `Text`, not coalesced) and the
+                    // later `macros` pass never fires on the `((…))`.
+                    out.push_str(&work.macro_sentinel(evs));
+                    i += consumed;
                 } else if matches!(m, b'{' | b'[' | b'<' | b'\'') {
                     // Generic single-character escapes for NON-marker characters
                     // (attribute ref / bracket / `<` / apostrophe): drop the
@@ -176,7 +217,7 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                     // (Asciidoctor's true model); deferred to a later session. Also
                     // covers `\+` (deferred to the passthrough pass), `\x`, `\"`
                     // (no backtick), and the deferred macro/char-ref forms
-                    // (`\pass:` `\link:` `\&#…;` `\(( ` …).
+                    // (`\pass:` `\link:` `\&#…;` …).
                     out.push('\\');
                     i += 1;
                 }
@@ -287,4 +328,101 @@ fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
         i += 1;
     }
     0
+}
+
+/// `\((…))` index-term-shorthand escape (gated on MACROS). Port of the legacy
+/// [`crate::inline::InlineState::handle_inline_escape`] index arm: the backslash
+/// drops and the whole `((…))` match stays literal (a non-concealed term), while
+/// `\(((…)))` keeps the outer parens literal around a FLOW index term of the
+/// inner text. Returns the byte length consumed from the backslash at `i` and the
+/// events to seal as a `Macro` leaf, or `None` when no `((` opener / closing `))`
+/// is present (the backslash then stays literal). Declines when the matched
+/// content already holds a sentinel (an earlier pass lifted part of it into a
+/// leaf — the legacy parser saw verbatim source), so the gate falls back.
+fn index_escape(old: &str, bytes: &[u8], i: usize, macros_on: bool) -> Option<(usize, Vec<Event<'static>>)> {
+    if !macros_on || bytes.get(i + 1) != Some(&b'(') || bytes.get(i + 2) != Some(&b'(') {
+        return None;
+    }
+    let content_start = i + 3;
+    let close = index_term_close(&old[content_start..])?;
+    let content = &old[content_start..content_start + close];
+    if content.bytes().any(|b| b == TAG_LEAD || b == TAG_TAIL) {
+        return None;
+    }
+    let events = if content.starts_with('(') && content.ends_with(')') {
+        // `\(((…)))` — escaped concealed term: literal parens around a flow term.
+        vec![
+            Event::Text(Cow::Owned("(".to_string())),
+            Event::IndexTerm { text: Cow::Owned(content[1..content.len() - 1].to_string()) },
+            Event::Text(Cow::Owned(")".to_string())),
+        ]
+    } else {
+        // The whole match minus the backslash, kept literal (`((…))`).
+        vec![Event::Text(Cow::Owned(old[i + 1..content_start + close + 2].to_string()))]
+    };
+    Some((content_start + close + 2 - i, events))
+}
+
+/// Offset of the closing `))` (its first byte) within `rest`, greedily absorbing
+/// any further trailing `)`, or `None` for an empty/absent match. Port of
+/// [`crate::inline::InlineState::index_term_close`].
+fn index_term_close(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    let mut close = rest.find("))")?;
+    while bytes.get(close + 2) == Some(&b')') {
+        close += 1;
+    }
+    if close == 0 { None } else { Some(close) }
+}
+
+/// `\\MM…MM` doubled-marker escape (unconstrained `**`/`__`/`##`/<double
+/// backtick>, gated on QUOTES). Port of the legacy `\\` unconstrained arm: both
+/// backslashes drop, the open/close marker pairs stay literal while the content
+/// flows. Returns the byte length consumed from the first backslash at `i`, plus
+/// borrowed slices of the open marker, the inner content, and the close marker;
+/// `None` when no closing pair forms (the `\\` then stays literal).
+fn doubled_marker_escape<'b>(
+    old: &'b str,
+    bytes: &[u8],
+    i: usize,
+    quotes_on: bool,
+) -> Option<(usize, &'b str, &'b str, &'b str)> {
+    if !quotes_on {
+        return None;
+    }
+    let marker = *bytes.get(i + 2)?;
+    if !matches!(marker, b'*' | b'_' | b'#' | b'`') || bytes.get(i + 3) != Some(&marker) {
+        return None;
+    }
+    let content_start = i + 4;
+    let close_pos = find_closing_unconstrained(bytes, marker, content_start)?;
+    if close_pos <= content_start {
+        return None; // empty content — no span forms (mirrors the legacy guard)
+    }
+    Some((
+        close_pos + 2 - i,
+        &old[i + 2..content_start],     // open "MM"
+        &old[content_start..close_pos], // inner content (flows through later passes)
+        &old[close_pos..close_pos + 2], // close "MM"
+    ))
+}
+
+/// Offset of the next unconstrained `MM` marker pair at or after `search_start`,
+/// or `None`. Port of [`crate::inline::InlineState::find_closing_unconstrained`]
+/// for the escape buffer: passthroughs are already sealed in sentinels here (and
+/// hold no marker byte), so the scan only steps over a sentinel rather than
+/// re-detecting `+…+`/`pass:[…]` spans.
+fn find_closing_unconstrained(bytes: &[u8], marker: u8, search_start: usize) -> Option<usize> {
+    let mut i = search_start;
+    while i + 1 < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            i = sentinel_end(bytes, i);
+            continue;
+        }
+        if bytes[i] == marker && bytes[i + 1] == marker {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
