@@ -286,6 +286,84 @@ mod tests {
         }
     }
 
+    /// Constrained-span close search: Asciidoctor's lazy `(\S|\S.*?\S)` content
+    /// keeps scanning past a marker that cannot close (one preceded by a space —
+    /// content would end in whitespace — or one whose trailing lookahead fails),
+    /// absorbing it into the content via `.` and matching a *later* valid marker.
+    /// The legacy parser stops at the first marker and abandons the span, so for
+    /// these inputs the engine is more Asciidoctor-faithful and the gate falls
+    /// back (asserted via `try_parse` returning `None`); under `force()` the
+    /// engine matches Asciidoctor (this is the `outline.adoc` flip:
+    /// `` `head` or `header; `foot` or `footer` ``).
+    #[test]
+    fn constrained_close_search_matches_asciidoctor() {
+        // Raw engine (force-equivalent) matches the Asciidoctor reference: the
+        // first inner marker is preceded by a space (or followed by a word char),
+        // so the span closes at the next valid marker, the literal backtick living
+        // inside the monospace content.
+        for (input, expected) in [
+            // space before the first candidate close → absorbed into content
+            (
+                "x `a; `b` y",
+                vec![
+                    Event::Text("x ".into()),
+                    Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                    Event::Text("a; `b".into()),
+                    Event::End(TagEnd::Monospace),
+                    Event::Text(" y".into()),
+                ],
+            ),
+            (
+                "`a `b` c",
+                vec![
+                    Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                    Event::Text("a `b".into()),
+                    Event::End(TagEnd::Monospace),
+                    Event::Text(" c".into()),
+                ],
+            ),
+            // first candidate close is followed by a word char (mono lookahead
+            // `(?![\p{Word}"'`])` fails) → absorbed, closes at the trailing marker
+            (
+                "`a`b`",
+                vec![
+                    Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                    Event::Text("a`b".into()),
+                    Event::End(TagEnd::Monospace),
+                ],
+            ),
+        ] {
+            assert_eq!(pipeline(input), expected, "force result for {input:?}");
+        }
+        // The gate declines these (the raw engine diverges from the more permissive
+        // legacy parser, which leaves the leading marker literal and closes at the
+        // first inner marker).
+        for c in ["x `a; `b` y", "`a `b` c", "`a`b`"] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
+                "gate should decline (diverge from legacy) for {c:?}"
+            );
+        }
+        // Regression guard: where the first marker is already a valid close (normal
+        // spans, internal spaces, or no later marker to fall through to), the loop
+        // returns the same position as before and the engine still reproduces
+        // legacy byte-for-byte.
+        for c in [
+            "`code`",
+            "a `b c` d",
+            "`a *b* c`",
+            "x `mono` y",
+            "`foo`bar",   // close followed by word, no later marker → no span (both)
+            "`trailing ", // no close at all → literal (both)
+        ] {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// With the `replacements` pass ported, the pipeline must also reproduce
     /// legacy on inputs that mix quotes with typographic replacements
     /// (apostrophe, dashes, arrows, (C)/(R)/(TM), ellipsis). The whole-buffer
