@@ -1,5 +1,66 @@
 # Session context
 
+## Сессия (2026-06-16, 91-я) — РЕРАЙТ inline, Фаза 2 (22/N): constrained-close ищет валидный маркер циклом (outline → 0)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-22`** (off master `2d3ef70`, 344) —
+ЗАКОММИЧЕНА (1 логический коммит `89e5f7d`), **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff`
+в master + `git push` + удаление ветки. 21/N к началу сессии УЖЕ смержен (master HEAD `2d3ef70`).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `2d3ef70` (blast_toggle base 344, blast_force base 338).
+
+### Выбор задачи
+nearmiss под FORCE: ближайший — **outline.adoc (2 diff, len_delta=0)** — финальный остаток cross-span,
+строка 877 `` ** *SDR* Clarify if it is table `head` or `header; `foot` or `footer`. `` (7 бэктиков, нечёт).
+
+### Корень — close-поиск constrained-спана не зеркалил lazy `(\S|\S.*?\S)`
+- asciidoctor `monospaced constrained: (^|[^\p{Word};:"'`}])(?:\[…\])?`(\S|\S.*?\S)`(?![\p{Word}"'`])`.
+  Lazy `.*?` (где `.` матчит ЛЮБОЙ символ, включая backtick) ПОГЛОЩАЕТ маркер, который НЕ может закрыть
+  (контент кончился бы пробелом — `\S` перед close; или close за word/`"'`backtick — провал lookahead), и
+  ищет СЛЕДУЮЩИЙ валидный. На `` `header; `foot` ``: бэктик после `header; ` идёт за пробелом → невалид →
+  поглощён → close на бэктике после `foot` → `<code>header; \`foot</code>` (бэктик литерал ВНУТРИ).
+- **наш движок + legacy** (`quotes.rs::find_closing_constrained` + один `constrained_close_ok`): брали ПЕРВЫЙ
+  маркер, при провале — отменяли весь спан. → `` `header; `` литерал + `<code>foot</code>` (легаси-баг, asciidoctor нет).
+- Регулярки получены `ruby -e 'require "asciidoctor"; Asciidoctor::QUOTE_SUBS.each{…rx.source…}'`. Пробы
+  asciidoctor==FORCE байт-в-байт: `x `a; `b` y`→`<code>a; \`b</code>`, `` `a `b` c ``, `` `a`b` ``→`<code>a`b</code>`.
+
+### Сделано (1 логический коммит `89e5f7d`, 2 файла, +117/-12)
+- **quotes.rs**: хелпер `find_valid_close_constrained(bytes, marker, content_start, mono_extra)` — цикл над
+  `find_closing_constrained`, пропускающий кандидаты, проваливающие `constrained_close_ok` (`from = pos`,
+  строго растёт → терминируется). `constrained_open_close` и `attrlist_constrained` теперь зовут его (вместо
+  первый-маркер + одиночная проверка). Doc-модуль обновлён (одно место строже легаси, медиируется гейтом).
+- **mod.rs**: тест `constrained_close_search_matches_asciidoctor` — (1) raw `pipeline()`==asciidoctor event-векторы
+  на 3 кейсах (пробел-перед-close ×2, word-после-close), (2) `try_parse().is_none()` — gate-decline на тех же,
+  (3) regression-цикл `pipeline()==legacy()` (нормальные спаны / no-later-marker → без изменений).
+
+### КЛЮЧЕВОЕ — движок СТРОЖЕ легаси здесь → gate-фоллбэк, FORCE→asciidoctor
+Legacy бросает leading-маркер литералом и закрывает на первом внутреннем. Новый зеркалит asciidoctor (поглощает
+невалидный close). new≠legacy → гейт возвращает None → фоллбэк (вывод корректен, 0 changed). Под FORCE new==asciidoctor.
+
+### Верификация (airtight, чистый flip)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 551→552, html 433, html_output 36, html-tests 6/6/1,
+  parsing-lab 1, render-core 15, integration 25).
+- **gate_check toggle: 344 файла, 0 различий base≡new** (airtight, нет утечки гейта).
+- **FORCE: Identical 338→339 (+1 FLIP outline.adoc 2→0), 0 REGR, 0 FARTHER, 0 паник.** outline ПОЛНОСТЬЮ выровнен.
+
+### ⚠ ИНФРА — fmt-гейт rust-quality-gates ОТКЛЮЧЁН (решение пользователя 2026-06-16)
+PreToolUse-хук `pre-commit-cargo.sh` гонял `cargo fmt --all -- --check` по всему репо; **сам master не проходит**
+(1169 блоков в ~35 файлах — кодовая база hand-formatted, rustfmt 1.9.0 массово не согласен). `git --no-verify` НЕ
+обходит (это хук харнесса, не git). Fmt-блок ЗАКОММЕНТИРОВАН в ОБЕИХ копиях скрипта (cache `…/1.1.0/hooks/` +
+marketplace `…/marketplaces/fdc-marketplace/plugins/rust-quality-gates/hooks/`); clippy-гейт ОСТАЁТСЯ активен.
+Встроенный bypass в хуке: `git commit --no-edit` (строка 6 — early-exit). [[proj_quality_gate_hooks]].
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 339 (FORCE): java/index(183), software-development-cookbook(183), java/monitoring(185),
+  footnote(283), include(375). **outline → 0** (cross-span финал выровнен под FORCE!).
+- **escape:** `\\` bare (legacy дропает первый); `\\pass:`/`\\https` doubled (pre-existing-deferred).
+- **macros (N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf), footnote (STATEFUL —
+  реестр/нумерация/список = отд. сессия, донор 1954).
+- **cross-span:** `*x*-- y` em-dash после close-span; A1 bare-autolink-in-mono; **ФИНАЛ:** снять gate.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file> [N]`,
+  `nearmiss.py`, `gate_check.py KEY=VAL`. CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+  Регулярки: `ruby -e 'require "asciidoctor"; Asciidoctor::QUOTE_SUBS.each{|k,s| s.each{|t,c,r| puts r.source}}'`.
+
+---
+
 ## Сессия (2026-06-16, 90-я) — РЕРАЙТ inline, Фаза 2 (21/N): xref-target первый-символ `[\p{Word}#/.:{]` (`<<<` декль)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-21`** (off master `377850c`, 343) —
