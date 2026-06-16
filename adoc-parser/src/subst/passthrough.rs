@@ -12,10 +12,12 @@
 //!
 //! The matching mirrors the legacy recursive parser's `handle_inline_passthrough`
 //! / `try_*_passthrough` / `try_pass_macro` so the differential-equality gate
-//! adopts the result. Forms not yet modelled by the leaf representation —
-//! spec'd `pass:SPEC[…]` (its content re-runs substitutions, producing non-leaf
-//! events) and char references — are left in the buffer and the gate rejects the
-//! divergence, falling back to legacy.
+//! adopts the result. The bare `pass:[…]` becomes a verbatim
+//! [`TagToken::Passthrough`] leaf; the spec'd `pass:SPEC[…]` (`pass:q[…]`,
+//! `pass:c,a[…]`, …) re-runs exactly its spec'd substitutions over the bracketed
+//! content (via the engine's own [`super::run_pipeline`], mirroring
+//! `push_pass_spec_content`) and seals the resulting event sequence as one opaque
+//! [`TagToken::Macro`] leaf — see [`try_pass_spec_macro`].
 //!
 //! Two backslash escapes are folded into this pass (Asciidoctor's `\\?` capture):
 //! the escaped single-plus `\+…+` and the escaped pass macro `\pass:SPEC[…]`.
@@ -24,7 +26,7 @@
 //! arms in [`extract`]. Their doubled (`\++`/`\+++`) and double-backslash
 //! (`\\+`/`\\pass:`) variants stay deferred.
 
-use crate::event::SubstitutionSet;
+use crate::event::{Event, SubstitutionSet};
 
 use super::tokenize::{utf8_char_len, PassPiece, Work};
 
@@ -102,6 +104,20 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             && let Some((pieces, end)) = try_pass_macro(&src, i)
         {
             out.push_str(&work.passthrough_sentinel(pieces));
+            i = end;
+            continue;
+        }
+
+        // `pass:SPEC[…]` macro (spec'd form, e.g. `pass:q[…]`, `pass:c,a[…]`).
+        // Unlike the bare form its content is NOT verbatim: it is re-run through
+        // exactly the spec'd substitutions and the resulting events are sealed as
+        // a single opaque leaf, mirroring Asciidoctor (which extracts the macro up
+        // front and applies its subs at restore time). Tried after the bare arm,
+        // which declines spec'd specs.
+        if b == b'p'
+            && let Some((events, end)) = try_pass_spec_macro(&src, i)
+        {
+            out.push_str(&work.macro_sentinel(events));
             i = end;
             continue;
         }
@@ -289,10 +305,9 @@ fn pass_escape_prefix_len(src: &str, p: usize) -> Option<usize> {
 }
 
 /// `pass:[…]` macro, bare form only (no subs spec → raw verbatim). Mirror
-/// `try_pass_macro` for `spec_len == 0`. A spec'd `pass:SPEC[…]` re-runs
-/// substitutions on its content (non-leaf events), so it is deferred: this
-/// returns `None`, the `pass:` text stays in the buffer, and the gate rejects
-/// the divergent result.
+/// `try_pass_macro` for `spec_len == 0`. A spec'd `pass:SPEC[…]` is handled by
+/// [`try_pass_spec_macro`] instead: this returns `None` so the dispatch falls
+/// through to that arm.
 fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
     let rest = src.get(i..)?;
     if !rest.starts_with("pass:") {
@@ -300,7 +315,7 @@ fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
     }
     let spec_len = crate::scanner::pass_spec_len(src, i + 5)?;
     if spec_len != 0 {
-        return None; // deferred to the macros sub-phase
+        return None; // spec'd form: see `try_pass_spec_macro`
     }
     let after = &src[i + 5..];
     if !after.starts_with('[') {
@@ -312,4 +327,59 @@ fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
         vec![PassPiece { text: inner.to_string(), raw: true }],
         i + 5 + bracket_end + 1,
     ))
+}
+
+/// `pass:SPEC[…]` macro with a non-empty subs spec (`pass:q[…]`, `pass:c,a[…]`,
+/// `pass:quotes[…]`). Mirror of the legacy `try_pass_macro` +
+/// `push_pass_spec_content`: the spec maps to a [`SubstitutionSet`] via
+/// [`crate::inline::pass_spec_to_subs`], the bracketed content runs to the first
+/// `]` (no `\]` unescaping — same as `parse_bracket_macro`), and the content is
+/// re-run through exactly those substitutions. The resulting events are returned
+/// for sealing as one opaque [`super::tokenize::TagToken::Macro`] leaf, so the
+/// later passes (quotes/replacements/…) cannot reach inside the protected
+/// content — exactly how Asciidoctor's `extract_passthroughs` lifts the macro out
+/// before any substitution runs. `spec_len == 0` (bare form) is declined here; it
+/// is handled verbatim by [`try_pass_macro`].
+fn try_pass_spec_macro(src: &str, i: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = src.get(i..)?;
+    if !rest.starts_with("pass:") {
+        return None;
+    }
+    let spec_len = crate::scanner::pass_spec_len(src, i + 5)?;
+    if spec_len == 0 {
+        return None; // bare form handled by `try_pass_macro`
+    }
+    let after = &src[i + 5 + spec_len..];
+    if !after.starts_with('[') {
+        return None;
+    }
+    let bracket_end = after.find(']')?;
+    let content = &after[1..bracket_end];
+    let spec = &src[i + 5..i + 5 + spec_len];
+    let set = crate::inline::pass_spec_to_subs(spec);
+    let end = i + 5 + spec_len + bracket_end + 1;
+    Some((pass_spec_events(content, set), end))
+}
+
+/// Run `content` through exactly the substitutions in `set` and downgrade the
+/// plain-text runs to `InlinePassthrough` when `set` lacks `specialcharacters`,
+/// so the renderer emits them unescaped — mirroring the legacy
+/// `push_pass_spec_content`. The inner [`super::run_pipeline`] reproduces the
+/// recursive reparse the legacy parser does with a fresh `InlineState`. Empty
+/// content yields no events (the legacy parser emits nothing for `pass:q[]`),
+/// and the engine's own empty-buffer guard would otherwise materialise a stray
+/// empty `Text`.
+fn pass_spec_events(content: &str, set: SubstitutionSet) -> Vec<Event<'static>> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let escape = set.has(SubstitutionSet::SPECIALCHARS);
+    let inner: Vec<Event<'static>> = super::run_pipeline(content, set);
+    inner
+        .into_iter()
+        .map(|ev| match ev {
+            Event::Text(t) if !escape => Event::InlinePassthrough(t),
+            ev => ev,
+        })
+        .collect()
 }
