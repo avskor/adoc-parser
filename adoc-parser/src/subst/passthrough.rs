@@ -16,6 +16,13 @@
 //! spec'd `pass:SPEC[…]` (its content re-runs substitutions, producing non-leaf
 //! events) and char references — are left in the buffer and the gate rejects the
 //! divergence, falling back to legacy.
+//!
+//! Two backslash escapes are folded into this pass (Asciidoctor's `\\?` capture):
+//! the escaped single-plus `\+…+` and the escaped pass macro `\pass:SPEC[…]`.
+//! Both drop the backslash and leave the would-be passthrough's content in the
+//! buffer to flow through the later passes rather than being extracted — see the
+//! arms in [`extract`]. Their doubled (`\++`/`\+++`) and double-backslash
+//! (`\\+`/`\\pass:`) variants stay deferred.
 
 use crate::event::SubstitutionSet;
 
@@ -55,6 +62,28 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         {
             out.push('+');
             i += 2;
+            continue;
+        }
+
+        // Escaped pass macro `\pass:SPEC[…]`: Asciidoctor folds the `\\?` escape
+        // into the pass-macro match, so the backslash drops and extraction is
+        // skipped, BUT the bracketed content still runs the remaining
+        // substitutions — it is NOT a verbatim passthrough. Emit `pass:SPEC[` as
+        // literal text (it flows through the later passes as plain text) and
+        // resume scanning right after the `[`, so the content is processed
+        // normally (`\pass:c[*b*]` → `pass:c[<strong>b</strong>]`,
+        // `` `\pass:[]` `` → `<code>pass:[]</code>`). Without the escape the
+        // `pass:[…]` arm below would lift the whole macro into a sentinel, leaving
+        // the bare backslash behind. The double-backslash (`\\pass:`) form, where
+        // only the second backslash takes part in the escape, stays deferred (the
+        // gate falls back). Mirrors the legacy `pass_escape_prefix_len` arm of
+        // `handle_inline_escape`.
+        if b == b'\\'
+            && (i == 0 || bytes[i - 1] != b'\\')
+            && let Some(prefix_len) = pass_escape_prefix_len(&src, i + 1)
+        {
+            out.push_str(&src[i + 1..i + 1 + prefix_len]); // drop `\`, keep `pass:SPEC[`
+            i += 1 + prefix_len;
             continue;
         }
 
@@ -241,6 +270,22 @@ fn single_plus_pieces(inner: &str) -> Vec<PassPiece> {
         pieces.push(PassPiece { text: inner[text_start..].to_string(), raw: false });
     }
     pieces
+}
+
+/// Length of the `pass:SPEC[` prefix of an escaped pass macro `\pass:SPEC[…]`
+/// beginning at byte `p` (the position right after the backslash), or `None` if
+/// `p` does not start one. Port of
+/// [`crate::inline::InlineState::pass_escape_prefix_len`]: requires the `pass:`
+/// literal, an optional lowercase subs spec, and an opening `[`. The returned
+/// length spans `pass:` through that `[` inclusive; the bracketed content and the
+/// trailing `]` are NOT part of it (they flow through the remaining passes).
+fn pass_escape_prefix_len(src: &str, p: usize) -> Option<usize> {
+    let rest = src.get(p..)?;
+    if !rest.starts_with("pass:") {
+        return None;
+    }
+    let spec_len = crate::scanner::pass_spec_len(rest, 5)?;
+    Some(5 + spec_len + 1) // "pass:" + spec + "["
 }
 
 /// `pass:[…]` macro, bare form only (no subs spec → raw verbatim). Mirror

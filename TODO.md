@@ -202,12 +202,38 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-15, 83-я сессия): РЕРАЙТ inline — Фаза 2 (14/N) escape `\macro` (ветка `feat/subst-phase2-macro-escape`)
+## АКТУАЛЬНО (2026-06-16, 84-я сессия): РЕРАЙТ inline — Фаза 2 (15/N) escape `\pass:SPEC[…]` (ветка `feat/subst-phase2-pass-escape`)
 
 Корпус неизменен **343/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate → flip outline.
-Phase 2 (1-13/N) уже СМЕРЖЕНА в master (`9c6a219`). **(14/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
+Phase 2 (1-14/N) уже СМЕРЖЕНА в master (`b9f03ff`). **(15/N) НЕ закоммичена, ОЖИДАЕТ авторизации** на
 commit + `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(15/N) escape `\pass:SPEC[…]`** (порт `pass_escape_prefix_len`). Выбор по nearmiss под FORCE: 3 из
+  пяти 1-diff файлов — escaped pass в монопространстве (attribute-entry-substitutions/footnote/
+  literal-monospace). Баг под FORCE: passthrough извлекал `pass:[]` → голый `\` → `<code>\</code>`.
+  - **Дом — PASSTHROUGH-пасс** (НЕ escape.rs): escaped pass — НЕ плейн-литерал. Легаси дропает `\`,
+    `pass:SPEC[` литерал, содержимое `[...]`+`]` ТЕЧЁТ через остальные subs (`\pass:c[*b*]`→
+    `pass:c[<strong>b</strong>]`). Passthrough бежит первым и иначе извлёк бы `pass:[]` целиком.
+  - **passthrough.rs**: новый арм в `extract()` (после `\+`, перед `+`-passthroughs): `b==\\` + guard
+    `(i==0 || bytes[i-1]!=\\)` + `pass_escape_prefix_len(src,i+1)` → `out.push_str(pass:SPEC[)`, advance.
+    Helper `pass_escape_prefix_len` (порт: `pass:`+опц.lowercase spec+`[`, len=`5+spec_len+1`; reuse
+    `scanner::pass_spec_len`). `\\pass:` doubled ОТЛОЖЕН (guard гасит второй `\`; поведение не изменилось).
+  - **gate-эквивалентность:** tokenize коалесцирует текст до сентинеля, `\pass:` сентинель не вставляет →
+    непрерывный Text; легаси делает flush_text у `\`. Совпадает event-в-event на ГРАНИЦЕ flush (начало
+    input/край спана). Все 3 корпус-кейса in-backtick (escape в начале спана) → gate ADOPTS. Bare mid-run
+    (`before \pass:[x]`) → 1 vs 2 Text → decline+fallback (HTML идентичен). escape.rs: только doc-перенос.
+  - **mod.rs**: +тест `reproduces_legacy_on_pass_escape_inputs` (14 boundary-кейсов; mid-run исключён).
+- **Гейт:** blast_toggle **343→343, 0 изменённых** (airtight). **FORCE: 326→329 (+3 FLIP), 0 REGR, 0
+  FARTHER, 0 паник.** Флипы: attribute-entry-substitutions/footnote/literal-monospace 1→0. 4 пробы байт-в-байт.
+- clippy 0, test --workspace зелёное (parser 545→546, html 433, compat 233; 24 subst).
+- **Дальше Фаза 2:** escape `\https://` autolink (in-backtick: seal URL-экстент+left-boundary, дом —
+  macros-пасс после quotes; links.adoc расходится именно на in-backtick)/`\((` index-term shorthand (leaf,
+  1 кейс)/`\\`/`\\MM` doubled-marker (дом — quote-пассы); macros (6/N+) UI(experimental-проброс)/
+  footnote(STATEFUL); снять gate → flip outline.
+
+### (АРХИВ 83-й) Phase 2 (14/N) escape `\macro` — СМЕРЖЕНА в master `b9f03ff`
+
+Phase 2 (1-13/N) уже СМЕРЖЕНА в master (`9c6a219`). **(14/N) СМЕРЖЕНА** (`b9f03ff`):
 - [x] **(14/N) escape `\name:target[…]`** (порт `inline_macro_escape_len`, дешёвый FORCE-win — escaped =
   литерал, impl-движок не нужен). Скоуп = только 12 именованных макросов; `\https://`/`\((`/`\pass:` —
   отд. code-path'ы, ОТЛОЖЕНЫ. **`subst/escape.rs`**:

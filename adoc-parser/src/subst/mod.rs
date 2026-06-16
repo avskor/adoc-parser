@@ -1091,6 +1091,55 @@ mod tests {
         }
     }
 
+    /// With the escaped pass macro `\pass:SPEC[…]` folded into the passthrough
+    /// pass, the pipeline must reproduce legacy: the backslash drops and the
+    /// `pass:SPEC[` prefix stays literal while the bracketed content flows through
+    /// the remaining substitutions (it is NOT extracted as a verbatim
+    /// passthrough). An unbracketed `\pass:` is not an escape (the backslash
+    /// stays). The escape is what stops the bare-`pass:[…]` arm from lifting the
+    /// whole macro into a sentinel and leaving the lone backslash behind.
+    ///
+    /// Cases keep the escape at a flush boundary (input start or a span edge),
+    /// where the legacy parser's `flush_text` at the backslash produces no empty
+    /// split, so the event vectors match exactly. A bare `\pass:` mid-run after
+    /// other text (`before \pass:[x]`) renders identically but splits the text one
+    /// event differently in legacy; the gate declines it and falls back (still
+    /// correct), so it is excluded here. The `\\pass:` double-backslash form is
+    /// likewise deferred.
+    #[test]
+    fn reproduces_legacy_on_pass_escape_inputs() {
+        let cases = [
+            // bare and spec'd, empty content → literal `pass:SPEC[]`
+            "\\pass:[]",
+            "\\pass:c[]",
+            "\\pass:q[]",
+            // content flows through the remaining subs (quotes / specialchars),
+            // and the `pass:SPEC[` prefix shares the `*`/text flush boundary
+            "\\pass:c[*b*]",
+            "\\pass:[<raw>]",
+            "\\pass:q[<x> & y]",
+            "\\pass:[plain text]",
+            // the corpus pattern: escaped pass macro inside a monospace span (the
+            // span edge is the flush boundary, so the prefix matches legacy)
+            "`\\pass:[]`",
+            "`\\pass:c[]`",
+            "the `\\pass:[]` macro",
+            "shorthand for the `\\pass:c[]` enclosure",
+            // NOT an escape: no opening bracket → backslash stays literal
+            "\\pass:nobracket",
+            "\\pass:c",
+            // a non-`pass:` name after the backslash is unaffected here
+            "\\passenger[x]",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1
