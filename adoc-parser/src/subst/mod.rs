@@ -1341,6 +1341,44 @@ mod tests {
         }
     }
 
+    /// A bare URL immediately inside a constrained span autolinks, exactly as
+    /// Asciidoctor links it after `quotes` materialises the `<code>`/`<strong>`/…
+    /// wrapper and the `macros` pass sees the `>`/`<` tag boundaries. Because the
+    /// engine runs `macros` *before* `quotes`, the still-literal opening marker is
+    /// the left boundary ([`super::macros::autolink_url_limit`]) and the
+    /// still-literal closing marker caps the URL scan (the pre-`quotes` stand-in
+    /// for the `<` of `</code>`). The legacy parser reaches the same result by
+    /// recursively re-parsing the span content, so the pipeline reproduces it.
+    #[test]
+    fn reproduces_legacy_on_bare_autolink_in_span_inputs() {
+        let cases = [
+            // the corpus pattern (monitoring.adoc): a URL is the whole monospace
+            // span, trailing sentence punctuation outside the span
+            "See `http://localhost:8080/actuator`.",
+            // every constrained marker that opens a span: the URL links inside it
+            "m `http://example.com/a` x",
+            "b *http://example.com/b* x",
+            "i _http://example.com/c_ x",
+            "k #http://example.com/d# x",
+            // superscript / subscript simple pairs
+            "s ^http://example.com/e^ x",
+            "z ~http://example.com/f~ x",
+            // URL mid-span (preceded by a space → plain boundary, capped by close)
+            "`see http://example.com/x here`",
+            // trailing punctuation inside the span is stripped from the bare URL
+            "`http://example.com/y.`",
+            // NOT a span (marker mid-word opens nothing) → no autolink, literal
+            "word`http://example.com/z` x",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// The spec'd pass macro `pass:SPEC[…]` re-runs exactly its spec'd
     /// substitutions over the bracketed content and seals the result as one opaque
     /// leaf (so the later passes cannot reach inside). The pipeline must reproduce

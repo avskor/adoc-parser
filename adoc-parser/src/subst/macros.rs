@@ -31,7 +31,7 @@
 //!
 //! This pass also folds in the **escaped autolink** `\http://…` (the escape pass's
 //! span-aware home for it): the backslash drops where an unescaped autolink could
-//! open and the URL stays literal text. See [`escaped_autolink_boundary`].
+//! open and the URL stays literal text. See [`autolink_open_boundary`].
 //!
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
@@ -289,7 +289,8 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // backslash so the URL stays literal text. The backslash is NOT copied to
         // `out` but is LEFT in `src`, so when the scheme is re-examined on the next
         // iteration the autolink arm below sees `\` as the preceding byte, fails
-        // `at_autolink_boundary`, and declines to link — exactly the legacy
+        // `autolink_open_boundary` (a backslash is not a span marker), and declines
+        // to link — exactly the legacy
         // `handle_inline_escape` arm, whose dropped-but-retained backslash likewise
         // blocks the URL. Fires only where an unescaped autolink could open: at a
         // real boundary (start / whitespace / `<>()[];`) OR immediately inside a
@@ -299,7 +300,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         if bytes[i] == b'\\'
             && matches!(bytes.get(i + 1), Some(b'h' | b'f' | b'i'))
             && scheme_at(&src, i + 1)
-            && escaped_autolink_boundary(work, bytes, i)
+            && autolink_open_boundary(work, bytes, i)
         {
             i += 1; // drop the backslash; the scheme is left literal below
             continue;
@@ -308,7 +309,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // Bare URL autolink (http://, https://, ftp://, irc://), optionally
         // followed by a `[label]` attrlist.
         if matches!(bytes[i], b'h' | b'f' | b'i') && scheme_at(&src, i) {
-            if let Some((events, end)) = try_autolink(&src, i, subs) {
+            if let Some((events, end)) = try_autolink(work, &src, i, subs) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -961,50 +962,75 @@ fn at_autolink_boundary(bytes: &[u8], i: usize) -> bool {
     prev.is_ascii_whitespace() || matches!(prev, b'<' | b'>' | b'(' | b')' | b'[' | b']' | b';')
 }
 
-/// Whether the backslash at `i` (followed by an autolink scheme) should drop —
-/// i.e. an unescaped autolink would be allowed to open at `i`. Mirror of the
-/// legacy [`crate::inline::InlineState::handle_inline_escape`] `\https://` arm
-/// (`autolink_scheme_at` + `at_autolink_boundary`), extended for the constrained
-/// quote case the legacy parser reaches via recursion.
+/// Whether an autolink could open at byte offset `i` — the shared boundary test
+/// for both the bare autolink ([`try_autolink`]) and its escaped form (the
+/// `\https://` arm). Extends [`at_autolink_boundary`] (start / whitespace /
+/// `<>()[];`) with the constrained-quote case the legacy parser reaches via
+/// recursion.
 ///
-/// The backslash drops when it sits at a real autolink boundary (start /
-/// whitespace / `<>()[];`), OR immediately after a constrained quote marker that
-/// actually opens a span here. The latter is the pre-`quotes` stand-in for
+/// An autolink also opens immediately after a constrained quote marker that
+/// actually forms a span here. This is the pre-`quotes` stand-in for
 /// Asciidoctor's `>`-after-`<code>` boundary: `quotes` runs after `macros`, so
 /// the `<code>`/`<strong>`/… tag that would precede the URL is not materialised
 /// yet — but the quote-span detectors ([`super::quotes::constrained_open_close`]
 /// / [`super::quotes::simple_pair_open_close`]) report whether the span forms,
-/// which is exactly when that boundary would exist. The span-formation check also
-/// keeps the backslash literal when the marker opens no span (`a*\http…`,
-/// `` a`\http… ``), matching Asciidoctor and the legacy parser.
-fn escaped_autolink_boundary(work: &Work, bytes: &[u8], i: usize) -> bool {
+/// which is exactly when that boundary would exist (`` `http…` `` → autolink
+/// inside `<code>`; `*http…*`/`_…_`/`#…#`/`^…^`/`~…~` likewise). The
+/// span-formation check returns false when the marker opens no span
+/// (`` word`http… ``, `a*\http…`), matching Asciidoctor and the legacy parser.
+///
+/// For the escaped form the caller passes the backslash offset; the backslash is
+/// not a span marker, so the URL one byte further right never sees the span
+/// boundary and stays literal (`` `\http…` `` → literal URL inside `<code>`).
+fn autolink_open_boundary(work: &Work, bytes: &[u8], i: usize) -> bool {
+    autolink_url_limit(work, bytes, i).is_some()
+}
+
+/// As [`autolink_open_boundary`], but on success also reports the exclusive byte
+/// offset at which the URL scan must stop. A plain boundary (start / whitespace /
+/// `<>()[];`) imposes no extra limit and returns `Some(bytes.len())`. A
+/// constrained-span open returns `Some(close)` — the span's closing-marker offset
+/// — because `macros` runs before `quotes`, so the URL would otherwise swallow the
+/// still-literal closing marker (`` `http://x` `` must link only `http://x`, not
+/// `` http://x` ``). This is the pre-`quotes` stand-in for the `<` of `</code>`
+/// that bounds the URL in Asciidoctor's later `macros` pass.
+fn autolink_url_limit(work: &Work, bytes: &[u8], i: usize) -> Option<usize> {
     if at_autolink_boundary(bytes, i) {
-        return true;
+        return Some(bytes.len());
     }
     if i == 0 {
-        return false;
+        return None;
     }
     let marker = bytes[i - 1];
     match marker {
-        b'`' | b'*' | b'_' | b'#' => {
-            super::quotes::constrained_open_close(&work.tags, bytes, i - 1, marker).is_some()
-        }
-        b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, i - 1, marker).is_some(),
-        _ => false,
+        b'`' | b'*' | b'_' | b'#' => super::quotes::constrained_open_close(&work.tags, bytes, i - 1, marker),
+        b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, i - 1, marker),
+        _ => None,
     }
 }
 
 /// At an autolink scheme (caller guarantees `scheme_at`), try to match a bare URL
 /// autolink, optionally followed by a `[label]` attrlist. Mirror of
-/// [`crate::inline::InlineState::try_autolink`].
-fn try_autolink(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
-    if !at_autolink_boundary(src.as_bytes(), start) {
-        return None;
-    }
+/// [`crate::inline::InlineState::try_autolink`]. The left-boundary test and URL
+/// scan limit both come from [`autolink_url_limit`], so a URL immediately inside a
+/// constrained quote span (`` `http…` ``) links exactly as it does after `<code>`
+/// materialises in Asciidoctor's later `macros` pass.
+fn try_autolink(
+    work: &Work,
+    src: &str,
+    start: usize,
+    subs: SubstitutionSet,
+) -> Option<(Vec<Event<'static>>, usize)> {
+    let limit = autolink_url_limit(work, src.as_bytes(), start)?;
     let rest = &src[start..];
-    let url_end = rest
+    // When `start` opens a constrained span, cap the scan at the span's closing
+    // marker (`limit`): `macros` runs before `quotes`, so that marker is still a
+    // literal byte the URL terminator set (whitespace / `[` `]` `<` `>`) would not
+    // stop on. The cap is the pre-`quotes` stand-in for the `<` of `</code>`.
+    let scan_end = (limit - start).min(rest.len());
+    let url_end = rest[..scan_end]
         .find(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '<' || c == '>')
-        .unwrap_or(rest.len());
+        .unwrap_or(scan_end);
     let mut url = &rest[..url_end];
     if url.len() <= 8 {
         return None;
