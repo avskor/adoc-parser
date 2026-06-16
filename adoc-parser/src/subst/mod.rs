@@ -327,6 +327,56 @@ mod tests {
         }
     }
 
+    /// An attribute reference (`{name}`) or inline set (`{set:…}`) is emitted as
+    /// its own event by the legacy parser, which *splits* the surrounding text
+    /// run — and a run-split edge counts as a line boundary for the spaced
+    /// em-dash (`{empty}--{empty}` → ` — `). The new engine reproduces that by
+    /// splitting the buffer at AttrRef/AttrSet sentinels before the replacements
+    /// pass, while quote/passthrough sentinels stay *inside* a segment and keep
+    /// their `<tag>`-like non-boundary treatment (`{empty}*--*{empty}` keeps the
+    /// span-internal `--` literal). Replacements that do not depend on boundaries
+    /// ((C)/ellipsis/arrows) are unaffected by the split.
+    #[test]
+    fn reproduces_legacy_on_attr_ref_emdash_boundary_inputs() {
+        let cases = [
+            // attr-ref-flanked em-dash → spaced em-dash at the split edges
+            "{empty}--{empty}",
+            "x{empty}--{empty}y",
+            "{empty}--",
+            "--{empty}",
+            "a{empty}--b",
+            "a--{empty}b",
+            // real spaces around `--` near an attr-ref (already a spaced em-dash)
+            "{empty} -- {empty}",
+            // inline set is a boundary too
+            "{set:foo:bar}--{set:foo:bar}",
+            "{set:foo!}--end",
+            // quote sentinel beside an attr-ref: the span-internal `--` stays literal
+            "*--*{empty}",
+            "{empty}*--*{empty}",
+            "{empty}`--`{empty}",
+            // boundary-independent replacements next to an attr-ref
+            "{empty}...{empty}",
+            "{empty}(C){empty}",
+            "{empty}->{empty}",
+            // apostrophe at a segment edge does not fire (needs flanking alnum)
+            "a{empty}'s",
+            // attr-ref with a trailing bracket segment beside `--`
+            "{url}[x]--{url}[y]",
+            // multiple attr-refs and dashes interleaved
+            "{a}--{b}--{c}",
+            // attr-ref far from any replacement (no spurious change)
+            "see {version} for details",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// With `post_replacements` ported, the pipeline must reproduce legacy on
     /// hard-break (` +`) inputs. The end-of-buffer break fires only at the true
     /// line edge: a ` +` inside a span is followed by its close sentinel and
