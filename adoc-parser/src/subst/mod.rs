@@ -1238,6 +1238,59 @@ mod tests {
         }
     }
 
+    /// The spec'd pass macro `pass:SPEC[…]` re-runs exactly its spec'd
+    /// substitutions over the bracketed content and seals the result as one opaque
+    /// leaf (so the later passes cannot reach inside). The pipeline must reproduce
+    /// the legacy `try_pass_macro` / `push_pass_spec_content`: `q`→quotes,
+    /// `c`→specialchars (text stays `Text`, html-escaped), `a`→attributes
+    /// (`{name}` → an `AttributeReference` leaf), `macros`→autolink, the full
+    /// `quotes`/`normal` names, comma-combined specs, and the empty-content form
+    /// (`pass:q[]` emits nothing). Unlike the escaped `\pass:` form, the spec'd
+    /// macro inserts a sentinel where the legacy parser flushes text, so a mid-run
+    /// macro splits the surrounding text identically — mid-run and in-span cases
+    /// match too.
+    #[test]
+    fn reproduces_legacy_on_pass_spec_macro_inputs() {
+        let cases = [
+            // `q` (quotes): the corpus table-cols pattern, bare and in-monospace
+            "pass:q[#e#]",
+            "the `[cols=\">pass:q[#e#],.^3pass:q[#s#]\"]` style",
+            "`[cols=\"pass:q[#h#],pass:q[#e#]\"]`",
+            "`pass:q[#h#]`",
+            "`[cols=\"2,pass:q[#^#]1\"]`",
+            // `q` over raw HTML with an inner strong (no specialchars → raw text)
+            "the text pass:q[<del>strike *this*</del>] is deleted",
+            // `q,a`: quotes + attributes, an attribute reference inside
+            "pass:q,a[<del>strike _{docname}_</del>]",
+            // full name spec
+            "pass:quotes[But I should contain *bold* text.]",
+            // `macros`: an autolink, with `__` left literal (no quotes)
+            "pass:macros[https://asciidoctor.org/now_this__link_works.html]",
+            // `c,a`: specialchars keeps text as escaped `Text`, attributes active
+            "pass:c,a[__<{email}>__]",
+            // `r` / `n`: replacements / normal (spaced em-dash, not an edge case)
+            "rep pass:r[a -- b (C) x...] end",
+            "norm pass:n[*b* -- _i_] end",
+            // empty content emits nothing (both specs)
+            "pass:q[]",
+            "pass:c[]",
+            "before pass:q[] after",
+            // mid-run flush boundary (the sentinel splits text like the flush)
+            "the text pass:q[#x#] here",
+            // the bare form is unchanged (verbatim leaf) — regression guard
+            "pass:[verbatim *x*]",
+            // no opening bracket → not a macro, the text stays literal
+            "pass:q nobracket",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1

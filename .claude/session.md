@@ -1,5 +1,65 @@
 # Session context
 
+## Сессия (2026-06-16, 87-я) — РЕРАЙТ inline, Фаза 2 (18/N): spec'd pass-макрос `pass:SPEC[…]`
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-pass-spec-macro`** (off master `a16596b`, 343) —
+**НЕ закоммичена, НЕ смержена, ОЖИДАЕТ авторизации** на commit + `git merge --no-ff` в master + `git push`
++ удаление ветки. em-dash attr-ref-boundary (17/N) к началу сессии УЖЕ смержена (master HEAD `a16596b`).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `a16596b` (blast_toggle base 343, blast_force base 331).
+
+### Выбор задачи
+nearmiss под FORCE: ближайший — **format-column-content.adoc (8 diff)**, все diffs — утечка `pass:q[` вокруг
+`[cols=…]`. Корень общий с align-by-column (20), pass.adoc (135), revision-line (220) — все используют
+inline spec'd pass-макрос. Взял spec'd `pass:SPEC[…]` целиком (один корень, флипает 4 файла).
+
+### Корень
+- `passthrough.rs::try_pass_macro` обрабатывал ТОЛЬКО bare `pass:[…]` (`spec_len==0`); spec'd `pass:SPEC[…]`
+  (`spec_len!=0`) был ОТЛОЖЕН (`return None`) → обёртка `pass:q[`/`]` течёт литералом, а `#e#` обрабатывался
+  позже quotes-пассом → `pass:q[<mark>e</mark>]` вместо `<mark>e</mark>`.
+- **asciidoctor**: `extract_passthroughs` извлекает `pass:SPEC[text]` ПЕРВЫМ пассом, применяет к контенту
+  ИМЕННО spec'd субституции (resolve_pass_subs) и запечатывает результат (защита от остальных пассов).
+- **legacy** (`inline.rs::push_pass_spec_content`): inner `InlineState::new(content, set, options).parse_inline`,
+  затем `Text→InlinePassthrough` когда `!set.has(SPECIALCHARS)` (renderer экранирует Text безусловно).
+
+### Сделано (1 логический коммит — ОЖИДАЕТ, 2 файла, +133/-10)
+- **passthrough.rs**: новый dispatch-арм после bare `try_pass_macro` (тот же `b=='p'`); функция
+  `try_pass_spec_macro` (parse `pass:` + spec_len!=0 + контент до первого `]` как `parse_bracket_macro`,
+  `spec→pass_spec_to_subs`); функция `pass_spec_events` (inner `super::run_pipeline(content,set)` +
+  `Text→InlinePassthrough` при отсутствии SPECIALCHARS; пустой контент → `Vec::new()` чтобы обойти
+  empty-buffer guard run_pipeline). Результат запечатывается через `work.macro_sentinel(events)` (атомарный
+  leaf — outer quotes/replacements не достают внутрь). Импорт `Event`. Doc модуля + `try_pass_macro` обновлены.
+- **mod.rs**: +тест `reproduces_legacy_on_pass_spec_macro_inputs` (19 кейсов: q/q,a/c,a/quotes/macros/r/n,
+  in-backtick cols-паттерн, пустой контент, mid-run flush, bare-форма regression-guard).
+
+### КЛЮЧЕВОЕ — spec'd pass = flush-граница в ОБОИХ движках
+В отличие от escaped `\pass:` (17/N донор — legacy flush НА бэкслеше, flat-движок не вставляет сентинель →
+расхождение событий), spec'd pass **вставляет сентинель** там, где legacy делает `flush_text` → mid-run
+(`the text pass:q[#x#] here`) и in-span совпадают событие-в-событие. Inner re-parse через `run_pipeline`
+(а не `parse_legacy`) — тот же паттерн, что label-reparse в macros.rs; gate ловит любое расхождение.
+
+### Верификация (airtight, +4 FLIP)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 548→549, html 433, compat 233, render-core 15,
+  parsing-lab 1). 11 проб (q/q,a/c,q/c,a/quotes/macros/r/n/empty/bare/in-backtick) — asciidoctor==FORCE==legacy.
+- **blast_toggle (гейт): 343→343, 0 ИЗМЕНЁННЫХ файлов** (airtight: вывод ≡ legacy на всех 344).
+- **FORCE: Identical 331→335 (+4 FLIP), 0 REGR, 0 FARTHER, 0 паник.** Флипы: revision-line.adoc 220→0,
+  pass.adoc 135→0, align-by-column.adoc 20→0, format-column-content.adoc 8→0 (диффы были позиционным
+  каскадом от утёкшей обёртки `pass:q[`/`]` — устранение выровняло весь токен-стрим).
+
+### Дальше (ОСТАЛОСЬ Фаза 2)
+- nearmiss на 335 (FORCE): url(21), subs(86), page-breaks(88), pass→УЖЕ 0, java/index(183), revision-line→УЖЕ 0,
+  footnote(283), include(375); outline(5487 — cross-span финал).
+- **escape:** `\((…))` index-term shorthand (leaf, 1 кейс subs.adoc:20); `\\`/`\\MM` doubled-marker;
+  `\\http` doubled (pre-existing legacy bug).
+- **edge-case spec'd pass (НЕ в корпусе):** `pass:r[--]` (`--` на самом краю контента) — inner run_pipeline
+  гонит replacements `(true,true)` → em-dash, legacy `edges=false` → литерал → gate declines (safe). Если
+  встретится — нужен проброс edge-флага в run_pipeline.
+- **macros (6/N+):** UI kbd|btn|menu (проброс `InlineOptions.experimental` — НЕ leaf), footnote (STATEFUL).
+- **cross-span:** `*x*-- y` em-dash после close-span; A1 bare-autolink-in-mono; **ФИНАЛ:** снять gate → flip outline.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт), `blast_force.py` (FORCE), `diffone.py <file>`,
+  `nearmiss.py` (под FORCE-env). CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD.
+
+---
+
 ## Сессия (2026-06-16, 86-я) — РЕРАЙТ inline, Фаза 2 (17/N): em-dash на границе attr-ref/attr-set сентинеля
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-emdash-attrref-boundary`** (off master `e25f45c`, 343) —
