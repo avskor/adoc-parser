@@ -34,7 +34,9 @@
 //! passes or left for later phases; the engine's caller falls back to the legacy
 //! parser whenever the result would differ): the macros pass.
 
-use super::tokenize::{sentinel_end, utf8_char_len, SpanKind, TagToken, Work, TAG_LEAD, TAG_TAIL};
+use super::tokenize::{
+    desentinelize, sentinel_end, utf8_char_len, SpanKind, TagToken, Work, TAG_LEAD, TAG_TAIL,
+};
 
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -260,7 +262,7 @@ fn pass_unconstrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kin
         // [attrlist]MM…MM (no open-boundary requirement when unconstrained)
         if bytes[i] == b'['
             && let Some((id, roles, content_start, close_pos)) =
-                attrlist_unconstrained(&old, bytes, i, marker)
+                attrlist_unconstrained(&work.tags, &old, bytes, i, marker)
         {
             out.push_str(&work.open_sentinel(attr_kind, id, roles));
             out.push_str(&old[content_start..close_pos]);
@@ -294,13 +296,14 @@ fn pass_unconstrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kin
 
 /// `[attrlist]` immediately followed by `markermarker…markermarker`.
 fn attrlist_unconstrained(
+    tags: &[TagToken],
     old: &str,
     bytes: &[u8],
     lbrack: usize,
     marker: u8,
 ) -> Option<(Option<String>, Vec<String>, usize, usize)> {
     let rbrack = find_attr_close(bytes, lbrack)?;
-    let (id, roles) = parse_attrs(&old[lbrack + 1..rbrack])?;
+    let (id, roles) = parse_attrs(&desentinelize(tags, &old[lbrack + 1..rbrack]))?;
     let marker_pos = rbrack + 1;
     if bytes.get(marker_pos).copied() != Some(marker)
         || bytes.get(marker_pos + 1).copied() != Some(marker)
@@ -375,7 +378,7 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
         if open_boundary
             && bytes[i] == b'['
             && let Some((id, roles, content_start, close_pos)) =
-                attrlist_constrained(&old, bytes, i, marker)
+                attrlist_constrained(&work.tags, &old, bytes, i, marker)
         {
             out.push_str(&work.open_sentinel(attr_kind, id, roles));
             out.push_str(&old[content_start..close_pos]);
@@ -409,13 +412,14 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
 
 /// `[attrlist]` immediately followed by a constrained `marker…marker`.
 fn attrlist_constrained(
+    tags: &[TagToken],
     old: &str,
     bytes: &[u8],
     lbrack: usize,
     marker: u8,
 ) -> Option<(Option<String>, Vec<String>, usize, usize)> {
     let rbrack = find_attr_close(bytes, lbrack)?;
-    let (id, roles) = parse_attrs(&old[lbrack + 1..rbrack])?;
+    let (id, roles) = parse_attrs(&desentinelize(tags, &old[lbrack + 1..rbrack]))?;
     let marker_pos = rbrack + 1;
     // single marker only (a doubled marker is the unconstrained form, which the
     // earlier pass owns; legacy does not fall back from unconstrained to

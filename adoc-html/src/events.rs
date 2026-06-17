@@ -586,17 +586,17 @@ impl HtmlRenderer {
                 self.start_inline_image(output, target, alt, width, height, float, link, role, title),
             Tag::Strong { id, roles } => {
                 output.push_str("<strong");
-                Self::push_inline_id_class(output, id, roles);
+                self.push_inline_id_class(output, id, roles);
                 output.push('>');
             }
             Tag::Emphasis { id, roles } => {
                 output.push_str("<em");
-                Self::push_inline_id_class(output, id, roles);
+                self.push_inline_id_class(output, id, roles);
                 output.push('>');
             }
             Tag::Monospace { id, roles } => {
                 output.push_str("<code");
-                Self::push_inline_id_class(output, id, roles);
+                self.push_inline_id_class(output, id, roles);
                 output.push('>');
             }
             Tag::Highlight => {
@@ -604,21 +604,7 @@ impl HtmlRenderer {
             }
             Tag::InlineSpan { id, roles } => {
                 output.push_str("<span");
-                if let Some(id) = id {
-                    output.push_str(" id=\"");
-                    html_escape(output, id);
-                    output.push('"');
-                }
-                if !roles.is_empty() {
-                    output.push_str(" class=\"");
-                    for (i, role) in roles.iter().enumerate() {
-                        if i > 0 {
-                            output.push(' ');
-                        }
-                        html_escape(output, role);
-                    }
-                    output.push('"');
-                }
+                self.push_inline_id_class(output, id, roles);
                 output.push('>');
             }
             Tag::Superscript => {

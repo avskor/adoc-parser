@@ -47,12 +47,31 @@ impl HtmlRenderer {
         }
     }
 
+    /// Resolve attribute references in an inline role/id value, mirroring
+    /// Asciidoctor's global `attributes` substitution. There `quotes` runs before
+    /// `attributes`, so a `{name}` written inside an inline attrlist
+    /// (`[.{role}]_x_`, `[#{anchor}]*y*`) survives into the role/id and is
+    /// resolved against the document attributes afterwards: defined → value,
+    /// undefined → kept literal (`attribute-missing` default of `skip`). A value
+    /// with no `{` is borrowed unchanged, so every non-attributed role (i.e. all
+    /// legacy / gated output) is byte-for-byte untouched and allocates nothing.
+    fn resolve_inline_attr_value<'v>(&self, value: &'v str) -> std::borrow::Cow<'v, str> {
+        if !value.contains('{') {
+            return std::borrow::Cow::Borrowed(value);
+        }
+        std::borrow::Cow::Owned(adoc_render_core::resolve_attr_refs_text(value, |n| {
+            self.document_attrs.get(n).map(|s| s.as_str())
+        }))
+    }
+
     /// Write ` id="..."` and ` class="..."` for an inline phrase element (em/strong/code)
     /// carrying an explicit id and/or roles, e.g. `[.path]_x_` → `<em class="path">`.
-    pub(crate) fn push_inline_id_class<S: AsRef<str>>(output: &mut String, id: &Option<S>, roles: &[S]) {
+    /// Attribute references in the id/roles are resolved first (see
+    /// [`Self::resolve_inline_attr_value`]).
+    pub(crate) fn push_inline_id_class<S: AsRef<str>>(&self, output: &mut String, id: &Option<S>, roles: &[S]) {
         if let Some(id) = id {
             output.push_str(" id=\"");
-            html_escape(output, id.as_ref());
+            html_escape(output, self.resolve_inline_attr_value(id.as_ref()).as_ref());
             output.push('"');
         }
         if !roles.is_empty() {
@@ -61,7 +80,7 @@ impl HtmlRenderer {
                 if i > 0 {
                     output.push(' ');
                 }
-                html_escape(output, role.as_ref());
+                html_escape(output, self.resolve_inline_attr_value(role.as_ref()).as_ref());
             }
             output.push('"');
         }

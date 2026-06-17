@@ -1,5 +1,84 @@
 # Session context
 
+## Сессия (2026-06-17, 96-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (27/N): attribute-ref в inline `[attrlist]` роли/id (`[{role}]*x*` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-27`** (off master `91447d6`, 344) —
+ЗАКОММИЧЕНА (1 логический коммит), **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff` +
+`git push` + удаление ветки. 26/N УЖЕ смержена (master HEAD `91447d6`). base-бинарь `/tmp/adoc_base`
+ПЕРЕСОБРАН из чистого master `91447d6` (stash→build→cp→pop): gate_check toggle off/on base 344, blast_force base 344.
+
+### Выбор задачи — ПАРИТЕТ new≡legacy (выбран пользователем через AskUserQuestion)
+Phase 2 контентно ЗАВЕРШЕНА (FORCE==asciidoctor 344/344, гейт airtight base≡new в обоих режимах) →
+корпус-сигнал исчерпан. Пользователь выбрал **parity-харднинг** (охота на sub-file edge-кейсы
+new≠legacy, как 26/N) над «Фаза 3 снять gate» и «render_kbd_keys».
+
+### Разведка (фаззер pipeline vs legacy на ~370 inline-формах)
+Временный тест `recon_pipeline_vs_legacy_divergences` (потом удалён): нашёл 11 расхождений.
+**10 — класс A** (new==asciidoctor, legacy баг → улучшения, не блокируют снятие гейта, НЕ чинятся):
+`*a*b*c*`, `#a#b#`, `` `a`b` ``, `*x*--*y*`/`*x*-- y` (em-dash после close-span), `a\*b*c`,
+`*x **y** z*`, `[%hardbreaks]*x*`, `[.a]_*b*_`, `&copy;--&reg;` — все сверены с asciidoctor байт-в-байт.
+**1 — класс B (РЕАЛЬНЫЙ БАГ):** `[{a}]*x*` клал СЫРОЙ сентинель `\x01N\x02` в роль → утечка
+control-байтов в `class="^A0^B"` (сломанный HTML). asciidoctor: undefined→`class="{a}"`, defined→значение.
+
+### Корень — `attributes`-пасс ДО `quotes` + роль не разрезентинеливается
+asciidoctor: `quotes` ДО `attributes` → роль захватывает литерал `{a}`, глобальный attr-пасс резолвит
+позже (в `class="{a}"`). Наш движок: `attributes` ДО `quotes` (лифтит `{a}` в сентинель), `quotes`
+захватывает сентинель в роль → tokenize кладёт его в `Tag::Strong.roles` как есть → рендерер пишет
+control-байты в `class`. Рендерер роли НЕ резолвил attr-refs вообще.
+
+### Сделано (1 логический коммит, 4 файла кода + 2 теста)
+- **ПАРСЕР (tokenize.rs):** новый `desentinelize(tags, s)` — заменяет сентинели в строке на их
+  ЛИТЕРАЛЬНЫЙ исходник (`AttrRef`→`{name}`+trailing, Literal/CharRef/SmartQuote/Passthrough→текст,
+  AttrSet→`{set:…}`; структурные Open/Close/Macro→drop). Fast-path `!contains(TAG_LEAD)`→borrow.
+- **ПАРСЕР (quotes.rs):** `attrlist_unconstrained`/`attrlist_constrained` получили параметр `tags:&[TagToken]`,
+  вызывают `parse_attrs(&desentinelize(tags, &old[lbrack+1..rbrack]))`. Call-sites передают `&work.tags`.
+- **РЕНДЕРЕР (inline.rs):** `resolve_inline_attr_value(&self, value)->Cow` (fast-path no-`{`→borrow;
+  иначе `resolve_attr_refs_text` с `document_attrs`-lookup → undefined keep-literal, defined→value);
+  `push_inline_id_class` стал МЕТОДОМ `&self`, резолвит id и каждую роль перед html_escape.
+- **РЕНДЕРЕР (events.rs):** Strong/Emphasis/Monospace `Self::`→`self.`; InlineSpan-арм (был inline-дубль)
+  схлопнут в `self.push_inline_id_class(output, id, roles)` (−18 строк).
+- **Тесты:** `force_resolves_attr_ref_sentinel_in_inline_attrlist` (mod.rs): 5 event-векторов
+  (positional role/shorthand role/shorthand id/id+role combo/unconstrained), no-sentinel-в-роли guard,
+  gate: SHORTHAND `[.{a}]`/`[#{a}]` ADOPT (теперь == legacy!), POSITIONAL `[{a}]` DECLINE; +
+  `test_attr_ref_in_inline_role_resolves` (html_output.rs): defined→`fancy`, undefined→`{undef}`, no-leak.
+
+### КЛЮЧЕВОЕ открытие про гейт
+desentinelize сделал SHORTHAND-формы (`[.{a}]`/`[#{a}]`/`[#{a}.{b}]`) БАЙТ-РАВНЫМИ legacy (раньше
+сентинель их разводил → fallback) → **гейт теперь ADOPT** → они корректны и в DEFAULT-сборке (рендерер
+дорезолвливает). POSITIONAL `[{a}]`/`[{a}]##u##` legacy не парсит как attrlist (даёт `[…]`+AttrRef+bare
+span) → DECLINE → исправлены только под FORCE. Корпус НЕ затронут (ни один файл не ставит `[{attr}]`).
+
+### Верификация (airtight, чисто аддитивно)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 557→558, html_output 36→37, остальные неизменны).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/tcls.adoc`):** new(FORCE)==asciidoctor БАЙТ-В-БАЙТ на всём классе `[{attr}]` —
+  `[{rn}]*x*`/`[.{rn}]_y_`/`[#{aid}]`z``/`[{undef}]*u*`/`[.{undef}]#m#`/`[#{aid}.{rn}]*combo*`/`[{rn}]##unc##`.
+  Gated `[.{rn}]` ТЕПЕРЬ резолвит (base давал `class="{rn}"` — улучшение). Экзотика (`[+pp+]`/`[\#r]`/`[&copy;]`)
+  без утечки control-байтов.
+
+### Остаток (сиблинг-гап, СЕПАРАТНО — pre-existing, НЕ регрессия, НЕ leak)
+- **Macro named-role attr-ref** `link:u[t,role={r}]`/`image:p[a,role={r}]`: рендерится `class="{r}"`
+  (литерал, валидный HTML — НЕ сентинель), asciidoctor резолвит→`green`. Идёт через macros-пасс (ДО
+  attributes → захватывает `{r}` литералом) и СОБСТВЕННЫЕ арм-рендереры `Tag::Link`/image (НЕ
+  `push_inline_id_class`). Pre-existing (base==new gated, identical). → отдельная задача в TODO.
+
+### ⚠ ИНФРА (без изменений с 91-95)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН (решение 2026-06-16); clippy-гейт активен. Bypass залипшего хука:
+  `git commit --no-edit`. [[proj_quality_gate_hooks]].
+- Clippy `--all-targets` показывает 1 pre-existing `useless_concat` в adoc-html/src/tests.rs:2154 (НЕ моё,
+  не ловится `cargo clippy --workspace`-гейтом). Не трогал — вне скоупа.
+
+### Дальше — Фаза 2 паритет (остаток) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- Macro named-role attr-ref (см. Остаток); render_kbd_keys сплит по `,` (рендерер, pre-existing);
+  прочие класс-A улучшения (em-dash после close-span и т.д. — new уже корректен).
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]` (base≡new напрямую, env только на NEW),
+  `blast_force.py`, `blast_toggle.py`, `diffone.py <file> [N]`, `nearmiss.py`. CLI: `adoc [--no-standalone] file`
+  (НЕ `-s`!). base пересобирать из master HEAD (stash→build→cp /tmp/adoc_base→pop). asciidoctor: `asciidoctor -s -o - f`.
+  ⚠ shell cwd сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+---
+
 ## Сессия (2026-06-17, 95-я) — РЕРАЙТ inline, Фаза 2 (26/N): doubled-backslash escape (`\\*bold*`/`\\pass:`/`\\+`/`\\^` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-26`** (off master `f1e572f`, 344) —

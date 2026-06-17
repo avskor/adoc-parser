@@ -438,3 +438,29 @@ fn test_xref_to_block_whose_title_contains_xref() {
         "no placeholder sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_attr_ref_in_inline_role_resolves() {
+    // A defined attribute used as an inline role (shorthand `[.{name}]`) resolves
+    // to its value in the rendered `class`, matching Asciidoctor's global
+    // attributes substitution running after quotes.
+    let html = to_html(":rn: fancy\n\n[.{rn}]_y_");
+    assert!(
+        html.contains("<em class=\"fancy\">y</em>"),
+        "defined attr ref in inline role must resolve. Got: {html}"
+    );
+
+    // An undefined reference is kept literal (the `attribute-missing` default of
+    // `skip`), exactly as Asciidoctor renders `class="{undef}"`.
+    let html = to_html("[.{undef}]_y_");
+    assert!(
+        html.contains("<em class=\"{undef}\">y</em>"),
+        "undefined attr ref in inline role must stay literal. Got: {html}"
+    );
+
+    // No raw extraction sentinel (control bytes) may leak into the class.
+    assert!(
+        !html.bytes().any(|b| b == 0x01 || b == 0x02),
+        "no extraction sentinel may leak into output. Got: {html:?}"
+    );
+}
