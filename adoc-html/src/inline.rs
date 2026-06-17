@@ -2,6 +2,7 @@
 //! icons and STEM content.
 
 use crate::*;
+use std::borrow::Cow;
 
 impl HtmlRenderer {
     pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>) {
@@ -105,10 +106,37 @@ impl HtmlRenderer {
     }
 
     pub(crate) fn render_kbd_keys(&self, output: &mut String, text: &str) {
-        let keys: Vec<&str> = text.split('+').map(|k| k.trim()).collect();
+        // Mirror Asciidoctor's `kbd:[…]` key splitting (substitutors.rb): the
+        // delimiter is whichever of `,` or `+` first appears at char-position >= 1
+        // (a leading delimiter at position 0 is a literal key, e.g. `kbd:[+]`).
+        // The chosen delimiter splits the keys; the renderer always joins them
+        // with `+` regardless of the original separator (html5.rb convert_inline_kbd).
+        let text = text.trim();
+        let delim = text
+            .char_indices()
+            .skip(1)
+            .find_map(|(_, c)| (c == ',' || c == '+').then_some(c));
+
+        let keys: Vec<Cow<'_, str>> = match delim {
+            None => vec![Cow::Borrowed(text)],
+            Some(d) if text.ends_with(d) => {
+                // Trailing-delimiter special case (`Ctrl++`, `Ctrl,,`): split the
+                // body without the final delimiter, trim each key, then re-attach
+                // the delimiter to the last key so it renders as a literal key.
+                let body = &text[..text.len() - d.len_utf8()];
+                let mut parts: Vec<Cow<'_, str>> =
+                    body.split(d).map(|k| Cow::Borrowed(k.trim())).collect();
+                if let Some(last) = parts.last_mut() {
+                    *last = Cow::Owned(format!("{last}{d}"));
+                }
+                parts
+            }
+            Some(d) => text.split(d).map(|k| Cow::Borrowed(k.trim())).collect(),
+        };
+
         if keys.len() == 1 {
             output.push_str("<kbd>");
-            html_escape(output, keys[0]);
+            html_escape(output, &keys[0]);
             output.push_str("</kbd>");
         } else {
             output.push_str("<span class=\"keyseq\">");

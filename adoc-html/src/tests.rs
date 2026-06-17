@@ -1717,6 +1717,54 @@ fn test_kbd_combo_html() {
 }
 
 #[test]
+fn test_kbd_comma_and_delimiter_parity_html() {
+    // Asciidoctor splits `kbd:[…]` on whichever of `,` or `+` appears first
+    // (at position >= 1) and always joins the rendered keys with `+`.
+    let kbd = |s: &str| {
+        to_html(&format!(":experimental:\n\n{s}"))
+            .trim_start_matches("<div class=\"paragraph\">\n<p>")
+            .trim_end_matches("</p>\n</div>\n")
+            .to_string()
+    };
+
+    // Comma delimiter renders identically to `+`.
+    assert_eq!(
+        kbd("kbd:[Ctrl,T]"),
+        "<span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>T</kbd></span>"
+    );
+    // Per-key trimming around comma delimiters.
+    assert_eq!(
+        kbd("kbd:[Ctrl, Alt, Del]"),
+        "<span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd></span>"
+    );
+    // First delimiter wins: comma comes first, so the inner `+` stays literal.
+    assert_eq!(
+        kbd("kbd:[Ctrl, T+X]"),
+        "<span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>T+X</kbd></span>"
+    );
+    // Trailing-delimiter special case: `++` / `,,` yield a literal final key.
+    assert_eq!(
+        kbd("kbd:[Ctrl++]"),
+        "<span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>+</kbd></span>"
+    );
+    assert_eq!(
+        kbd("kbd:[Ctrl,,]"),
+        "<span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>,</kbd></span>"
+    );
+    // A leading delimiter (position 0) is a literal single key, not a split.
+    assert_eq!(kbd("kbd:[+]"), "<kbd>+</kbd>");
+    assert_eq!(kbd("kbd:[,]"), "<kbd>,</kbd>");
+    assert_eq!(kbd("kbd:[+x]"), "<kbd>+x</kbd>");
+    // A single key ending in a delimiter collapses to one `<kbd>` (no empty key).
+    assert_eq!(kbd("kbd:[a+]"), "<kbd>a+</kbd>");
+    // Whitespace before a trailing delimiter is trimmed before re-attaching it.
+    assert_eq!(
+        kbd("kbd:[a, b ,]"),
+        "<span class=\"keyseq\"><kbd>a</kbd>+<kbd>b,</kbd></span>"
+    );
+}
+
+#[test]
 fn test_btn_html() {
     let html = to_html(":experimental:\n\nbtn:[OK]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><b class=\"button\">OK</b></p>\n</div>\n");
