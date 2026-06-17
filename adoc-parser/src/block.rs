@@ -507,6 +507,14 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    /// Default source language from the `source-language` document attribute,
+    /// if set. Presence-based (an empty value still counts) — mirrors
+    /// Asciidoctor, where `:source-language:` promotes blocks to source even
+    /// when the value is empty.
+    fn default_source_language(&self) -> Option<String> {
+        self.doc_attrs.get("source-language").cloned()
+    }
+
     /// Substitute `{name}` attribute references against the recorded entries.
     /// Used on section/heading titles before auto-id generation (Asciidoctor
     /// applies attribute substitution to the title before deriving the id)
@@ -2452,7 +2460,9 @@ impl<'a> BlockScanner<'a> {
                 "source" => {
                     let language = block_attrs.as_ref()
                         .and_then(|a| a.source_language())
-                        .map(|l| Cow::Owned(l.to_string()));
+                        .map(|l| l.to_string())
+                        .or_else(|| self.default_source_language())
+                        .map(Cow::Owned);
                     self.push_event(Event::End(TagEnd::SourceBlock));
                     for (i, &pline) in para_lines.iter().enumerate().rev() {
                         if i < para_lines.len() - 1 {
@@ -2845,8 +2855,29 @@ impl<'a> BlockScanner<'a> {
 
         // Check for source block (applies to any delimiter type with [source] style)
         if block_attrs.is_source_block() {
-            let language = block_attrs.source_language().map(|l| Cow::Owned(l.to_string()));
+            let language = block_attrs.source_language()
+                .map(|l| l.to_string())
+                .or_else(|| self.default_source_language())
+                .map(Cow::Owned);
             return self.scan_source_block(delim_type, delim_len, language, title_events, &block_attrs);
+        }
+
+        // A bare listing block (`----` with no explicit style) is promoted to a
+        // source block when the `source-language` document attribute is set —
+        // Asciidoctor applies the default language to undecorated listings.
+        // An explicit `[listing]`/`[literal]`/… style (block_style_kind() is
+        // Some) opts out; `....` literal delimiters never reach this branch.
+        if delim_type == scanner::DelimiterType::Listing
+            && block_attrs.block_style_kind().is_none()
+            && let Some(lang) = self.default_source_language()
+        {
+            return self.scan_source_block(
+                delim_type,
+                delim_len,
+                Some(Cow::Owned(lang)),
+                title_events,
+                &block_attrs,
+            );
         }
 
         // Verse block: [verse] on any delimiter type
@@ -4964,6 +4995,62 @@ mod tests {
             Event::CalloutRef(2),
             Event::End(TagEnd::SourceBlock),
         ]);
+    }
+
+    #[test]
+    fn test_source_language_default_for_bare_source() {
+        // `[source]` without an explicit language inherits :source-language:.
+        let input = ":source-language: ruby\n\n[source]\n----\nputs 1\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+    }
+
+    #[test]
+    fn test_source_language_promotes_bare_listing() {
+        // A bare `----` listing becomes a source block when :source-language: is set.
+        let input = ":source-language: ruby\n\n----\nputs 1\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing })
+        )));
+    }
+
+    #[test]
+    fn test_source_language_does_not_promote_explicit_listing() {
+        // Explicit [listing] opts out of source promotion.
+        let input = ":source-language: ruby\n\n[listing]\n----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::DelimitedBlock {
+            kind: DelimitedBlockKind::Listing
+        })));
+        assert!(!events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
+    }
+
+    #[test]
+    fn test_source_language_explicit_language_wins() {
+        // An explicit `[source,lang]` beats the document default.
+        let input = ":source-language: ruby\n\n[source,python]\n----\nprint(1)\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("python".into()))
+        })));
+    }
+
+    #[test]
+    fn test_bare_listing_not_promoted_without_source_language() {
+        // Without :source-language:, a bare listing stays a listing.
+        let input = "----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::DelimitedBlock {
+            kind: DelimitedBlockKind::Listing
+        })));
+        assert!(!events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
     }
 
     #[test]
