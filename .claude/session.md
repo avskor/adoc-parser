@@ -1,5 +1,36 @@
 # Session context
 
+## Сессия (2026-06-17, 106-я) — РАСШИРЕНИЕ КОРПУСА: frontier-репо + 9 классов расхождений (поиск, НЕ фикс)
+
+Запрос «расширь корпус новыми репозиториями для поиска расхождений». Код НЕ менялся — это research/инфра.
+Изменения в репо: только TODO.md + session.md (документация находок). НЕ закоммичено.
+
+### Сделано (инфра)
+- Склонированы (shallow, depth 1) в **`/mnt/c/tmp/adoc-frontier/`** (ОТДЕЛЬНО от гейта, чтобы 344/344 остался
+  чистым регресс-гардом): **`asciidoctor-org`** (asciidoctor/asciidoctor.org, 74 .adoc — real-world docs) +
+  **`asciidoctor`** (asciidoctor/asciidoctor, 176 .adoc — доки+test-fixtures). Итого 250 файлов.
+- Скрипты (персистентно в `/mnt/c/tmp/adoc-test/`): **`frontier_parity.py`** (рендер каждого файла нашим бинарём
+  vs asciidoctor через refcache; пропуск asciidoctor-empty; флаг include-файлов как «шум»; сортировка по diff-count)
+  и **`showdiff.py <file>`** (построчный нормализованный diff asciidoctor-vs-наш).
+- Результат frontier: **191 identical, 41 чистых расхождения, 18 include-шум.**
+
+### 9 классов расхождений (верифицированы пробами; в TODO.md как F-A…F-I)
+F-A текст ссылки режется по 1-й запятой (13 файлов, самый частый; `parse_link_attrs`); F-B `:hide-uri-scheme:`
+не реализован (рендерер); F-G `:source-language:` дефолт не на `[source]`; F-D `toc::[attrs]` не распознан
+(`is_toc_macro` только `[]`; смежно с п.28); F-C author/inline `<url>` → `mailto:`; F-F `menu:X[]` один пункт →
+`<b class="menuref">` (мы `<span class="menu">`); F-E `[%nowrap]` source; F-I UTF-8 BOM не срезается; F-H YAML
+front matter → `<hr>`. **Рекомендация фикса: F-A → F-G/F-B → остальное.**
+
+### Замечания
+- Основной гейт `parity_check.py` (3 репо) НЕ затронут — по-прежнему 344/344 (frontier в отдельном каталоге).
+- Большие diff-count (migration 861, news 600+) — каскады от F-A/F-D, не отдельные классы.
+- asciidoctor/test/fixtures/* — часть нарочно ломкие (edge), потому отделены от real-world asciidoctor-org в анализе.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 105-я) — п.28 `toc::[]` macro: рендер только при `:toc: macro`, иначе `<!-- toc disabled -->` (ветка `feat/toc-macro-mode`, НЕ закоммичено)
 
 Запрос «займись п.28». Ветка **`feat/toc-macro-mode`** (off master `0c39fa4`) — **НЕ закоммичена**
