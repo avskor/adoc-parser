@@ -27,6 +27,7 @@
 //! (`\\+`/`\\pass:`) variants stay deferred.
 
 use crate::event::{Event, SubstitutionSet};
+use crate::inline::InlineOptions;
 
 use super::tokenize::{utf8_char_len, PassPiece, Work};
 
@@ -37,7 +38,7 @@ use super::tokenize::{utf8_char_len, PassPiece, Work};
 /// line break (the legacy parser consumes it at the space, before the `+` can
 /// open a single-plus passthrough), so the single-plus form must not claim it —
 /// it is left in the buffer for the [`super::post_replacements`] pass.
-pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
+pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOptions) {
     let guard_hard_break = subs.has(SubstitutionSet::POST_REPLACEMENTS);
     let src = std::mem::take(&mut work.buf);
     let bytes = src.as_bytes();
@@ -115,7 +116,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // front and applies its subs at restore time). Tried after the bare arm,
         // which declines spec'd specs.
         if b == b'p'
-            && let Some((events, end)) = try_pass_spec_macro(&src, i)
+            && let Some((events, end)) = try_pass_spec_macro(&src, i, options)
         {
             out.push_str(&work.macro_sentinel(events));
             i = end;
@@ -340,7 +341,11 @@ fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
 /// content — exactly how Asciidoctor's `extract_passthroughs` lifts the macro out
 /// before any substitution runs. `spec_len == 0` (bare form) is declined here; it
 /// is handled verbatim by [`try_pass_macro`].
-fn try_pass_spec_macro(src: &str, i: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_pass_spec_macro(
+    src: &str,
+    i: usize,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = src.get(i..)?;
     if !rest.starts_with("pass:") {
         return None;
@@ -358,7 +363,7 @@ fn try_pass_spec_macro(src: &str, i: usize) -> Option<(Vec<Event<'static>>, usiz
     let spec = &src[i + 5..i + 5 + spec_len];
     let set = crate::inline::pass_spec_to_subs(spec);
     let end = i + 5 + spec_len + bracket_end + 1;
-    Some((pass_spec_events(content, set), end))
+    Some((pass_spec_events(content, set, options), end))
 }
 
 /// Run `content` through exactly the substitutions in `set` and downgrade the
@@ -369,12 +374,16 @@ fn try_pass_spec_macro(src: &str, i: usize) -> Option<(Vec<Event<'static>>, usiz
 /// content yields no events (the legacy parser emits nothing for `pass:q[]`),
 /// and the engine's own empty-buffer guard would otherwise materialise a stray
 /// empty `Text`.
-fn pass_spec_events(content: &str, set: SubstitutionSet) -> Vec<Event<'static>> {
+fn pass_spec_events(
+    content: &str,
+    set: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'static>> {
     if content.is_empty() {
         return Vec::new();
     }
     let escape = set.has(SubstitutionSet::SPECIALCHARS);
-    let inner: Vec<Event<'static>> = super::run_pipeline(content, set);
+    let inner: Vec<Event<'static>> = super::run_pipeline(content, set, options);
     inner
         .into_iter()
         .map(|ev| match ev {

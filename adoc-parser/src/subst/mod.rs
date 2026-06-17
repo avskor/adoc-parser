@@ -106,7 +106,7 @@ pub(crate) fn try_parse<'a>(
         return None;
     }
 
-    let candidate = run_pipeline(text, subs);
+    let candidate = run_pipeline(text, subs, options);
 
     if force() {
         return Some(candidate);
@@ -134,16 +134,20 @@ pub(crate) fn try_parse<'a>(
 /// family — `xref:target[label]` and `<<target>>` — with the label re-parsed via
 /// an inner `MACROS`-cleared pipeline) plus the link family (`link:`/`mailto:`
 /// macros and bare URL/email autolinks), the inline image (`image:`), the leaf
-/// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), and the anchor
+/// macros `icon:`/STEM (`stem:`/`latexmath:`/`asciimath:`), the anchor
 /// (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
-/// `indexterm2:`) families, `replacements`, `post_replacements`. The remaining
-/// macro families (footnote and the experimental UI macros) — the remaining
+/// `indexterm2:`) families, the `footnote:`/`footnote:id[]` family, and the
+/// `:experimental:`-gated UI macros (`kbd:`/`btn:`/`menu:`, dispatched only when
+/// `options.experimental`), `replacements`, `post_replacements`. The remaining
 /// escape forms (the `\pass:`/`\https://` autolink escapes, and the bare `\\`
 /// escaped backslash) — and the quote-marker escapes `\*`/`\_`/`` \` `` and
 /// `\+`, which belong inside the quote/passthrough passes — are not yet ported;
 /// inputs that need them diverge from legacy and are rejected by the gate (or
-/// surface as diffs under `force()`).
-fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
+/// surface as diffs under `force()`). `options` is threaded through so the
+/// experimental flag reaches the macros pass and every inner reparse (label,
+/// cross-reference label, passthrough spec content), mirroring the legacy
+/// parser's `self.options` propagation into nested `InlineState`s.
+fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -> Vec<Event<'a>> {
     let mut work = Work::new(text);
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
     // every later pass INCLUDING `escape` (mirrors Asciidoctor's
@@ -153,7 +157,7 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // `<code>\{name}</code>`). Unconditional: the legacy parser runs
     // `+…+`/`pass:[…]` regardless of the subs flags, and the engine only runs when
     // QUOTES is present anyway.
-    passthrough::extract(&mut work, subs);
+    passthrough::extract(&mut work, subs, options);
     // Escapes are neutralised next, before the attribute/quote passes: a
     // recognised `\x` drops the backslash and turns `x` into a literal leaf that
     // is opaque to those passes (mirrors Asciidoctor's per-substitution `\\?`
@@ -188,7 +192,7 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet) -> Vec<Event<'a>> {
     // `indexterm2:`) families; the remaining macros are not, so their inputs
     // diverge from legacy and the gate rejects them.
     if subs.has(SubstitutionSet::MACROS) {
-        macros::extract(&mut work, subs);
+        macros::extract(&mut work, subs, options);
     }
     // Attribute references are extracted next, before quotes. The legacy parser
     // emits an unresolved `AttributeReference`; extracting `{name}[…]` up front
@@ -228,7 +232,28 @@ mod tests {
     }
 
     fn pipeline(text: &str) -> Vec<Event<'_>> {
-        run_pipeline(text, SubstitutionSet::NORMAL)
+        run_pipeline(text, SubstitutionSet::NORMAL, InlineOptions::default())
+    }
+
+    /// Like [`legacy`], but with `:experimental:` set so the legacy parser
+    /// recognises the `kbd:`/`btn:`/`menu:` UI macros — the reference the ported
+    /// new-engine arms must reproduce.
+    fn legacy_exp(text: &str) -> Vec<Event<'_>> {
+        crate::inline::parse_legacy(
+            text,
+            SubstitutionSet::NORMAL,
+            InlineOptions { experimental: true },
+        )
+    }
+
+    /// Like [`pipeline`], but with `:experimental:` set so the macros pass
+    /// dispatches the UI macros.
+    fn pipeline_exp(text: &str) -> Vec<Event<'_>> {
+        run_pipeline(
+            text,
+            SubstitutionSet::NORMAL,
+            InlineOptions { experimental: true },
+        )
     }
 
     /// The new pipeline must reproduce the legacy parser byte-for-byte on every
@@ -1570,6 +1595,112 @@ mod tests {
             pipeline("footnote:fn1[]"),
             vec![Event::FootnoteRef { id: "fn1".into() }]
         );
+    }
+
+    /// With the `:experimental:`-gated UI macros ported, the pipeline (run with
+    /// `experimental` set) must reproduce the legacy parser on every form: the
+    /// bracket-only `kbd:[keys]`/`btn:[label]` (incl. mid-word, inside a span, and
+    /// the malformed/empty-content forms that stay literal), and the
+    /// `menu:target[items]` macro (incl. empty items, a `>`-sequence, a nested `[`
+    /// stopping at the first `]`, and the empty-target form that declines). Raw
+    /// quote markers in the content are NOT re-parsed (the renderer owns the
+    /// `+`/`,`/`>` splitting). Inputs whose brackets would hold a passthrough/
+    /// escape/char-ref leaf are deliberately excluded: an earlier pass lifts those
+    /// into a sentinel and the leaf-macro sentinel guard then declines (gate
+    /// fallback), so they are not byte-equal to legacy.
+    #[test]
+    fn reproduces_legacy_on_ui_macro_inputs() {
+        let cases = [
+            // kbd: keys, single key, in a sentence, with modifiers/commas
+            "kbd:[Ctrl+C]",
+            "kbd:[F11]",
+            "Press kbd:[Ctrl+T] to open a tab",
+            "kbd:[Ctrl,T]",
+            // btn: label, in a sentence
+            "btn:[OK]",
+            "click the btn:[Save] button",
+            // menu: target with items, empty items, a `>` sub-menu sequence
+            "menu:File[New]",
+            "menu:File[]",
+            "menu:View[Zoom > Reset]",
+            "menu:File[Open Recent > Reopen]",
+            // first `]` ends the items; a nested `[` stays literal in the items text
+            "menu:File[a [b] c]",
+            // raw quote markers in the content are NOT re-parsed (renderer-owned)
+            "kbd:[*x*]",
+            "btn:[_y_]",
+            // inside a constrained span (the span re-parses the macro with the same
+            // experimental option, exactly as legacy threads `self.options`)
+            "*kbd:[X]*",
+            "`btn:[Y]`",
+            // mid-word prefix still matches at legacy's offset (no left boundary)
+            "xkbd:[Y]",
+            // mixed run of all three
+            "kbd:[Esc] then menu:Edit[Undo] then btn:[Go]",
+            // invalid / empty → literal (empty content, no bracket, no close)
+            "kbd:[]",
+            "btn:[]",
+            "kbd:noclose",
+            "btn:[unclosed",
+            "menu:[x]",      // empty target → declines
+            "menu:File",     // no bracket → literal
+            "menu:File[a",   // no close → literal
+            // a UI prefix with experimental still defers to the surrounding text
+            "plain kbd text with no macro",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline_exp(c),
+                legacy_exp(c),
+                "new engine diverged from legacy (experimental) for {c:?}"
+            );
+        }
+
+        // The leaf shapes: kbd/btn carry the content as one raw `Text`; menu carries
+        // its target on the tag and the items (when non-empty) as one raw `Text`.
+        assert_eq!(
+            pipeline_exp("kbd:[Ctrl+C]"),
+            vec![
+                Event::Start(Tag::Keyboard),
+                Event::Text("Ctrl+C".into()),
+                Event::End(TagEnd::Keyboard),
+            ]
+        );
+        assert_eq!(
+            pipeline_exp("btn:[Save]"),
+            vec![
+                Event::Start(Tag::Button),
+                Event::Text("Save".into()),
+                Event::End(TagEnd::Button),
+            ]
+        );
+        assert_eq!(
+            pipeline_exp("menu:File[New]"),
+            vec![
+                Event::Start(Tag::Menu { target: "File".into() }),
+                Event::Text("New".into()),
+                Event::End(TagEnd::Menu),
+            ]
+        );
+        // Empty items → no `Text` between `Start` and `End`.
+        assert_eq!(
+            pipeline_exp("menu:File[]"),
+            vec![
+                Event::Start(Tag::Menu { target: "File".into() }),
+                Event::End(TagEnd::Menu),
+            ]
+        );
+
+        // The macros fire ONLY under `:experimental:`. With it unset the prefix is
+        // not a macro: no UI event is produced (the bytes stay plain text, matching
+        // Asciidoctor's default and `legacy` with experimental off).
+        assert_eq!(pipeline("kbd:[Ctrl+C]"), legacy("kbd:[Ctrl+C]"));
+        assert!(!pipeline("kbd:[Ctrl+C]")
+            .iter()
+            .any(|e| matches!(e, Event::Start(Tag::Keyboard))));
+        assert!(pipeline_exp("kbd:[Ctrl+C]")
+            .iter()
+            .any(|e| matches!(e, Event::Start(Tag::Keyboard))));
     }
 
     /// The signature cross-span case: a constrained strong that opens inside one

@@ -32,6 +32,12 @@
 //!   (`Footnote`), and `footnote:id[]` references an existing one (`FootnoteRef`).
 //!   A leaf: the text is verbatim (the registry/numbering/foot-list live in the
 //!   renderer, shared by both engines).
+//! - **UI macros** (7/N) — the `:experimental:`-gated `kbd:[keys]` (`Keyboard`),
+//!   `btn:[label]` (`Button`), and `menu:target[items]` (`Menu`). Dispatched only
+//!   when `options.experimental` is set; otherwise the bytes flow through as plain
+//!   text (Asciidoctor registers these only under `:experimental:`). Leaves: the
+//!   keys/label/items are verbatim `Text` the renderer splits (`+`/`,` for keys,
+//!   `>` for the menu sequence).
 //!
 //! This pass also folds in the **escaped autolink** `\http://…` (the escape pass's
 //! span-aware home for it): the backslash drops where an unescaped autolink could
@@ -40,9 +46,8 @@
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro family — the experimental UI macros
-//! `kbd:`/`btn:`/`menu:`, which need the `:experimental:` option threaded through
-//! the pipeline — is ported in a subsequent phase.)
+//! it. With the UI macros ported, every inline macro family the legacy parser
+//! recognises now has a home here.
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -80,12 +85,12 @@ use std::borrow::Cow;
 
 use crate::attributes::{parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
-use crate::inline::url_encode_into;
+use crate::inline::{url_encode_into, InlineOptions};
 
 use super::tokenize::{sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
 
 /// Extract every supported inline macro from `work.buf` into sentinels.
-pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
+pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOptions) {
     let src = std::mem::take(&mut work.buf);
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
@@ -103,7 +108,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 
         // xref:target[label]
         if bytes[i] == b'x' && src[i..].starts_with("xref:") {
-            if let Some((events, end)) = try_xref(&src, i, subs) {
+            if let Some((events, end)) = try_xref(&src, i, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -117,7 +122,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 
         // link:url[attrs]
         if bytes[i] == b'l' && src[i..].starts_with("link:") {
-            if let Some((events, end)) = try_link(&src, i, subs, work) {
+            if let Some((events, end)) = try_link(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -129,7 +134,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 
         // mailto:email[attrs]
         if bytes[i] == b'm' && src[i..].starts_with("mailto:") {
-            if let Some((events, end)) = try_mailto(&src, i, subs) {
+            if let Some((events, end)) = try_mailto(&src, i, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -252,9 +257,52 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
             continue;
         }
 
+        // Experimental UI macros — `kbd:[keys]`, `btn:[label]`, and
+        // `menu:target[items]` — dispatched ONLY when `:experimental:` is set
+        // (`options.experimental`). With the attribute unset the prefix bytes are
+        // copied verbatim and the `[…]` interior flows through the later passes as
+        // ordinary text, matching Asciidoctor (which registers these macros only
+        // under `:experimental:`). The legacy parser instead *skips* the whole
+        // `[…]` so its interior is never re-substituted; that is a legacy-only
+        // quirk with no corpus coverage, so on the rare input where it would differ
+        // the gate just falls back. Each macro is a leaf: the content/items become
+        // a single raw `Text` the renderer splits (`+`/`,` for keys, `>` for menu
+        // items) — never re-parsed, mirroring `try_kbd_macro`/`try_btn_macro`/
+        // `try_menu_macro`. A failed match advances one byte (legacy `pos += 1`).
+        if options.experimental && bytes[i] == b'k' && src[i..].starts_with("kbd:") {
+            if let Some((events, end)) = try_kbd(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        if options.experimental && bytes[i] == b'b' && src[i..].starts_with("btn:") {
+            if let Some((events, end)) = try_btn(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        if options.experimental && bytes[i] == b'm' && src[i..].starts_with("menu:") {
+            if let Some((events, end)) = try_menu(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
         // <<target>> / <<target,label>>
         if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'<') {
-            if let Some((events, end)) = try_cross_ref(&src, i, subs) {
+            if let Some((events, end)) = try_cross_ref(&src, i, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -328,7 +376,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // Bare URL autolink (http://, https://, ftp://, irc://), optionally
         // followed by a `[label]` attrlist.
         if matches!(bytes[i], b'h' | b'f' | b'i') && scheme_at(&src, i) {
-            if let Some((events, end)) = try_autolink(work, &src, i, subs) {
+            if let Some((events, end)) = try_autolink(work, &src, i, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -342,7 +390,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
         // copied to `out`, so on a match we truncate it back off before splicing
         // in the link sentinel.
         if bytes[i] == b'@' {
-            if let Some((events, local_start, end)) = try_email(&src, i, subs) {
+            if let Some((events, local_start, end)) = try_email(&src, i, subs, options) {
                 out.truncate(out.len() - (i - local_start));
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
@@ -367,7 +415,12 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 /// Returns the macro's event sequence plus the index just past the closing `]`,
 /// or `None` to leave the `xref:` literal. Mirror of
 /// [`crate::inline::InlineState::try_xref_macro`].
-fn try_xref(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_xref(
+    src: &str,
+    start: usize,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "xref:"
     let bracket_start = rest.find('[')?;
     let bracket_end = rest.find(']')?;
@@ -386,7 +439,7 @@ fn try_xref(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event
     // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
     // explicit one.
     let label = (!label_text.is_empty()).then_some(label_text);
-    Some((build_cross_reference(target, label, subs), end))
+    Some((build_cross_reference(target, label, subs, options), end))
 }
 
 /// Whether `content` begins with a character Asciidoctor accepts as the first
@@ -407,6 +460,7 @@ fn try_cross_ref(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let after_open = start + 2;
     let rest = &src[after_open..];
@@ -440,7 +494,7 @@ fn try_cross_ref(
     };
     // A leading '#' is an explicit-anchor marker, not part of the id.
     let target = target.strip_prefix('#').unwrap_or(target);
-    Some((build_cross_reference(target, label, subs), end))
+    Some((build_cross_reference(target, label, subs, options), end))
 }
 
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
@@ -455,6 +509,7 @@ fn build_cross_reference(
     target: &str,
     label: Option<&str>,
     subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Vec<Event<'static>> {
     let mut events: Vec<Event<'static>> = Vec::new();
     events.push(Event::Start(Tag::CrossReference {
@@ -467,7 +522,7 @@ fn build_cross_reference(
             // Re-parse the label exactly as `push_macro_label` does: full subs
             // minus MACROS (so a nested macro stays literal and recursion ends).
             let inner: Vec<Event<'static>> =
-                super::run_pipeline(l, subs.without(SubstitutionSet::MACROS));
+                super::run_pipeline(l, subs.without(SubstitutionSet::MACROS), options);
             for e in inner {
                 events.push(e);
             }
@@ -496,6 +551,7 @@ fn try_link(
     start: usize,
     subs: SubstitutionSet,
     work: &Work,
+    options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "link:"
     let bracket_start = rest.find('[')?;
@@ -537,6 +593,7 @@ fn try_link(
         label,
         &url,
         subs,
+        options,
     );
     Some((events, end))
 }
@@ -575,7 +632,12 @@ fn passthrough_url(work: &Work, url_part: &str) -> Option<String> {
 /// [`crate::inline::InlineState::try_mailto_macro`]: positional attrs 2/3 become
 /// `?subject=&body=` query parameters, percent-encoded. A mailto link is never
 /// "bare" (the visible text falls back to the email, not the `mailto:` URL).
-fn try_mailto(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_mailto(
+    src: &str,
+    start: usize,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "mailto:"
     let bracket_start = rest.find('[')?;
     let bracket_end = rest.find(']')?;
@@ -613,7 +675,17 @@ fn try_mailto(src: &str, start: usize, subs: SubstitutionSet) -> Option<(Vec<Eve
         }
     };
     let label = (!attrs.text.is_empty()).then_some(attrs.text);
-    let events = build_link(url, attrs.window, attrs.nofollow, attrs.role, false, label, email, subs);
+    let events = build_link(
+        url,
+        attrs.window,
+        attrs.nofollow,
+        attrs.role,
+        false,
+        label,
+        email,
+        subs,
+        options,
+    );
     Some((events, end))
 }
 
@@ -747,6 +819,90 @@ fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)>
             text: Cow::Owned(content.to_string()),
         }],
     };
+    Some((events, end))
+}
+
+/// Shared body for the two bracket-only UI macros `kbd:[keys]` and `btn:[label]`.
+/// Both require the `[` directly after the prefix (no target part), take the
+/// content up to the first `]`, and DECLINE on empty content — mirroring the
+/// legacy `parse_bracket_macro` + `try_kbd_macro`/`try_btn_macro`. The content is a
+/// single raw `Text` (the renderer's `kbd_mode` splits keys on `+`/`,`; the button
+/// label renders through the normal text path) and is never re-parsed. The
+/// sentinel guard declines when an earlier pass lifted a passthrough/escape/
+/// char-ref out of the span, so the verbatim text the legacy event carries is no
+/// longer present. Caller (dispatch) guarantees the prefix and that
+/// `:experimental:` is set.
+fn try_bracket_ui(
+    src: &str,
+    start: usize,
+    prefix_len: usize,
+    open: Tag<'static>,
+    close: TagEnd,
+) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + prefix_len..];
+    if !rest.starts_with('[') {
+        return None;
+    }
+    let bracket_end = rest.find(']')?;
+    let content = &rest[1..bracket_end];
+    if content.is_empty() {
+        return None;
+    }
+    let end = start + prefix_len + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    Some((
+        vec![
+            Event::Start(open),
+            Event::Text(Cow::Owned(content.to_string())),
+            Event::End(close),
+        ],
+        end,
+    ))
+}
+
+/// `kbd:[keys]` — the keyboard UI macro (`kbd:` is 4 bytes). See [`try_bracket_ui`].
+fn try_kbd(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    try_bracket_ui(src, start, 4, Tag::Keyboard, TagEnd::Keyboard)
+}
+
+/// `btn:[label]` — the button UI macro (`btn:` is 4 bytes). See [`try_bracket_ui`].
+fn try_btn(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    try_bracket_ui(src, start, 4, Tag::Button, TagEnd::Button)
+}
+
+/// `menu:target[items]` — the menu UI macro. Mirror of
+/// [`crate::inline::InlineState::try_menu_macro`] (and its
+/// `parse_target_bracket_macro` helper): the target is every byte before the first
+/// `[` and must be non-empty; the items run to the first `]` and, when non-empty,
+/// become a single raw `Text` (the renderer splits the menu sequence on `>`).
+/// Declines on an empty target or a `]` at/before the `[`. The sentinel guard
+/// declines a span that swallowed an earlier leaf. Caller (dispatch) guarantees
+/// the `menu:` prefix and that `:experimental:` is set.
+fn try_menu(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let rest = &src[start + 5..]; // after "menu:"
+    let bracket_start = rest.find('[')?;
+    let target = &rest[..bracket_start];
+    if target.is_empty() {
+        return None;
+    }
+    let bracket_end = rest.find(']')?;
+    if bracket_end <= bracket_start {
+        return None;
+    }
+    let items = &rest[bracket_start + 1..bracket_end];
+    let end = start + 5 + bracket_end + 1;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Menu {
+        target: Cow::Owned(target.to_string()),
+    })];
+    if !items.is_empty() {
+        events.push(Event::Text(Cow::Owned(items.to_string())));
+    }
+    events.push(Event::End(TagEnd::Menu));
     Some((events, end))
 }
 
@@ -1095,6 +1251,7 @@ fn try_autolink(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let limit = autolink_url_limit(work, src.as_bytes(), start)?;
     let rest = &src[start..];
@@ -1146,6 +1303,7 @@ fn try_autolink(
             label,
             url,
             subs,
+            options,
         );
         return Some((events, end));
     }
@@ -1155,7 +1313,7 @@ fn try_autolink(
     if span_has_sentinel(src, start, end) {
         return None;
     }
-    let events = build_link(url.to_string(), None, false, None, true, None, url, subs);
+    let events = build_link(url.to_string(), None, false, None, true, None, url, subs, options);
     Some((events, end))
 }
 
@@ -1171,6 +1329,7 @@ fn try_email(
     src: &str,
     at_pos: usize,
     subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize, usize)> {
     let bytes = src.as_bytes();
 
@@ -1213,7 +1372,17 @@ fn try_email(
 
     let email = &src[local_start..domain_end];
     // Asciidoctor does not mark email autolinks as bare.
-    let events = build_link(format!("mailto:{email}"), None, false, None, false, None, email, subs);
+    let events = build_link(
+        format!("mailto:{email}"),
+        None,
+        false,
+        None,
+        false,
+        None,
+        email,
+        subs,
+        options,
+    );
     Some((events, local_start, domain_end))
 }
 
@@ -1232,6 +1401,7 @@ fn build_link(
     label: Option<&str>,
     bare_text: &str,
     subs: SubstitutionSet,
+    options: InlineOptions,
 ) -> Vec<Event<'static>> {
     let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Link {
         url: Cow::Owned(url),
@@ -1241,7 +1411,7 @@ fn build_link(
         role: role.map(|r| Cow::Owned(r.to_string())),
     })];
     match label {
-        Some(l) => push_label(l, subs, &mut events),
+        Some(l) => push_label(l, subs, options, &mut events),
         None => events.push(Event::Text(Cow::Owned(bare_text.to_string()))),
     }
     events.push(Event::End(TagEnd::Link));
@@ -1254,11 +1424,17 @@ fn build_link(
 /// `push_macro_label("")`. Callers only pass `Some(label)` for a non-empty label
 /// (an empty attrlist text routes through the bare branch), but the guard keeps
 /// the mirror exact.
-fn push_label(text: &str, subs: SubstitutionSet, events: &mut Vec<Event<'static>>) {
+fn push_label(
+    text: &str,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+    events: &mut Vec<Event<'static>>,
+) {
     if text.is_empty() {
         return;
     }
-    let inner: Vec<Event<'static>> = super::run_pipeline(text, subs.without(SubstitutionSet::MACROS));
+    let inner: Vec<Event<'static>> =
+        super::run_pipeline(text, subs.without(SubstitutionSet::MACROS), options);
     events.extend(inner);
 }
 
