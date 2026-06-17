@@ -464,3 +464,43 @@ fn test_attr_ref_in_inline_role_resolves() {
         "no extraction sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_attr_ref_in_link_and_image_role_resolves() {
+    // A `{name}` written as a named role on a link or inline image survives the
+    // `macros` pass (which runs before `attributes`) as a literal in the role
+    // field; the renderer resolves it against the document attributes, exactly
+    // like the inline phrase roles above. Matches Asciidoctor byte-for-byte.
+    let html = to_html(":rn: fancy\n\nlink:https://example.com[Home,role={rn}]");
+    assert!(
+        html.contains("<a href=\"https://example.com\" class=\"fancy\">Home</a>"),
+        "defined attr ref in link role must resolve. Got: {html}"
+    );
+
+    let html = to_html(":rn: fancy\n\nimage:img.png[Logo,role={rn}]");
+    assert!(
+        html.contains("<span class=\"image fancy\"><img src=\"img.png\" alt=\"Logo\">"),
+        "defined attr ref in inline-image role must resolve. Got: {html}"
+    );
+
+    // Undefined reference is kept literal (`attribute-missing` default `skip`),
+    // and a quoted multi-role value resolves only the reference, keeping the
+    // rest verbatim.
+    let html = to_html("link:https://example.com[Home,role={undef}]");
+    assert!(
+        html.contains("class=\"{undef}\""),
+        "undefined attr ref in link role must stay literal. Got: {html}"
+    );
+
+    let html = to_html(":rn: fancy\n\nlink:https://example.com[Home,role=\"{rn} external\"]");
+    assert!(
+        html.contains("class=\"fancy external\""),
+        "attr ref inside a quoted multi-role value must resolve in place. Got: {html}"
+    );
+
+    // No raw extraction sentinel (control bytes) may leak into the class.
+    assert!(
+        !html.bytes().any(|b| b == 0x01 || b == 0x02),
+        "no extraction sentinel may leak into output. Got: {html:?}"
+    );
+}
