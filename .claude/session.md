@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-17, 101-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (32/N): `render_kbd_keys` сплит по `,` + trailing-delim (`kbd:[Ctrl,T]`/`kbd:[Ctrl++]` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-32`** (off master `9c8fe5d`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — ТОЛЬКО по запросу пользователя). 31/N УЖЕ смержена
+(master HEAD `9c8fe5d` — Merge). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `9c8fe5d`
+(`cargo build --release -p adoc-cli`→cp; ⚠ CLI в пакете **adoc-cli**).
+
+### Выбор задачи — последний документированный остаток Фазы 2 (с 25/N)
+29/30/31 завершили attr-ref во ВСЕХ target макросов (link/image/xref). Остался единственный документированный
+кандидат: **`render_kbd_keys` сплит по `,`** — предсуществующий БАГ рендерера, отмеченный ещё 25/N (TODO `[ ]`).
+Выбран как завершение Фазы-2 паритета. (Альтернатив в остатке нет — после этого ФИНАЛ = Фаза 3 снять gate.)
+
+### Корень — рендерер сплитил только по `+`; парсер уже эмитит сырой Text
+`render_kbd_keys` (adoc-html/src/inline.rs) делал `text.split('+')` → `kbd:[Ctrl,T]`→`<kbd>Ctrl,T</kbd>`
+(asciidoctor: keyseq Ctrl+T), `kbd:[Ctrl++]`→пустые `<kbd></kbd>`. Парсер УЖЕ эмитит сырой Text внутри
+`Tag::Keyboard` (kbd_mode в events.rs:61, render_kbd_keys html_escape'ит per-key) → фикс РЕНДЕРЕР-ONLY (как 27-31).
+**Реальный алгоритм asciidoctor** (`substitutors.rb:357-369` + `html5.rb:1237`, верифиц. И эмпирически `asciidoctor -s`):
+delim = первое вхождение `,` ИЛИ `+` на char-поз ≥1 (что раньше → **first-delimiter-wins**); split по нему; trim
+каждого; trailing-delim спец-случай (chop+split+append delim последнему); рендер 1ключ→`<kbd>X</kbd>` иначе keyseq
+join ВСЕГДА по `+`.
+
+### Сделано (1 файл кода + 1 тест) — РЕНДЕРЕР-ONLY (inline.rs)
+- **`render_kbd_keys`:** `text.trim()`; `delim = text.char_indices().skip(1).find_map(|(_,c)| (c==','||c=='+').then_some(c))`;
+  match: None→`vec![Cow::Borrowed(text)]`; `Some(d) if text.ends_with(d)`→trailing спец (body=`text[..len-d.len_utf8()]`,
+  split+trim, last=`Cow::Owned(format!("{last}{d}"))`); `Some(d)`→split+trim. Рендер как было (1/keyseq, join `+`),
+  `html_escape(&keys[0])`/`(key)`. `+use std::borrow::Cow` (через `use crate::*` не виден).
+- **Семантика подтверждена эмпирически:** `kbd:[Ctrl,T]`→keyseq+`; `kbd:[Ctrl, T+X]`→`Ctrl`+`T+X` (first-delim=`,`,
+  внутр.`+` литерал); `kbd:[Ctrl++]`→`Ctrl`+`+`; `kbd:[a+]`→`<kbd>a+</kbd>`; `kbd:[+]`/`[,]`→literal single;
+  `kbd:[+x]`→`<kbd>+x</kbd>` (leading на поз.0); `kbd:[a, b ,]`→last `b,` (ws перед хвостом trim, потом append).
+- **Тест:** `test_kbd_comma_and_delimiter_parity_html` (tests.rs, после `test_kbd_combo_html`): хелпер вырезает
+  `<p>…</p>`; 10 ассертов (comma=`+`, per-key trim, first-delim-wins, trailing `++`/`,,`, leading-delim literal,
+  single trailing `a+`, ws-before-trailing).
+
+### Скоуп / ОТЛОЖЕНО
+Скоуп СТРОГО = kbd-сплит паритет (завершён). escaped-`]` внутри kbd (`keys.gsub ESC_R_SB`) НЕ трогал
+(парсер-side, отд. редкий edge, вне темы). После 32/N остаток Фазы 2 = ПУСТО → следующий шаг ФИНАЛ (Фаза 3).
+
+### Верификация (airtight, рендерер корпус-невидим)
+- clippy --workspace 0; cargo test --workspace зелёное (html unit 433→434, parser 558, html_output 41, прочее неизм.).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). Единств. корпус kbd-с-запятой сидит ВНУТРИ
+  `[source]`-листинга (verbatim, НЕ парсится макросом) → вывод не меняется. **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/p32_kbd.adoc`/`p32_edge`/`p32_ws`/`p32_more`):** new == `asciidoctor -s -o -` БАЙТ-В-БАЙТ на ВСЕХ
+  формах (comma, multi-comma, first-delim-wins, trailing `++`/`,,`, leading `+`/`,`/`+x`, ws, interior empty,
+  html-escape `a&b<c`). `diff` пуст (IDENTICAL) на всех 4 файлах.
+
+### Дальше — ФИНАЛ (Фаза 3): снять gate (остаток Фазы 2 ИСЧЕРПАН)
+- **Остаток Фазы 2 = ПУСТО.** Все attr-ref target (29/30/31) + kbd-сплит (32) закрыты.
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]` (env только на NEW), `blast_force.py`,
+  `diffone.py <file> [N]`, `nearmiss.py`. CLI: `adoc [--no-standalone] [-a nofooter] file` (НЕ `-s`!).
+  base пересобирать `cargo build --release -p adoc-cli` из master HEAD. asciidoctor: `asciidoctor -s -o - f`.
+  ⚠ shell cwd сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 100-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (31/N): attribute-ref в xref TARGET (`xref:{rel}.adoc[]`/`xref:{frag}[]`/`<<{id}>>` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-31`** (off master `b330983`, 344) —
