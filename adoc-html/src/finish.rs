@@ -95,13 +95,17 @@ impl HtmlRenderer {
             for entry in self.toc_builder.entries() {
                 ctx.add_section(&entry.id, &entry.title);
             }
+            // `add_block` is first-wins, so register in precedence order. An
+            // explicit reference text (`[[id,reftext]]` / `[reftext=…]`) outranks
+            // a block's own title in Asciidoctor, so anchor reftexts go before
+            // title-derived ones.
+            for (id, reftext) in &self.anchor_reftexts {
+                ctx.add_block(id, RefText::Markup(reftext));
+            }
             for (id, title_html) in &self.block_ref_titles {
                 ctx.add_block(id, RefText::Markup(title_html));
             }
             for (id, reftext) in &self.bibliography_reftexts {
-                ctx.add_block(id, RefText::Markup(reftext));
-            }
-            for (id, reftext) in &self.anchor_reftexts {
                 ctx.add_block(id, RefText::Markup(reftext));
             }
             let mut replacements: HashMap<&str, String> = HashMap::with_capacity(

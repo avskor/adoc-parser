@@ -225,10 +225,21 @@ impl BlockAttributes {
             let id = &attr_str[1..attr_str.len() - 1];
             // Only treat as legacy anchor if the inner part doesn't contain brackets
             if !id.contains('[') && !id.contains(']') {
-                // `[[id,xreflabel]]` — the label is reference text for xrefs,
-                // never part of the id.
-                let id = id.split_once(',').map_or(id, |(i, _)| i.trim_end());
-                attrs.id = Some(id.to_string());
+                // `[[id,xreflabel]]` — the part after the comma is reference text
+                // for xrefs (never part of the id). Mirror the inline `try_anchor`
+                // trimming (id trim_end, reftext trim_start) and stash the reftext
+                // as the `reftext` attribute so an unlabeled `<<id>>` resolves to
+                // it — the same channel as the named `[reftext=…]` form.
+                match id.split_once(',') {
+                    Some((i, reftext)) => {
+                        attrs.id = Some(i.trim_end().to_string());
+                        let reftext = reftext.trim_start();
+                        if !reftext.is_empty() {
+                            attrs.named.insert("reftext".to_string(), reftext.to_string());
+                        }
+                    }
+                    None => attrs.id = Some(id.to_string()),
+                }
                 return attrs;
             }
         }
@@ -965,13 +976,24 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_anchor_xreflabel_stripped() {
-        // [[id]] → attr_str "[id]"; the xreflabel after the comma is reference
-        // text for xrefs, never part of the id.
+    fn test_legacy_anchor_xreflabel_captured_as_reftext() {
+        // [[id,xreflabel]] → attr_str "[id,xreflabel]"; the part after the comma
+        // is reference text for xrefs (never part of the id), captured as the
+        // `reftext` attribute so an unlabeled `<<id>>` resolves to it.
         let attrs = BlockAttributes::parse("[tiger-image,Image of a tiger]");
         assert_eq!(attrs.id.as_deref(), Some("tiger-image"));
+        assert_eq!(attrs.named.get("reftext").map(String::as_str), Some("Image of a tiger"));
+        // Leading whitespace after the comma is trimmed (mirrors inline anchor).
+        let attrs = BlockAttributes::parse("[id2, Spaced Ref]");
+        assert_eq!(attrs.id.as_deref(), Some("id2"));
+        assert_eq!(attrs.named.get("reftext").map(String::as_str), Some("Spaced Ref"));
+        // No comma → no reftext; empty reftext (`[id,]`) → none.
         let attrs = BlockAttributes::parse("[plain-id]");
         assert_eq!(attrs.id.as_deref(), Some("plain-id"));
+        assert!(attrs.named.get("reftext").is_none());
+        let attrs = BlockAttributes::parse("[id3,]");
+        assert_eq!(attrs.id.as_deref(), Some("id3"));
+        assert!(attrs.named.get("reftext").is_none());
     }
 
     #[test]

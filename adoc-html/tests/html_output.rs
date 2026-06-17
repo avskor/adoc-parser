@@ -390,6 +390,40 @@ fn test_xref_with_explicit_label_unchanged() {
 }
 
 #[test]
+fn test_xref_block_anchor_reftext() {
+    // A block anchor `[[id,reftext]]` registers reference text; an unlabeled
+    // `<<id>>` resolves to it instead of the `[id]` fallback (п.20).
+    let input = "[[myid,My Ref]]\nText with <<myid>>.";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#myid\">My Ref</a>"),
+        "block anchor reftext should resolve. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_named_reftext_attribute() {
+    // The named `[reftext=…]` form is equivalent to `[[id,reftext]]`.
+    let input = "[#myid,reftext=My Ref]\nText with <<myid>>.";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#myid\">My Ref</a>"),
+        "named reftext attribute should resolve. Got: {html}"
+    );
+}
+
+#[test]
+fn test_xref_reftext_beats_block_title() {
+    // An explicit reftext outranks a block's own title for an unlabeled xref.
+    let input = "[[myid,Ref Text]]\n.Block Title\n====\nbody\n====\n\nSee <<myid>>.";
+    let html = to_html(input);
+    assert!(
+        html.contains("<a href=\"#myid\">Ref Text</a>"),
+        "explicit reftext should win over block title. Got: {html}"
+    );
+}
+
+#[test]
 fn test_xref_hash_prefix_resolves_section_title() {
     let input = "[#divide-large-responses]\n== Разделение больших ответов\n\nСм. <<#divide-large-responses>>";
     let html = to_html(input);

@@ -351,6 +351,18 @@ impl HtmlRenderer {
                 if let Some(s) = subs {
                     self.pending_subs = Some(s);
                 }
+                // An explicit reference text (`[[id,reftext]]` / `[reftext=…]`)
+                // registers as this block's xref text, so an unlabeled `<<id>>`
+                // resolves to it instead of the `[id]` fallback — mirroring the
+                // inline `Tag::Anchor` path. Rendered through inline subs (the
+                // reftext can carry formatting), stored as `Markup`.
+                if let (Some(id_val), Some((_, reftext))) =
+                    (id.as_ref(), named.iter().find(|(k, _)| k == "reftext"))
+                {
+                    let mut rendered = String::new();
+                    self.render_inline_value(&mut rendered, reftext);
+                    self.anchor_reftexts.push((id_val.to_string(), rendered));
+                }
                 self.pending_block_meta = Some(BlockMeta {
                     style: style.map(|s| s.into_owned()),
                     id: id.map(|s| s.into_owned()),
