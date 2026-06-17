@@ -202,7 +202,30 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 101-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (32/N) `render_kbd_keys` сплит по `,` + trailing-delim (ветка `feat/subst-phase2-parity-32`)
+## АКТУАЛЬНО (2026-06-17, 102-я сессия): РЕРАЙТ inline — **ФАЗА 3: СНЯТ GATE** (sequential-движок дефолт; ветка `feat/subst-phase3-drop-gate`)
+
+Корпус **343 → 344** (FLIP `outline.adoc` 4813→0 vs asciidoctor). Фаза 2 (1-32/N) смержена в master (`45d0e56`).
+**(Фаза 3) НЕ закоммичена** (коммит/мерж/пуш — по запросу пользователя).
+- [x] **Снять differential-gate, движок sequential — ДЕФОЛТ, env-флаги удалены.**
+  - `inline.rs`: убран guard `subst::enabled()`; движок — первая попытка, `parse_legacy` — fallback при decline.
+  - `subst/mod.rs`: удалены `enabled()`/`force()`/`env_true()` + env-флаги `ADOC_QUOTES_SEQUENTIAL`/`ADOC_SUBST_FORCE`.
+    `try_parse` без гейта (оставлены decline-проверки: нет QUOTES / sentinel-байт).
+- [x] **Явный per-construct decline→legacy** (инкрементальный safe-baseline вместо гейта; решение пользователя).
+  - Shared `thread_local DECLINED` + `flag_decline()`/`take_decline()` в `subst/mod.rs`; `try_parse` → None при флаге.
+  - `macros.rs`: `span_has_sentinel` (17 punt-сайтов) + 2 punt'а `try_link` → `flag_decline` (passthrough в target/
+    label макроса → legacy, корректно). `passthrough.rs`: новый arm `\++`/`\+++` (отложенная форма) → `flag_decline`.
+- [x] **Тесты:** 6 групп `try_parse(...).is_none()` (divergent-correct) → adopt; `link:[++pass++]` остаётся decline
+    (punt). `inline.rs` хелперы `parse`/`parse_experimental` → `parse_legacy` (тестируют live legacy-fallback;
+    11 escape/replacement тестов падали лишь на форме event-потока, HTML идентичен).
+  - clippy 0; **test --workspace зелёное** (parser 558, html 434, html_output 41, **compat 233/233**, прочее).
+    gate_check = 1 diff (outline). **blast: Identical 343→344, [FLIP] outline 4813→0, 0 REGR.**
+- [ ] **СЛЕДУЮЩЕЕ (инкрементально):** native-конверсия passthrough-в-макросе по семействам (seed-tags re-parse
+    label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) — снимает punt'ы,
+    делает new==asciidoctor. Удаление мёртвого legacy-quotes-кода. Doc-свип «gate»-терминологии в остальных пассах.
+
+---
+
+## (2026-06-17, 101-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (32/N) `render_kbd_keys` сплит по `,` + trailing-delim (ветка `feat/subst-phase2-parity-32`)
 
 Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-31/N) СМЕРЖЕНА в master
 (`9c8fe5d`). **(32/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).

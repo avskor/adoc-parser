@@ -16,8 +16,8 @@
 //! [`find_valid_close_constrained`]): legacy stops at the first inner marker and
 //! abandons the span if it cannot close, whereas Asciidoctor's lazy
 //! `(\S|\S.*?\S)` absorbs that marker and keeps scanning for a later valid
-//! close. The Phase-1 gate mediates the difference (it falls back to legacy on
-//! any divergence); it only surfaces under `ADOC_SUBST_FORCE`.
+//! close. The engine is now the default, so this Asciidoctor-faithful behaviour
+//! is adopted directly (it is the `outline.adoc` flip).
 //!
 //! ## Scope
 //!
@@ -139,8 +139,7 @@ fn find_closing_constrained(bytes: &[u8], marker: u8, search_start: usize) -> Op
 /// the `.` in `.*?` absorbs it into the content and the regex keeps scanning for
 /// a later marker. The legacy parser stops at the first marker and abandons the
 /// span when that one is invalid, so this is strictly more Asciidoctor-faithful;
-/// the difference is mediated by the Phase-1 gate (which falls back to legacy on
-/// any divergence) and only surfaces under `ADOC_SUBST_FORCE`.
+/// the engine being the default, this behaviour is adopted directly.
 fn find_valid_close_constrained(
     bytes: &[u8],
     marker: u8,

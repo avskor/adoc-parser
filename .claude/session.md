@@ -1,5 +1,84 @@
 # Session context
 
+## Сессия (2026-06-17, 102-я) — РЕРАЙТ inline, **ФАЗА 3: СНЯТ GATE** (sequential-движок — ДЕФОЛТ; env-флаги удалены; явный per-construct decline→legacy)
+
+Запрос «приступи к фазе 3». Ветка **`feat/subst-phase3-drop-gate`** (off master `45d0e56`, 344) —
+**НЕ закоммичена** (коммит/мерж/пуш — ТОЛЬКО по запросу пользователя). base-бинарь `/tmp/adoc_base`
+ПЕРЕСОБРАН из master `45d0e56` (`cargo build --release -p adoc-cli`→cp; CLI в пакете **adoc-cli**).
+
+### АРХИТЕКТУРНОЕ РЕШЕНИЕ (зафиксировать): Фаза 3 = снять differential-gate, движок → дефолт
+Рерайт (100+ сессий) завершил Фазу 1 (quotes за gate) + Фазу 2 (все пассы; смержена). Гейт в `try_parse`
+сравнивал new vs legacy и принимал только при байт-равенстве → расходящиеся (overlapping-span) кейсы НЕ
+проявлялись. Фаза 3 снимает гейт — необратимый payoff. **Замер: снятие гейта меняет РОВНО 1 файл корпуса
+(`outline.adoc`): base(legacy)=4813 расхождений с asciidoctor → new=0.** Остальные 343 неизменны.
+
+### Решение по ОБЪЁМУ (подтверждено пользователем 2×): инкрементально
+1) Снять гейт + движок дефолт + удалить env-флаги + **явный per-construct decline→legacy** для всех
+форм, что движок ещё не умеет (точно восстанавливает защиту гейта). 2) Native-конверсия этих форм —
+СЛЕДУЮЩИЕ сессии (по семействам). 3) Удаление мёртвого legacy-quotes-кода — отдельно.
+**ВАЖНО:** «починить корень passthrough-в-макросе» оказалось многогранным (seed-tags для re-parse label
+xref/link/mailto + verbatim-строка для image-alt/icon/UI + parser↔renderer для footnote + 19 punt-сайтов) —
+многосессионный объём → отложено в пользу инкрементального decline-baseline.
+
+### Сделано (код)
+- **`inline.rs:parse_str_with_subs_options`** — убран guard `if subst::enabled() &&`; движок — безусловная
+  первая попытка, `parse_legacy` остаётся fallback при decline (нет QUOTES / sentinel-байт / punt).
+- **`subst/mod.rs`** — удалены `enabled()`/`force()`/`env_true()` (env-флаги `ADOC_QUOTES_SEQUENTIAL`/
+  `ADOC_SUBST_FORCE` УДАЛЕНЫ). `try_parse`: оставлены decline-проверки (нет QUOTES → None; sentinel-байт →
+  None), гейт-блок снят. **Новый shared decline-механизм:** `thread_local DECLINED` + `pub(super)
+  flag_decline()` + `take_decline()`. `try_parse`: `take_decline()` (clear stale) → `run_pipeline` →
+  `if take_decline() { return None }` (→ legacy). Module docstring переписан (движок дефолт, gate снят).
+- **`subst/macros.rs`** — `flag_punt()` → `super::flag_decline()` (убран локальный thread_local). Бывший
+  «gate fallback» для passthrough-sentinel в target/label макроса теперь ЯВНЫЙ: `span_has_sentinel`
+  (17 punt-сайтов, общий helper) флагует decline; 2 punt'а в `try_link` (label-sentinel, url-passthrough-fail)
+  тоже. → passthrough-в-target/label макроса → legacy (корректно).
+- **`subst/passthrough.rs`** — НОВЫЙ arm: одиночный backslash + `++` (`\++…`/`\+++…`, отложенная форма,
+  escape.rs:66) → `super::flag_decline()` → legacy. (asciidoctor сам self-inconsistent: parsing-lab ASG vs
+  Ruby HTML расходятся; legacy=ASG-корректен.) Это починило compat-падение `inline/passthrough/escaped-input`.
+
+### Сделано (тесты)
+- **subst/mod.rs (6 групп `try_parse(...).is_none()` → adopt `Some(pipeline(c))`):** constrained-close,
+  xref-invalid-target (`<<-y>>` и т.п.), doubled-backslash-macro (`\\image:`/`\\&copy;`/`\\((term))`/`\\++pp++`),
+  doubled-backslash-escape (`\\*bold*`…), cross-span overlap, attr-ref-positional (`[{a}]*x*`). Переименованы
+  `try_parse_gate_*` → `try_parse_adopts_*`; `force_handles_*` → `handles_*`. **`link:http://x.com[++raw++]`
+  ОСТАЁТСЯ decline** (через punt) — обновлён комментарий gate→punt.
+- **`inline.rs` тест-хелперы `parse`/`parse_experimental` → `parse_legacy(...)` напрямую.** Эти сотни unit-
+  тестов покрывают LEGACY-парсер (live fallback); на master `parse_str` по умолчанию шёл в legacy. 11 escape/
+  replacement тестов падали лишь на ФОРМЕ event-потока (новый движок иначе дробит `Text`) — **HTML идентичен**
+  (проверено NEW==BASE==ASCIIDOCTOR). Redirect = master-эквивалент, zero-risk. Новый движок покрыт корпусом/
+  compat/subst-differential-тестами.
+- Doc-свип: поправлены дангли на удалённый код (`force()`/`ADOC_SUBST_FORCE`) в mod.rs/quotes.rs + docstring'и
+  macros.rs/passthrough.rs. **ОСТАЛОСЬ (follow-up):** терминология «the gate falls back/rejects/adopts» в
+  attributes.rs/escape.rs/replacements.rs/post_replacements.rs/tokenize.rs (doc-only, не дангли).
+
+### Pre-existing divergences (ВНЕ СКОУПА, new==base, не регресс)
+passthrough в image-alt / footnote-text / icon-attrs: legacy САМ ≠ asciidoctor (e.g. `image:p[++a b++]`→
+base/new `alt="++a b++"`, asciidoctor `alt="a b"`). punt→legacy воспроизводит base → 0 регресс vs master.
+Чинится при native-конверсии этих семейств.
+
+### Верификация (AIRTIGHT)
+- **clippy --workspace 0**; **cargo test --workspace ВСЁ зелёное** (parser 558, html unit 434, html_output 41,
+  **compat 233/233**, html-compat 1, author 6, прочее). 
+- **gate_check.py (base-vs-new, env-флаги теперь no-op) = РОВНО 1 DIFF: `outline.adoc`.** Остальные 343 — new==base.
+- **blast.py: Identical base 343 → new 344; [FLIP] outline.adoc 4813→0; 0 REGR, 0 FARTHER.**
+- e2e: весь класс passthrough-в-макросе (xref/link/mailto/image/footnote/icon) == asciidoctor ЛИБО == base
+  (pre-existing). Escaped-plus `\++i and i\+\+` → `++i and i++` (== legacy/ASG).
+
+### Дальше (следующие сессии, инкрементально)
+- **Native-конверсия passthrough-в-макросе** по семействам (снимает соответствующий punt, делает new==asciidoctor):
+  seed-tags re-parse label (xref/link/mailto: засеять inner `run_pipeline` тег-таблицей внешнего `Work`, чтобы
+  foreign passthrough-sentinel резолвился; работает и для straddle `*a ++x++ b*`); verbatim content-строка из
+  leaf для image-alt/icon/UI; footnote — parser↔renderer (leaf теряет исходный синтаксис).
+- Удаление мёртвого legacy-quotes-кода из `InlineState` (редизайн fallback при sentinel-байтах).
+- Doc-свип «gate»-терминологии в остальных пассах.
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py` (плейн, без env), `blast.py`. CLI `adoc [--no-standalone]
+  [-a nofooter] file`. asciidoctor `asciidoctor -s -o - f`. ⚠ shell cwd сбрасывается — пути /tmp/*.adoc абсолютные.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 101-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (32/N): `render_kbd_keys` сплит по `,` + trailing-delim (`kbd:[Ctrl,T]`/`kbd:[Ctrl++]` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-32`** (off master `9c8fe5d`, 344) —

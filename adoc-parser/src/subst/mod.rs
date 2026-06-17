@@ -1,11 +1,11 @@
 //! Sequential-pass inline substitution engine (Asciidoctor `Substitutors`
 //! model).
 //!
-//! TRANSITIONAL / DEV scaffolding. The legacy recursive inline parser
-//! ([`crate::inline`]) remains the default; this engine is built in parallel
-//! behind the `ADOC_QUOTES_SEQUENTIAL=1` environment toggle until it reaches
-//! byte-for-byte corpus parity, at which point it becomes the default and the
-//! legacy quotes path is removed (see plan `greedy-yawning-pumpkin`).
+//! This is the **default** top-level inline engine: [`crate::inline`] routes
+//! every top-level paragraph through [`try_parse`] first, falling back to the
+//! legacy recursive parser ([`crate::inline::parse_legacy`]) only when this
+//! engine declines (no `quotes` substitution requested, or the input already
+//! contains a reserved sentinel byte).
 //!
 //! ## Why a string-rewriting model
 //!
@@ -18,26 +18,21 @@
 //! physically *overlap* a sibling span — output Asciidoctor itself emits as
 //! invalid, non-nested HTML. A recursive/tree parser (the legacy engine) can
 //! only ever produce *nested* tags, so it cannot reproduce this; replicating it
-//! requires the string-rewriting pipeline this module houses.
+//! requires the string-rewriting pipeline this module houses. This is exactly
+//! why the engine is now the default: it is the only one that reproduces those
+//! overlapping spans (the `outline.adoc` flip).
 //!
-//! ## Phase 1: quotes pipeline behind a differential-equality gate
+//! ## History
 //!
-//! This phase implements the `quotes` pass family ([`quotes`]) plus the
-//! sentinel tokenizer ([`tokenize`]). The other passes (passthrough,
-//! specialchars, attributes, replacements, macros, post-replacements) are NOT
-//! yet implemented.
-//!
-//! To make partial coverage provably **zero-regression**, [`try_parse`] runs
-//! the new pipeline AND the legacy parser and only returns the new result when
-//! the two event streams are byte-identical; on any difference it returns
-//! `None` and the caller falls back to legacy. So with the toggle on, corpus
-//! output is unchanged (the gate). This gate is a Phase-1-only scaffold: Phase 2
-//! removes it precisely so the divergent (overlapping) cases can flip
-//! `outline.adoc`.
-//!
-//! `ADOC_SUBST_FORCE=1` (diagnostic, requires the toggle on) skips the gate and
-//! returns the raw new-engine result, so a `blast` run measures how faithfully
-//! the new engine reproduces the legacy output (divergences show up as diffs).
+//! The engine was built incrementally behind a differential-equality gate (a
+//! now-removed `ADOC_QUOTES_SEQUENTIAL` toggle, plus an `ADOC_SUBST_FORCE`
+//! diagnostic that bypassed the gate): [`try_parse`] used to run both this
+//! pipeline and the legacy parser and adopt the new result only when the two
+//! event streams were byte-identical. Once the pipeline reached corpus parity
+//! with Asciidoctor across every implemented pass (passthrough, escape,
+//! character references, attributes, quotes, macros, replacements,
+//! post-replacements), the gate was removed and the raw pipeline result is now
+//! adopted directly — letting the divergent (overlapping-span) cases flip.
 
 mod attributes;
 mod char_refs;
@@ -49,43 +44,44 @@ mod quotes;
 mod replacements;
 mod tokenize;
 
-use std::sync::OnceLock;
+use std::cell::Cell;
 
 use crate::event::{Event, SubstitutionSet};
 use crate::inline::InlineOptions;
 use tokenize::{Work, TAG_LEAD, TAG_TAIL};
 
-/// Whether the sequential-quotes engine is enabled for this process.
-///
-/// Read once from the `ADOC_QUOTES_SEQUENTIAL` env var (`1`/`true` enables).
-/// This is a transition-only toggle: it disappears when the engine becomes the
-/// default in the final phase. A process-global is acceptable because the
-/// corpus harness (`blast_toggle.py`) runs each engine in a separate process.
-pub(crate) fn enabled() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| env_true("ADOC_QUOTES_SEQUENTIAL"))
+thread_local! {
+    /// Set by a pass that recognises a construct it cannot yet form faithfully and
+    /// must defer to the legacy recursive parser: a macro whose span swallowed an
+    /// earlier-extracted sentinel ([`macros`]), or a deferred escaped-plus form
+    /// (`\++…`, [`passthrough`]). Read-and-cleared by [`try_parse`], which then
+    /// falls back to legacy for the whole paragraph. Thread-local (not threaded
+    /// through every matcher) and confined to one synchronous pipeline run; the
+    /// recursive label re-parse shares it, so a deferred construct inside a macro
+    /// label propagates the decline to the top-level paragraph. This is the
+    /// explicit, per-construct replacement for the old differential-equality gate
+    /// — each construct that gains native handling stops flagging.
+    static DECLINED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Diagnostic: when set (and the engine is enabled), bypass the
-/// differential-equality gate and return the raw new-engine result. Used to
-/// measure reproduction fidelity via `blast`; NOT the safety gate.
-fn force() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| env_true("ADOC_SUBST_FORCE"))
+/// Record that the engine cannot faithfully handle a construct and must defer to
+/// the legacy parser (see [`DECLINED`]).
+pub(super) fn flag_decline() {
+    DECLINED.with(|d| d.set(true));
 }
 
-fn env_true(var: &str) -> bool {
-    std::env::var(var)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+/// Read and clear the decline flag (see [`DECLINED`]).
+fn take_decline() -> bool {
+    DECLINED.with(|d| d.replace(false))
 }
 
 /// Attempt to parse top-level inline `text` with the sequential-pass engine.
 ///
-/// Returns `None` when the engine declines (no quotes substitution requested,
-/// the input contains a reserved sentinel byte, or — under the Phase 1 gate —
-/// the result would differ from the legacy parser), signalling the caller to
-/// fall back to the legacy recursive parser. Only called for top-level
+/// Returns `None` only when the engine genuinely cannot run: no `quotes`
+/// substitution is requested (e.g. verbatim blocks), or the input already
+/// contains a reserved sentinel byte. In both cases the caller falls back to
+/// the legacy recursive parser ([`crate::inline::parse_legacy`]). Otherwise the
+/// raw pipeline result is returned and adopted. Only called for top-level
 /// paragraph text, never for inner-span reparses.
 pub(crate) fn try_parse<'a>(
     text: &'a str,
@@ -98,7 +94,7 @@ pub(crate) fn try_parse<'a>(
         return None;
     }
     // A sentinel byte in the source would be indistinguishable from an
-    // engine-inserted sentinel; refuse such input outright.
+    // engine-inserted sentinel; refuse such input outright (legacy handles it).
     if text
         .bytes()
         .any(|b| b == TAG_LEAD || b == TAG_TAIL)
@@ -106,19 +102,17 @@ pub(crate) fn try_parse<'a>(
         return None;
     }
 
+    // Clear any stale decline flag from an earlier paragraph on this thread, run
+    // the pipeline, then check whether any pass had to defer a construct it cannot
+    // yet form faithfully (a macro whose span swallowed a sentinel, or a deferred
+    // escaped-plus form). When one did, fall back to the legacy recursive parser
+    // (which still has the raw source) for the whole paragraph. See [`flag_decline`].
+    take_decline();
     let candidate = run_pipeline(text, subs, options);
-
-    if force() {
-        return Some(candidate);
+    if take_decline() {
+        return None;
     }
-
-    // Phase 1 gate: only adopt the new result when it exactly reproduces legacy.
-    let legacy = crate::inline::parse_legacy(text, subs, options);
-    if candidate == legacy {
-        Some(candidate)
-    } else {
-        None
-    }
+    Some(candidate)
 }
 
 /// Run the implemented substitution passes (in Asciidoctor `subs=normal` order,
@@ -147,8 +141,8 @@ pub(crate) fn try_parse<'a>(
 /// construct-adjacent backslash is consumed, and only when the construct would
 /// form. The two doubled forms still deferred are pathological in Asciidoctor
 /// itself: the URL-target `\\link:http://…[…]` (rendered as a link there) and the
-/// triple-plus `\\+++…+++`; inputs that need them diverge from legacy and are
-/// rejected by the gate (or surface as diffs under `force()`).
+/// triple-plus `\\+++…+++`; inputs that need them diverge from legacy and stay on
+/// the legacy path (the macro pass punts them — see [`flag_decline`]).
 /// `options` is threaded through so the
 /// experimental flag reaches the macros pass and every inner reparse (label,
 /// cross-reference label, passthrough spec content), mirroring the legacy
@@ -190,13 +184,14 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -
     // (`xref:{anchor}[]`) stays literal in the target rather than becoming its own
     // event. Extracting `attributes` first would lift it into a sentinel and the
     // macro would be declined. A label is re-parsed with MACROS cleared (mirroring
-    // `push_macro_label`). Ported so far: the cross-reference family
-    // (`xref:`/`<<>>`), the link family (`link:`/`mailto:`, bare URL/email
-    // autolinks), the inline image (`image:`), the leaf macros `icon:` and the
-    // STEM family (`stem:`/`latexmath:`/`asciimath:`), and the anchor
-    // (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
-    // `indexterm2:`) families; the remaining macros are not, so their inputs
-    // diverge from legacy and the gate rejects them.
+    // `push_macro_label`). Every inline macro family the legacy parser recognises
+    // is ported: the cross-reference family (`xref:`/`<<>>`), the link family
+    // (`link:`/`mailto:`, bare URL/email autolinks), the inline image (`image:`),
+    // the leaf macros `icon:` and the STEM family (`stem:`/`latexmath:`/
+    // `asciimath:`), the anchor (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term
+    // (`((…))`/`indexterm:`/`indexterm2:`) families, footnotes, and the
+    // experimental UI macros. A macro whose span swallowed an earlier-extracted
+    // sentinel still punts to legacy (see `flag_decline`).
     if subs.has(SubstitutionSet::MACROS) {
         macros::extract(&mut work, subs, options);
     }
@@ -322,10 +317,9 @@ mod tests {
     /// content would end in whitespace — or one whose trailing lookahead fails),
     /// absorbing it into the content via `.` and matching a *later* valid marker.
     /// The legacy parser stops at the first marker and abandons the span, so for
-    /// these inputs the engine is more Asciidoctor-faithful and the gate falls
-    /// back (asserted via `try_parse` returning `None`); under `force()` the
-    /// engine matches Asciidoctor (this is the `outline.adoc` flip:
-    /// `` `head` or `header; `foot` or `footer` ``).
+    /// these inputs the engine is more Asciidoctor-faithful; with the gate removed
+    /// `try_parse` now ADOPTS the engine result (asserted below). This is the
+    /// `outline.adoc` flip: `` `head` or `header; `foot` or `footer` ``.
     #[test]
     fn constrained_close_search_matches_asciidoctor() {
         // Raw engine (force-equivalent) matches the Asciidoctor reference: the
@@ -366,13 +360,15 @@ mod tests {
         ] {
             assert_eq!(pipeline(input), expected, "force result for {input:?}");
         }
-        // The gate declines these (the raw engine diverges from the more permissive
-        // legacy parser, which leaves the leading marker literal and closes at the
-        // first inner marker).
+        // With the gate removed the engine ADOPTS these (the raw, Asciidoctor-
+        // faithful result) instead of falling back to the more permissive legacy
+        // parser, which leaves the leading marker literal and closes at the first
+        // inner marker.
         for c in ["x `a; `b` y", "`a `b` c", "`a`b`"] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
-                "gate should decline (diverge from legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the Asciidoctor-faithful result for {c:?}"
             );
         }
         // Regression guard: where the first marker is already a valid close (normal
@@ -951,18 +947,18 @@ mod tests {
         // Asciidoctor's `InlineXrefMacroRx` rejects a `<<target>>` whose target does
         // NOT begin with `[\p{Word}#/.:{]`. The legacy parser has no such guard and
         // links these (it only reaches a top-level `<<`, never one buried inside a
-        // span), so the engine now diverges and the gate falls back to legacy —
-        // asserted via `try_parse` returning `None`. Under `force()` the engine
-        // instead matches Asciidoctor (no link), which is what flips `page-breaks`.
+        // span). With the gate removed the engine ADOPTS the Asciidoctor-faithful
+        // result (no link), which is what flips `page-breaks`.
         for c in [
             "<< id , the label >>", // leading space
             "<<-y>>",               // leading dash
             "<<\"a\">>",            // leading quote
             "a <<<b>>",             // inner `<<` matches at `b` → `<` literal + `#b`
         ] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
-                "gate should decline (diverge from legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the Asciidoctor-faithful result for {c:?}"
             );
         }
     }
@@ -1287,9 +1283,9 @@ mod tests {
     /// where the legacy parser's `flush_text` at the backslash produces no empty
     /// split, so the event vectors match exactly. A bare `\pass:` mid-run after
     /// other text (`before \pass:[x]`) renders identically but splits the text one
-    /// event differently in legacy; the gate declines it and falls back (still
-    /// correct), so it is excluded here. The `\\pass:` double-backslash form is
-    /// likewise deferred.
+    /// event differently from legacy (the engine adopts its own, still-correct
+    /// split), so it is excluded from these byte-equality cases. The `\\pass:`
+    /// double-backslash form is likewise excluded.
     #[test]
     fn reproduces_legacy_on_pass_escape_inputs() {
         let cases = [
@@ -1334,10 +1330,10 @@ mod tests {
     /// Cases keep the escape at a flush boundary (input start or a span edge): the
     /// legacy parser flushes text AT the backslash, so a mid-run bare escape
     /// (`before \http://x`) splits the text one event differently (the URL flows
-    /// into a fresh run) while the flat engine merges it into one Text — the gate
-    /// declines that and falls back (HTML identical). The `\\http://…`
-    /// double-backslash form (legacy drops one backslash, Asciidoctor keeps both)
-    /// is likewise excluded.
+    /// into a fresh run) while the flat engine merges it into one Text — the engine
+    /// adopts its own (HTML-identical) split, so that case is excluded from these
+    /// byte-equality cases. The `\\http://…` double-backslash form (legacy drops
+    /// one backslash, Asciidoctor keeps both) is likewise excluded.
     #[test]
     fn reproduces_legacy_on_autolink_escape_inputs() {
         let cases = [
@@ -1468,9 +1464,10 @@ mod tests {
     /// passthrough leaf first, then the link macro reconstructs it. Covers the
     /// corpus cases (special chars `[a b]` in the URL, repeating `__`), bare and
     /// explicit-label forms, a plain-link regression guard, and surrounding text.
-    /// A passthrough in the *label* (not the URL) is a decline — the engine cannot
-    /// re-parse a label that already holds a sentinel, so the gate falls back to
-    /// legacy; that is asserted separately below.
+    /// A passthrough in the *label* (not the URL) is a punt — the engine cannot
+    /// yet re-parse a label that already holds a sentinel, so the macro pass flags
+    /// the punt and `try_parse` falls back to legacy; that is asserted separately
+    /// below.
     #[test]
     fn reproduces_legacy_on_link_passthrough_url_inputs() {
         let cases = [
@@ -1495,8 +1492,9 @@ mod tests {
                 "new engine diverged from legacy for {c:?}"
             );
         }
-        // A passthrough sentinel in the LABEL declines (the engine can't re-parse a
-        // label that already holds a sentinel): the gate falls back to legacy.
+        // A passthrough sentinel in the LABEL punts (the engine can't yet re-parse a
+        // label that already holds a sentinel): the macro pass flags the punt and
+        // `try_parse` falls back to legacy, which renders it correctly.
         assert!(
             try_parse(
                 "link:http://x.com[++raw__text++]",
@@ -1508,9 +1506,8 @@ mod tests {
     }
 
     /// The `\((…))` index-term-shorthand escape and the `\\MM…MM` doubled-marker
-    /// escape (subs.adoc lines 20 and 27): the engine must reproduce legacy's
-    /// event stream so the gate adopts them, and (under FORCE) render the literal
-    /// `((…))` / `__…__` Asciidoctor emits.
+    /// escape (subs.adoc lines 20 and 27): the engine reproduces legacy's event
+    /// stream here and renders the literal `((…))` / `__…__` Asciidoctor emits.
     #[test]
     fn reproduces_legacy_on_index_and_doubled_marker_escape_inputs() {
         let cases = [
@@ -1747,8 +1744,8 @@ mod tests {
     }
 
     #[test]
-    fn try_parse_gate_adopts_matching_result() {
-        // A plain quotes input the engine reproduces exactly → gate adopts it.
+    fn try_parse_adopts_plain_quotes_result() {
+        // A plain quotes input the engine reproduces exactly as legacy.
         let got = try_parse("*bold* and _em_", SubstitutionSet::NORMAL, InlineOptions::default());
         assert_eq!(got, Some(legacy("*bold* and _em_")));
     }
@@ -1761,10 +1758,11 @@ mod tests {
     /// construct-adjacent backslash is consumed. Deliberately NOT covered (left
     /// deferred — Asciidoctor itself is pathological/inconsistent there): the
     /// URL-target `\\link:http://…[…]` (which Asciidoctor still renders as a link)
-    /// and the triple-plus `\\+++…+++`. As with the markers, every form diverges
-    /// from the legacy parser, so the gate declines and the corpus is unchanged.
+    /// and the triple-plus `\\+++…+++`. As with the markers, every covered form
+    /// diverges from the legacy parser, and the engine now ADOPTS the
+    /// Asciidoctor-faithful result (asserted below).
     #[test]
-    fn force_handles_doubled_backslash_macro_index_and_double_plus() {
+    fn handles_doubled_backslash_macro_index_and_double_plus() {
         for (input, expected) in [
             // macro escapes — one backslash dropped, the macro kept literal
             (
@@ -1805,27 +1803,26 @@ mod tests {
                 ],
             ),
         ] {
-            assert_eq!(pipeline(input), expected, "force result for {input:?}");
+            assert_eq!(pipeline(input), expected, "pipeline result for {input:?}");
         }
 
         for c in ["\\\\image:a.png[alt]", "\\\\&copy;", "\\\\((term))", "\\\\++pp++"] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
-                "gate should decline (diverge from legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the Asciidoctor-faithful result for {c:?}"
             );
         }
     }
 
     #[test]
-    fn try_parse_gate_declines_divergent_result() {
-        // Cross-span overlap differs from legacy → gate declines (None).
-        assert!(
-            try_parse(
-                "a *crosses `code* span`",
-                SubstitutionSet::NORMAL,
-                InlineOptions::default()
-            )
-            .is_none()
+    fn try_parse_adopts_cross_span_overlap() {
+        // Cross-span overlap is the Asciidoctor-faithful result the legacy (nested)
+        // parser cannot produce; with the gate removed `try_parse` adopts it.
+        let input = "a *crosses `code* span`";
+        assert_eq!(
+            try_parse(input, SubstitutionSet::NORMAL, InlineOptions::default()),
+            Some(pipeline(input))
         );
     }
 
@@ -1835,14 +1832,13 @@ mod tests {
     /// capture), keeping the construct literal and leaving every leading backslash
     /// as a literal boundary char. This DIVERGES from the legacy parser, which
     /// either still renders the span (`\\*bold*` → `\<strong>bold</strong>`) or
-    /// emits a different event shape, so the differential gate declines every form
-    /// (asserted below) and the corpus output is unchanged — the new behaviour
-    /// only surfaces under `force`/after the gate is lifted. Matches Asciidoctor
-    /// byte-for-byte (verified against `asciidoctor -s` on each form).
+    /// emits a different event shape; with the gate removed the engine now ADOPTS
+    /// every form (asserted below). Matches Asciidoctor byte-for-byte (verified
+    /// against `asciidoctor -s` on each form).
     #[test]
-    fn force_handles_doubled_backslash_escape() {
-        // `pipeline` (ungated) reproduces Asciidoctor: one backslash dropped, the
-        // construct kept literal.
+    fn handles_doubled_backslash_escape() {
+        // `pipeline` reproduces Asciidoctor: one backslash dropped, the construct
+        // kept literal.
         for (input, expected) in [
             // constrained markers — one backslash dropped, span NOT formed
             ("\\\\*bold*", vec![Event::Text("\\*bold*".into())]),
@@ -1884,12 +1880,12 @@ mod tests {
                 ],
             ),
         ] {
-            assert_eq!(pipeline(input), expected, "force result for {input:?}");
+            assert_eq!(pipeline(input), expected, "pipeline result for {input:?}");
         }
 
-        // The gate declines every form: the new (correct) result is not byte-equal
-        // to the legacy parser's (buggy span / split-event) output, so the engine
-        // falls back to legacy and the gated corpus output stays unchanged.
+        // The engine ADOPTS every form: the new (correct) result differs from the
+        // legacy parser's (buggy span / split-event) output, and with the gate
+        // removed `try_parse` returns the Asciidoctor-faithful pipeline result.
         for c in [
             "\\\\*bold*",
             "\\\\^sup^",
@@ -1897,9 +1893,10 @@ mod tests {
             "\\\\pass:[raw]",
             "\\\\+plus+",
         ] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
-                "gate should decline (diverge from legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the Asciidoctor-faithful result for {c:?}"
             );
         }
     }
@@ -1971,24 +1968,25 @@ mod tests {
         // The SHORTHAND forms (`[.role]` / `[#id]`) are parsed identically by the
         // legacy parser, which also keeps the `{name}` literal in the role/id.
         // Restoring the literal here makes the new result byte-equal to legacy, so
-        // the gate now ADOPTS them — previously the raw sentinel made them diverge
-        // and fall back. They are therefore correct in the default (gated) build,
-        // finished off by the renderer's reference resolution.
+        // the engine adopts them, finished off by the renderer's reference
+        // resolution.
         for c in ["[.{a}]_y_", "[#{a}]`z`", "[#{a}.{b}]*c*"] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_some(),
-                "gate should adopt (matches legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the result for {c:?}"
             );
         }
 
         // The POSITIONAL form (`[role]`, no `.`/`#`) is NOT treated as a span
         // attrlist by the legacy parser (it emits the bracket and an
-        // `AttributeReference` separately), so the new result diverges and the gate
-        // declines — the corrected span only appears under `force()`.
+        // `AttributeReference` separately), so the new result diverges; with the
+        // gate removed the engine ADOPTS the corrected span.
         for c in ["[{a}]*x*", "[{a}]##u##"] {
-            assert!(
-                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
-                "gate should decline (diverge from legacy) for {c:?}"
+            assert_eq!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
+                Some(pipeline(c)),
+                "engine should adopt the corrected span for {c:?}"
             );
         }
     }

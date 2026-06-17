@@ -23,8 +23,11 @@
 //! the escaped single-plus `\+…+` and the escaped pass macro `\pass:SPEC[…]`.
 //! Both drop the backslash and leave the would-be passthrough's content in the
 //! buffer to flow through the later passes rather than being extracted — see the
-//! arms in [`extract`]. Their doubled (`\++`/`\+++`) and double-backslash
-//! (`\\+`/`\\pass:`) variants stay deferred.
+//! arms in [`extract`]. The double-backslash `\\++…++` marker escape is handled
+//! too; the single-backslash doubled-marker forms (`\++`/`\+++`) and the other
+//! double-backslash variants (`\\+`/`\\pass:`/`\\+++`) are deferred — `\++…`
+//! flags a decline (Asciidoctor's own handling is self-inconsistent) so
+//! [`super::try_parse`] falls back to legacy.
 
 use crate::event::{Event, SubstitutionSet};
 use crate::inline::InlineOptions;
@@ -73,6 +76,23 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
             out.push_str(&src[i + 4..close]); // raw content flows through later passes
             out.push_str(&work.macro_sentinel(vec![Event::Text("++".into())]));
             i = end;
+            continue;
+        }
+
+        // Deferred: a SINGLE-backslash escaped double/triple-plus marker (`\++…` /
+        // `\+++…`). Asciidoctor escapes the marker (the `++`/`+++` stays literal),
+        // but its handling of these forms is self-inconsistent (the parsing-lab ASG
+        // and the Ruby HTML disagree), so the engine does not reproduce them yet:
+        // flag a decline and let [`super::try_parse`] fall back to the legacy
+        // parser, which still has the raw source. The DOUBLE-backslash `\\++…++`
+        // form above IS handled; this only catches the single-backslash marker.
+        if b == b'\\'
+            && bytes.get(i + 1).copied() == Some(b'+')
+            && bytes.get(i + 2).copied() == Some(b'+')
+        {
+            super::flag_decline();
+            out.push('\\');
+            i += 1;
             continue;
         }
 
