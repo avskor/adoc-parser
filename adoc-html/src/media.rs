@@ -375,11 +375,14 @@ impl HtmlRenderer {
         let has_link = link.is_some();
         if let Some(href) = link {
             output.push_str("<a class=\"image\" href=\"");
-            html_escape(output, href);
+            html_escape(output, self.resolve_inline_attr_value(href).as_ref());
             output.push_str("\">");
         }
         output.push_str("<img");
-        write_attr(output, "src", &self.image_uri(target));
+        // The `macros` pass captures an attribute reference in the target
+        // (`image:{p}[…]`) literally; resolve it before `image_uri` applies
+        // `imagesdir`, matching asciidoctor's attributes-before-macros order.
+        write_attr(output, "src", &self.image_uri(self.resolve_inline_attr_value(target).as_ref()));
         let effective_alt = if alt.as_ref().is_empty() {
             auto_alt_from_target(target)
         } else {

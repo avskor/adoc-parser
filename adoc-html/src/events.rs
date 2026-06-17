@@ -23,6 +23,20 @@ impl HtmlRenderer {
             Event::Start(tag) => self.start_tag(output, &tag),
             Event::End(tag_end) => self.end_tag(output, &tag_end),
             Event::Text(text) => {
+                // A bare `link:{u}[]` repeats its target as visible text; resolve
+                // the attribute reference (only when one is present, so all other
+                // text is byte-for-byte untouched) before the normal text path
+                // escapes it — mirrors the href resolution above.
+                let text = if self.bare_link_pending {
+                    self.bare_link_pending = false;
+                    if text.contains('{') {
+                        CowStr::from(self.resolve_inline_attr_value(&text).into_owned())
+                    } else {
+                        text
+                    }
+                } else {
+                    text
+                };
                 // Raw content of an open AsciiDoc-style (`a`) table cell: collect
                 // for the nested block parse on TagEnd::TableCell.
                 if let Some(buf) = self.acell_capture.last_mut() {
@@ -615,7 +629,16 @@ impl HtmlRenderer {
             }
             Tag::Link { url, window, nofollow, is_bare, role } => {
                 output.push_str("<a");
-                write_attr(output, "href", url);
+                // The `macros` pass runs before `attributes`, so an attribute
+                // reference in the target (`link:{u}[…]`) survives unresolved into
+                // `url`; resolve it here to match asciidoctor (which substitutes
+                // attributes first). Undefined → kept literal; no `{` → borrowed.
+                write_attr(output, "href", self.resolve_inline_attr_value(url).as_ref());
+                // A bare link's visible text repeats the (literal) target, so flag
+                // the upcoming text event to resolve the same references the href did.
+                if *is_bare {
+                    self.bare_link_pending = true;
+                }
                 // class comes right after href (asciidoctor order); bare
                 // precedes the role: class="bare green".
                 if *is_bare || role.is_some() {
@@ -1154,6 +1177,9 @@ impl HtmlRenderer {
                 output.push_str("</sub>");
             }
             TagEnd::Link => {
+                // Defensive: a bare link always emits its visible text, but clear
+                // the flag here too so it never leaks past an empty link.
+                self.bare_link_pending = false;
                 output.push_str("</a>");
             }
             TagEnd::CrossReference => {

@@ -504,3 +504,58 @@ fn test_attr_ref_in_link_and_image_role_resolves() {
         "no extraction sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_attr_ref_in_link_and_image_target_resolves() {
+    // A `{name}` in a link/image macro target (`link:{u}[…]`/`image:{p}[…]`)
+    // survives the `macros` pass — which runs before `attributes` — as a literal
+    // in the `url`/`target` field; the renderer resolves it against the document
+    // attributes, matching Asciidoctor (which substitutes attributes first).
+    let html = to_html(":u: https://example.com\n\nlink:{u}[home]");
+    assert!(
+        html.contains("<a href=\"https://example.com\">home</a>"),
+        "defined attr ref in link target must resolve. Got: {html}"
+    );
+
+    // A trailing path after the reference is kept verbatim.
+    let html = to_html(":u: https://example.com\n\nlink:{u}/issues[issues]");
+    assert!(
+        html.contains("<a href=\"https://example.com/issues\">issues</a>"),
+        "attr ref + path in link target must resolve and keep the path. Got: {html}"
+    );
+
+    // Inline image target resolves before `imagesdir` is applied.
+    let html = to_html(":p: tiger.png\n:imagesdir: img\n\nimage:{p}[Tiger]");
+    assert!(
+        html.contains("<img src=\"img/tiger.png\" alt=\"Tiger\">"),
+        "attr ref in image target must resolve, then imagesdir prefixes. Got: {html}"
+    );
+
+    // The inline image `link=` href resolves too.
+    let html = to_html(":u: https://example.com\n\nimage:cat.png[Cat,link={u}]");
+    assert!(
+        html.contains("<a class=\"image\" href=\"https://example.com\"><img src=\"cat.png\""),
+        "attr ref in inline-image link target must resolve. Got: {html}"
+    );
+
+    // A bare link (empty bracket) repeats the target as visible text; both the
+    // href and that text resolve the reference.
+    let html = to_html(":u: https://example.com\n\nlink:{u}[]");
+    assert!(
+        html.contains("<a href=\"https://example.com\" class=\"bare\">https://example.com</a>"),
+        "bare link must resolve the attr ref in both href and visible text. Got: {html}"
+    );
+
+    // Undefined reference is kept literal (`attribute-missing` default `skip`).
+    let html = to_html("link:{undef}[gone]");
+    assert!(
+        html.contains("<a href=\"{undef}\">gone</a>"),
+        "undefined attr ref in link target must stay literal. Got: {html}"
+    );
+
+    // No raw extraction sentinel (control bytes) may leak into the output.
+    assert!(
+        !html.bytes().any(|b| b == 0x01 || b == 0x02),
+        "no extraction sentinel may leak into output. Got: {html:?}"
+    );
+}
