@@ -202,7 +202,40 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 94-я сессия): РЕРАЙТ inline — Фаза 2 (25/N) UI-макросы kbd/btn/menu (ветка `feat/subst-phase2-next-25`)
+## АКТУАЛЬНО (2026-06-17, 95-я сессия): РЕРАЙТ inline — Фаза 2 (26/N) doubled-backslash escape (ветка `feat/subst-phase2-parity-26`)
+
+Корпус неизменен **344/344** (гейт держит). Фаза 2 контентно завершена (FORCE 344/344) → задачу выбрал
+пользователь (AskUserQuestion): **ПАРИТЕТ new≡legacy** на sub-file edge-кейсах = предусловие чистого снятия
+гейта. Phase 2 (1-25/N) уже СМЕРЖЕНА в master (`f1e572f`). **(26/N) НЕ закоммичена** (рабочее дерево;
+коммит/мерж по запросу пользователя):
+- [x] **(26/N) doubled-backslash escape** `\\*bold*`→`\*bold*`, `\\pass:`→`\pass:`, `\\+plus+`→`\+plus+`,
+  `\\^sup^`→`\^sup^` (и каскад N→N-1 `\`). Снят избыточный guard `(i==0 || bytes[i-1] != b'\\')` в 4 escape-армах.
+  - **Разведка:** doubled-backslash сломан в ОБОИХ движках. asciidoctor: N backslash → (N-1)+конструкт-литерал
+    (ровно ОДИН смежный `\` поглощается). Класс A (new корректнее legacy: `\\ bare`/`\\https`/`*x*--`) — улучшения;
+    класс B (new ошибочен: `\\*marker*`/`\\pass:` мусор) — баги, чинятся.
+  - **Корень:** guard отсекал второй `\` (смежный с конструктом) → escape не срабатывал → оба `\`+рендер. Guard
+    ИЗБЫТОЧЕН — армы уже гейтятся на «конструкт сформировался бы» (`constrained_open_close`/`simple_pair_open_close`/
+    `pass_escape_prefix_len`/`try_single_plus`). Снятие → escape на последнем `\`, каскад точен. Nested-защита
+    БЕСПЛАТНА: `_\\*a*_`→`<em>\\*a*</em>` (внутренний `*a*` не закрывается перед `_` → None → escape не срабатывает).
+  - **Файлы:** quotes.rs (pass_constrained:348, pass_simple_pair:~567), passthrough.rs (single-plus:63, pass:85).
+- [x] **«добей» — macro/char-ref/index/double-plus doubled-backslash** (расширение по запросу пользователя):
+  `\\image:`/`\\xref:`/`\\mailto:`/`\\link:foo.html`→`\image:…`, `\\&copy;`→`\&amp;copy;`, `\\((term))`→`\((term))`,
+  `\\++pp++`→`++pp++`, `\\++*x*++`→`++<strong>x</strong>++`.
+  - **escape.rs**: арм `Some(b'\\')` else-ветка `"\\\\"; i+=2` → `'\\'; i+=1` (advance-by-1: первый `\` литералом,
+    ре-вход на втором → одиночный escape поглощает смежный `\`). Маркеры/bare `\\`/`\\https` не задеты.
+  - **passthrough.rs**: новый арм `\\++…++` (перед single-plus) — оба `\` дропнуты, `++` как Macro-leaf, content RAW
+    flows (зеркало `doubled_marker_escape` для `**`). Triple `\\+++` исключён (`bytes[i+4] != '+'`).
+  - **mod.rs тест** `force_handles_doubled_backslash_macro_index_and_double_plus` (6 векторов + 4 gate-decline).
+  - clippy 0; test --workspace зелёное (parser 555→557 (+2)). **gate_check toggle 344, 0** (airtight). **blast_force
+    Identical 344→344** (0 REGR). e2e (p_fin/p_dp/p_q1/q2/p_db): NEW(FORCE)==asciidoctor байт-в-байт на ВСЕХ формах.
+- [ ] **Остаток — 2 патологии САМОГО asciidoctor** (FORCE расходится осознанно): `\\link:URL[text]` с автолинк-URL
+  (asciidoctor рендерит ссылку; `\\link:foo.html` — литерал, как и у нас); `\\+++…+++` (triple-plus, asciidoctor сам
+  непоследователен `+++…+`). Воспроизводить не стоит.
+- **Дальше:** cross-span `*x*-- y` (new УЖЕ корректен — улучшение); render_kbd_keys по `,`; **ФИНАЛ (Фаза 3): снять gate**.
+
+---
+
+## (2026-06-17, 94-я сессия): РЕРАЙТ inline — Фаза 2 (25/N) UI-макросы kbd/btn/menu (ветка `feat/subst-phase2-next-25`)
 
 Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.

@@ -1,5 +1,71 @@
 # Session context
 
+## Сессия (2026-06-17, 95-я) — РЕРАЙТ inline, Фаза 2 (26/N): doubled-backslash escape (`\\*bold*`/`\\pass:`/`\\+`/`\\^` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-26`** (off master `f1e572f`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж по запросу пользователя). 25/N к началу сессии УЖЕ смержен
+(master HEAD `f1e572f`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `f1e572f`.
+
+### Выбор задачи — ПАРИТЕТ new≡legacy (выбран пользователем через AskUserQuestion)
+Фаза 2 контентно завершена (FORCE 344/344, все inline-макросы портированы) → nearmiss пуст. Путь
+разветвился: (1) паритет на sub-file edge-кейсах, (2) render_kbd_keys, (3) ФИНАЛ — снять гейт.
+Пользователь выбрал **(1) паритет** = предусловие чистого снятия гейта.
+
+### Разведка (asciidoctor/legacy/FORCE на 18+ формах doubled-backslash)
+Открытие: **doubled-backslash сломан в ОБОИХ движках**, не только в new. asciidoctor-каскад: **N backslash
+перед конструктом → (N-1) backslash + конструкт-литерал** (ровно ОДИН `\`, смежный с конструктом, поглощается).
+Классы остатков: (A) new корректнее legacy (`\\ bare`, `\\https`, `*x*-- y` em-dash после close — улучшения,
+гейт подавляет, под FORCE уже верны); (B) new ОШИБОЧЕН (`\\*marker*` держит оба `\`+рендерит спан; `\\pass:`
+выдаёт мусор `\\x*y*z`). Класс (B) = реальные баги, при снятии гейта дадут регресс → чинить.
+
+### Корень — guard `(i==0 || bytes[i-1] != b'\\')` в 4 escape-армах
+Армы escape гейтились на «предыдущий байт ≠ backslash» → для `\\X` второй `\` (смежный с конструктом)
+отсекался, escape не срабатывал → конструкт жил с обоими backslash. Guard ИЗБЫТОЧЕН: армы УЖЕ гейтятся на
+«конструкт сформировался бы» (`constrained_open_close`/`simple_pair_open_close`/`pass_escape_prefix_len`/
+`try_single_plus`). Снятие guard'а → escape срабатывает на ПОСЛЕДНЕМ `\` перед конструктом, поглощая ровно
+один — точный asciidoctor-каскад для любого N. Nested-защита сохраняется БЕСПЛАТНО: `_\\*a*_` →
+`<em>\\*a*</em>` (два `\`), т.к. внутренний `*a*` не закрывается перед word-char `_` → `constrained_open_close`
+= None → escape не срабатывает (== asciidoctor).
+
+### Сделано — пользователь сказал «добей» → закрыты ВСЕ формы (кроме 2 патологий asciidoctor)
+**Часть 1 (markers/pass/plus):** снят избыточный guard в 4 escape-армах:
+- **quotes.rs**: `pass_constrained` (строка 348) и `pass_simple_pair` (~567).
+- **passthrough.rs**: single-plus (строка 63) и pass-макрос (строка 85).
+**Часть 2 («добей» — macro/char-ref/index/double-plus):**
+- **escape.rs**: арм `Some(b'\\')` else-ветка `out.push_str("\\\\"); i+=2` → `out.push('\\'); i+=1` (advance-by-1:
+  эмитит первый `\`, ре-входит на втором → одиночный escape поглощает смежный `\`). Чинит `\\image:`/`\\xref:`/
+  `\\mailto:`/`\\link:foo.html` (macro), `\\&#…;`/`\\&copy;` (char-ref), `\\((…))` (index). Маркеры/bare `\\`/`\\https`
+  не задеты (второй `\` → blanket / уже обработан раньше).
+- **passthrough.rs**: новый арм `\\++…++` (double-plus, перед single-plus) — оба `\` дропнуты, `++` маркеры
+  как литеральные Macro-leaf, content RAW flows (зеркало `doubled_marker_escape` для `**`): `\\++*x*++` →
+  `++<strong>x</strong>++`, `\\++pp++` → `++pp++`. Triple `\\+++` исключён (`bytes[i+4] != '+'`).
+- **mod.rs тесты**: `force_handles_doubled_backslash_escape` (13 векторов + 5 gate-decline) +
+  `force_handles_doubled_backslash_macro_index_and_double_plus` (6 векторов + 4 gate-decline).
+- **Docstring'и**: escape.rs модуль-doc (single-plus/pass/marker «handled», секция double-backslash, Deferred=
+  только 2 патологии, `Some(b'\\')` арм), mod.rs run_pipeline-doc.
+
+### Верификация (airtight, чисто аддитивно)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 555→557 (+2), html 433, остальные неизменны).
+- **gate_check toggle ON: 344, 0 различий base≡new** (airtight — гейт деклайнит все формы, fallback на legacy,
+  корпус неизменен). **blast_force: Identical base 344→new 344 (0 REGR/FLIP — формы НЕ встречаются в корпусе).**
+- **e2e-пробы** (`/tmp/p_db.adoc`, p_fin, p_dp, p_q1/q2, p_tri, p_edge, p_c1..3): NEW(FORCE) == asciidoctor
+  **байт-в-байт** на ВСЕХ формах doubled-backslash + каскад 1→4 `\` + nested + double-plus с разметкой.
+
+### Остаток (deferred — 2 патологии САМОГО asciidoctor, FORCE расходится осознанно)
+- **`\\link:URL[text]`** с автолинк-URL-таргетом: asciidoctor РЕНДЕРИТ ссылку (`\\link:foo.html[t]` — литерал,
+  как ожидается; спец только URL). У нас литерал `\link:URL[text]`. Воспроизводить уродливый спец-кейс не стоит.
+- **`\\+++…+++`** (triple-plus): asciidoctor сам непоследователен (`\\+++*x*+++` → `+++<strong>x</strong>+` —
+  3 открыв / 1 закрыв). Портирован только double-plus.
+
+### Дальше — Фаза 2 паритет (остаток выше) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- Прочие cross-span: `*x*-- y` em-dash после close (new УЖЕ корректен, legacy баг — улучшение, не баг).
+- render_kbd_keys сплит по `,` (рендерер, pre-existing).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py KEY=VAL`, `blast_force.py`, `blast_toggle.py`, `diffone.py`,
+  `nearmiss.py`. CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD (stash→build→cp→pop).
+  asciidoctor: `asciidoctor -s -o - file.adoc`. Регулярки: `ruby -e 'require "asciidoctor"; puts Asciidoctor::Rx...'`.
+
+---
+
 ## Сессия (2026-06-17, 94-я) — РЕРАЙТ inline, Фаза 2 (25/N): UI-макросы kbd/btn/menu (последний inline-конструкт; предусловие снятия гейта)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-25`** (off master `43c2eeb`, 344) —
