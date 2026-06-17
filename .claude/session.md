@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-17, 100-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (31/N): attribute-ref в xref TARGET (`xref:{rel}.adoc[]`/`xref:{frag}[]`/`<<{id}>>` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-31`** (off master `b330983`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — ТОЛЬКО по запросу пользователя). 30/N УЖЕ смержена
+(master HEAD `b330983`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `b330983`
+(`cargo build --release -p adoc-cli`→cp; ⚠ CLI в пакете **adoc-cli**).
+
+### Выбор задачи — документированный остаток 29/30 («xref `{rel}` target — отд. механизм xref-резолвера»)
+29/N сделала attr-ref в TARGET inline link/image; 30/N — image alt+блочный image. Оба ЯВНО отложили xref target
+(`xref:{rel}.adoc`→`intro.html`; xref-резолвер — отд. механизм). 31/N закрывает его — завершение «attr-ref во
+ВСЕХ target макросов» (link ✓ image ✓ → xref). Альтернатива (render_kbd_keys сплит по `,`) — другая тема, отложена.
+
+### Корень — те же, что 29/30: macros ДО attributes, target минует resolve
+asciidoctor subs: attributes → … → macros, поэтому `{rel}`/`{frag}` резолвлены к xref-пассу. Наш движок: macros
+ПЕРВЫЙ → `{rel}`/`{frag}` доживают литералом в `Tag::CrossReference.target`. **РАЗВЕДКА (`/tmp/p31_xref.adoc`):**
+наш `href="{rel}.html"`/`#{frag}`, asciidoctor `intro.html`/`#section-one`. Фикс РЕНДЕРЕР-ONLY (attr-refs эмитятся
+парсером литералом — docstring subst/attributes.rs; резолвит рендерер с document_attrs).
+
+### Сделано (1 файл кода + 1 тест) — РЕНДЕРЕР-ONLY (inline.rs)
+- **`start_cross_reference`:** в начале `let resolved = self.resolve_inline_attr_value(target); let target: &str =
+  resolved.as_ref();` ДО is_interdoc_xref_target/interdoc_xref_href и до сохранения internal href-placeholder/fallback.
+  Резолвнутый target драйвит ВСЁ: interdoc/internal-классификацию, `.adoc`→`.html`, lookup id, bracketed fallback.
+  `resolve_inline_attr_value` возвращает Cow из АРГУМЕНТА (не self) → безопасно из `&mut self` (как 30/N).
+- **КЛЮЧЕВОЕ:** резолв ДО is_interdoc — `{rel}.adoc`→`intro.adoc` детектится как interdoc, `{frag}`→`section-one`
+  как internal (natural-xref по резолвнутому id подхватывает заголовок секции). undefined `{undef}.adoc`→`{undef}.html`
+  (расширение всё равно переписывается), internal `{undef}`→`#{undef}`/`[{undef}]` (keep-literal).
+- **Тест:** `test_attr_ref_in_xref_target_resolves` (html_output.rs, после `_in_image_target_alt_link_resolves`):
+  interdoc `{rel}.adoc`→intro.html / interdoc+`#{frag}` / internal `{frag}`→href+fallback / резолв-id→реальная секция /
+  angle-форма `<<{secid}>>` / undefined interdoc+internal keep-literal / no-sentinel-leak.
+
+### Скоуп (СТРОГО = завершение target attr-ref) / ОТЛОЖЕНО
+ВСЕ target макросов теперь резолвят attr-refs (link/image 29/30 + xref 31). ОТЛОЖЕНО (остаток, вне скоупа):
+**render_kbd_keys сплит по `,`** (`kbd:[Ctrl,T]`→split; наш `<kbd>Ctrl,T</kbd>`, рендерер, pre-existing).
+
+### Верификация (airtight, рендерер корпус-невидим)
+- clippy --workspace 0; cargo test --workspace зелёное (html_output integration 40→41, parser 558, прочее неизменно).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). Корпус: единств. `xref:chain-{chapter}[]`
+  (include-multiple-times-…adoc) сидит ВНУТРИ `[source]`-листинга (verbatim, НЕ парсится макросом) → вывод не
+  меняется. **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/p31_xref.adoc`/`p31_edge.adoc`):** new == `asciidoctor -s -o -` БАЙТ-В-БАЙТ на всём классе
+  (единств. остаток-diff `p31_edge` — pre-existing trailing-blank после секции, есть и на base, НЕ про xref).
+
+### Дальше — Фаза 2 паритет (остаток) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- **Остаток-кандидат:** render_kbd_keys сплит по `,` (рендерер, pre-existing). attr-ref в target макросов
+  ТЕПЕРЬ ЗАКРЫТ полностью (link/image/xref).
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]` (env только на NEW), `blast_force.py`,
+  `diffone.py <file> [N]`, `nearmiss.py`. CLI: `adoc [--no-standalone] [-a nofooter] file` (НЕ `-s`!).
+  base пересобирать `cargo build --release -p adoc-cli` из master HEAD. asciidoctor: `asciidoctor -s -o - f`.
+  ⚠ shell cwd сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 99-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (30/N): attribute-ref в image alt + БЛОЧНЫЙ image target/alt/link (`image::{p}[{a}]`/`image:{p}[{a}]` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-30`** (off master `96f04ae`, 344) —
