@@ -1146,6 +1146,28 @@ fn test_source_lang_shifted_by_leading_named_attr_html() {
 }
 
 #[test]
+fn test_source_language_default_html() {
+    // `:source-language:` provides the default language for `[source]` blocks
+    // without an explicit language, and promotes bare `----` listings to source.
+    let bare_source = to_html(":source-language: ruby\n\n[source]\n----\nputs 1\n----");
+    assert!(
+        bare_source.contains("<pre class=\"highlight\"><code class=\"language-ruby\" data-lang=\"ruby\">"),
+        "[source] no-lang inherits source-language. Got: {bare_source}"
+    );
+
+    let promoted = to_html(":source-language: ruby\n\n----\nputs 1\n----");
+    assert!(
+        promoted.contains("<pre class=\"highlight\"><code class=\"language-ruby\" data-lang=\"ruby\">"),
+        "bare listing promoted to source. Got: {promoted}"
+    );
+
+    // Regression guard: without the attribute, a bare listing stays plain.
+    let plain = to_html("----\nputs 1\n----");
+    assert!(!plain.contains("language-"), "no attr → no language class. Got: {plain}");
+    assert!(!plain.contains("<code"), "no attr → plain listing, no <code>. Got: {plain}");
+}
+
+#[test]
 fn test_checklist_html() {
     let html = to_html("* [x] Done\n* [ ] Todo");
     assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));

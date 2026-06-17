@@ -1,5 +1,43 @@
 # Session context
 
+## Сессия (2026-06-18, 109-я) — F-G `:source-language:` дефолт (ветка `feat/source-language-default`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-A/F-B уже смержены (`f6c9b48`), следующий незакрытый frontier-класс
+— **F-G**. План одобрен через plan mode (объём «обе части» подтверждён через AskUserQuestion), затем реализован.
+Ветка off master `f6c9b48`. **НЕ закоммичена** (коммит/мерж — только по запросу).
+
+### Корень и фикс (только парсер `adoc-parser/src/block.rs`, рендерер не тронут)
+- `:source-language:` не учитывался. asciidoctor 2.0.23 (верифицировано 9 пробами): document-attr задаёт язык по
+  умолчанию. (1) `[source]` без языка → язык = attr; (2) **голый `----` listing (без явного стиля) промотится в source**
+  с дефолтным языком; явный `[source,lang]` побеждает; `[listing]`/`....` literal/literal-параграф — НЕ конвертируются;
+  `:source-language!:` снимает; пустой атрибут промотит с пустым языком (presence-based).
+- Промоция listing→source меняет ТИП события → обязан делать парсер (рендерер `Tag::SourceBlock{language}` уже корректен).
+- Хелпер `default_source_language()` (после `record_attribute_entry`, ~стр.510): `doc_attrs.get("source-language").cloned()`.
+- 3 сайта: paragraph `[source]` (2452) + delimited `[source]` (2848) — fallback `.or_else(default_source_language)`;
+  промоция в `scan_delimited_block` сразу после `is_source_block()` (~2855): `delim==Listing && block_style_kind().is_none()
+  && default_source_language()` → `scan_source_block` с дефолтным языком. `block_style_kind()` (`attributes.rs:432`)
+  = `None` ровно для голого/role/id-only listing; `DelimiterType::Literal` (`....`) сюда не доходит.
+
+### Файлы (3 кода)
+- `adoc-parser/src/block.rs` — хелпер + 3 сайта + 5 parser-тестов (default/promote/explicit-listing-not/explicit-wins/no-attr).
+- `adoc-html/src/tests.rs` — `test_source_language_default_html` (3 кейса: `[source]` default, bare-promote, regression-guard).
+
+### Верификация (AIRTIGHT)
+- clippy 0; `cargo test --workspace` зелёное (parser 562→567 +5, html unit 437→438 +1, остальное неизм.).
+- 9 проб vs asciidoctor (`--no-standalone` ⚠ НЕ `-e` — наш CLI флага `-e` не знает!) — ВСЕ MATCH.
+- **Гейт 344/344** байт-в-байт (`compare_full.py`, release-бинарь). Watch-point `verbatim/examples/source.adoc`
+  (единств. gate-файл с source-language; мангленный tag-soup) — ИДЕНТИЧЕН, не флипнул.
+- **Frontier** (`frontier_parity.py /mnt/c/tmp/adoc-frontier`): 192→**193 identical**, clean-div 40→39. Diff
+  new-vs-master (через временный worktree master→/tmp/adoc_base): изменились ТОЛЬКО 8 source-language файлов, ВСЕ
+  улучшены, 0 регрессий: READMEs(×5) −20 каждый (bare-listing промоция), CONTRIBUTING −6, writers-guide −8, asciidoclet-news −14.
+
+### Остаток / дальше
+- **F-J (НОВЫЙ, в TODO)**: fenced ` ``` ` блоки asciidoctor ВСЕГДА source даже без языка/source-language; мы — plain listing.
+  Отдельный корень от F-G (не зависит от source-language). `scan_markdown_code_fence` ветка без языка (~3170).
+- Дальше по frontier: F-J → F-D/F-C.
+
+---
+
 ## Сессия (2026-06-17, 108-я) — F-B `:hide-uri-scheme:` (ветка `feat/hide-uri-scheme`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-A уже смержена (`d290505`), следующий незакрытый класс — **F-B**
