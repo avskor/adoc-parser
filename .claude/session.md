@@ -1,5 +1,31 @@
 # Session context
 
+## Сессия (2026-06-17, 107-я) — F-A: текст ссылки/autolink не режется по 1-й запятой (ветка `fix/link-text-comma`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → первый класс frontier (F-A). Ветка off master `4beff2e`.
+
+### Корень и фикс
+- `attributes.rs::parse_link_attrs` ВСЕГДА сплитил bracket по запятой → `link:url[A, B, C]` давал текст «A».
+- Правило asciidoctor (1.5.7+, docs.asciidoctor.org/.../link-macro-attribute-parsing): bracket = attribute-list
+  ТОЛЬКО при named-атрибуте (`key=value`, валидный ключ) или ведущей `"`; иначе весь текст (запятые сохранены).
+  mailto — исключение: subject/body позиционны (split по запятой всегда, без `=`).
+- Решение: новый `pub enum LinkKind {Link, Mailto}` + параметр в `parse_link_attrs`; флаг `found_named`; для
+  `Link` при `!found_named && !starts_with('"')` → `text = bracket_content.trim()` (whole-content). В attr-list
+  ветке добавлен `strip_quotes` к `text` (кейс `["A, B",role=x]`). Фикс в ОБЩЕЙ функции покрывает оба движка.
+- Call-sites (7): inline.rs ×4 (link/link/mailto/autolink), subst/macros.rs ×3 (link/mailto/autolink) + 2 импорта.
+
+### Верификация
+- clippy 0, `cargo test --workspace` зелёное (parser 557→562, +4 F-A теста в attributes.rs; +1 обновлён под сигнатуру).
+- **Гейт 344/344**: `compare_full.py` Identical 344/0; `gate_check.py` 0 differing (new vs master-baseline) — байт-в-байт.
+- **Frontier**: 4 файла улучшено, 0 регрессий — `news/_index.adoc` 1→0 (стал identical), `what-is-asciidoc.adoc`
+  3→2 («NFJS, the Magazine»), README-de/fr -1. Проба: оба кейса рендерят полный текст ссылки = asciidoctor.
+
+### Остаток (необязательно, отмечено в плане)
+- Классификатор ключа (`attributes.rs:728`) допускает ведущую цифру (`1=2` → ложный named). asciidoctor требует
+  букву/`_`. Вне корпуса — не трогал. Следующие классы: F-G/F-B (см. TODO).
+
+---
+
 ## Сессия (2026-06-17, 106-я) — РАСШИРЕНИЕ КОРПУСА: frontier-репо + 9 классов расхождений (поиск, НЕ фикс)
 
 Запрос «расширь корпус новыми репозиториями для поиска расхождений». Код НЕ менялся — это research/инфра.

@@ -698,7 +698,23 @@ pub struct LinkAttrs<'a> {
     pub body: Option<&'a str>,
 }
 
-pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
+/// Which inline macro is requesting attribute parsing. This governs whether the
+/// bracketed content is parsed as an attribute list (commas split positional /
+/// named attributes) or kept verbatim as the link text.
+///
+/// Asciidoctor parses a `link:`/URL-macro/autolink bracket as an attribute list
+/// ONLY when it contains a named attribute (`key=value`, key being a valid
+/// attribute name) or is quote-wrapped; otherwise the whole content is the
+/// visible text, commas and all (`link:url[A, B, C]` → "A, B, C"). `mailto:` is
+/// the exception: it always splits positionally so the 2nd/3rd values become the
+/// `?subject=&body=` query parameters even without an `=` sign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    Link,
+    Mailto,
+}
+
+pub fn parse_link_attrs(bracket_content: &str, kind: LinkKind) -> LinkAttrs<'_> {
     if bracket_content.is_empty() {
         return LinkAttrs {
             text: "",
@@ -714,6 +730,7 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
     let mut nofollow = false;
     let mut role: Option<&str> = None;
     let mut positional = Vec::new();
+    let mut found_named = false;
 
     for part in split_respecting_quotes(bracket_content) {
         let part = part.trim();
@@ -728,6 +745,7 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
             !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         });
         if let Some((key, value)) = named {
+            found_named = true;
             let key = key.trim();
             let value = value.trim();
             let value = value
@@ -753,9 +771,21 @@ pub fn parse_link_attrs(bracket_content: &str) -> LinkAttrs<'_> {
     let subject = positional.get(1).copied().map(strip_quotes).filter(|s| !s.is_empty());
     let body = positional.get(2).copied().map(strip_quotes).filter(|s| !s.is_empty());
 
-    // No positional text (named-only attrlist) → empty text; the caller falls
-    // back to the bare form (visible text = target), matching Asciidoctor.
-    let mut text = positional.first().copied().unwrap_or("");
+    // Link text. For a `link:`/URL macro whose bracket is NOT an attribute list
+    // — no named attribute and not quote-wrapped — Asciidoctor keeps the ENTIRE
+    // content as the visible text, commas included (`link:url[A, B, C]` →
+    // "A, B, C"). The trim mirrors the old single-positional path, so no-comma /
+    // no-`=` inputs are byte-for-byte unchanged. mailto and any attribute-list
+    // bracket keep the positional split (positional[0] is the text); a named-only
+    // attrlist leaves text empty so the caller falls back to the bare form.
+    let mut text = if kind == LinkKind::Link
+        && !found_named
+        && !bracket_content.trim_start().starts_with('"')
+    {
+        bracket_content.trim()
+    } else {
+        strip_quotes(positional.first().copied().unwrap_or(""))
+    };
 
     // Blank-window shorthand: a trailing `^` on the link text opens the link in a
     // new window. Asciidoctor strips the caret from the visible text and sets
@@ -882,23 +912,23 @@ mod tests {
     #[test]
     fn test_link_attrs_blank_window_caret() {
         // Trailing `^` on the link text ⇒ window=_blank, caret stripped from text.
-        let a = parse_link_attrs("macro^");
+        let a = parse_link_attrs("macro^", LinkKind::Link);
         assert_eq!(a.text, "macro");
         assert_eq!(a.window, Some("_blank"));
         assert!(!a.nofollow);
 
         // Caret combined with a named role attribute: caret is on the positional text.
-        let a = parse_link_attrs("label^,role=external");
+        let a = parse_link_attrs("label^,role=external", LinkKind::Link);
         assert_eq!(a.text, "label");
         assert_eq!(a.window, Some("_blank"));
 
         // No caret ⇒ no implied window.
-        let a = parse_link_attrs("plain");
+        let a = parse_link_attrs("plain", LinkKind::Link);
         assert_eq!(a.text, "plain");
         assert_eq!(a.window, None);
 
         // Explicit window= wins over the caret shorthand (no override).
-        let a = parse_link_attrs("x^,window=_self");
+        let a = parse_link_attrs("x^,window=_self", LinkKind::Link);
         assert_eq!(a.text, "x");
         assert_eq!(a.window, Some("_self"));
     }
@@ -1428,7 +1458,7 @@ mod tests {
 
     #[test]
     fn test_parse_link_attrs_text_only() {
-        let attrs = parse_link_attrs("Example Site");
+        let attrs = parse_link_attrs("Example Site", LinkKind::Link);
         assert_eq!(attrs.text, "Example Site");
         assert_eq!(attrs.window, None);
         assert!(!attrs.nofollow);
@@ -1436,7 +1466,7 @@ mod tests {
 
     #[test]
     fn test_parse_link_attrs_with_window() {
-        let attrs = parse_link_attrs("Example,window=_blank");
+        let attrs = parse_link_attrs("Example,window=_blank", LinkKind::Link);
         assert_eq!(attrs.text, "Example");
         assert_eq!(attrs.window, Some("_blank"));
         assert!(!attrs.nofollow);
@@ -1444,7 +1474,7 @@ mod tests {
 
     #[test]
     fn test_parse_link_attrs_with_nofollow() {
-        let attrs = parse_link_attrs("Example,opts=nofollow");
+        let attrs = parse_link_attrs("Example,opts=nofollow", LinkKind::Link);
         assert_eq!(attrs.text, "Example");
         assert_eq!(attrs.window, None);
         assert!(attrs.nofollow);
@@ -1452,7 +1482,7 @@ mod tests {
 
     #[test]
     fn test_parse_link_attrs_with_all() {
-        let attrs = parse_link_attrs("Example,window=_blank,opts=nofollow");
+        let attrs = parse_link_attrs("Example,window=_blank,opts=nofollow", LinkKind::Link);
         assert_eq!(attrs.text, "Example");
         assert_eq!(attrs.window, Some("_blank"));
         assert!(attrs.nofollow);
@@ -1460,10 +1490,51 @@ mod tests {
 
     #[test]
     fn test_parse_link_attrs_empty() {
-        let attrs = parse_link_attrs("");
+        let attrs = parse_link_attrs("", LinkKind::Link);
         assert_eq!(attrs.text, "");
         assert_eq!(attrs.window, None);
         assert!(!attrs.nofollow);
+    }
+
+    #[test]
+    fn test_parse_link_attrs_comma_in_text_kept() {
+        // F-A: a `link:`/URL bracket with no named attribute keeps the WHOLE
+        // content as the link text, commas included (not split at the 1st comma).
+        let attrs = parse_link_attrs("A, B, C", LinkKind::Link);
+        assert_eq!(attrs.text, "A, B, C");
+        assert_eq!(attrs.window, None);
+        assert!(!attrs.nofollow);
+        assert_eq!(attrs.role, None);
+
+        let attrs = parse_link_attrs("NFJS, the Magazine", LinkKind::Link);
+        assert_eq!(attrs.text, "NFJS, the Magazine");
+    }
+
+    #[test]
+    fn test_parse_link_attrs_comma_text_with_named_attr_splits() {
+        // A named attribute (`role=`/`window=`) switches the bracket into
+        // attribute-list mode, so the comma separates the positional text.
+        let attrs = parse_link_attrs("Google, window=_blank", LinkKind::Link);
+        assert_eq!(attrs.text, "Google");
+        assert_eq!(attrs.window, Some("_blank"));
+    }
+
+    #[test]
+    fn test_parse_link_attrs_quoted_comma_text_with_role() {
+        // Quoted text preserves a comma even alongside a named attribute; the
+        // surrounding quotes are stripped from the visible text.
+        let attrs = parse_link_attrs("\"A, B\",role=green", LinkKind::Link);
+        assert_eq!(attrs.text, "A, B");
+        assert_eq!(attrs.role, Some("green"));
+    }
+
+    #[test]
+    fn test_parse_link_attrs_mailto_positional_subject_body() {
+        // mailto always splits positionally so subject/body survive without `=`.
+        let attrs = parse_link_attrs("Email, Subject, Body", LinkKind::Mailto);
+        assert_eq!(attrs.text, "Email");
+        assert_eq!(attrs.subject, Some("Subject"));
+        assert_eq!(attrs.body, Some("Body"));
     }
 
     #[test]

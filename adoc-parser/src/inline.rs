@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::attributes::parse_link_attrs;
+use crate::attributes::{LinkKind, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 
 pub(crate) fn apply_typographic_replacements<'a>(
@@ -2085,7 +2085,7 @@ impl<'a> InlineState<'a> {
             }
 
             self.flush_text(*text_start, start_pos, events);
-            let link_attrs = parse_link_attrs(bracket_content);
+            let link_attrs = parse_link_attrs(bracket_content, LinkKind::Link);
             // Asciidoctor marks a link macro with no explicit text as "bare"
             // (the visible text defaults to the target) → class="bare".
             let is_bare = link_attrs.text.is_empty();
@@ -2129,7 +2129,7 @@ impl<'a> InlineState<'a> {
 
         self.flush_text(*text_start, start_pos, events);
 
-        let link_attrs = parse_link_attrs(bracket_content);
+        let link_attrs = parse_link_attrs(bracket_content, LinkKind::Link);
         let is_bare = link_attrs.text.is_empty();
         events.push(Event::Start(Tag::Link {
             url: Cow::Borrowed(url),
@@ -2182,7 +2182,7 @@ impl<'a> InlineState<'a> {
         // Build mailto: URL; positional attrs 2/3 become ?subject=&body= query
         // params, percent-encoded (asciidoctor keeps only A-Za-z0-9_.~- literal).
         let url = &self.input[start_pos..start_pos + 7 + bracket_start]; // "mailto:email"
-        let link_attrs = parse_link_attrs(bracket_content);
+        let link_attrs = parse_link_attrs(bracket_content, LinkKind::Mailto);
         let url: Cow<'a, str> = match (link_attrs.subject, link_attrs.body) {
             (None, None) => Cow::Borrowed(url),
             (subject, body) => {
@@ -2517,7 +2517,7 @@ impl<'a> InlineState<'a> {
             && let Some(close) = after_url.find(']')
         {
             let bracket_content = &after_url[1..close];
-            let link_attrs = parse_link_attrs(bracket_content);
+            let link_attrs = parse_link_attrs(bracket_content, LinkKind::Link);
             let is_bare = link_attrs.text.is_empty();
             events.push(Event::Start(Tag::Link {
                 url: Cow::Borrowed(url),
