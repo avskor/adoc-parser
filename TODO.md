@@ -202,7 +202,40 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 95-я сессия): РЕРАЙТ inline — Фаза 2 (26/N) doubled-backslash escape (ветка `feat/subst-phase2-parity-26`)
+## АКТУАЛЬНО (2026-06-17, 96-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (27/N) attribute-ref в inline `[attrlist]` роли/id (ветка `feat/subst-phase2-parity-27`)
+
+Корпус неизменен **344/344** (гейт держит). Phase 2 контентно ЗАВЕРШЕНА (FORCE==asciidoctor 344/344) →
+пользователь выбрал (AskUserQuestion) **parity-харднинг** = охота на sub-file edge-кейсы new≠legacy.
+Phase 2 (1-26/N) уже СМЕРЖЕНА в master (`91447d6`). **(27/N) ЗАКОММИЧЕНА на ветке, ОЖИДАЕТ авторизации**
+на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(27/N) attribute-ref в inline `[attrlist]`** `[{role}]*x*`/`[.{role}]_y_`/`[#{id}]`z`` → asciidoctor.
+  Был **класс B баг**: сырой сентинель `\x01N\x02` утекал в `class="^A0^B"` (сломанный HTML).
+  - **Разведка:** фаззер pipeline vs legacy (~370 форм) нашёл 11 расхождений: 10 класс A (new==asciidoctor,
+    legacy баг — улучшения, НЕ чинятся) + 1 класс B (этот баг).
+  - **Корень:** наш движок гоняет `attributes` ДО `quotes` (лифтит `{role}` в сентинель) → `quotes`
+    захватывает сентинель в роль → утечка. asciidoctor: `quotes` ДО `attributes`, роль держит литерал `{role}`,
+    глобальный attr-пасс резолвит позже. Рендерер роли вообще не резолвил attr-refs.
+  - **Парсер:** `desentinelize(tags, s)` (tokenize.rs) — сентинель→литерал-исходник (`AttrRef`→`{name}`+trailing,
+    leaf-токены→текст, структурные→drop); `attrlist_unconstrained`/`attrlist_constrained` (quotes.rs) зовут его
+    перед `parse_attrs`.
+  - **Рендерер:** `resolve_inline_attr_value(&self,v)->Cow` (inline.rs, fast-path no-`{`→borrow, иначе
+    `resolve_attr_refs_text`); `push_inline_id_class` стал методом `&self`, резолвит id/роли; events.rs
+    Strong/Em/Mono `Self::`→`self.`, InlineSpan-арм схлопнут в метод.
+  - **Гейт:** SHORTHAND `[.{a}]`/`[#{a}]` теперь БАЙТ-РАВНЫ legacy → **ADOPT** (корректны и в default-сборке);
+    POSITIONAL `[{a}]` legacy не парсит → DECLINE → исправлены под FORCE. Корпус не затронут.
+  - **Тесты:** `force_resolves_attr_ref_sentinel_in_inline_attrlist` (mod.rs, 5 векторов+no-leak+gate-decisions);
+    `test_attr_ref_in_inline_role_resolves` (html_output.rs, defined/undefined/no-leak).
+  - clippy 0; test --workspace зелёное (parser 557→558, html_output 36→37). **gate_check toggle off/on 344/0**
+    (airtight). **blast_force 344→344** (0 REGR). e2e: класс `[{attr}]` == asciidoctor байт-в-байт.
+- [ ] **Сиблинг-гап (СЕПАРАТНО, pre-existing, НЕ leak):** macro named-role attr-ref `link:u[t,role={r}]`/
+  `image:p[a,role={r}]` → `class="{r}"` (литерал, валидный HTML), asciidoctor резолвит→`green`. Идёт через
+  macros-пасс (ДО attributes) + собств. арм-рендереры `Tag::Link`/image (НЕ `push_inline_id_class`).
+  base==new gated. Чинить: резолвить attr-refs в Link/Image роли в рендерере (сверить gate_check после).
+- **Дальше:** render_kbd_keys по `,`; класс-A улучшения (new уже корректен); **ФИНАЛ (Фаза 3): снять gate**.
+
+---
+
+## (2026-06-17, 95-я сессия): РЕРАЙТ inline — Фаза 2 (26/N) doubled-backslash escape (ветка `feat/subst-phase2-parity-26`)
 
 Корпус неизменен **344/344** (гейт держит). Фаза 2 контентно завершена (FORCE 344/344) → задачу выбрал
 пользователь (AskUserQuestion): **ПАРИТЕТ new≡legacy** на sub-file edge-кейсах = предусловие чистого снятия

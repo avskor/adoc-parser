@@ -303,6 +303,82 @@ pub(super) fn sentinel_end(bytes: &[u8], i: usize) -> usize {
     if j < bytes.len() { j + 1 } else { bytes.len() }
 }
 
+/// Replace every tag sentinel in `s` with the literal source text it stands
+/// for. Used by the quotes pass when a span's `[attrlist]` captured a sentinel
+/// during an earlier extraction — most importantly an attribute reference
+/// (`[{role}]*x*`): the role/id must carry the literal `{role}` so the renderer
+/// resolves it the same way Asciidoctor's global `attributes` substitution does.
+/// Asciidoctor runs `quotes` *before* `attributes`, so the literal `{role}`
+/// survives into the captured attrlist and is resolved afterwards; this engine
+/// runs `attributes` first (lifting `{role}` into a sentinel), so the captured
+/// attrlist would otherwise hold a raw sentinel — this restores the source text
+/// before the role/id is parsed, and the renderer's attribute-reference
+/// resolution finishes the job (undefined → kept literal, defined → value).
+///
+/// Only leaf tokens with a well-defined source/text are reconstructed; a
+/// structural sentinel (span open/close, hard break, macro) cannot legitimately
+/// appear inside an attrlist and is dropped — such inputs diverge from the legacy
+/// parser anyway and are caught by the Phase-1 gate.
+pub(super) fn desentinelize(tags: &[TagToken], s: &str) -> String {
+    if !s.as_bytes().contains(&TAG_LEAD) {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let mut j = i + 1;
+            let mut idx = 0usize;
+            while j < bytes.len() && bytes[j] != TAG_TAIL {
+                idx = idx * 10 + (bytes[j] - b'0') as usize;
+                j += 1;
+            }
+            match tags.get(idx) {
+                Some(TagToken::AttrRef { name, trailing_brackets }) => {
+                    out.push('{');
+                    out.push_str(name);
+                    out.push('}');
+                    if let Some(t) = trailing_brackets {
+                        out.push_str(t);
+                    }
+                }
+                Some(TagToken::Literal(t)) => out.push_str(t),
+                Some(TagToken::CharRef { text, .. }) => out.push_str(text),
+                Some(TagToken::SmartQuote { text, .. }) => out.push_str(text),
+                Some(TagToken::Passthrough(pieces)) => {
+                    for p in pieces {
+                        out.push_str(&p.text);
+                    }
+                }
+                Some(TagToken::AttrSet { name, value }) => {
+                    // `{set:…}` is nonsensical inside an attrlist, but reconstruct
+                    // it rather than drop it so nothing is silently lost.
+                    out.push_str("{set:");
+                    if let Some(unset) = name.strip_prefix('!') {
+                        out.push_str(unset);
+                        out.push('!');
+                    } else {
+                        out.push_str(name);
+                        out.push(':');
+                        out.push_str(value);
+                    }
+                    out.push('}');
+                }
+                // Open/Close/HardBreak/Macro/None: drop (cannot appear in a
+                // well-formed attrlist; mediated by the gate).
+                _ => {}
+            }
+            i = if j < bytes.len() { j + 1 } else { j };
+        } else {
+            let len = utf8_char_len(bytes[i]);
+            out.push_str(&s[i..i + len]);
+            i += len;
+        }
+    }
+    out
+}
+
 /// Flush the accumulated literal run as a single `Text` event (no-op when empty).
 fn flush_pending<'a>(events: &mut Vec<Event<'a>>, pending: &mut String) {
     if !pending.is_empty() {

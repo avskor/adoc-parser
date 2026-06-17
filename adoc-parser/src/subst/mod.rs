@@ -1904,4 +1904,92 @@ mod tests {
         }
     }
 
+    /// An attribute reference inside an inline `[attrlist]` (`[{role}]*x*`,
+    /// `[.{role}]_y_`, `[#{id}]`z``) must survive into the captured role/id as the
+    /// literal `{name}`, NOT as a raw extraction sentinel. The engine runs the
+    /// `attributes` pass before `quotes`, so without `desentinelize` the quotes
+    /// pass would capture the sentinel byte sequence verbatim and leak it into the
+    /// rendered `class`/`id`. The renderer resolves the `{name}` afterwards
+    /// (mirroring Asciidoctor's quotes-then-attributes ordering), so the parser's
+    /// job is only to restore the literal source text here.
+    #[test]
+    fn force_resolves_attr_ref_sentinel_in_inline_attrlist() {
+        fn strong(roles: Vec<&str>, id: Option<&str>, body: &str) -> Vec<Event<'static>> {
+            vec![
+                Event::Start(Tag::Strong {
+                    id: id.map(|s| s.to_string().into()),
+                    roles: roles.into_iter().map(|r| r.to_string().into()).collect(),
+                }),
+                Event::Text(body.to_string().into()),
+                Event::End(TagEnd::Strong),
+            ]
+        }
+
+        // Positional role, shorthand role, shorthand id, id+role combo,
+        // unconstrained span, and the emphasis/monospace markers.
+        assert_eq!(pipeline("[{a}]*x*"), strong(vec!["{a}"], None, "x"));
+        assert_eq!(
+            pipeline("[.{a}]_y_"),
+            vec![
+                Event::Start(Tag::Emphasis { id: None, roles: vec!["{a}".to_string().into()] }),
+                Event::Text("y".to_string().into()),
+                Event::End(TagEnd::Emphasis),
+            ]
+        );
+        assert_eq!(
+            pipeline("[#{a}]`z`"),
+            vec![
+                Event::Start(Tag::Monospace {
+                    id: Some("{a}".to_string().into()),
+                    roles: vec![],
+                }),
+                Event::Text("z".to_string().into()),
+                Event::End(TagEnd::Monospace),
+            ]
+        );
+        assert_eq!(
+            pipeline("[#{a}.{b}]*c*"),
+            strong(vec!["{b}"], Some("{a}"), "c")
+        );
+        assert_eq!(
+            pipeline("[{a}]##u##"),
+            vec![
+                Event::Start(Tag::InlineSpan { id: None, roles: vec!["{a}".to_string().into()] }),
+                Event::Text("u".to_string().into()),
+                Event::End(TagEnd::InlineSpan),
+            ]
+        );
+
+        // No raw sentinel may survive: the role string is exactly `{a}`.
+        if let Event::Start(Tag::Strong { roles, .. }) = &pipeline("[{a}]*x*")[0] {
+            assert_eq!(roles[0].as_ref(), "{a}");
+            assert!(!roles[0].as_ref().bytes().any(|b| b == 0x01 || b == 0x02));
+        } else {
+            panic!("expected an attributed strong span");
+        }
+
+        // The SHORTHAND forms (`[.role]` / `[#id]`) are parsed identically by the
+        // legacy parser, which also keeps the `{name}` literal in the role/id.
+        // Restoring the literal here makes the new result byte-equal to legacy, so
+        // the gate now ADOPTS them — previously the raw sentinel made them diverge
+        // and fall back. They are therefore correct in the default (gated) build,
+        // finished off by the renderer's reference resolution.
+        for c in ["[.{a}]_y_", "[#{a}]`z`", "[#{a}.{b}]*c*"] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_some(),
+                "gate should adopt (matches legacy) for {c:?}"
+            );
+        }
+
+        // The POSITIONAL form (`[role]`, no `.`/`#`) is NOT treated as a span
+        // attrlist by the legacy parser (it emits the bracket and an
+        // `AttributeReference` separately), so the new result diverges and the gate
+        // declines — the corrected span only appears under `force()`.
+        for c in ["[{a}]*x*", "[{a}]##u##"] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
+                "gate should decline (diverge from legacy) for {c:?}"
+            );
+        }
+    }
 }
