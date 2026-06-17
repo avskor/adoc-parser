@@ -312,7 +312,8 @@ fn typographic_escape_len(bytes: &[u8], backslash: usize) -> usize {
 /// extraction, so the target or bracketed content may already hold a sentinel; a
 /// sentinel byte inside either run means the would-be literal text no longer
 /// matches the source the legacy parser kept verbatim, so the match is declined
-/// (returns 0) and the gate falls back to legacy.
+/// (returns 0). Such inputs diverge from the verbatim source and end up on the
+/// legacy fallback path.
 fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
     if p >= bytes.len() {
         return 0;
@@ -369,7 +370,8 @@ fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
 /// events to seal as a `Macro` leaf, or `None` when no `((` opener / closing `))`
 /// is present (the backslash then stays literal). Declines when the matched
 /// content already holds a sentinel (an earlier pass lifted part of it into a
-/// leaf — the legacy parser saw verbatim source), so the gate falls back.
+/// leaf — the legacy parser saw verbatim source); such inputs diverge and end up
+/// on the legacy fallback path.
 fn index_escape(old: &str, bytes: &[u8], i: usize, macros_on: bool) -> Option<(usize, Vec<Event<'static>>)> {
     if !macros_on || bytes.get(i + 1) != Some(&b'(') || bytes.get(i + 2) != Some(&b'(') {
         return None;

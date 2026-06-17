@@ -1609,8 +1609,8 @@ mod tests {
     /// quote markers in the content are NOT re-parsed (the renderer owns the
     /// `+`/`,`/`>` splitting). Inputs whose brackets would hold a passthrough/
     /// escape/char-ref leaf are deliberately excluded: an earlier pass lifts those
-    /// into a sentinel and the leaf-macro sentinel guard then declines (gate
-    /// fallback), so they are not byte-equal to legacy.
+    /// into a sentinel and the leaf-macro sentinel guard then declines
+    /// (`flag_decline` → legacy fallback), so the engine never forms them itself.
     #[test]
     fn reproduces_legacy_on_ui_macro_inputs() {
         let cases = [
@@ -1708,9 +1708,9 @@ mod tests {
 
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
-    /// non-nested events — which the recursive legacy parser cannot. The Phase 1
-    /// gate therefore declines this input (falls back), but the raw pipeline
-    /// must produce the overlap.
+    /// non-nested events — which the recursive legacy parser cannot. With the
+    /// differential gate removed (Phase 3) the engine now adopts this overlap
+    /// instead of falling back to legacy — the raw pipeline must produce it.
     #[test]
     fn produces_cross_span_overlap() {
         let events = pipeline("a *crosses `code* span`");

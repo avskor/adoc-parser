@@ -16,9 +16,9 @@
 //! nor before a `\n` and stays literal automatically (`*x +*` →
 //! `<strong>x +</strong>`, while top-level `*x* +` → `…</strong><br>`).
 //!
-//! A `+` that begins a passthrough (`+…+`) is not handled here — passthrough
-//! extraction is a separate, earlier pass. Until it lands, such inputs diverge
-//! from legacy and fall back through the gate.
+//! A `+` that begins a passthrough (`+…+`) is never seen here as a live marker:
+//! passthrough extraction is an earlier pass, so by the time this pass runs the
+//! passthrough is already a sentinel and its `+` markers are gone.
 
 use super::tokenize::{sentinel_end, utf8_char_len, Work, TAG_LEAD};
 

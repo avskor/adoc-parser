@@ -12,7 +12,8 @@
 //! trailing `[brackets]`/`/path[brackets]` capture that turns a URL-valued
 //! attribute into a link, are reproduced downstream). This pass therefore mirrors
 //! [`crate::inline::InlineState::try_attribute_reference`] /
-//! `try_inline_set` exactly so the differential-equality gate adopts the result.
+//! `try_inline_set` exactly, so the events it emits match what the legacy parser
+//! would have produced for the same reference.
 //!
 //! ## Why before quotes (vs. Asciidoctor's quotes-then-attributes order)
 //!
@@ -24,8 +25,9 @@
 //! brackets. The boundary bytes seen by quotes are identical either way (`{`/`}`
 //! and the sentinel are both non-word), so quote spans are unaffected.
 //!
-//! Escapes (`\{name}`) are a separate, not-yet-ported pass; an escaped reference
-//! diverges from legacy and the gate rejects it (falls back to legacy).
+//! An escaped reference (`\{name}`) never reaches this pass as a live reference:
+//! the earlier [`super::escape`] pass already dropped the backslash and sealed
+//! `{name}` as a literal leaf, exactly as the legacy parser leaves it as text.
 
 use super::tokenize::{utf8_char_len, Work};
 

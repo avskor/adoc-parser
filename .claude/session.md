@@ -1,5 +1,66 @@
 # Session context
 
+## Сессия (2026-06-17, 103-я) — ХВОСТЫ ФАЗЫ 3: doc-свип «gate»-терминологии + оценка мёртвого legacy-quotes (НЕ закоммичено)
+
+Запрос «продолжи». Ветка **`chore/subst-phase3-doc-sweep`** (off master `80a6b39`) — **НЕ закоммичена**
+(коммит/мерж/пуш — ТОЛЬКО по запросу). Выбор направления через AskUserQuestion: «закрыть хвосты Фазы 3».
+
+### Стартовая сверка состояния (ВАЖНО)
+- **Фаза 3 УЖЕ закоммичена и смержена** в master (`f3dd1e2` → merge `80a6b39`). session.md 102-й писался ДО коммита
+  («НЕ закоммичена») — устарел по этому пункту; git авторитетен.
+- **Перемерил parity: master = 344/344 байт-идентичны asciidoctor** (single-binary parity_check.py vs asciidoctor
+  2.0.23, через refcache). Корпусная цель достигнута полностью.
+- **Находка:** документированная «оставшаяся работа» (native-конверсия passthrough-в-макросе) даёт **0 выигрыша на
+  корпусе** — таких punt-кейсов в 344 файлах нет. Единственное близкое вхождение `xref:...[controlled by \`partnums\`]`
+  — backtick-monospace, обрабатывается inner-quotes-пассом нативно, punt не возникает. `pass:[++]` в корпусе — это
+  сам top-level pass-макрос, не nested. → native-конверсия = только синтетические edge-кейсы, отложена.
+
+### Сделано — doc-свип (8 файлов, СТРОГО doc-only; git diff: все изменённые строки — комментарии)
+Удалена устаревшая present-tense «gate»-терминология (differential-equality gate СНЯТ в Фазе 3), заменена на
+актуальный decline-механизм / фактическое поведение. Где формулировка несла неверную посылку — поправлено по факту:
+- **attributes.rs**: «gate adopts the result» → «events match legacy»; «escape `\{name}` not-yet-ported … gate rejects»
+  → escape УЖЕ обрабатывает `\{name}` (escape.rs:18,232), reference не доходит сюда live.
+- **escape.rs** (×2): «the gate falls back» → «ends up on the legacy fallback path».
+- **passthrough.rs**: «differential-equality gate adopts» → «events match legacy».
+- **post_replacements.rs**: «until it lands … fall back through the gate» → passthrough-extract УЖЕ первый пасс,
+  `+` к этому пассу уже сентинель.
+- **replacements.rs**: «char-ref … lands in a later pass … gate» → char_refs РАНЬШЕ (run_pipeline шаг 3 vs replacements 7).
+- **tokenize.rs** (×2): «Phase-1 gate» / «mediated by the gate» → pathological-кейс не возникает из корректного ввода.
+- **macros.rs** (×8): «gate falls back/adopts/declines/keeps pinned/compared by gate» → decline (`flag_decline`)/
+  движок-mirrors-legacy/исторический контекст. ВАЖНО macros.rs:283 — раньше gate откатывал к legacy-квирку,
+  ТЕПЕРЬ движок оставляет свой asciidoctor-верный результат (поведенческое отличие зафиксировано в комментарии).
+- **mod.rs** (×2 test-докстринга): «gate fallback»/«Phase 1 gate declines» → `flag_decline`/«с снятым gate движок adopts overlap».
+- ОСТАВЛЕНО намеренно: историческое «the gate was removed / old differential-equality gate / with the gate removed
+  the engine ADOPTS» в mod.rs (History) + macros.rs:84 — корректно описывают gate как удалённый. «Gated on MACROS/QUOTES» — subs-flag, не тот gate.
+
+### Оценка мёртвого legacy-quotes-кода → НИЧЕГО НЕ УДАЛЕНО (обосновано + ВЕРИФИЦИРОВАНО)
+`parse_legacy` — единственный fallback из `parse_str_with_subs_options`; достигается при (1) !QUOTES → legacy без
+quotes; (2) sentinel-байт во вводе → legacy со ВСЕМИ subs; (3) `flag_decline` → legacy со ВСЕМИ subs. В (2)/(3)
+legacy-QUOTES **исполняется** (вход несёт quote-маркеры). **Проба бинарём:** `a \++x++ and *bold* end` (decline) →
+`<strong>bold</strong>`; `a \x01b and *bold* end` (sentinel-байт) → `<strong>bold</strong>`. → legacy-quotes ЖИВОЙ,
+удаление сломало бы fallback. Полное устранение заблокировано на native-конверсии + редизайне sentinel-байт-fallback
+(отложено). Gate-скаффолдинг (env-флаги `enabled`/`force`, сравнение в `try_parse`) уже удалён в Фазе 3 — остатков нет.
+`#[allow(dead_code)]` в attributes.rs — предсуществующие, вне темы.
+
+### Верификация (AIRTIGHT)
+- **clippy --workspace 0**; **cargo test --workspace ВСЁ зелёное** (parser 558, html unit 434, html_output 41,
+  parsing-lab/compat 233 [1 harness-тест], html-compat 1, author 6, integration 25, render-core 15, doc-tests все ок).
+- **parity vs asciidoctor 344/344** (после пересборки release с ветки — doc-only → бинарь не меняется).
+- git diff: 8 файлов, +44/-35, ВСЕ изменённые строки — комментарии (проверено `git diff` grep'ом не-комментариев = пусто).
+
+### Дальше (следующие сессии)
+- Native-конверсия passthrough-в-макросе (edge-correctness, 0 корпусного выигрыша) — seed-tags re-parse label, требует
+  Clone на TagToken/PassPiece + pre-seeded тег-таблица. ОПЦИОНАЛЬНО (корпус уже решён).
+- Удаление legacy-quotes — ТОЛЬКО после native-конверсии всех decline-кейсов + sentinel-байт-fallback редизайна.
+- Расширить корпус новыми .adoc-репозиториями (текущие 3 исчерпаны как сигнал).
+- Скрипты: `/tmp/parity_check.py` (single-binary new-vs-asciidoctor, refcache). `gate_check.py`/`blast.py` требуют
+  base-бинарь `/tmp/adoc_base` (НЕТ — /tmp очищается; пересобрать из master при надобности).
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 102-я) — РЕРАЙТ inline, **ФАЗА 3: СНЯТ GATE** (sequential-движок — ДЕФОЛТ; env-флаги удалены; явный per-construct decline→legacy)
 
 Запрос «приступи к фазе 3». Ветка **`feat/subst-phase3-drop-gate`** (off master `45d0e56`, 344) —

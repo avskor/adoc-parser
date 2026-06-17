@@ -11,8 +11,8 @@
 //! pieces.
 //!
 //! The matching mirrors the legacy recursive parser's `handle_inline_passthrough`
-//! / `try_*_passthrough` / `try_pass_macro` so the differential-equality gate
-//! adopts the result. The bare `pass:[…]` becomes a verbatim
+//! / `try_*_passthrough` / `try_pass_macro` so the events it produces match what
+//! the legacy parser would have produced. The bare `pass:[…]` becomes a verbatim
 //! [`TagToken::Passthrough`] leaf; the spec'd `pass:SPEC[…]` (`pass:q[…]`,
 //! `pass:c,a[…]`, …) re-runs exactly its spec'd substitutions over the bracketed
 //! content (via the engine's own [`super::run_pipeline`], mirroring
