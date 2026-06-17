@@ -42,10 +42,10 @@
 //! by control bytes (none of the trigger characters `- . ( ' \``), and no
 //! replacement output contains a control byte, so sentinels pass through intact.
 //!
-//! Character-reference restoration (`&#167;` survival) is NOT done here — it is
-//! tied to passthrough/specialchars handling and lands in a later pass. Inputs
-//! containing char references therefore still diverge from legacy and fall back
-//! through the differential-equality gate.
+//! Character-reference survival (`&#167;`) is NOT done here — it is handled by
+//! the earlier [`super::char_refs`] pass, which lifts each valid reference into a
+//! sentinel before this pass runs, so a reference never reaches replacements as
+//! live text.
 
 use std::borrow::Cow;
 

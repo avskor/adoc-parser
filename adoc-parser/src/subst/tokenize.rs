@@ -317,8 +317,9 @@ pub(super) fn sentinel_end(bytes: &[u8], i: usize) -> usize {
 ///
 /// Only leaf tokens with a well-defined source/text are reconstructed; a
 /// structural sentinel (span open/close, hard break, macro) cannot legitimately
-/// appear inside an attrlist and is dropped — such inputs diverge from the legacy
-/// parser anyway and are caught by the Phase-1 gate.
+/// appear inside an attrlist and is dropped — such a sentinel cannot arise from
+/// well-formed input, so this only affects pathological cases that already
+/// diverge from the legacy parser.
 pub(super) fn desentinelize(tags: &[TagToken], s: &str) -> String {
     if !s.as_bytes().contains(&TAG_LEAD) {
         return s.to_string();
@@ -366,7 +367,7 @@ pub(super) fn desentinelize(tags: &[TagToken], s: &str) -> String {
                     out.push('}');
                 }
                 // Open/Close/HardBreak/Macro/None: drop (cannot appear in a
-                // well-formed attrlist; mediated by the gate).
+                // well-formed attrlist).
                 _ => {}
             }
             i = if j < bytes.len() { j + 1 } else { j };

@@ -280,7 +280,8 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // under `:experimental:`). The legacy parser instead *skips* the whole
         // `[…]` so its interior is never re-substituted; that is a legacy-only
         // quirk with no corpus coverage, so on the rare input where it would differ
-        // the gate just falls back. Each macro is a leaf: the content/items become
+        // the engine now keeps its own Asciidoctor-faithful result. Each macro is a
+        // leaf: the content/items become
         // a single raw `Text` the renderer splits (`+`/`,` for keys, `>` for menu
         // items) — never re-parsed, mirroring `try_kbd_macro`/`try_btn_macro`/
         // `try_menu_macro`. A failed match advances one byte (legacy `pos += 1`).
@@ -515,8 +516,8 @@ fn try_cross_ref(
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
 /// explicit label text (`None` for the bracket-less / empty-bracket form). The
 /// `CrossReference` tag carries `target` and an `is_some()`-significant `label`
-/// field (only its presence drives the renderer; its text is compared by the
-/// gate). The label *events* are re-parsed with `MACROS` cleared, matching
+/// field (only its presence drives the renderer). The label *events* are
+/// re-parsed with `MACROS` cleared, matching
 /// `push_macro_label`; an empty explicit label (`<<a,>>`) yields no label events
 /// (as `push_macro_label("")` does), while the no-label form emits the target as
 /// the link text.
@@ -559,8 +560,8 @@ fn build_cross_reference(
 /// from the leaf and the link is built with it — reproducing the legacy special
 /// case (Asciidoctor's general `extract_passthroughs`-then-match mechanism). Any
 /// other sentinel shape in the span (a sentinel inside the *label*, or a URL part
-/// that is more than one bare passthrough sentinel) declines, so the gate falls
-/// back to legacy.
+/// that is more than one bare passthrough sentinel) declines (recording the punt
+/// via [`super::flag_decline`]), so the paragraph falls back to legacy.
 fn try_link(
     src: &str,
     start: usize,
@@ -627,7 +628,8 @@ fn try_link(
 /// [`TagToken::Passthrough`] leaf, so the URL is the concatenation of the leaf's
 /// verbatim pieces — Asciidoctor's restored target. Returns `None` when `url_part`
 /// is not a lone sentinel (e.g. text surrounds it, or two sentinels) or the
-/// sentinel is not a passthrough, so the caller declines and the gate falls back.
+/// sentinel is not a passthrough, so the caller declines and the paragraph falls
+/// back to legacy.
 fn passthrough_url(work: &Work, url_part: &str) -> Option<String> {
     let bytes = url_part.as_bytes();
     if bytes.first() != Some(&TAG_LEAD) {
@@ -719,8 +721,8 @@ fn try_mailto(
 /// parsed image-attribute fields, so the `Start(InlineImage)`/`End` pair is built
 /// directly (no `MACROS`-cleared sub-pipeline). An empty target is accepted — the
 /// donor has no such guard, so `image:[alt]` still matches (the renderer makes the
-/// `<img>` from the attrs). The tag fields are owned `Cow`s (`== Cow::Borrowed`
-/// legacy by `PartialEq`, so the gate adopts).
+/// `<img>` from the attrs). The tag fields are owned `Cow`s, semantically equal
+/// to the legacy parser's borrowed ones.
 fn try_image(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 6..]; // after "image:"
     let bracket_start = rest.find('[')?;
@@ -802,8 +804,9 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// (`FootnoteRef`); every other form *defines* one (`Footnote`). Asciidoctor's
 /// `InlineFootnoteMacroRx` is stricter on both parts (id `[\p{Word}-]+`, content
 /// honouring a `\]` escape) and also accepts the deprecated `footnoteref:` spelling;
-/// the legacy parser does none of that and the gate keeps the new engine pinned to
-/// legacy, so those rare divergent forms simply fall back. The sentinel guard
+/// the legacy parser does none of that, and this engine deliberately mirrors the
+/// legacy form rather than Asciidoctor's stricter rx, so those rare forms match
+/// legacy (and, like legacy, diverge from Asciidoctor). The sentinel guard
 /// declines a footnote whose span swallowed an earlier passthrough/escape/char-ref
 /// leaf (the verbatim text the legacy event would carry is no longer present).
 fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
@@ -1207,7 +1210,8 @@ fn scheme_at(src: &str, i: usize) -> bool {
 /// preceding byte reproduces the legacy decision; an extracted construct leaves a
 /// `TAG_TAIL` byte (not a boundary), matching the legacy parser's non-boundary
 /// view of the same position. (A multibyte preceding char is treated as a
-/// non-boundary; a Unicode-whitespace boundary is rare and the gate declines it.)
+/// non-boundary, mirroring legacy; a Unicode-whitespace boundary is rare and not
+/// corpus-covered.)
 fn at_autolink_boundary(bytes: &[u8], i: usize) -> bool {
     if i == 0 {
         return true;
@@ -1412,8 +1416,8 @@ fn try_email(
 /// Build the `Start(Link) … End` event sequence shared by the link macro, mailto
 /// macro, and URL/email autolinks. `label` (when `Some`) is re-parsed with
 /// `MACROS` cleared via [`push_label`], mirroring `push_macro_label`; otherwise
-/// `bare_text` is emitted as the visible text. The tag fields are owned `Cow`s
-/// (`== Cow::Borrowed` legacy by `PartialEq`, so the gate adopts).
+/// `bare_text` is emitted as the visible text. The tag fields are owned `Cow`s,
+/// semantically equal to the legacy parser's borrowed ones.
 #[allow(clippy::too_many_arguments)]
 fn build_link(
     url: String,

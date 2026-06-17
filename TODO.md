@@ -202,10 +202,28 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 102-я сессия): РЕРАЙТ inline — **ФАЗА 3: СНЯТ GATE** (sequential-движок дефолт; ветка `feat/subst-phase3-drop-gate`)
+## АКТУАЛЬНО (2026-06-17, 103-я сессия): ХВОСТЫ ФАЗЫ 3 — doc-свип «gate» + оценка legacy-quotes (ветка `chore/subst-phase3-doc-sweep`, НЕ закоммичено)
+
+Запрос «продолжи» → AskUserQuestion «закрыть хвосты Фазы 3». Корпус **344/344 байт-идентичны asciidoctor**
+(перемерено на master `80a6b39`). Находка: native-конверсия passthrough-в-макросе = **0 корпусного выигрыша**
+(таких punt-кейсов в 344 файлах нет) — остаётся опциональным edge-correctness.
+- [x] **Doc-свип stale «gate»-терминологии** (8 файлов subst, СТРОГО doc-only): убраны present-tense ссылки на
+  снятый differential-gate, заменены на decline-механизм/фактическое поведение. attributes/escape/passthrough/
+  post_replacements/replacements/tokenize + macros (×8 present-tense + правка смысла macros.rs:283) + mod.rs (×2
+  test-докстринга). ОСТАВЛЕНО историческое «the gate was removed / with the gate removed the engine ADOPTS» (mod.rs
+  History, macros.rs:84) и «Gated on MACROS/QUOTES» (subs-flag).
+- [x] **Оценка мёртвого legacy-quotes** → НИЧЕГО НЕ УДАЛЕНО (обосновано + проба бинарём). `parse_legacy` — живой
+  fallback при !QUOTES / sentinel-байт / `flag_decline`; в двух последних legacy-QUOTES исполняется (вход несёт
+  quote-маркеры). `a \++x++ and *bold*`→`<strong>`, `a \x01b *bold*`→`<strong>`. Удаление сломало бы fallback —
+  заблокировано на native-конверсии + редизайне sentinel-байт-fallback. Gate-скаффолдинг уже снят в Фазе 3.
+- Верификация: **clippy 0; test --workspace зелёное** (parser 558, html 434, compat 233, doc-tests); **parity 344/344**.
+
+---
+
+## (2026-06-17, 102-я сессия): РЕРАЙТ inline — **ФАЗА 3: СНЯТ GATE** (sequential-движок дефолт; СМЕРЖЕНА в master `80a6b39`)
 
 Корпус **343 → 344** (FLIP `outline.adoc` 4813→0 vs asciidoctor). Фаза 2 (1-32/N) смержена в master (`45d0e56`).
-**(Фаза 3) НЕ закоммичена** (коммит/мерж/пуш — по запросу пользователя).
+**(Фаза 3) СМЕРЖЕНА** в master (`f3dd1e2` → merge `80a6b39`); session.md 102-й писался ДО коммита.
 - [x] **Снять differential-gate, движок sequential — ДЕФОЛТ, env-флаги удалены.**
   - `inline.rs`: убран guard `subst::enabled()`; движок — первая попытка, `parse_legacy` — fallback при decline.
   - `subst/mod.rs`: удалены `enabled()`/`force()`/`env_true()` + env-флаги `ADOC_QUOTES_SEQUENTIAL`/`ADOC_SUBST_FORCE`.
@@ -219,9 +237,10 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     11 escape/replacement тестов падали лишь на форме event-потока, HTML идентичен).
   - clippy 0; **test --workspace зелёное** (parser 558, html 434, html_output 41, **compat 233/233**, прочее).
     gate_check = 1 diff (outline). **blast: Identical 343→344, [FLIP] outline 4813→0, 0 REGR.**
-- [ ] **СЛЕДУЮЩЕЕ (инкрементально):** native-конверсия passthrough-в-макросе по семействам (seed-tags re-parse
-    label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) — снимает punt'ы,
-    делает new==asciidoctor. Удаление мёртвого legacy-quotes-кода. Doc-свип «gate»-терминологии в остальных пассах.
+- [ ] **СЛЕДУЮЩЕЕ (ОПЦИОНАЛЬНО, 0 корпусного выигрыша):** native-конверсия passthrough-в-макросе по семействам
+    (seed-tags re-parse label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) —
+    снимает punt'ы, делает new==asciidoctor на синтетических edge. Затем удаление legacy-quotes (требует ещё
+    редизайн sentinel-байт-fallback). [Doc-свип «gate»-терминологии — СДЕЛАНО в 103-й, см. выше.]
 
 ---
 
