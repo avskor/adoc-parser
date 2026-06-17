@@ -1168,6 +1168,31 @@ fn test_source_language_default_html() {
 }
 
 #[test]
+fn test_markdown_fence_source_html() {
+    // A markdown fence is always a source block, even without an info-string
+    // language: `<pre class="highlight"><code>` (F-J, verified vs asciidoctor).
+    let bare = to_html("```\nputs 1\n```");
+    assert!(
+        bare.contains("<pre class=\"highlight\"><code>puts 1</code></pre>"),
+        "bare fence → source block. Got: {bare}"
+    );
+
+    // Combined with :source-language:, the fence inherits the default language.
+    let with_default = to_html(":source-language: ruby\n\n```\nputs 1\n```");
+    assert!(
+        with_default.contains("<pre class=\"highlight\"><code class=\"language-ruby\" data-lang=\"ruby\">puts 1</code></pre>"),
+        "bare fence inherits source-language. Got: {with_default}"
+    );
+
+    // Regression guard: an info-string language still renders correctly.
+    let with_lang = to_html("```ruby\nputs 1\n```");
+    assert!(
+        with_lang.contains("<pre class=\"highlight\"><code class=\"language-ruby\" data-lang=\"ruby\">puts 1</code></pre>"),
+        "fence with info-string language. Got: {with_lang}"
+    );
+}
+
+#[test]
 fn test_checklist_html() {
     let html = to_html("* [x] Done\n* [ ] Todo");
     assert!(html.contains("<div class=\"ulist checklist\">\n<ul class=\"checklist\">"));
@@ -4375,11 +4400,17 @@ fn test_markdown_code_fence_with_language() {
 
 #[test]
 fn test_markdown_code_fence_without_language() {
+    // Asciidoctor renders a markdown fence as a source block even without an
+    // info-string language: `<pre class="highlight"><code>` with no language
+    // class (F-J).
     let html = to_html("```\nsome code\n```");
     assert!(html.contains("some code"), "should contain code. Got: {html}");
     assert!(html.contains("listingblock"), "should have listingblock class. Got: {html}");
-    assert!(html.contains("<pre>"), "should have <pre> tag. Got: {html}");
-    assert!(!html.contains("<code"), "listing block should not have <code> tag. Got: {html}");
+    assert!(
+        html.contains("<pre class=\"highlight\"><code>some code</code></pre>"),
+        "no-language fence → source block, no language class. Got: {html}"
+    );
+    assert!(!html.contains("language-"), "no info-string → no language class. Got: {html}");
 }
 
 #[test]
