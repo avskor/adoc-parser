@@ -48,6 +48,34 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
     while i < bytes.len() {
         let b = bytes[i];
 
+        // Escaped double-plus passthrough `\\++…++`: Asciidoctor's
+        // `(\\{0,2})(\+{2,3})` capture consumes BOTH backslashes when a `++…++`
+        // passthrough would form here, leaving the `++` markers LITERAL while the
+        // content flows through the remaining subs — the double-plus analogue of
+        // the unconstrained `\\**…**` marker escape (`\\++*x*++` →
+        // `++<strong>x</strong>++`, `\\++a<b++` → `++a&lt;b++`, `\\++pp++` →
+        // `++pp++`). Seal each `++` as its own literal `Text` leaf (a `Macro` leaf,
+        // opaque to re-extraction and non-coalescing like the marker escape) and
+        // leave the content raw. Restricted to exactly `++` (not `+++`): the
+        // triple-plus `\\+++…+++` form stays deferred — Asciidoctor's own handling
+        // of it is inconsistent. A longer backslash run cascades naturally (each
+        // leading `\` is copied by the fall-through until this arm fires on the
+        // adjacent pair).
+        if b == b'\\'
+            && bytes.get(i + 1).copied() == Some(b'\\')
+            && bytes.get(i + 2).copied() == Some(b'+')
+            && bytes.get(i + 3).copied() == Some(b'+')
+            && bytes.get(i + 4).copied() != Some(b'+')
+            && let Some((_, end)) = try_double_plus(&src, i + 2)
+        {
+            let close = end - 2; // position of the closing `++`
+            out.push_str(&work.macro_sentinel(vec![Event::Text("++".into())]));
+            out.push_str(&src[i + 4..close]); // raw content flows through later passes
+            out.push_str(&work.macro_sentinel(vec![Event::Text("++".into())]));
+            i = end;
+            continue;
+        }
+
         // Escaped single-plus passthrough `\+…+`: Asciidoctor folds the `\\?`
         // escape into the passthrough match, so the backslash is honoured only
         // when an unescaped `+…+` would form a single-plus passthrough here. When
@@ -55,12 +83,15 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // content and closing `+` are NOT extracted — they flow through the normal
         // substitutions (`\+*b*+` → `+<strong>b</strong>+`), exactly as the
         // escaped form renders. When it would not (`\+nopass`, `a\+b+c`), the `\+`
-        // is left for the [`super::escape`] pass to keep literal. The doubled
-        // (`\++`/`\+++`) and double-backslash (`\\+`) forms stay deferred.
+        // is left for the [`super::escape`] pass to keep literal. A doubled
+        // backslash (`\\+plus+`) consumes only the one backslash adjacent to the
+        // `+` (the `\\?` capture sits right before it), leaving any leading
+        // backslashes as literal — each is copied by the fall-through until this
+        // arm fires on the adjacent one (`\\+plus+` → `\+plus+`). The doubled
+        // (`\++`/`\+++`) marker form stays deferred.
         if b == b'\\'
             && bytes.get(i + 1).copied() == Some(b'+')
             && bytes.get(i + 2).copied() != Some(b'+')
-            && (i == 0 || bytes[i - 1] != b'\\')
             && try_single_plus(&src, bytes, i + 1, guard_hard_break).is_some()
         {
             out.push('+');
@@ -77,12 +108,14 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // normally (`\pass:c[*b*]` → `pass:c[<strong>b</strong>]`,
         // `` `\pass:[]` `` → `<code>pass:[]</code>`). Without the escape the
         // `pass:[…]` arm below would lift the whole macro into a sentinel, leaving
-        // the bare backslash behind. The double-backslash (`\\pass:`) form, where
-        // only the second backslash takes part in the escape, stays deferred (the
-        // gate falls back). Mirrors the legacy `pass_escape_prefix_len` arm of
-        // `handle_inline_escape`.
+        // the bare backslash behind. A double (or longer) backslash run before
+        // `pass:` (`\\pass:SPEC[…]`) consumes only the one backslash adjacent to
+        // the macro (the `\\?` capture sits right before it), leaving any leading
+        // backslashes literal — each is copied by the fall-through until this arm
+        // fires on the adjacent one (`\\pass:c[*b*]` → `\pass:c[<strong>b</strong>]`,
+        // `\\\pass:[x]` → `\\pass:[x]`). Mirrors the legacy `pass_escape_prefix_len`
+        // arm of `handle_inline_escape`.
         if b == b'\\'
-            && (i == 0 || bytes[i - 1] != b'\\')
             && let Some(prefix_len) = pass_escape_prefix_len(&src, i + 1)
         {
             out.push_str(&src[i + 1..i + 1 + prefix_len]); // drop `\`, keep `pass:SPEC[`

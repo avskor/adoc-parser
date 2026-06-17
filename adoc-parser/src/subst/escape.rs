@@ -61,20 +61,25 @@
 //!   passthrough pass ([`super::passthrough`]), which runs before this one: a
 //!   `\+…+` whose `+…+` would form a single-plus passthrough drops the backslash
 //!   there. A `\+` that forms no passthrough is left for *this* pass's blanket
-//!   arm to keep literal. The `\++`/`\+++` doubled forms stay deferred.
+//!   arm to keep literal. A doubled (or longer) backslash run before a single-plus
+//!   (`\\+plus+` → `\+plus+`) drops only the marker-adjacent backslash there too.
+//!   The `\++`/`\+++` doubled-marker forms stay deferred.
 //! - **`\pass:SPEC[…]`** — the escaped pass macro is also folded into the
 //!   passthrough pass: the backslash drops and the `pass:SPEC[` prefix is kept
 //!   literal while the bracketed content flows through the remaining subs (it is
-//!   NOT a verbatim leaf), so it cannot be handled here as a plain literal. The
-//!   `\\pass:` double-backslash form stays deferred.
+//!   NOT a verbatim leaf), so it cannot be handled here as a plain literal. A
+//!   doubled (or longer) backslash run (`\\pass:` → `\pass:`) likewise drops only
+//!   the macro-adjacent backslash there.
 //! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — these
 //!   are folded into each quote substitution ([`super::quotes`]), exactly as
 //!   Asciidoctor folds the `\\?` capture: a backslash is only an escape at the
 //!   point a span would open, so a `\` already *inside* an open span (the content
 //!   of `` `\` ``) stays literal content. They CANNOT be handled in this
 //!   escape-FIRST pass, which would hide a span's closing marker and tear it
-//!   apart (`a (`\`) and (`]`) b`). The doubled-marker (`\MM…MM`) form stays
-//!   deferred.
+//!   apart (`a (`\`) and (`]`) b`). A doubled (or longer) backslash run before a
+//!   single marker (`\\*bold*` → `\*bold*`) is folded there too — only the
+//!   marker-adjacent backslash is consumed, and only when a span would form. The
+//!   doubled-MARKER (`\MM…MM`, e.g. `\**`) form stays deferred.
 //! - **`\https://…` (`http`/`https`/`ftp`/`irc`) autolink escape** — folded into
 //!   the [`super::macros`] pass (the autolink's home): the backslash drops only
 //!   where an unescaped autolink could open (a real boundary, or immediately
@@ -83,11 +88,26 @@
 //!   pass has the context for. Handling it in this escape-FIRST pass would drop
 //!   the backslash without that context.
 //!
-//! ## Deferred (backslash left untouched; the gate falls back, FORCE diverges):
+//! ## Double-backslash (`\\X`) — Asciidoctor's `\\?`/`\\{0,2}` capture
 //!
-//! - `\\` (a bare escaped backslash with no following marker), and the
-//!   `\\pass:`/`\\https://` double-backslash forms (their non-doubled siblings
-//!   live in the passthrough/macros passes, so the doubled form does too).
+//! A doubled backslash consumes exactly the ONE backslash adjacent to the
+//! construct, leaving any leading backslashes literal. Handled across the passes:
+//! the constrained markers (`\\*bold*`), super/sub, `\\pass:`, and `\\+` in their
+//! span-aware passes (see above); the macro / char-ref / index forms (`\\image:…`,
+//! `\\&#…;`, `\\((…))`) here — this arm emits the first backslash and re-enters on
+//! the second, which then runs the single-escape logic; the unconstrained marker
+//! pair (`\\**…**`) via [`doubled_marker_escape`]; and the double-plus passthrough
+//! (`\\++…++`) in the passthrough pass. A bare `\\` (no following construct, e.g.
+//! `\\ ` / `\\x`) correctly keeps BOTH backslashes — Asciidoctor does not collapse
+//! it.
+//!
+//! ## Deferred (FORCE still diverges from Asciidoctor — both pathological there):
+//!
+//! - `\\link:URL[text]` with an autolink-able URL target: Asciidoctor still
+//!   renders it as a link (a file/anchor target like `\\link:foo.html[t]` is kept
+//!   literal as expected — only the URL form is special); we keep it literal.
+//! - `\\+++…+++` (triple-plus): Asciidoctor's own close-marker handling of the
+//!   escaped triple-plus is inconsistent, so only the double-plus form is ported.
 
 use std::borrow::Cow;
 
@@ -132,8 +152,8 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
             // unconstrained pass strips one backslash, the constrained pass the
             // other (`\\__func__` → `__func__`, `\\__a*b*c__` →
             // `__a<strong>b</strong>c__`). Gated on QUOTES, like the legacy arm.
-            // The remaining `\\` forms (escaped backslash, `\\pass:`, `\\https`)
-            // are not yet ported and keep BOTH backslashes literal.
+            // Any OTHER `\\` form falls to the else-branch below, which emits one
+            // backslash and re-enters on the second (see there).
             Some(b'\\') => {
                 if let Some((consumed, open, inner, close)) =
                     doubled_marker_escape(&old, bytes, i, quotes_on)
@@ -143,8 +163,19 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                     out.push_str(&work.macro_sentinel(vec![Event::Text(Cow::Owned(close.to_string()))]));
                     i += consumed;
                 } else {
-                    out.push_str("\\\\");
-                    i += 2;
+                    // Not an unconstrained marker pair: emit the FIRST backslash
+                    // literally and advance ONE byte, re-entering the match on the
+                    // second backslash so it runs the single-escape logic below.
+                    // That consumes exactly the one backslash adjacent to a
+                    // macro/char-ref/index construct (`\\image:…` → `\image:…`,
+                    // `\\&#…;` → `\&#…;`, `\\((…))` → `\((…))`), mirroring
+                    // Asciidoctor's `\\?` capture. For a quote marker the second
+                    // backslash falls to the blanket arm and stays literal (the
+                    // marker is then resolved by the later quotes pass), and a bare
+                    // `\\` (no following construct) keeps BOTH backslashes — exactly
+                    // Asciidoctor, which does not collapse a bare double backslash.
+                    out.push('\\');
+                    i += 1;
                 }
             }
             Some(m) => {

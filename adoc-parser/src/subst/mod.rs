@@ -138,12 +138,18 @@ pub(crate) fn try_parse<'a>(
 /// (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term (`((…))`/`indexterm:`/
 /// `indexterm2:`) families, the `footnote:`/`footnote:id[]` family, and the
 /// `:experimental:`-gated UI macros (`kbd:`/`btn:`/`menu:`, dispatched only when
-/// `options.experimental`), `replacements`, `post_replacements`. The remaining
-/// escape forms (the `\pass:`/`\https://` autolink escapes, and the bare `\\`
-/// escaped backslash) — and the quote-marker escapes `\*`/`\_`/`` \` `` and
-/// `\+`, which belong inside the quote/passthrough passes — are not yet ported;
-/// inputs that need them diverge from legacy and are rejected by the gate (or
-/// surface as diffs under `force()`). `options` is threaded through so the
+/// `options.experimental`), `replacements`, `post_replacements`. The
+/// single-backslash escapes (quote-marker `\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`,
+/// `\pass:`, `\+`, `\https://`-autolink, macro `\image:`/`\link:`/…, `\&#…;`
+/// char-ref, `\((…))` index) are ported into their span-aware passes, AS ARE the
+/// DOUBLED-backslash forms (`\\*bold*` → `\*bold*`, `\\pass:`, `\\+`, `\\image:`,
+/// `\\&#…;`, `\\((…))`, `\\++…++` → `++…++`, and bare `\\` kept intact) — only the
+/// construct-adjacent backslash is consumed, and only when the construct would
+/// form. The two doubled forms still deferred are pathological in Asciidoctor
+/// itself: the URL-target `\\link:http://…[…]` (rendered as a link there) and the
+/// triple-plus `\\+++…+++`; inputs that need them diverge from legacy and are
+/// rejected by the gate (or surface as diffs under `force()`).
+/// `options` is threaded through so the
 /// experimental flag reaches the macros pass and every inner reparse (label,
 /// cross-reference label, passthrough spec content), mirroring the legacy
 /// parser's `self.options` propagation into nested `InlineState`s.
@@ -1747,6 +1753,69 @@ mod tests {
         assert_eq!(got, Some(legacy("*bold* and _em_")));
     }
 
+    /// The doubled-backslash escape also covers the macro / char-reference /
+    /// index-term forms (whose single-backslash escape lives in the `escape` pass:
+    /// `\\image:…` → `\image:…`, `\\&copy;` → `\&amp;copy;`, `\\((term))` →
+    /// `\((term))`, `\\xref:id[t]` → `\xref:id[t]`) and the double-plus passthrough
+    /// (`\\++pp++` → `++pp++`, `\\++*x*++` → `++<strong>x</strong>++`). Only the
+    /// construct-adjacent backslash is consumed. Deliberately NOT covered (left
+    /// deferred — Asciidoctor itself is pathological/inconsistent there): the
+    /// URL-target `\\link:http://…[…]` (which Asciidoctor still renders as a link)
+    /// and the triple-plus `\\+++…+++`. As with the markers, every form diverges
+    /// from the legacy parser, so the gate declines and the corpus is unchanged.
+    #[test]
+    fn force_handles_doubled_backslash_macro_index_and_double_plus() {
+        for (input, expected) in [
+            // macro escapes — one backslash dropped, the macro kept literal
+            (
+                "\\\\image:a.png[alt]",
+                vec![Event::Text("\\".into()), Event::Text("image:a.png[alt]".into())],
+            ),
+            (
+                "\\\\xref:id[t]",
+                vec![Event::Text("\\".into()), Event::Text("xref:id[t]".into())],
+            ),
+            // char-reference escape (renders `\&amp;copy;`)
+            (
+                "\\\\&copy;",
+                vec![Event::Text("\\".into()), Event::Text("&copy;".into())],
+            ),
+            // index-term shorthand escape
+            (
+                "\\\\((term))",
+                vec![Event::Text("\\".into()), Event::Text("((term))".into())],
+            ),
+            // double-plus passthrough — `++` markers literal, content flows
+            (
+                "\\\\++pp++",
+                vec![
+                    Event::Text("++".into()),
+                    Event::Text("pp".into()),
+                    Event::Text("++".into()),
+                ],
+            ),
+            (
+                "\\\\++*x*++",
+                vec![
+                    Event::Text("++".into()),
+                    Event::Start(Tag::Strong { id: None, roles: vec![] }),
+                    Event::Text("x".into()),
+                    Event::End(TagEnd::Strong),
+                    Event::Text("++".into()),
+                ],
+            ),
+        ] {
+            assert_eq!(pipeline(input), expected, "force result for {input:?}");
+        }
+
+        for c in ["\\\\image:a.png[alt]", "\\\\&copy;", "\\\\((term))", "\\\\++pp++"] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
+                "gate should decline (diverge from legacy) for {c:?}"
+            );
+        }
+    }
+
     #[test]
     fn try_parse_gate_declines_divergent_result() {
         // Cross-span overlap differs from legacy → gate declines (None).
@@ -1758,6 +1827,81 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// A doubled (or longer) backslash before a constrained quote marker, a
+    /// super/sub marker, a `pass:` macro, or a single-plus passthrough consumes
+    /// exactly the ONE backslash adjacent to the construct (Asciidoctor's `\\?`
+    /// capture), keeping the construct literal and leaving every leading backslash
+    /// as a literal boundary char. This DIVERGES from the legacy parser, which
+    /// either still renders the span (`\\*bold*` → `\<strong>bold</strong>`) or
+    /// emits a different event shape, so the differential gate declines every form
+    /// (asserted below) and the corpus output is unchanged — the new behaviour
+    /// only surfaces under `force`/after the gate is lifted. Matches Asciidoctor
+    /// byte-for-byte (verified against `asciidoctor -s` on each form).
+    #[test]
+    fn force_handles_doubled_backslash_escape() {
+        // `pipeline` (ungated) reproduces Asciidoctor: one backslash dropped, the
+        // construct kept literal.
+        for (input, expected) in [
+            // constrained markers — one backslash dropped, span NOT formed
+            ("\\\\*bold*", vec![Event::Text("\\*bold*".into())]),
+            ("\\\\_em_", vec![Event::Text("\\_em_".into())]),
+            ("\\\\`code`", vec![Event::Text("\\`code`".into())]),
+            ("\\\\#mark#", vec![Event::Text("\\#mark#".into())]),
+            // super/sub simple pairs
+            ("\\\\^sup^", vec![Event::Text("\\^sup^".into())]),
+            ("\\\\~sub~", vec![Event::Text("\\~sub~".into())]),
+            // pass macro (bare + spec'd) — kept literal, content still flows but
+            // forms no span here (the `*y*` is word-flanked)
+            ("\\\\pass:[raw]", vec![Event::Text("\\pass:[raw]".into())]),
+            ("\\\\pass:q[x*y*z]", vec![Event::Text("\\pass:q[x*y*z]".into())]),
+            // single-plus passthrough
+            ("\\\\+plus+", vec![Event::Text("\\+plus+".into())]),
+            // mid-text and the multi-backslash cascade: only the marker-adjacent
+            // `\` is consumed, leading ones stay literal
+            ("a \\\\*b* c", vec![Event::Text("a \\*b* c".into())]),
+            ("\\\\\\*a*", vec![Event::Text("\\\\*a*".into())]),
+            // a doubled backslash inside a span whose own close is INVALID keeps
+            // BOTH backslashes literal — the inner `*a*` cannot close before the
+            // word char `_`, so no escape fires (Asciidoctor parity)
+            (
+                "_\\\\*a*_",
+                vec![
+                    Event::Start(Tag::Emphasis { id: None, roles: vec![] }),
+                    Event::Text("\\\\*a*".into()),
+                    Event::End(TagEnd::Emphasis),
+                ],
+            ),
+            // …but inside `` `code` `` the inner `*a*` CAN close (before the
+            // backtick), so one backslash is consumed
+            (
+                "`\\\\*a*`",
+                vec![
+                    Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                    Event::Text("\\*a*".into()),
+                    Event::End(TagEnd::Monospace),
+                ],
+            ),
+        ] {
+            assert_eq!(pipeline(input), expected, "force result for {input:?}");
+        }
+
+        // The gate declines every form: the new (correct) result is not byte-equal
+        // to the legacy parser's (buggy span / split-event) output, so the engine
+        // falls back to legacy and the gated corpus output stays unchanged.
+        for c in [
+            "\\\\*bold*",
+            "\\\\^sup^",
+            "\\\\pass:q[x*y*z]",
+            "\\\\pass:[raw]",
+            "\\\\+plus+",
+        ] {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_none(),
+                "gate should decline (diverge from legacy) for {c:?}"
+            );
+        }
     }
 
 }
