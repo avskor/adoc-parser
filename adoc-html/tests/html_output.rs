@@ -617,3 +617,67 @@ fn test_attr_ref_in_image_target_alt_link_resolves() {
         "no extraction sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_attr_ref_in_xref_target_resolves() {
+    // An xref target (`xref:{rel}.adoc[]`, `xref:{frag}[]`, `<<{id}>>`) carries
+    // its attribute reference literally past the `macros` pass; the renderer
+    // resolves it against the document attributes before classifying the target
+    // as inter-document vs internal, matching Asciidoctor (attributes first).
+    let doc = ":rel: intro\n:frag: section-one\n:secid: _real_section\n\n";
+
+    // Inter-document target: `{rel}` resolves, then `.adoc` rewrites to `.html`.
+    let html = to_html(&format!("{doc}See xref:{{rel}}.adoc[Intro]."));
+    assert!(
+        html.contains("<a href=\"intro.html\">Intro</a>"),
+        "inter-document xref target attr ref must resolve. Got: {html}"
+    );
+
+    // Inter-document target with a `#fragment`: both `{rel}` and `{frag}` resolve.
+    let html = to_html(&format!("{doc}See xref:{{rel}}.adoc#{{frag}}[Deep]."));
+    assert!(
+        html.contains("<a href=\"intro.html#section-one\">Deep</a>"),
+        "xref target with attr-ref path and fragment must resolve. Got: {html}"
+    );
+
+    // Internal xref to an unknown id: the resolved id drives both the href and
+    // the bracketed fallback label (`#section-one` / `[section-one]`).
+    let html = to_html(&format!("{doc}See xref:{{frag}}[]."));
+    assert!(
+        html.contains("<a href=\"#section-one\">[section-one]</a>"),
+        "internal xref target attr ref must resolve in href and fallback. Got: {html}"
+    );
+
+    // Internal xref whose resolved id matches a real section: the natural cross
+    // reference picks up the section title as the link text.
+    let html = to_html(&format!("{doc}See xref:{{secid}}[].\n\n== Real Section"));
+    assert!(
+        html.contains("<a href=\"#_real_section\">Real Section</a>"),
+        "resolved xref id must still resolve to the section title. Got: {html}"
+    );
+
+    // The angle-bracket form resolves the attribute reference identically.
+    let html = to_html(&format!("{doc}<<{{secid}}>>.\n\n== Real Section"));
+    assert!(
+        html.contains("<a href=\"#_real_section\">Real Section</a>"),
+        "angle-bracket xref attr ref must resolve. Got: {html}"
+    );
+
+    // An undefined reference is kept literal (`attribute-missing` default `skip`):
+    // `xref:{undef}.adoc[]` still rewrites the extension, internal `{undef}` stays.
+    let html = to_html("Doc xref:{undef}.adoc[F]. Internal xref:{undef2}[].");
+    assert!(
+        html.contains("<a href=\"{undef}.html\">F</a>"),
+        "undefined inter-document xref target stays literal. Got: {html}"
+    );
+    assert!(
+        html.contains("<a href=\"#{undef2}\">[{undef2}]</a>"),
+        "undefined internal xref target stays literal. Got: {html}"
+    );
+
+    // No extraction sentinel (control bytes) may leak into the output.
+    assert!(
+        !html.bytes().any(|b| b == 0x01 || b == 0x02),
+        "no extraction sentinel may leak into output. Got: {html:?}"
+    );
+}

@@ -202,7 +202,37 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 99-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (30/N) attribute-ref в image alt + БЛОЧНЫЙ image target/alt/link (ветка `feat/subst-phase2-parity-30`)
+## АКТУАЛЬНО (2026-06-17, 100-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (31/N) attribute-ref в xref TARGET (ветка `feat/subst-phase2-parity-31`)
+
+Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-30/N) СМЕРЖЕНА в master
+(`b330983`). **(31/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `b330983`.
+- [x] **(31/N) attr-ref в xref TARGET** `xref:{rel}.adoc[]`/`xref:{frag}[]`/`<<{id}>>` → asciidoctor.
+  Завершение «attr-ref во ВСЕХ target макросов»: документированный остаток 29/30 (xref `{rel}` target — отд.
+  механизм xref-резолвера). Альтернатива render_kbd_keys (другая тема) отложена.
+  - **Корень (те же, что 29/30):** macros-пасс ДО attributes → `{rel}`/`{frag}` доживают литералом в
+    `Tag::CrossReference.target`. asciidoctor резолвит attributes ДО macros → `href="intro.html"`/`#section-one`,
+    наш base `href="{rel}.html"`/`#{frag}`. **NB:** фикс рендерер-side (attr-refs эмитятся парсером литералом —
+    docstring subst/attributes.rs).
+  - **Фикс (рендерер, 1 файл inline.rs):** `start_cross_reference` — `let resolved = resolve_inline_attr_value(target);
+    let target: &str = resolved.as_ref();` ДО is_interdoc_xref_target/interdoc_xref_href и сохранения internal
+    href-placeholder/fallback. Резолвнутый target драйвит ВСЁ: interdoc/internal-классификацию, `.adoc`→`.html`,
+    lookup id, bracketed fallback. Cow из аргумента (не self) → безопасно из `&mut self`.
+  - **КЛЮЧЕВОЕ:** резолв ДО is_interdoc — `{rel}.adoc`→interdoc, `{frag}`→internal (natural-xref по резолвнутому
+    id подхватывает заголовок секции). undefined→keep-literal (`{undef}.adoc`→`{undef}.html`, `{undef}`→`#{undef}`).
+  - **Скоуп:** ВСЕ target макросов теперь резолвят attr-refs (link/image 29/30 + xref 31). ОТЛОЖЕНО (остаток):
+    render_kbd_keys сплит по `,` (`kbd:[Ctrl,T]`→split; рендерер, pre-existing).
+  - **Тест:** `test_attr_ref_in_xref_target_resolves` (html_output.rs): interdoc `{rel}.adoc` / interdoc+`#{frag}` /
+    internal `{frag}`→href+fallback / резолв-id→реальная секция / angle `<<{secid}>>` / undefined keep-literal /
+    no-sentinel-leak. Работает под ОБОИМИ движками (рендерер shared).
+  - clippy 0; test --workspace зелёное (html_output 40→41). **gate_check toggle off/on 344/0** (airtight base≡new —
+    единств. корпус-хит `xref:chain-{chapter}[]` сидит ВНУТРИ `[source]`-листинга → verbatim, не парсится макросом).
+    **blast_force Identical 344→344** (0 REGR). e2e (p31_xref/p31_edge): все in-scope формы == asciidoctor
+    байт-в-байт (единств. остаток-diff p31_edge — pre-existing trailing-blank после секции, есть и на base, НЕ про xref).
+
+---
+
+## (2026-06-17, 99-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (30/N) attribute-ref в image alt + БЛОЧНЫЙ image target/alt/link (ветка `feat/subst-phase2-parity-30`)
 
 Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-29/N) СМЕРЖЕНА в master
 (`96f04ae`). **(30/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).

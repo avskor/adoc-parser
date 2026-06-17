@@ -5,6 +5,19 @@ use crate::*;
 
 impl HtmlRenderer {
     pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>) {
+        // Resolve attribute references in the target before any xref processing.
+        // Asciidoctor runs the global `attributes` pass before `macros`, so an
+        // `{name}` written in an xref target (`xref:{rel}.adoc[]`,
+        // `xref:{frag}[]`) is already resolved when the cross reference is
+        // interpreted — the resolved value drives both the interdoc/internal
+        // classification and, for an internal ref, the looked-up id and the
+        // bracketed fallback. Our `macros` pass runs first, so the reference
+        // survives literally in `Tag::CrossReference.target`; resolve it here
+        // (defined → value, undefined → kept literal, same as link/image
+        // targets). Borrows when there is no `{`, so every plain xref is
+        // byte-for-byte untouched.
+        let resolved = self.resolve_inline_attr_value(target);
+        let target: &str = resolved.as_ref();
         let is_interdoc = adoc_render_core::is_interdoc_xref_target(target);
         // Inter-document target with the .adoc extension rewritten to .html.
         // Asciidoctor uses this rewritten path both as href and, when the xref
