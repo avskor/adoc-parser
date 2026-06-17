@@ -1,5 +1,67 @@
 # Session context
 
+## Сессия (2026-06-17, 98-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (29/N): attribute-ref в TARGET inline link/image (`link:{u}[…]`/`image:{p}[…]` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-29`** (off master `b8d95b7`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — ТОЛЬКО по запросу пользователя). 28/N УЖЕ смержена
+(master HEAD `b8d95b7`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `b8d95b7`
+(`cargo build --release -p adoc-cli`→cp; ⚠ CLI в пакете **adoc-cli**).
+
+### Выбор задачи — документированный остаток 28/N
+28/N оставила явный кандидат: «`href={u}` в target макроса НЕ резолвится — отдельный pre-existing баг».
+recon обнажил: наш `href="{u}"`/`src="{p}"`, asciidoctor резолвит attributes ДО macros → `https://example.com`.
+
+### Корень — macros ДО attributes + Link/Image target минует resolve_inline_attr_value
+asciidoctor subs-порядок: attributes → … → macros, поэтому `{u}` уже резолвлен к моменту макро-пасса. Наш
+движок: macros ПЕРВЫЙ → `{u}` доживает литералом в `Tag::Link.url`/image `target`. Арм Link (events.rs
+`write_attr(output,"href",url)`) и `start_inline_image` (media.rs `image_uri(target)` + `link=` href)
+писали target ВЕРБАТИМ. **КЛЮЧЕВОЕ:** attr-refs НЕ резолвятся в ПАРСЕРЕ ни одним движком (docstring
+`subst/attributes.rs:9-11` — эмитятся, резолвит рендерер с `document_attrs`) → фикс ОБЯЗАН быть рендерер-side
+(как 27/28). InlineOptions несёт только `experimental`, не значения атрибутов.
+
+### Сделано (3 файла кода + 1 тест) — РЕНДЕРЕР-ONLY
+- **events.rs (Link-арм):** `write_attr(output,"href",url)` → `…resolve_inline_attr_value(url).as_ref()`.
+  bare-ссылка `link:{u}[]`: `if *is_bare { self.bare_link_pending=true }` (видимый текст повторяет target).
+- **events.rs (Text-арм, в начале):** если `bare_link_pending` и текст содержит `{` → резолв
+  `resolve_inline_attr_value` (owned), иначе текст as-is → fall-through на обычный escape-путь
+  (байт-идентично для не-attr bare-ссылок и всего прочего текста). Флаг сбрасывается тут + защитно в TagEnd::Link.
+- **media.rs (`start_inline_image`):** `image_uri(target)` → `image_uri(resolve_inline_attr_value(target))`
+  (резолв ДО imagesdir!); `link=` href `html_escape(href)` → `…resolve_inline_attr_value(href)`.
+- **lib.rs:** новое поле struct `bare_link_pending: bool` (+init false).
+- **Тест:** `test_attr_ref_in_link_and_image_target_resolves` (html_output.rs): link `home`, link+path,
+  image+imagesdir `img/tiger.png`, image `link=`, bare `link:{u}[]` (href+текст), undefined `{undef}`, no-leak.
+
+### Скоуп (СТРОГО документированная задача = TARGET)
+ТОЛЬКО inline `link:`/`image:` (target href/src + bare-текст + inline image `link=`). ОТЛОЖЕНО (остаток,
+вне скоупа): **блочный image** `image::{p}` (BlockMeta/write_meta_attrs — отд. block-attrlist механизм,
+1 файл корпуса `images-directory.adoc` `image::{imagesdir}/…` — не тронут); **xref** `xref:{rel}[…]`
+target (xref-резолвер строит `docs/intro.html` — отд. механизм); inline image `alt` attr-ref.
+
+### Верификация (airtight, рендерер корпус-невидим)
+- clippy --workspace 0; cargo test --workspace зелёное (html_output integration 38→39, parser 558, прочее неизменно).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). Корпус: единств. inline `link:{site-url}/…`
+  (asciidoc-vs-markdown.adoc) — `{site-url}` UNDEFINED → литерал в обоих движках; блочный `image::{imagesdir}`
+  вне inline-пути. **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/p29.adoc`/p29b/p29c/p29d):** new(FORCE И legacy) == `asciidoctor -s -o -` БАЙТ-В-БАЙТ на
+  всех in-scope формах: `link:{u}[home]`→`href="https://example.com"`, `link:{u}/issues`→`+/issues`,
+  `image:{p}`+imagesdir→`img/tiger.png`, abs `/root/cat.png`, inline `image[…,link={u}]`→резолв href,
+  bare `link:{u}[]`→href+текст `https://example.com`, undefined `{undef}`→литерал. Расходятся ТОЛЬКО
+  отложенные: xref `{rel}`→`docs/intro.html` (наш `#{rel}`), блочный `image::{p}` (наш `{p}`).
+
+### Дальше — Фаза 2 паритет (остаток) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- **Остаток-кандидаты:** xref `{rel}` target-резолв (xref-резолвер); блочный image `image::{p}`/`link=`
+  (BlockMeta); inline image `alt` attr-ref; render_kbd_keys сплит по `,` (рендерер, pre-existing).
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]` (env только на NEW), `blast_force.py`,
+  `diffone.py <file> [N]`, `nearmiss.py`. CLI: `adoc [--no-standalone] [-a nofooter] file` (НЕ `-s`!).
+  base пересобирать `cargo build --release -p adoc-cli` из master HEAD. asciidoctor: `asciidoctor -s -o - f`.
+  ⚠ shell cwd сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 97-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (28/N): attribute-ref в named-role link/inline-image (`link:u[t,role={r}]`/`image:p[a,role={r}]` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-28`** (off master `3dd9b8e`, 344) —
