@@ -627,7 +627,7 @@ impl HtmlRenderer {
                         }
                     }
                     if let Some(r) = role {
-                        html_escape(output, r);
+                        html_escape(output, self.resolve_inline_attr_value(r).as_ref());
                     }
                     output.push('"');
                 }

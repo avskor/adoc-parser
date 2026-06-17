@@ -367,7 +367,7 @@ impl HtmlRenderer {
         }
         if let Some(r) = role {
             img_class.push(' ');
-            img_class.push_str(r);
+            img_class.push_str(self.resolve_inline_attr_value(r).as_ref());
         }
         output.push_str("<span class=\"");
         output.push_str(&img_class);

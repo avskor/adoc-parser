@@ -55,7 +55,12 @@ impl HtmlRenderer {
     /// undefined → kept literal (`attribute-missing` default of `skip`). A value
     /// with no `{` is borrowed unchanged, so every non-attributed role (i.e. all
     /// legacy / gated output) is byte-for-byte untouched and allocates nothing.
-    fn resolve_inline_attr_value<'v>(&self, value: &'v str) -> std::borrow::Cow<'v, str> {
+    ///
+    /// Shared by the inline phrase elements ([`Self::push_inline_id_class`]) and
+    /// by the link / inline-image renderers, whose `role` carries the literal
+    /// `{name}` written as `link:u[t,role={name}]` (the `macros` pass runs before
+    /// `attributes`, so the reference survives unresolved into the role).
+    pub(crate) fn resolve_inline_attr_value<'v>(&self, value: &'v str) -> std::borrow::Cow<'v, str> {
         if !value.contains('{') {
             return std::borrow::Cow::Borrowed(value);
         }
