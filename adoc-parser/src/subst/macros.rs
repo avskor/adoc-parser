@@ -8,7 +8,7 @@
 //!   must begin with `[\p{Word}#/.:{]` (Asciidoctor's `InlineXrefMacroRx`), so a
 //!   leading `<` (`<<<`), `"`, `-`, or space declines and the angle brackets stay
 //!   literal; the legacy parser lacks this guard but never reaches a `<<` inside a
-//!   span, so the gate falls back to legacy on the divergent forms;
+//!   span, so the engine is the more Asciidoctor-faithful one on the divergent forms;
 //! - **link family** (2/N) — the `link:url[attrs]` macro, the `mailto:email[attrs]`
 //!   macro (with `?subject=&body=` query encoding), bare URL autolinks
 //!   (`http://`/`https://`/`ftp://`/`irc://`, with the optional `[label]` form),
@@ -76,10 +76,16 @@
 //! Because earlier passes already lifted passthroughs/escapes/char-refs into
 //! sentinels, a macro whose source span now contains one (`xref:x[+raw+]`, a
 //! passthrough inside the label) no longer has the raw text the legacy parser
-//! would re-parse. Rather than emit a mismatched leaf, the pass declines such a
-//! span (leaving it literal); the differential-equality gate then falls back to
-//! legacy. The common case — plain targets and text/quote labels — carries no
-//! sentinels and is extracted normally.
+//! would re-parse. The engine cannot yet faithfully form such a macro (the
+//! verbatim source is gone), so the pass declines the span (leaving it literal)
+//! AND records the punt via [`super::flag_decline`]: [`super::try_parse`] then falls back
+//! to the legacy recursive parser for the whole paragraph, which still has the
+//! raw text and renders these correctly. This is the explicit replacement for
+//! the old differential-equality gate, which used to absorb the same divergence.
+//! Converting each macro family to native sentinel handling (re-parsing labels
+//! against the shared tag table, reconstructing verbatim target strings) will
+//! retire the corresponding punt. The common case — plain targets and text/quote
+//! labels — carries no sentinels and is extracted normally.
 
 use std::borrow::Cow;
 
@@ -87,7 +93,16 @@ use crate::attributes::{parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
+use super::flag_decline;
 use super::tokenize::{sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
+
+/// Record that a macro was declined because its span contained a sentinel — the
+/// shared [`super::flag_decline`] makes [`super::try_parse`] fall back to legacy.
+/// The ~17 punt sites are free functions taking `&str` (not `&mut Work`), so a
+/// thread-local flag avoids threading a parameter through every macro matcher.
+fn flag_punt() {
+    flag_decline();
+}
 
 /// Extract every supported inline macro from `work.buf` into sentinels.
 pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOptions) {
@@ -474,10 +489,10 @@ fn try_cross_ref(
     // e.g. inside a `` `<<<` `` monospace span), `"`, `-`, or whitespace is not a
     // valid cross-reference start. The legacy recursive parser has no such guard,
     // but it never reaches a `<<` buried inside a constrained span (the span is
-    // consumed and re-parsed first), so on those forms the gate falls back to
-    // legacy while `force()` now matches Asciidoctor. The dispatcher advances by a
-    // single `<` on `None`, so a later valid `<<` in the same run still matches
-    // (`<<<b>>` → literal `<` + xref `#b`).
+    // consumed and re-parsed first), so on those forms the engine declines the link
+    // and now matches Asciidoctor. The dispatcher advances by a single `<` on
+    // `None`, so a later valid `<<` in the same run still matches (`<<<b>>` →
+    // literal `<` + xref `#b`).
     if !xref_target_start_ok(content) {
         return None;
     }
@@ -566,14 +581,22 @@ fn try_link(
     }
     let end = start + 5 + bracket_end + 1;
     // The label is re-parsed by the engine, which cannot run over sentinel bytes,
-    // so a sentinel in the label declines (mirrors the old whole-span guard).
+    // so a sentinel in the label punts to legacy (mirrors the old whole-span guard).
     if content.as_bytes().contains(&TAG_LEAD) {
+        flag_punt();
         return None;
     }
     // The URL is normally plain text; the one sentinel form supported is a
-    // passthrough-protected target (`link:++url++[…]`), reconstructed verbatim.
+    // passthrough-protected target (`link:++url++[…]`), reconstructed verbatim. Any
+    // other sentinel shape in the URL part is a punt to legacy.
     let url: Cow<str> = if url_part.as_bytes().contains(&TAG_LEAD) {
-        Cow::Owned(passthrough_url(work, url_part)?)
+        match passthrough_url(work, url_part) {
+            Some(u) => Cow::Owned(u),
+            None => {
+                flag_punt();
+                return None;
+            }
+        }
     } else {
         Cow::Borrowed(url_part)
     };
@@ -1440,7 +1463,13 @@ fn push_label(
 
 /// Whether `src[start..end]` (a candidate macro span) contains a tag sentinel —
 /// i.e. an earlier pass already lifted a passthrough/escape/char-ref out of it,
-/// so the raw text the legacy parser would re-parse is gone.
+/// so the raw text the legacy parser would re-parse is gone. Every caller treats
+/// `true` as a decline, so this records the punt ([`flag_punt`]) on the way out,
+/// signalling [`super::try_parse`] to fall back to legacy for the paragraph.
 fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
-    src.as_bytes()[start..end].contains(&TAG_LEAD)
+    let has = src.as_bytes()[start..end].contains(&TAG_LEAD);
+    if has {
+        flag_punt();
+    }
+    has
 }

@@ -230,13 +230,12 @@ impl InlineParser {
             return vec![Event::Text(Cow::Borrowed(""))];
         }
 
-        // Transitional: when the sequential-pass engine is enabled and can
-        // handle this top-level text, use it; otherwise fall through to the
-        // legacy recursive parser. Phase 0: the engine always declines, so this
-        // is inert (see `crate::subst`).
-        if crate::subst::enabled()
-            && let Some(events) = crate::subst::try_parse(text, subs, options)
-        {
+        // The sequential-pass engine ([`crate::subst`]) is the default for
+        // top-level inline text. It declines (returns `None`) only when it
+        // cannot run — no `quotes` substitution requested (e.g. verbatim blocks)
+        // or the input already holds a reserved sentinel byte — in which case we
+        // fall back to the legacy recursive parser below.
+        if let Some(events) = crate::subst::try_parse(text, subs, options) {
             return events;
         }
 
@@ -245,9 +244,9 @@ impl InlineParser {
 }
 
 /// The legacy recursive inline parser, factored out of
-/// [`InlineParser::parse_str_with_subs_options`] so the sequential-pass engine
-/// ([`crate::subst`]) can run it for differential comparison without
-/// re-entering the toggle check (which would recurse). Handles any `text`
+/// [`InlineParser::parse_str_with_subs_options`] so it can serve as the explicit
+/// fallback when the sequential-pass engine ([`crate::subst`]) declines, without
+/// re-entering the engine dispatch (which would recurse). Handles any `text`
 /// including the empty string (yields a single empty `Text`).
 pub(crate) fn parse_legacy<'a>(
     text: &'a str,
@@ -3138,14 +3137,22 @@ impl<'a> InlineState<'a> {
 mod tests {
     use super::*;
 
+    // These unit tests cover the legacy recursive parser directly — it remains the
+    // fallback when the default sequential engine ([`crate::subst`]) declines, so
+    // its event-stream behaviour (including the exact Text-run splitting these
+    // tests pin) still needs coverage. Calling `parse_legacy` rather than the
+    // public `parse_str` entry keeps that focus: the entry now routes through the
+    // sequential engine, which can produce HTML-identical but differently-split
+    // event streams. The sequential engine is exercised by the corpus/compat
+    // suites and `subst`'s own differential tests.
     fn parse(text: &str) -> Vec<Event<'_>> {
-        InlineParser::parse_str(text)
+        parse_legacy(text, SubstitutionSet::NORMAL, InlineOptions::default())
     }
 
     /// Parse with the experimental UI macros (`kbd:`/`btn:`/`menu:`) enabled,
-    /// as if `:experimental:` were set.
+    /// as if `:experimental:` were set (legacy parser — see [`parse`]).
     fn parse_experimental(text: &str) -> Vec<Event<'_>> {
-        InlineParser::parse_str_with_subs_options(
+        parse_legacy(
             text,
             SubstitutionSet::NORMAL,
             InlineOptions { experimental: true },
