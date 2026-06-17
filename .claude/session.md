@@ -1,6 +1,49 @@
 # Session context
 
-## Сессия (2026-06-17, 103-я) — ХВОСТЫ ФАЗЫ 3: doc-свип «gate»-терминологии + оценка мёртвого legacy-quotes (НЕ закоммичено)
+## Сессия (2026-06-17, 104-я) — п.20 `[[id,reftext]]`: block-anchor reftext для `<<id>>` (ветка `feat/block-anchor-reftext`, НЕ закоммичено)
+
+Запрос «займись п.20». Ветка **`feat/block-anchor-reftext`** (off master `8704452`) — **НЕ закоммичена**
+(коммит/мерж/пуш — ТОЛЬКО по запросу). Предыдущие коммиты сессии (doc-свип `4c677de`, TODO-метки `8704452`)
+уже смержены и запушены.
+
+### Диагностика (локализация бага)
+`[[id,reftext]]` / `<<id>>`: **inline-форма** (anchor внутри текста) УЖЕ работала (events.rs:699 `Tag::Anchor`
+рендерит label → `anchor_reftexts`). **Block-форма** (`[[id,reftext]]` на отдельной строке = block attribute)
+была сломана: `<a href="#id">[id]</a>` вместо reftext. Также named `[reftext=…]` НЕ работала.
+**Корень:** `attributes.rs::parse` (legacy-anchor ветка) дропал label после запятой (`map_or(id, |(i,_)| …)`),
+а рендерер вообще не потреблял `reftext` для xref-регистрации.
+
+### Сделано (3 файла кода + 2 группы тестов)
+- **`attributes.rs::parse`** (~230): вместо дропа — `named.insert("reftext", …)`; mirror inline `try_anchor`
+  (id `trim_end`, reftext `trim_start`, пустой→skip). Так `[[id,reftext]]` и `[reftext=…]` сходятся на
+  `named["reftext"]` (named-форма уже клала туда через `_ =>` arm — парсер-side для неё уже работал, не хватало рендерера).
+- **`events.rs` `Event::BlockMetadata`**: при id + `named["reftext"]` → `render_inline_value` → push в
+  `self.anchor_reftexts` (зеркало inline `Tag::Anchor`; reftext несёт формат → `RefText::Markup`).
+  `write_meta_attrs` эмитит только id/class — reftext в `named` НЕ утекает в HTML (проверено).
+- **`finish.rs`**: реордер регистрации (add_block = first-wins) — `anchor_reftexts` ПЕРЕД `block_ref_titles`,
+  т.к. explicit reftext > block title (asciidoctor). Безопасно для корпуса: затрагивает только id с *и*
+  reftext *и* title; раз корпус был 344/344, такого кейса в нём нет.
+- **Тесты:** parser `test_legacy_anchor_xreflabel_captured_as_reftext` (бывш. `_stripped`; +reftext в named,
+  trim, empty/no-comma). html_output +3: `test_xref_block_anchor_reftext`, `_named_reftext_attribute`,
+  `_reftext_beats_block_title`.
+
+### Верификация (AIRTIGHT)
+- Пробы vs asciidoctor: основной п.20 / named / reftext+formatting / title-only / fallback `[id]` / precedence
+  (reftext>title) / inline-regression — ВСЕ MATCH.
+- **clippy --workspace 0**; **cargo test --workspace зелёное** (parser 558, html unit 434, **html_output 41→44 (+3)**,
+  compat 233, прочее неизм.). **parity vs asciidoctor 344/344** (0 регрессий; п.20 closed).
+
+### Остаток точечных (TODO.md) — открыт только п.28
+- п.28 (`toc::[]` macro) — нет обёртки `preamble`/`sectionbody`, `toctitle` без `class="title"` (вне корпуса).
+- 240 native-конверсия (опционально, 0 корпусного выигрыша).
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+- Скрипты: `/tmp/parity_check.py` (single-binary new-vs-asciidoctor, refcache). base-бинарь отсутствует.
+
+---
+
+## Сессия (2026-06-17, 103-я) — ХВОСТЫ ФАЗЫ 3: doc-свип «gate»-терминологии + оценка мёртвого legacy-quotes (СМЕРЖЕНА `4c677de`)
 
 Запрос «продолжи». Ветка **`chore/subst-phase3-doc-sweep`** (off master `80a6b39`) — **НЕ закоммичена**
 (коммит/мерж/пуш — ТОЛЬКО по запросу). Выбор направления через AskUserQuestion: «закрыть хвосты Фазы 3».
