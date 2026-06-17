@@ -202,7 +202,47 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-16, 93-я сессия): РЕРАЙТ inline — Фаза 2 (24/N) footnote-макрос → FORCE 344/344 (ветка `feat/subst-phase2-next-24`)
+## АКТУАЛЬНО (2026-06-17, 94-я сессия): РЕРАЙТ inline — Фаза 2 (25/N) UI-макросы kbd/btn/menu (ветка `feat/subst-phase2-next-25`)
+
+Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
+в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.
+Phase 2 (1-24/N) уже СМЕРЖЕНА в master (`43c2eeb`). **(25/N) ЗАКОММИЧЕНА на ветке, ОЖИДАЕТ
+авторизации** на `git merge --no-ff` + `git push` + удаление ветки:
+- [x] **(25/N) UI-макросы `kbd:`/`btn:`/`menu:`** (macros-пасс, за `:experimental:`). Последний
+  непортированный inline-конструкт; ПРЕДУСЛОВИЕ снятия гейта (Фаза 3). 0 FORCE-diff в корпусе (ни один
+  файл не ставит `:experimental:`) → чисто аддитивно, проверяется парсер-тестами + e2e-пробой.
+  - **Корень:** новый движок не имел kbd/btn/menu И не пробрасывал `InlineOptions` в `run_pipeline`.
+    Легаси-дисп (inline.rs:497-543) гейтит арм на `options.experimental`; контент эмитится СЫРЫМ `Text`
+    (рендерер `render_kbd_keys`/`menu_target` сам сплитит по `+`/`,`/`>`) — НЕ репарсится → leaf.
+  - **Threading (4 файла):** `run_pipeline(text,subs,options)` + проброс `options` во ВСЕ inner-reparse
+    (`macros::extract`, `passthrough::extract`→`pass_spec_events`, `push_label`, `build_link`,
+    `build_cross_reference` + `try_xref/cross_ref/link/mailto/autolink/email`). Зеркалит легаси
+    `push_macro_label`/inner `InlineState::new(_,_,self.options)` — experimental доходит до вложенных меток.
+  - **Фикс (macros.rs):** `try_bracket_ui(prefix_len,open,close)` (kbd/btn, prefix 4, `[` сразу после,
+    контент до первого `]`, пусто→decline) → `try_kbd`/`try_btn`; `try_menu` (prefix 5, target до `[` непуст,
+    items до первого `]`, пусто-items→без Text) — зеркала `try_kbd_macro`/`try_btn_macro`/`try_menu_macro`
+    (+`parse_bracket_macro`/`parse_target_bracket_macro`). `span_has_sentinel` guard на всех. Dispatch-армы
+    `options.experimental && b'k'|b'b'|b'm'` перед `<<`-армом; при experimental OFF армы НЕ срабатывают →
+    байты текут как текст (== asciidoctor, у которого макросы не зарегистрированы без `:experimental:`).
+  - **mod.rs:** тест `reproduces_legacy_on_ui_macro_inputs` (хелперы `pipeline_exp`/`legacy_exp`): 27 кейсов
+    `pipeline_exp==legacy_exp` (формы, span-вложенность, mid-word, invalid/empty) + 4 event-вектора +
+    OFF-vs-ON контраст. Кейсы с passthrough/escape/char-ref внутри скобок ИСКЛЮЧЕНЫ (сентинель→decline→fallback).
+  - clippy 0; test --workspace зелёное (parser 554→555). **gate_check toggle ON: 344, 0 различий base≡new**
+    (airtight, нет утечки гейта); blast_toggle 343→343 (0 changed); **blast_force 344→344 (0 REGR/FLIP/FARTHER).**
+  - **e2e-проба** (`:experimental:` doc, kbd+`,`/btn/menu+`>`/span): new(force) == legacy байт-в-байт; == asciidoctor
+    КРОМЕ `kbd:[Ctrl,T]` — **предсуществующий БАГ РЕНДЕРЕРА** `render_kbd_keys` (сплит только по `+`, не по `,`;
+    `adoc-html/src/inline.rs:71`), общий для обоих движков, вне зоны парсер-порта. → отдельная задача ниже.
+- [ ] **РЕНДЕРЕР: `render_kbd_keys` сплит по `,` (не только `+`)** — asciidoctor сплитит kbd-ключи и по запятой
+  (`kbd:[Ctrl,T]` → `<span class="keyseq"><kbd>Ctrl</kbd>+<kbd>T</kbd></span>`); мы даём `<kbd>Ctrl,T</kbd>`.
+  Pre-existing, не регрессия 25/N. Точную семантику разделителя asciidoctor (`KbdDelimiterRx`) сверить пробами.
+- **Дальше — Фаза 2 контентно ЗАВЕРШЕНА, ВСЕ inline-макросы портированы.** cross-span остатки (gated, корректны):
+  `*x*-- y` em-dash после close; escape `\\`/`\\pass:`/`\\https` doubled. **ФИНАЛ (Фаза 3): снять gate** (swap
+  дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги) → outline флип в DEFAULT. UI-макросы
+  больше не блокируют — предусловие выполнено.
+
+---
+
+## (2026-06-16, 93-я сессия): РЕРАЙТ inline — Фаза 2 (24/N) footnote-макрос → FORCE 344/344 (ветка `feat/subst-phase2-next-24`)
 
 Корпус неизменен **344/344** (гейт держит). Фаза 2 = перенести оставшиеся пассы пайплайна asciidoctor
 в `adoc-parser/src/subst/`, довести FORCE-движок до байт-идентичности, в финале снять gate.

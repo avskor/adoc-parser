@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-17, 94-я) — РЕРАЙТ inline, Фаза 2 (25/N): UI-макросы kbd/btn/menu (последний inline-конструкт; предусловие снятия гейта)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-25`** (off master `43c2eeb`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж по запросу пользователя). 24/N к началу сессии УЖЕ смержен
+(master HEAD `43c2eeb`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН из чистого master `43c2eeb`
+(stash → build → cp → stash pop): gate_check toggle base 344, blast_force base 344.
+
+### Выбор задачи
+Фаза 2 контентно завершена под FORCE (344/344 на файловой гранулярности с 24/N). Остался ЕДИНСТВЕННЫЙ
+непортированный inline-конструкт — UI-макросы `kbd:`/`btn:`/`menu:` за `:experimental:`. 0 FORCE-diff (ни один
+файл корпуса не ставит `:experimental:`; 10 файлов используют kbd/btn/menu-СИНТАКСИС, но без атрибута →
+рендерятся литералом), НО для снятия гейта (Фаза 3, новый движок = единственный путь) ОБЯЗАТЕЛЬНЫ.
+
+### Корень — макросов не было + `InlineOptions` не пробрасывался в `run_pipeline`
+Легаси-дисп (inline.rs:497-543) гейтит арм kbd/btn/menu на `self.options.experimental`; контент эмитится
+СЫРЫМ `Text(Cow::Borrowed)` — рендерер (`kbd_mode`→`render_kbd_keys` сплит по `+`; `menu_target`→`render_menu`
+сплит по `>`; btn → `<b class="button">`+обычный текст) сам обрабатывает контент → для inline-парсера это
+чистые **leaf** (никакого reparse/`push_label`; заметка про «рекурсивные push_label» была ложной — легаси
+эмитит raw). Новый движок (subst/) НЕ имел макросов И `run_pipeline(text,subs)` не нёс `options`.
+
+### Сделано (1 логический коммит готов, 4 файла)
+- **THREADING `InlineOptions` (Copy):** `run_pipeline(text,subs,options)` + проброс во ВСЕ inner-reparse, чтобы
+  experimental доходил до вложенных меток (зеркалит легаси `push_macro_label`/inner `InlineState::new(_,_,self.options)`):
+  `mod.rs` (run_pipeline + try_parse + 2 теста-хелпера `pipeline_exp`/`legacy_exp`), `macros.rs`
+  (`extract`, `push_label`, `build_link`, `build_cross_reference`, `try_xref/cross_ref/link/mailto/autolink/email`),
+  `passthrough.rs` (`extract`, `try_pass_spec_macro`, `pass_spec_events`). Импорт `InlineOptions` в macros.rs/passthrough.rs.
+- **macros.rs — функции:** `try_bracket_ui(prefix_len,open,close)` (общая kbd/btn: prefix 4, `[` сразу после,
+  контент до первого `]`, ПУСТО→decline) → `try_kbd`(Keyboard)/`try_btn`(Button); `try_menu` (prefix 5, target до
+  `[` непуст, items до первого `]`, пусто-items→БЕЗ Text-события) — зеркала `try_kbd_macro`/`try_btn_macro`/
+  `try_menu_macro` (+`parse_bracket_macro`/`parse_target_bracket_macro`). `span_has_sentinel` guard на всех трёх
+  (как footnote/icon/stem). Dispatch-армы `options.experimental && bytes[i]==b'k'|b'b'|b'm' && starts_with(...)`
+  перед `<<`-армом; fail→`pos+=1`. **experimental OFF: армы НЕ срабатывают** → байты текут как текст (== asciidoctor,
+  где макросы не зарегистрированы без `:experimental:`; легаси вместо этого `skip_disabled_ui_macro` ПРОПУСКАЕТ
+  весь `[…]` — легаси-quirk, медиируется гейтом, 0 корпус-покрытия).
+- **mod.rs тест** `reproduces_legacy_on_ui_macro_inputs`: 27 кейсов `pipeline_exp==legacy_exp` (формы, span-вложен,
+  mid-word `xkbd:[Y]`, raw-маркеры не репарсятся, invalid/empty) + 4 event-вектора (kbd/btn/menu/menu-пусто) +
+  OFF-vs-ON контраст. Сентинель-кейсы (passthrough/escape/char-ref внутри скобок) ИСКЛЮЧЕНЫ — guard→decline→fallback.
+- **Docstring'и** обновлены: mod.rs run_pipeline (footnote+UI портированы, threading-причина), macros.rs module
+  (UI = пункт 7/N; «every inline macro family … now has a home here»).
+
+### Верификация (airtight, чисто аддитивно)
+- clippy --workspace 0; cargo test --workspace зелёное (parser 554→555, html 433, html_output 36, html-tests 6,
+  author_rendering 6, html_compat 1, parsing-lab 1, integration 25, render-core 15).
+- **gate_check toggle ON: 344 файла, 0 различий base≡new** (airtight — gated-вывод байт-в-байт с чистым master).
+  toggle-off: 344, 0. blast_toggle 343→343 (0 changed). **blast_force: Identical base 344→new 344 (0 REGR/FLIP/FARTHER).**
+  Корпус ПОЛНОСТЬЮ неизменен — изменение гейтировано `:experimental:`, корпус его не ставит.
+- **e2e-проба** `/tmp/exp_ui.adoc` (`:experimental:`; kbd с `+`/`,`, btn, menu с `>`, span-вложен): new(force)
+  == legacy(default) **байт-в-байт**; == asciidoctor КРОМЕ `kbd:[Ctrl,T]`.
+
+### ⚠ Предсуществующий БАГ РЕНДЕРЕРА (не регрессия 25/N, вне зоны парсер-порта)
+`render_kbd_keys` (`adoc-html/src/inline.rs:71`) сплитит kbd-ключи только по `+`, asciidoctor — и по `,`:
+`kbd:[Ctrl,T]` → у нас `<kbd>Ctrl,T</kbd>`, у asciidoctor `<span class="keyseq"><kbd>Ctrl</kbd>+<kbd>T</kbd></span>`.
+Парсер обоих движков эмитит ОДИНАКОВЫЙ raw `Text("Ctrl,T")` → расхождение чисто рендерерное, общее для движков.
+Задача добавлена в TODO (сверить `KbdDelimiterRx` пробами перед фиксом).
+
+### ⚠ ИНФРА — fmt-гейт rust-quality-gates ОТКЛЮЧЁН (решение пользователя 2026-06-16)
+Без изменений с 91-93. Fmt-блок закомментирован в ОБЕИХ копиях `pre-commit-cargo.sh`; clippy активен.
+Bypass залипшего хука: `git commit --no-edit`. [[proj_quality_gate_hooks]].
+
+### Дальше — Фаза 2 контентно ЗАВЕРШЕНА, ВСЕ inline-макросы портированы
+- **ФИНАЛ (Фаза 3): снять gate** — swap дефолта (`ADOC_QUOTES_SEQUENTIAL` → on), удалить legacy quotes +
+  edge-флаги; outline флипает в DEFAULT-режиме. ПРЕДУСЛОВИЕ (UI-макросы) ВЫПОЛНЕНО.
+- **cross-span остатки** (gated, fallback, вывод корректен): `*x*-- y` em-dash после close-span;
+  escape `\\` bare / `\\pass:`/`\\https` doubled (pre-existing-deferred).
+- **Рендерер:** `render_kbd_keys` сплит по `,` (см. выше; pre-existing).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `blast_toggle.py` (гейт vs asciidoctor), `blast_force.py` (FORCE vs asciidoctor),
+  `gate_check.py [KEY=VAL]` (base≡new напрямую; env только на NEW), `diffone.py <file> [N]`, `nearmiss.py`.
+  CLI: `adoc [--no-standalone] file`. base пересобирать из master HEAD (stash→build→cp /tmp/adoc_base→pop).
+  Регулярки: `ruby -e 'require "asciidoctor"; puts Asciidoctor::InlineKbdBtnMacroRx.source'`.
+
+---
+
 ## Сессия (2026-06-16, 93-я) — РЕРАЙТ inline, Фаза 2 (24/N): footnote-макрос → FORCE 344/344 (весь корпус выровнен!)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-next-24`** (off master `0b58a8c`, 344) —
