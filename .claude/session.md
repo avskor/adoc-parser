@@ -1,5 +1,68 @@
 # Session context
 
+## Сессия (2026-06-17, 99-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (30/N): attribute-ref в image alt + БЛОЧНЫЙ image target/alt/link (`image::{p}[{a}]`/`image:{p}[{a}]` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-30`** (off master `96f04ae`, 344) —
+**НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — ТОЛЬКО по запросу пользователя). 29/N УЖЕ смержена
+(master HEAD `96f04ae`). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `96f04ae`
+(`cargo build --release -p adoc-cli`→cp; ⚠ CLI в пакете **adoc-cli**).
+
+### Выбор задачи — документированный остаток 29/N (завершение «image attr-ref паритета»)
+29/N сделала attr-ref в TARGET ТОЛЬКО inline link/image (src/href + bare-текст + inline link=). Явно ОТЛОЖИЛА:
+блочный image (`image::{p}` — отд. путь), inline image `alt`. 30/N закрывает их вместе как единый «image
+attr-ref паритет»: чтобы ВСЕ поля image-макросов (inline+block: target/alt/link href/auto-alt) резолвили attr-refs.
+
+### Корень — те же что 29/N: macros ДО attributes, поля минуют resolve
+asciidoctor subs: attributes → … → macros, поэтому `{p}`/`{a}` резолвлены к макро-пассу. Наш движок: macros ПЕРВЫЙ
+→ `{p}`/`{a}` доживают литералом в `Tag::Image`/`BlockMeta`-полях. **РАЗВЕДКА (`/tmp/p30_full.adoc`):**
+- **inline image** (29/N): src/role/link href резолвились, но `alt` — НЕТ (`alt="{a}"`), и **auto-alt брал СЫРОЙ
+  target** (`image:{p}[]`→`alt="{p}"` вместо `tiger`).
+- **block image** (`start_block_image`): НИЧЕГО не резолвилось — `src="img/{p}"`, `alt="{a}"`, `href="{u}"`, auto-alt `{p}`.
+- **КЛЮЧЕВОЕ:** auto_alt_from_target ОБЯЗАН получать РЕЗОЛВНУТЫЙ target (asciidoctor `image::{p}[]`→`alt="tiger"`).
+Фикс РЕНДЕРЕР-ONLY (как 27/28/29; attr-refs эмитятся парсером литералом, резолвит рендерер с document_attrs).
+
+### Сделано (1 файл кода + 1 тест) — РЕНДЕРЕР-ONLY (media.rs)
+- **`start_block_image`:** `let resolved_target = self.resolve_inline_attr_value(target)` ДО image_uri/auto-alt;
+  link href `html_escape(href)`→`…resolve_inline_attr_value(href)`; alt non-empty `alt.to_string()`→
+  `self.resolve_inline_attr_value(alt).into_owned()`; auto-alt `auto_alt_from_target(target)`→`(resolved_target)`;
+  `image_uri(target)`→`(resolved_target.as_ref())` (img-арм + interactive `data` + fallback src).
+- **`start_inline_image`:** лифт `resolved_target` (был inline в src write_attr); auto-alt `(target)`→`(resolved_target)`;
+  alt non-empty `alt.to_string()`→`self.resolve_inline_attr_value(alt).into_owned()`.
+- `resolve_inline_attr_value` возвращает Cow, заимствующий из АРГУМЕНТА (не self) → безопасно из `&mut self`-метода.
+- **Тест:** `test_attr_ref_in_image_target_alt_link_resolves` (html_output.rs, после `_in_link_and_image_target_resolves`):
+  block target+alt / block auto-alt из резолв-basename / block `link={u}`+target / inline alt / inline auto-alt /
+  undefined target+alt keep-literal+imagesdir / no-sentinel-leak.
+
+### Скоуп (СТРОГО = завершение image attr-ref) / ОТЛОЖЕНО
+ВСЕ поля inline+block image (target/alt/link href/auto-alt/interactive data+fallback). ОТЛОЖЕНО (остаток, вне
+скоупа): **xref `{rel}` target** (`xref:{rel}.adoc`→`intro.html`/`#intro`; xref-резолвер — отд. механизм, наш
+`{rel}.html`/`#{rel}`); **render_kbd_keys сплит по `,`** (`kbd:[Ctrl,T]`→split; наш `<kbd>Ctrl,T</kbd>`, рендерер,
+pre-existing); inline `link:` уже покрыт 29/N.
+
+### Верификация (airtight, рендерер корпус-невидим)
+- clippy --workspace 0; cargo test --workspace зелёное (html_output integration 39→40, parser 558, прочее неизменно).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). Корпус: единств. `image::{imagesdir}/…`/
+  `image::image.jpg[{half-width}]` сидят ВНУТРИ `[source]`-листингов (verbatim, НЕ парсятся макросом) → вывод не
+  меняется. **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/p30_full.adoc`/`p30_edge.adoc`):** new == `asciidoctor -s -o -` БАЙТ-В-БАЙТ на всём классе:
+  block `image::{p}[{a}]`→`src="img/tiger.png" alt="My Tiger"`, `[]`→auto-alt `tiger`, `link={u}`→резолв href,
+  inline `image:{p}[{a}]`/`[]`; edge: undefined `{undef}` keep-literal (target+alt), abs `/root/cat.png` и URL
+  (imagesdir НЕ применяется). `diff` пуст (IDENTICAL).
+
+### Дальше — Фаза 2 паритет (остаток) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- **Остаток-кандидаты:** xref `{rel}` target-резолв (xref-резолвер); render_kbd_keys сплит по `,` (рендерер).
+  Image attr-ref паритет ТЕПЕРЬ ЗАКРЫТ полностью (inline+block, все поля).
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]` (env только на NEW), `blast_force.py`,
+  `diffone.py <file> [N]`, `nearmiss.py`. CLI: `adoc [--no-standalone] [-a nofooter] file` (НЕ `-s`!).
+  base пересобирать `cargo build --release -p adoc-cli` из master HEAD. asciidoctor: `asciidoctor -s -o - f`.
+  ⚠ shell cwd сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 98-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (29/N): attribute-ref в TARGET inline link/image (`link:{u}[…]`/`image:{p}[…]` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-29`** (off master `b8d95b7`, 344) —
