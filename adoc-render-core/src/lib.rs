@@ -257,6 +257,42 @@ pub fn interdoc_xref_href(target: &str) -> String {
     }
 }
 
+/// Strip a leading URI scheme from `s`, returning the remainder. Mirrors
+/// Asciidoctor's `UriSniffRx` (`\A\p{Alpha}[\p{Alnum}.+-]+:/{0,2}`): a letter,
+/// then one or more alphanumeric / `.` / `+` / `-` characters, a colon, and up
+/// to two slashes. Honours `:hide-uri-scheme:` on the visible text of bare
+/// autolinks and `link:url[]` macros (callers keep the full target in `href`).
+/// Returns `s` unchanged when no scheme matches.
+pub fn strip_uri_scheme(s: &str) -> &str {
+    let mut chars = s.char_indices();
+    // First char must be a letter (\p{Alpha}).
+    match chars.next() {
+        Some((_, c)) if c.is_alphabetic() => {}
+        _ => return s,
+    }
+    // `[\p{Alnum}.+-]+` — at least one such char must precede the colon.
+    let mut seen_body = false;
+    let after_colon = loop {
+        match chars.next() {
+            Some((i, ':')) if seen_body => break i + 1,
+            Some((_, c)) if c.is_alphanumeric() || matches!(c, '.' | '+' | '-') => {
+                seen_body = true;
+            }
+            _ => return s,
+        }
+    };
+    // `/{0,2}` — up to two slashes after the colon.
+    let mut end = after_colon;
+    for _ in 0..2 {
+        if s[end..].starts_with('/') {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    &s[end..]
+}
+
 /// A section heading collected while walking the event stream. Doubles as
 /// the section registry for xref resolution (see [`XrefResolver`]) and as
 /// the source of TOC entries.
@@ -1217,5 +1253,39 @@ mod tests {
         assert_eq!(resolve_attr_refs_text("{missing} stays", doc), "{missing} stays");
         assert_eq!(resolve_attr_refs_text("brace { only", doc), "brace { only");
         assert_eq!(resolve_attr_refs_text("{NAME}", doc), "World");
+    }
+
+    #[test]
+    fn strip_uri_scheme_common_schemes() {
+        assert_eq!(strip_uri_scheme("https://github.com/foo"), "github.com/foo");
+        assert_eq!(strip_uri_scheme("http://example.org/a/b"), "example.org/a/b");
+        assert_eq!(strip_uri_scheme("ftp://host/file"), "host/file");
+        assert_eq!(strip_uri_scheme("irc://chat.freenode.net"), "chat.freenode.net");
+        // mailto: has zero slashes after the colon.
+        assert_eq!(strip_uri_scheme("mailto:a@b.com"), "a@b.com");
+        // A scheme without slashes (e.g. urn:) still strips up to the colon.
+        assert_eq!(strip_uri_scheme("urn:isbn:0451450523"), "isbn:0451450523");
+    }
+
+    #[test]
+    fn strip_uri_scheme_non_uris_unchanged() {
+        // No colon at all.
+        assert_eq!(strip_uri_scheme("github.com/foo"), "github.com/foo");
+        assert_eq!(strip_uri_scheme("plainword"), "plainword");
+        assert_eq!(strip_uri_scheme(""), "");
+        // Must start with a letter, not a digit.
+        assert_eq!(strip_uri_scheme("1abc://x"), "1abc://x");
+        // The `+` quantifier requires at least one body char before the colon.
+        assert_eq!(strip_uri_scheme("a:b"), "a:b");
+    }
+
+    #[test]
+    fn strip_uri_scheme_edge_cases() {
+        // Bare scheme strips to empty — caller is responsible for the fallback.
+        assert_eq!(strip_uri_scheme("https://"), "");
+        // Only the leading scheme is removed, not a later colon.
+        assert_eq!(strip_uri_scheme("https://host:8080/p"), "host:8080/p");
+        // At most two slashes are consumed.
+        assert_eq!(strip_uri_scheme("file:///etc/hosts"), "/etc/hosts");
     }
 }

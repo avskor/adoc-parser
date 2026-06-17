@@ -1,5 +1,46 @@
 # Session context
 
+## Сессия (2026-06-17, 108-я) — F-B `:hide-uri-scheme:` (ветка `feat/hide-uri-scheme`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-A уже смержена (`d290505`), следующий незакрытый класс — **F-B**
+(первый `[ ]` в frontier; рекомендация ставит F-G/F-B во 2-ю волну). План одобрен через plan mode, затем реализован.
+Ветка off master `d290505`.
+
+### Корень и фикс
+- `:hide-uri-scheme:` не был реализован (0 упоминаний). Когда установлен, asciidoctor срезает схему URI из ВИДИМОГО
+  текста bare-autolink и `link:url[]` (без явного текста); `href` остаётся полным.
+- Правило (исходник asciidoctor `rx.rb`): `UriSniffRx = \A\p{Alpha}[\p{Alnum}.+-]+:/{0,2}` — буква, 1+ из
+  `[alnum.+-]`, `:`, 0–2 слеша. Применяется в `substitutors.rb` ТОЛЬКО когда видимый текст повторяет target.
+  **mailto исключён** (особый case до hide-uri-scheme).
+- Решение: новый `pub fn adoc_render_core::strip_uri_scheme(&str)->&str` (ручной char-скан, zero-dep, рядом с
+  `interdoc_xref_href` — прецедент R7). Применён в `adoc-html/events.rs` в существующей ветке `bare_link_pending`
+  (Event::Text, ~стр.30): при `document_attrs.contains_key("hide-uri-scheme")` срезать схему; **href не трогаем**
+  (пишется отдельно из `url`). Fallback к полному тексту при пустом срезе (голая схема `https://`, как substitutors.rb:682).
+- **mailto безопасен**: `try_mailto_macro` (inline.rs:2209) эмитит `is_bare:false` всегда → `bare_link_pending` не
+  ставится → срез его не заденет. Совпадает с asciidoctor.
+
+### Файлы (3)
+- `adoc-render-core/src/lib.rs` — `strip_uri_scheme` + 3 юнит-теста (common schemes / non-uris / edge: голая схема,
+  file:///, host:port).
+- `adoc-html/src/events.rs` — срез в ветке bare_link_pending.
+- `adoc-html/src/tests.rs` — `test_hide_uri_scheme` (5 кейсов: bare autolink, `link:[]`, явный текст НЕ трогается,
+  mailto НЕ трогается, regression guard без атрибута).
+
+### Верификация
+- clippy 0; `cargo test --workspace` зелёное (render-core 15→18, html unit 436→437, parser 562 неизм.).
+- **Гейт 344/344** (`compare_full.py` vs asciidoctor): Identical 344/0 — байт-в-байт (корпус без hide-uri-scheme).
+- **Frontier** (`frontier_parity.py` /mnt/c/tmp/adoc-frontier): 191→**192 identical**, clean-div 41→40. Diff
+  new-vs-master на всех 4 hide-uri `.adoc`: `gradle-plugin` news → identical (+1), `release-notes` `https://asciidoctor.org`
+  → текст `asciidoctor.org`; CHANGELOG + writers-guide **unchanged** (нет активных bare-ссылок под атрибутом).
+  **0 регрессий** — все диффы только в видимом тексте bare-ссылок, href цел, совпадает с asciidoctor.
+- Остаточные расхождения в writers-guide/release-notes — ДРУГИЕ классы (F-C author→mailto, NCR-кавычки, natural-xref), не F-B.
+
+### Остаток / дальше
+- Следующие frontier-классы: **F-G** (`:source-language:` дефолт на `[source]`) — равноприоритетна; затем F-D/F-C и др.
+- F-A edge (классификатор ключа допускает ведущую цифру) — вне корпуса, не трогали.
+
+---
+
 ## Сессия (2026-06-17, 107-я) — F-A: текст ссылки/autolink не режется по 1-й запятой (ветка `fix/link-text-comma`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → первый класс frontier (F-A). Ветка off master `4beff2e`.
