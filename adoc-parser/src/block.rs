@@ -913,10 +913,12 @@ impl<'a> BlockScanner<'a> {
             return Some(self.scan_section(level, title));
         }
 
-        // TOC macro `toc::[]`
+        // TOC macro `toc::[]` — distinct from the `:toc:`-attribute auto TOC so
+        // the renderer can honour Asciidoctor's rule that the macro renders only
+        // under `:toc: macro` (otherwise it is inert).
         if scanner::is_toc_macro(line) {
             self.advance();
-            return Some(Some(Event::Toc));
+            return Some(Some(Event::TocMacro));
         }
 
         // NOTE: `include::path[attrs]` is NOT detected here. Asciidoctor resolves
@@ -4920,7 +4922,7 @@ mod tests {
     fn test_toc_macro() {
         let input = "toc::[]";
         let events: Vec<_> = BlockScanner::new(input).collect();
-        assert_eq!(events, vec![Event::Toc]);
+        assert_eq!(events, vec![Event::TocMacro]);
     }
 
     #[test]

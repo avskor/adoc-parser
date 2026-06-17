@@ -86,6 +86,17 @@ impl HtmlRenderer {
             }
         }
 
+        // Macro-placed TOC (`toc::[]` under `:toc: macro`): replace every
+        // placeholder with the rendered TOC. Distinct from the offset-insert
+        // path above — the placeholder was spliced into the content stream, so it
+        // already moved with the preamble wrap and sits at the right position.
+        if self.toc_macro_used {
+            let toc_html = self.generate_toc();
+            if output.contains(TOC_MACRO_PLACEHOLDER) {
+                *output = output.replace(TOC_MACRO_PLACEHOLDER, &toc_html);
+            }
+        }
+
         // Resolve xref placeholders (link text and internal hrefs) against the
         // unified id/title registries in a single pass over the output.
         if !self.xref_placeholders.is_empty() || !self.xref_href_placeholders.is_empty() {
@@ -198,7 +209,14 @@ impl HtmlRenderer {
             "left" | "right" => toc.push_str("<div id=\"toc\" class=\"toc2\">\n"),
             _ => toc.push_str("<div id=\"toc\" class=\"toc\">\n"),
         }
-        toc.push_str("<div id=\"toctitle\">");
+        // The `toc::[]` block macro renders via Asciidoctor's block-toc template,
+        // whose title carries `class="title"`; the auto TOC (header outline) does
+        // not. The only macro placement is `:toc: macro`.
+        if self.toc_position == "macro" {
+            toc.push_str("<div id=\"toctitle\" class=\"title\">");
+        } else {
+            toc.push_str("<div id=\"toctitle\">");
+        }
         html_escape(&mut toc, &self.toc_title);
         toc.push_str("</div>\n");
 

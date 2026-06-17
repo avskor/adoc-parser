@@ -111,7 +111,17 @@ pub enum Event<'a> {
         id: CowStr<'a>,
         label: Option<CowStr<'a>>,
     },
+    /// The automatic table of contents requested by the `:toc:` document
+    /// attribute (emitted after the header). Placement depends on the `toc`
+    /// value (auto / left / right / preamble); `macro` defers to [`Self::TocMacro`].
     Toc,
+    /// The `toc::[]` block macro. Renders the table of contents at this exact
+    /// position, but only when `:toc:` is set to `macro` — otherwise the
+    /// consumer emits an inert marker (Asciidoctor's `<!-- toc disabled -->`).
+    /// Distinct from [`Self::Toc`] because the parser cannot otherwise tell the
+    /// two apart by order (the macro can appear with no `:toc:` attribute, so it
+    /// would be the only `Toc` event).
+    TocMacro,
     Include {
         path: CowStr<'a>,
         attrs: CowStr<'a>,
@@ -187,6 +197,7 @@ impl<'a> Event<'a> {
                 label: label.map(cow_owned),
             },
             Event::Toc => Event::Toc,
+            Event::TocMacro => Event::TocMacro,
             Event::Include { path, attrs } => Event::Include {
                 path: cow_owned(path),
                 attrs: cow_owned(attrs),

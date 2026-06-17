@@ -922,14 +922,41 @@ fn test_toc_default_levels() {
 }
 
 #[test]
-fn test_toc_macro_html() {
+fn test_toc_macro_disabled_without_toc_attribute() {
+    // The toc::[] macro renders only under `:toc: macro`; otherwise it is inert,
+    // matching Asciidoctor's `<!-- toc disabled -->` marker (no TOC emitted).
     let input = "= Document Title\n\n== Before\n\ntoc::[]\n\n== After";
     let html = to_html(input);
-    assert!(html.contains("<div id=\"toc\" class=\"toc\">"));
-    // TOC should be placed where toc::[] macro is (after "Before" section start)
+    assert!(html.contains("<!-- toc disabled -->"), "got: {html}");
+    assert!(!html.contains("<div id=\"toc\""), "no TOC should render. got: {html}");
+}
+
+#[test]
+fn test_toc_macro_renders_under_macro_mode() {
+    // Under `:toc: macro` the toc::[] macro renders the TOC at its position, with
+    // the block-template title class (`class="title"`, unlike the auto TOC).
+    let input = "= Document Title\n:toc: macro\n\n== Before\n\ntoc::[]\n\n== After";
+    let html = to_html(input);
+    assert!(
+        html.contains("<div id=\"toctitle\" class=\"title\">"),
+        "macro toc title should carry class=title. got: {html}"
+    );
+    // Placed where toc::[] sits (after the "Before" heading), not auto-placed up top.
     let toc_pos = html.find("<div id=\"toc\"").unwrap();
     let before_pos = html.find("Before</h2>").unwrap();
-    assert!(toc_pos > before_pos, "TOC should appear after the Before heading");
+    assert!(toc_pos > before_pos, "TOC should appear after the Before heading. got: {html}");
+}
+
+#[test]
+fn test_toc_macro_in_preamble_wrapped() {
+    // A toc::[] alone in the preamble is preamble content: it sits inside the
+    // `<div id="preamble"><div class="sectionbody">` wrapper, before the section.
+    let input = "= Doc\n:toc: macro\n\ntoc::[]\n\n== S1\n\ntext";
+    let html = to_html(input);
+    let preamble = html.find("<div id=\"preamble\">").expect("preamble wrapper");
+    let toc = html.find("<div id=\"toc\"").expect("toc div");
+    let sect = html.find("<div class=\"sect1\">").expect("section");
+    assert!(preamble < toc && toc < sect, "toc must be inside preamble, before section. got: {html}");
 }
 
 #[test]

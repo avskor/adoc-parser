@@ -1,6 +1,55 @@
 # Session context
 
-## Сессия (2026-06-17, 104-я) — п.20 `[[id,reftext]]`: block-anchor reftext для `<<id>>` (ветка `feat/block-anchor-reftext`, НЕ закоммичено)
+## Сессия (2026-06-17, 105-я) — п.28 `toc::[]` macro: рендер только при `:toc: macro`, иначе `<!-- toc disabled -->` (ветка `feat/toc-macro-mode`, НЕ закоммичено)
+
+Запрос «займись п.28». Ветка **`feat/toc-macro-mode`** (off master `0c39fa4`) — **НЕ закоммичена**
+(коммит/мерж/пуш — ТОЛЬКО по запросу). п.20 (`feat/block-anchor-reftext` → `0c39fa4`) уже смержена.
+
+### Диагностика (3 расхождения `toc::[]`)
+1. **toctitle без `class="title"`** — в macro-toc нужен класс (в авто-toc класса нет, там совпадаем).
+2. **Нет preamble-обёртки** когда toc — единственный контент преамбулы (toc эмитил 0 inline-байт → `preamble_content.is_empty()`).
+3. **Сдвиг офсетов** — preamble-обёртка делает `split_off`+re-push, а `toc_insert_position` (байт-офсет) не обновлялся → toc уезжал в начало.
+4. **КЛЮЧЕВОЕ:** `toc::[]` БЕЗ `:toc: macro` → asciidoctor выдаёт `<!-- toc disabled -->` (НЕ рендерит); мы рендерили — неверно.
+   Существующий `test_toc_macro_html` закреплял неверное поведение.
+
+### Архитектурное решение
+Парсер эмитил единый `Event::Toc` и для авто (`:toc:`), и для макроса — отличить по порядку НЕЛЬЗЯ (без `:toc:`
+макрос-Toc идёт первым). → Новый **`Event::TocMacro`**. Корень багов 2&3 — хрупкий «байт-офсет»; решение —
+**сентинель-плейсхолдер** на месте макроса (как xref-сентинели): движется со `split_off` (фикс 3), считается
+контентом преамбулы (фикс 2), точная позиция.
+
+### Сделано (5 файлов кода)
+- **`event.rs`** — `Event::TocMacro` (unit-вариант) + clone-arm. **`block.rs:919`** — `toc::[]` → `TocMacro` (не `Toc`).
+  тест `test_toc_macro` → ожидает `TocMacro`.
+- **`event.rs`/builder.rs** — `Event::TocMacro` в exhaustive-match adoc-compat-tests/builder.rs (no-op arm).
+- **`lib.rs`** — `pub(crate) const TOC_MACRO_PLACEHOLDER = "\u{0}TOCMACRO\u{0}"` + поле `toc_macro_used: bool` (+init).
+- **`events.rs`** — handler `Event::TocMacro`: если `toc_position=="macro"` → push плейсхолдер (+`toc_macro_used=true`),
+  иначе `<!-- toc disabled -->`. Также фикс events.rs:806 (non-standalone путь) — добавлен guard `&& toc_position!="macro"`
+  (был лишний авто-toc вверху в embeddable; standalone-путь:786 уже имел guard, потому корпус-parity не ловил).
+- **`finish.rs`** — replace `TOC_MACRO_PLACEHOLDER` на `generate_toc()` (macro-путь, отдельно от offset-insert);
+  `generate_toc`: `toctitle class="title"` при `toc_position=="macro"`.
+
+### Тесты
+- parser `test_toc_macro` → `Event::TocMacro`. html `test_toc_macro_html` РАЗБИТ на: `_disabled_without_toc_attribute`
+  (toc disabled, нет toc-div — asciidoctor-faithful), `_renders_under_macro_mode` (class=title + позиция),
+  `_in_preamble_wrapped` (toc внутри preamble-обёртки).
+
+### Верификация (AIRTIGHT)
+- Пробы vs asciidoctor (8 вариантов): macro в преамбуле/с текстом/в секции, macro без `toc::[]`, disabled×2,
+  `:toc: auto`+`toc::[]`, авто-regression — ВСЕ MATCH.
+- **clippy 0; test --workspace зелёное** (parser 558, html unit 434→436, html_output 44, compat 233, прочее неизм.).
+- **parity 344/344** (toc.adoc/toc-ref.adoc — `toc::[]` там в listing-блоке, не обрабатывается → неизм.).
+- **Pre-existing вне скоупа** (есть и на master, проверено git stash): `:toc: left/right` в embeddable → `class="toc2"`
+  вместо `toc` (toc2-sidebar только в standalone). Корпус идёт через standalone, где корректно.
+
+### Остаток точечных — ПУСТО (все п.17-39 закрыты). Дальше — только 240 native-конверсия (опц., 0 корпуса).
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy активен. [[proj_quality_gate_hooks]]. `/tmp/parity_check.py` (refcache).
+
+---
+
+## Сессия (2026-06-17, 104-я) — п.20 `[[id,reftext]]`: block-anchor reftext для `<<id>>` (СМЕРЖЕНА `0c39fa4`)
 
 Запрос «займись п.20». Ветка **`feat/block-anchor-reftext`** (off master `8704452`) — **НЕ закоммичена**
 (коммит/мерж/пуш — ТОЛЬКО по запросу). Предыдущие коммиты сессии (doc-свип `4c677de`, TODO-метки `8704452`)
