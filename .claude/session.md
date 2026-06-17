@@ -1,5 +1,66 @@
 # Session context
 
+## Сессия (2026-06-17, 97-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (28/N): attribute-ref в named-role link/inline-image (`link:u[t,role={r}]`/`image:p[a,role={r}]` → asciidoctor)
+
+Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-28`** (off master `3dd9b8e`, 344) —
+**ЗАКОММИЧЕНА** (1 коммит `3ecc059` код+тест), **НЕ смержена, ОЖИДАЕТ авторизации** на `git merge --no-ff` +
+`git push` + удаление ветки. 27/N УЖЕ смержена (master HEAD `3dd9b8e`; session.md 96-й устарел — писал «ожидает
+авторизации», но мерж `3dd9b8e` уже на master). base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master
+`3dd9b8e` (stash→`cargo build --release -p adoc-cli`→cp→pop; ⚠ CLI-бинарь в пакете **adoc-cli**, НЕ adoc-html).
+
+### Выбор задачи — документированный остаток 27/N (сиблинг-гап)
+Phase 2 контентно ЗАВЕРШЕНА (FORCE 344/344). Запрос «продолжи фазу 2» = parity-харднинг (НЕ Фаза 3/снять гейт).
+TODO явно держал `[ ]` сиблинг-гап от 27/N: macro named-role attr-ref в link/image → выбран как прямое
+продолжение (27/N научил `push_inline_id_class` резолвить attr-refs в роли InlineSpan/Strong/Em/Mono; собств.
+арм-рендереры Link/Image остались).
+
+### Корень — macros ДО attributes + Link/Image НЕ шли через push_inline_id_class
+asciidoctor резолвит `{r}` глобальным attr-пассом → `class="green"`. Наш движок: macros-пасс ДО attributes →
+`{r}` доживает литералом в `Tag::Link.role`/`Tag::InlineImage.role`; арм Link (events.rs:630 `html_escape(output,r)`)
+и `start_inline_image` (media.rs:370 `img_class.push_str(r)`) писали роль ВЕРБАТИМ → `class="{r}"` (валидный HTML,
+но не резолв). base==new gated.
+
+### Сделано (1 коммит, 3 файла кода + 1 тест) — РЕНДЕРЕР-ONLY
+- **inline.rs:** `resolve_inline_attr_value` поднят `fn`→`pub(crate) fn` (был приватен модулю `inline`; нужен из
+  events.rs/media.rs) + docstring про link/image-шаринг.
+- **events.rs (Link-арм):** `html_escape(output, r)` → `html_escape(output, self.resolve_inline_attr_value(r).as_ref())`.
+- **media.rs (`start_inline_image`):** `img_class.push_str(r)` → `…push_str(self.resolve_inline_attr_value(r).as_ref())`
+  (БЕЗ нового html_escape — сохранён pre-existing no-escape образ image-роли).
+- defined→value, undefined→литерал (`attribute-missing=skip`), quoted мульти-роль (`role="{r} external"`)→резолв
+  ref на месте (`resolve_attr_refs_text` по всей строке).
+- **Тест:** `test_attr_ref_in_link_and_image_role_resolves` (html_output.rs, после `_in_inline_role_resolves`):
+  link `fancy` / image `image fancy` / undefined `{undef}` / quoted мульти-роль `fancy external` / no-sentinel-leak.
+
+### Скоуп (СТРОГО документированная задача)
+ТОЛЬКО inline `link:`/`image:`. НЕ тронуты (вне скоупа): блочный image (роль из `BlockMeta`/`write_meta_attrs` —
+отд. block-attrlist механизм), icon-макрос (pre-existing рендерер-расхождение font-icons vs текст).
+**`href={u}` в target макроса НЕ резолвится** — ОТДЕЛЬНЫЙ pre-existing баг (attr-ref в target link/image),
+recon его обнажил (asciidoctor `href="https://example.com"`, наш `href="{u}"`), но он вне этой задачи → новый
+кандидат остатка для следующей parity-сессии.
+
+### Верификация (airtight, рендерер корпус-невидим)
+- clippy --workspace 0; cargo test --workspace зелёное (html_output integration 37→38, parser 558, остальное неизменно).
+- **gate_check toggle OFF 344/0, ON 344/0** (airtight base≡new). Рендерер shared обоими движками, НО `grep -E
+  'role=\{' корпус` = **0 файлов** → вывод корпуса не меняется. **blast_force Identical 344→344** (0 REGR).
+- **e2e (`/tmp/p28.adoc`/`p28b.adoc`):** new(`--no-standalone -a nofooter`) == `asciidoctor -s -o -` БАЙТ-В-БАЙТ
+  на классе: `role={r}`→`class="green"`, `role={undef}`→`class="{undef}"`, `role="{r} external"`→`class="green external"`,
+  image `class="image green"`.
+
+### Дальше — Фаза 2 паритет (остаток) ИЛИ ФИНАЛ (Фаза 3): снять gate
+- **НОВЫЙ кандидат:** attr-ref в TARGET макроса `link:{u}[…]`/`image:{p}[…]` (recon обнажил: наш `href="{u}"` vs
+  asciidoctor резолвит). Отдельный pre-existing баг, не leak.
+- render_kbd_keys сплит по `,` (рендерер, pre-existing); класс-A улучшения (new уже корректен).
+- **ФИНАЛ (Фаза 3): снять gate** (swap дефолта `ADOC_QUOTES_SEQUENTIAL`→on, удалить legacy quotes+edge-флаги).
+- Скрипты `/mnt/c/tmp/adoc-test/`: `gate_check.py [KEY=VAL]`, `blast_force.py`, `diffone.py`, `nearmiss.py`.
+  CLI: `adoc [--no-standalone] [-a nofooter] file` (НЕ `-s`!). base пересобирать `cargo build --release -p adoc-cli`
+  из master HEAD (stash→build→cp /tmp/adoc_base→pop). asciidoctor: `asciidoctor -s -o - f`. ⚠ shell cwd
+  сбрасывается между Bash-вызовами — пути к /tmp/*.adoc АБСОЛЮТНЫЕ.
+
+### ⚠ ИНФРА (без изменений)
+- fmt-гейт `rust-quality-gates` ОТКЛЮЧЁН; clippy-гейт активен. [[proj_quality_gate_hooks]].
+
+---
+
 ## Сессия (2026-06-17, 96-я) — РЕРАЙТ inline, Фаза 2 ПАРИТЕТ (27/N): attribute-ref в inline `[attrlist]` роли/id (`[{role}]*x*` → asciidoctor)
 
 Запрос «продолжи фазу 2». Ветка **`feat/subst-phase2-parity-27`** (off master `91447d6`, 344) —
