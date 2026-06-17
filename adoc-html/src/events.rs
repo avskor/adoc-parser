@@ -317,6 +317,19 @@ impl HtmlRenderer {
                     self.toc_insert_position = Some(output.len());
                 }
             }
+            Event::TocMacro => {
+                // The `toc::[]` macro renders the TOC at this position only under
+                // `:toc: macro`; otherwise Asciidoctor emits an inert marker.
+                // Either way the output is spliced in at the macro position (so it
+                // counts as preamble content and lands in source order), unlike the
+                // auto TOC which records a deferred insert offset.
+                if self.toc_position == "macro" {
+                    self.toc_macro_used = true;
+                    output.push_str(TOC_MACRO_PLACEHOLDER);
+                } else {
+                    output.push_str("<!-- toc disabled -->");
+                }
+            }
             Event::Include { path, .. } => {
                 output.push_str("<!-- include::");
                 html_escape(output, &path);
@@ -789,8 +802,11 @@ impl HtmlRenderer {
                     } else {
                         output.truncate(pos);
                     }
-                    // Reset TOC insert position to after truncation point
-                    if self.toc_auto_seen {
+                    // Reset TOC insert position to after truncation point. The
+                    // `macro` placement is owned by the `toc::[]` macro (a spliced
+                    // placeholder), so the auto TOC must not also claim a position
+                    // here — mirrors the standalone guard above.
+                    if self.toc_auto_seen && self.toc_position != "macro" {
                         self.toc_insert_position = Some(output.len());
                     }
                     if self.has_document_title {

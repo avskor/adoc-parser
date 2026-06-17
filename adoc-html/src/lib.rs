@@ -26,6 +26,14 @@ use blocks::*;
 use escape::*;
 use media::*;
 
+/// Placeholder spliced in at a `toc::[]` macro position (under `:toc: macro`).
+/// Survives the preamble-wrap `split_off` (it moves with the content, unlike a
+/// recorded byte offset) and counts as preamble content; [`HtmlRenderer::finish`]
+/// replaces every occurrence with the rendered TOC. Uses the reserved NUL frame
+/// like the xref sentinels, so it can never collide with real text and is dropped
+/// by `html_escape` if one ever leaks.
+pub(crate) const TOC_MACRO_PLACEHOLDER: &str = "\u{0}TOCMACRO\u{0}";
+
 #[derive(Default, Clone)]
 pub struct HtmlOptions {
     pub docinfo_head: Option<String>,
@@ -159,6 +167,9 @@ struct HtmlRenderer {
     toc_position: String,
     toc_title: String,
     toc_auto_seen: bool,
+    /// A `toc::[]` macro spliced a [`TOC_MACRO_PLACEHOLDER`] (under `:toc: macro`)
+    /// that `finish` must replace with the rendered TOC.
+    toc_macro_used: bool,
     /// Doctype latched at the end of the document header (Asciidoctor locks
     /// it there; body `:doctype:` entries don't change section semantics).
     doctype_book: bool,
@@ -308,6 +319,7 @@ impl HtmlRenderer {
             toc_position: String::new(),
             toc_title: String::from(DEFAULT_TOC_TITLE),
             toc_auto_seen: false,
+            toc_macro_used: false,
             doctype_book: false,
             in_section_title: false,
             current_toc_entry: None,

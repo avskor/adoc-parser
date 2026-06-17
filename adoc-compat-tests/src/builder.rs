@@ -412,6 +412,7 @@ pub fn build_asg<'a>(
             | Event::ConcealedIndexTerm { .. }
             | Event::BibliographyAnchor { .. }
             | Event::Toc
+            | Event::TocMacro
             | Event::Include { .. } => {}
 
             Event::BlockMetadata { .. } => {
