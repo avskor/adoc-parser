@@ -89,7 +89,7 @@
 
 use std::borrow::Cow;
 
-use crate::attributes::{parse_image_attrs, parse_link_attrs};
+use crate::attributes::{LinkKind, parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
@@ -604,7 +604,7 @@ fn try_link(
     if url.is_empty() {
         return None;
     }
-    let attrs = parse_link_attrs(content);
+    let attrs = parse_link_attrs(content, LinkKind::Link);
     // An empty attrlist text marks a "bare" link (visible text = the target).
     let is_bare = attrs.text.is_empty();
     let label = (!is_bare).then_some(attrs.text);
@@ -679,7 +679,7 @@ fn try_mailto(
         return None;
     }
     let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
-    let attrs = parse_link_attrs(content);
+    let attrs = parse_link_attrs(content, LinkKind::Mailto);
     let url = match (attrs.subject, attrs.body) {
         (None, None) => base.to_string(),
         (subject, body) => {
@@ -1318,7 +1318,7 @@ fn try_autolink(
         if span_has_sentinel(src, start, end) {
             return None;
         }
-        let attrs = parse_link_attrs(&after_url[1..close]);
+        let attrs = parse_link_attrs(&after_url[1..close], LinkKind::Link);
         let is_bare = attrs.text.is_empty();
         let label = (!is_bare).then_some(attrs.text);
         let events = build_link(
