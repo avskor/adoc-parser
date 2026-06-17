@@ -1515,6 +1515,63 @@ mod tests {
         }
     }
 
+    /// With the footnote macro ported, the pipeline must reproduce legacy on every
+    /// form: the anonymous `footnote:[text]`, the named `footnote:id[text]`, the
+    /// reference `footnote:id[]` (named + empty), the anonymous-but-empty
+    /// `footnote:[]` (a definition with empty text, *not* a reference), the
+    /// first-`]` content scan (a nested `[` stays literal in the text), footnotes
+    /// mixed with surrounding text and wrapped by a span, raw (un-re-parsed) quote
+    /// markers in the text, and the invalid forms that stay literal.
+    #[test]
+    fn reproduces_legacy_on_footnote_inputs() {
+        let cases = [
+            // anonymous / named definitions and the named reference
+            "footnote:[A clarification.]",
+            "footnote:disclaimer[Opinions are my own.]",
+            "footnote:disclaimer[]",
+            // anonymous + empty content is a definition with empty text, not a ref
+            "footnote:[]",
+            // first `]` ends the content; a nested `[` stays literal in the text
+            "footnote:[a [nested bracket]",
+            // raw quote markers in the text are NOT re-parsed (sealed before quotes)
+            "footnote:[note with _em_ and *strong* markers]",
+            // mixed with surrounding text and inside a span
+            "A bold statement!footnote:disclaimer[Opinions are my own.]",
+            "see footnote:[one] and footnote:two[x] done",
+            "*footnote:[bold note]*",
+            "`footnote:[mono note]`",
+            // invalid → literal (no bracket, no close, empty rest, empty id)
+            "footnote:noclose",
+            "footnote:[unclosed",
+            "footnote:",
+            "footnote:[id with no bracket close",
+            // a prefix still matches mid-word (no left-boundary rule), at legacy's offset
+            "prefixfootnote:[x]",
+        ];
+        for c in cases {
+            assert_eq!(
+                pipeline(c),
+                legacy(c),
+                "new engine diverged from legacy for {c:?}"
+            );
+        }
+
+        // The leaf shape: a named empty macro is a `FootnoteRef`; everything else is
+        // a `Footnote` (anonymous → `id: None`).
+        assert_eq!(
+            pipeline("footnote:[hi]"),
+            vec![Event::Footnote { id: None, text: "hi".into() }]
+        );
+        assert_eq!(
+            pipeline("footnote:fn1[hi]"),
+            vec![Event::Footnote { id: Some("fn1".into()), text: "hi".into() }]
+        );
+        assert_eq!(
+            pipeline("footnote:fn1[]"),
+            vec![Event::FootnoteRef { id: "fn1".into() }]
+        );
+    }
+
     /// The signature cross-span case: a constrained strong that opens inside one
     /// monospace region and closes inside the next produces *overlapping*,
     /// non-nested events — which the recursive legacy parser cannot. The Phase 1

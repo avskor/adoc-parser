@@ -28,6 +28,10 @@
 //!   `indexterm:[…]` concealed macro, and the `indexterm2:[term]` flow macro) →
 //!   `IndexTerm` / `ConcealedIndexTerm` events. All are leaves: the id/label/term
 //!   text is stored verbatim, never re-parsed.
+//! - **footnote** (6/N) — `footnote:[text]` / `footnote:id[text]` define a footnote
+//!   (`Footnote`), and `footnote:id[]` references an existing one (`FootnoteRef`).
+//!   A leaf: the text is verbatim (the registry/numbering/foot-list live in the
+//!   renderer, shared by both engines).
 //!
 //! This pass also folds in the **escaped autolink** `\http://…` (the escape pass's
 //! span-aware home for it): the backslash drops where an unescaped autolink could
@@ -36,9 +40,9 @@
 //! Every match is lifted out of the working buffer into a tag sentinel pointing at
 //! a [`TagToken::Macro`] leaf that holds the macro's `Start`, its label events, and
 //! its `End`, so the later attribute/quote/replacement passes cannot reach inside
-//! it. (The remaining macro families — footnote and the experimental UI macros
+//! it. (The remaining macro family — the experimental UI macros
 //! `kbd:`/`btn:`/`menu:`, which need the `:experimental:` option threaded through
-//! the pipeline — are ported in subsequent phases.)
+//! the pipeline — is ported in a subsequent phase.)
 //!
 //! ## Where it runs in the pipeline
 //!
@@ -224,6 +228,21 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet) {
 
         if bytes[i] == b'a' && src[i..].starts_with("asciimath:[") {
             if let Some((events, end)) = try_stem(&src, i, 10, "asciimath") {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // footnote:[text] / footnote:id[text] / footnote:id[] (a reference to an
+        // already-defined footnote). Fires on `f` before the bare `ftp://` autolink
+        // arm below; `footnote:` never satisfies `scheme_at`, so the order is only
+        // for clarity.
+        if bytes[i] == b'f' && src[i..].starts_with("footnote:") {
+            if let Some((events, end)) = try_footnote(&src, i) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -672,6 +691,62 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
         events.push(Event::Text(Cow::Owned(attrs.to_string())));
     }
     events.push(Event::End(TagEnd::Icon));
+    Some((events, end))
+}
+
+/// At a `footnote:` (caller guarantees the prefix), try to match
+/// `footnote:[text]` / `footnote:id[text]` / `footnote:id[]`. Mirror of
+/// [`crate::inline::InlineState::try_footnote_macro`]. A *leaf* macro: the text is
+/// stored verbatim on the event and never re-parsed, because the footnote registry,
+/// numbering, and the document-foot list all live in the renderer (shared by both
+/// engines) — none of it is inline-parser state.
+///
+/// The form splits exactly as legacy: an id is every byte before the first `[` and
+/// must be non-empty; the content runs to the first `]`. A named macro with empty
+/// content (`footnote:id[]`) is a *reference* to an already-defined footnote
+/// (`FootnoteRef`); every other form *defines* one (`Footnote`). Asciidoctor's
+/// `InlineFootnoteMacroRx` is stricter on both parts (id `[\p{Word}-]+`, content
+/// honouring a `\]` escape) and also accepts the deprecated `footnoteref:` spelling;
+/// the legacy parser does none of that and the gate keeps the new engine pinned to
+/// legacy, so those rare divergent forms simply fall back. The sentinel guard
+/// declines a footnote whose span swallowed an earlier passthrough/escape/char-ref
+/// leaf (the verbatim text the legacy event would carry is no longer present).
+fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+    let after_prefix = start + 9; // after "footnote:"
+    let rest = src.get(after_prefix..)?;
+    if rest.is_empty() {
+        return None;
+    }
+    // Anonymous (`footnote:[…]`) vs named (`footnote:id[…]`): the id is every byte
+    // before the first `[`, and must be non-empty.
+    let (id, bracket_rest) = if rest.starts_with('[') {
+        (None, rest)
+    } else {
+        let bracket_pos = rest.find('[')?;
+        let id = &rest[..bracket_pos];
+        if id.is_empty() {
+            return None;
+        }
+        (Some(id), &rest[bracket_pos..])
+    };
+    let bracket_end = bracket_rest.find(']')?; // offset of `]` within `bracket_rest`
+    let content = &bracket_rest[1..bracket_end];
+    let id_len = id.map_or(0, str::len);
+    let end = after_prefix + id_len + 1 + bracket_end;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let events: Vec<Event<'static>> = match (id, content.is_empty()) {
+        // `footnote:id[]` — a reference to an existing definition.
+        (Some(id_str), true) => vec![Event::FootnoteRef {
+            id: Cow::Owned(id_str.to_string()),
+        }],
+        // `footnote:[text]` / `footnote:id[text]` — defines a footnote.
+        _ => vec![Event::Footnote {
+            id: id.map(|s| Cow::Owned(s.to_string())),
+            text: Cow::Owned(content.to_string()),
+        }],
+    };
     Some((events, end))
 }
 
