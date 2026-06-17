@@ -559,3 +559,61 @@ fn test_attr_ref_in_link_and_image_target_resolves() {
         "no extraction sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_attr_ref_in_image_target_alt_link_resolves() {
+    // Block and inline image macros carry an attribute reference written in the
+    // target, alt text or `link=` href literally past the `macros` pass; the
+    // renderer resolves each against the document attributes (attributes-first,
+    // like Asciidoctor) before `imagesdir` is prefixed to the target.
+    let doc = ":p: tiger.png\n:imagesdir: img\n:u: https://example.com\n:a: My Tiger\n\n";
+
+    // Block image: target + alt both resolve, then imagesdir prefixes the src.
+    let html = to_html(&format!("{doc}image::{{p}}[{{a}}]"));
+    assert!(
+        html.contains("<img src=\"img/tiger.png\" alt=\"My Tiger\">"),
+        "block image target and alt attr refs must resolve. Got: {html}"
+    );
+
+    // Empty alt derives the auto-alt from the *resolved* basename ("tiger").
+    let html = to_html(&format!("{doc}image::{{p}}[]"));
+    assert!(
+        html.contains("<img src=\"img/tiger.png\" alt=\"tiger\">"),
+        "block image auto-alt must come from the resolved target basename. Got: {html}"
+    );
+
+    // Block image `link=` href resolves; the target still resolves alongside it.
+    let html = to_html(&format!("{doc}image::{{p}}[Cat,link={{u}}]"));
+    assert!(
+        html.contains("<a class=\"image\" href=\"https://example.com\"><img src=\"img/tiger.png\" alt=\"Cat\">"),
+        "block image link href and target attr refs must resolve. Got: {html}"
+    );
+
+    // Inline image: target resolved by an earlier change; the alt resolves here.
+    let html = to_html(&format!("{doc}image:{{p}}[{{a}}]"));
+    assert!(
+        html.contains("<span class=\"image\"><img src=\"img/tiger.png\" alt=\"My Tiger\"></span>"),
+        "inline image alt attr ref must resolve. Got: {html}"
+    );
+
+    // Inline empty alt also derives from the resolved basename.
+    let html = to_html(&format!("{doc}image:{{p}}[]"));
+    assert!(
+        html.contains("<img src=\"img/tiger.png\" alt=\"tiger\">"),
+        "inline image auto-alt must come from the resolved target basename. Got: {html}"
+    );
+
+    // An undefined reference is kept literal in both target and alt
+    // (`attribute-missing` default `skip`); imagesdir still prefixes it.
+    let html = to_html(":imagesdir: img\n\nimage::{undef}[Alt {undef2}]");
+    assert!(
+        html.contains("<img src=\"img/{undef}\" alt=\"Alt {undef2}\">"),
+        "undefined image target/alt refs must stay literal. Got: {html}"
+    );
+
+    // No raw extraction sentinel (control bytes) may leak into the output.
+    assert!(
+        !html.bytes().any(|b| b == 0x01 || b == 0x02),
+        "no extraction sentinel may leak into output. Got: {html:?}"
+    );
+}

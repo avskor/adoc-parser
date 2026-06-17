@@ -202,7 +202,37 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 98-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (29/N) attribute-ref в TARGET inline link/image (ветка `feat/subst-phase2-parity-29`)
+## АКТУАЛЬНО (2026-06-17, 99-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (30/N) attribute-ref в image alt + БЛОЧНЫЙ image target/alt/link (ветка `feat/subst-phase2-parity-30`)
+
+Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-29/N) СМЕРЖЕНА в master
+(`96f04ae`). **(30/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `96f04ae`.
+- [x] **(30/N) attr-ref в image alt + БЛОЧНЫЙ image (target/alt/link href/auto-alt)** → asciidoctor.
+  Завершение «image attr-ref паритета»: документированный остаток 29/N (блочный image + inline image `alt`).
+  - **Корень (те же, что 29/N):** macros-пасс ДО attributes → `{p}`/`{a}` доживают литералом в полях
+    `Tag::Image`/`BlockMeta`. **inline image** (29/N резолвил src/role/link, но НЕ `alt`, и auto-alt брал СЫРОЙ
+    target → `image:{p}[]`→`alt="{p}"`); **block image** (`start_block_image`) НЕ резолвил НИЧЕГО
+    (`src="img/{p}"`, `alt="{a}"`, `href="{u}"`). asciidoctor резолвит attributes ДО macros. **NB:** фикс
+    рендерер-side (attr-refs эмитятся парсером литералом — docstring subst/attributes.rs).
+  - **КЛЮЧЕВОЕ:** `auto_alt_from_target` ОБЯЗАН получать РЕЗОЛВНУТЫЙ target (asciidoctor `image::{p}[]`→`alt="tiger"`).
+  - **Фикс (рендерер, 1 файл media.rs):** `start_block_image` — `let resolved_target = resolve_inline_attr_value(target)`
+    ДО image_uri/auto-alt; link href, non-empty alt (`into_owned`), img-src + interactive `data`/fallback src
+    через резолв. `start_inline_image` — лифт `resolved_target` (auto-alt из него), non-empty alt через резолв.
+    `resolve_inline_attr_value` возвращает Cow из аргумента (не self) → безопасно из `&mut self`-метода.
+  - **Скоуп:** ВСЕ поля inline+block image (target/alt/link href/auto-alt/interactive). ОТЛОЖЕНО (остаток):
+    xref `{rel}` target (`xref:{rel}.adoc`→`intro.html`/`#intro`; xref-резолвер — отд. механизм); render_kbd_keys
+    сплит по `,` (`kbd:[Ctrl,T]`→split; рендерер, pre-existing). inline `link:` уже покрыт 29/N.
+  - **Тест:** `test_attr_ref_in_image_target_alt_link_resolves` (html_output.rs): block target+alt / block auto-alt
+    из резолв-basename / block `link={u}`+target / inline alt / inline auto-alt / undefined target+alt keep-literal
+    +imagesdir / no-sentinel-leak. Работает под ОБОИМИ движками (рендерер shared).
+  - clippy 0; test --workspace зелёное (html_output 39→40). **gate_check toggle off/on 344/0** (airtight base≡new —
+    единств. корпус-хиты `image::{imagesdir}/…`/`image::image.jpg[{half-width}]` сидят ВНУТРИ `[source]`-листингов
+    → verbatim, не парсятся макросом). **blast_force Identical 344→344** (0 REGR). e2e (p30_full/p30_edge): все
+    in-scope формы == asciidoctor байт-в-байт (abs/URL target → imagesdir не применяется; undefined keep-literal).
+
+---
+
+## (2026-06-17, 98-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (29/N) attribute-ref в TARGET inline link/image (ветка `feat/subst-phase2-parity-29`)
 
 Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-28/N) СМЕРЖЕНА в master
 (`b8d95b7`). **(29/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).

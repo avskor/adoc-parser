@@ -287,21 +287,27 @@ impl HtmlRenderer {
         let has_link = link.is_some();
         if let Some(href) = link {
             output.push_str("<a class=\"image\" href=\"");
-            html_escape(output, href);
+            html_escape(output, self.resolve_inline_attr_value(href).as_ref());
             output.push_str("\">");
         }
-        // Auto-generate alt from filename if empty
+        // The `macros` pass captures an attribute reference in the target
+        // (`image::{p}[…]`) literally; resolve it before `image_uri` applies
+        // `imagesdir` (and before deriving the auto-alt from its basename),
+        // matching asciidoctor's attributes-before-macros order.
+        let resolved_target = self.resolve_inline_attr_value(target);
+        // Auto-generate alt from the resolved filename if empty; otherwise
+        // resolve any attribute reference written in the alt text.
         let effective_alt = if alt.as_ref().is_empty() {
-            auto_alt_from_target(target)
+            auto_alt_from_target(resolved_target.as_ref())
         } else {
-            alt.to_string()
+            self.resolve_inline_attr_value(alt).into_owned()
         };
         if interactive {
             // Interactive SVG → <object> (html5.rb convert_image). Both the
             // object and the fallback <img> carry width/height; the fallback is
             // a <img> when the `fallback` attribute is set, else a styled <span>.
             output.push_str("<object type=\"image/svg+xml\"");
-            write_attr(output, "data", &self.image_uri(target));
+            write_attr(output, "data", &self.image_uri(resolved_target.as_ref()));
             if let Some(w) = width {
                 write_attr(output, "width", w);
             }
@@ -312,7 +318,7 @@ impl HtmlRenderer {
             match fallback {
                 Some(fb) => {
                     output.push_str("<img");
-                    write_attr(output, "src", &self.image_uri(fb));
+                    write_attr(output, "src", &self.image_uri(self.resolve_inline_attr_value(fb).as_ref()));
                     write_attr(output, "alt", &effective_alt);
                     if let Some(w) = width {
                         write_attr(output, "width", w);
@@ -331,7 +337,7 @@ impl HtmlRenderer {
             output.push_str("</object>");
         } else {
             output.push_str("<img");
-            write_attr(output, "src", &self.image_uri(target));
+            write_attr(output, "src", &self.image_uri(resolved_target.as_ref()));
             write_attr(output, "alt", &effective_alt);
             if let Some(w) = width {
                 write_attr(output, "width", w);
@@ -380,13 +386,16 @@ impl HtmlRenderer {
         }
         output.push_str("<img");
         // The `macros` pass captures an attribute reference in the target
-        // (`image:{p}[…]`) literally; resolve it before `image_uri` applies
-        // `imagesdir`, matching asciidoctor's attributes-before-macros order.
-        write_attr(output, "src", &self.image_uri(self.resolve_inline_attr_value(target).as_ref()));
+        // (`image:{p}[…]`) and alt text literally; resolve them before
+        // `image_uri` applies `imagesdir` (and before deriving the auto-alt
+        // from the basename), matching asciidoctor's attributes-before-macros
+        // order.
+        let resolved_target = self.resolve_inline_attr_value(target);
+        write_attr(output, "src", &self.image_uri(resolved_target.as_ref()));
         let effective_alt = if alt.as_ref().is_empty() {
-            auto_alt_from_target(target)
+            auto_alt_from_target(resolved_target.as_ref())
         } else {
-            alt.to_string()
+            self.resolve_inline_attr_value(alt).into_owned()
         };
         write_attr(output, "alt", &effective_alt);
         if let Some(w) = width {
