@@ -1,5 +1,47 @@
 # Session context
 
+## Сессия (2026-06-18, 110-я) — F-J fenced ` ``` ` → source (ветка `feat/fenced-source`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-G смержена (`4b3f13d`), следующий незакрытый frontier-класс — **F-J**.
+План одобрен через plan mode, затем реализован. Ветка off master `4b3f13d`. **НЕ закоммичена** (коммит/мерж — по запросу).
+
+### Корень и фикс (только парсер `adoc-parser/src/block.rs`, рендерер не тронут)
+- asciidoctor 2.0.23 ВСЕГДА рендерит markdown-fence (` ``` `) как source (`<pre class="highlight"><code>`) даже без
+  info-string-языка. Мы для fence без языка эмитили `DelimitedBlock{Listing}` (`<pre>` без `<code>`). Верифицировано 12 пробами.
+- Правило: fence → стиль ВСЕГДА source; язык = info-string, иначе `:source-language:` дефолт; блочный стиль
+  `[source,lang]`/`[listing]`/`[literal]`/`[quote]` для языка ИГНОРИТСЯ (fence сбрасывает стиль); `.Title` сохранён.
+- Фикс в `scan_markdown_code_fence` (~3166): ветки `Some(lang)`/`else` схлопнуты в одну эмиссию `SourceBlock`
+  (`resolved_lang = info-string OR default_source_language()`). **Спец-кейс пустого тела `Text("\n")` УДАЛЁН** — ветка
+  `Some` уже доказывала, что пустое/`[""]` тело → `<code></code>` (MATCH asciidoctor; проба «одна пустая строка»).
+- Рендерер `start_source_block` при `language:None` уже даёт `<pre class="highlight"><code>` — не тронут.
+
+### Файлы (2 кода)
+- `adoc-parser/src/block.rs` — схлопывание веток в `scan_markdown_code_fence` + 5 parser-тестов (`test_markdown_fence_*`).
+- `adoc-html/src/tests.rs` — `test_markdown_fence_source_html` (3 кейса) + обновлён старый `test_markdown_code_fence_without_language`
+  (закреплял неверное listing-поведение `!contains("<code")` → теперь source).
+
+### Верификация (AIRTIGHT)
+- clippy 0; `cargo test --workspace` зелёное (parser 567→572 +5, html unit 438→439 +1, compat 233, остальное неизм.).
+- 12 проб vs asciidoctor `-e` (НЕ `--no-standalone` — наш CLI vs эталон разные флаги!) — ВСЕ MATCH (включая
+  блочный стиль игнор, info-string-побеждает, .Title, пустой/unclosed/одна-пустая fence).
+- **Гейт 344/344** байт-в-байт (`compare_full.py`). Живых fence в гейте нет: голые ` ``` ` лежат ВНУТРИ
+  `[source,markdown]\n----…----` listing (`asciidoc-vs-markdown.adoc:293`, `verbatim/examples/source.adoc`).
+- **Frontier** (`frontier_parity.py /mnt/c/tmp/adoc-frontier`): identical 193 (без изм.). Diff new-vs-master (worktree
+  master→/tmp/adoc_master_wt, удалён): **2 файла изменились, ОБА улучшены, 0 регрессий**:
+  `asciidoctor-0-1-4-released.adoc` (`<pre>icon:tags[]</pre>` → `<pre class="highlight"><code>…`),
+  `asciidoc-writers-guide.adoc` (`<pre>[%header…]</pre>` → `<pre class="highlightjs highlight"><code…>`).
+  Файлы не стали identical из-за ДРУГИХ классов (см. ниже).
+
+### Остаток / дальше (новые классы, обнаружены при F-J)
+- **F-J' `:compat-mode:` → `:language:` алиасит `:source-language:`**: в compat-mode голый fence/source без явного
+  языка берёт язык из `:language:` (вне compat-mode `:language:` НЕ влияет — проверено пробой). Корень
+  `asciidoctor-0-1-4-released` (`:compat-mode:` + `:language: asciidoc`).
+- **F-K порядок классов highlightjs (ПРЕДСУЩЕСТВУЮЩИЙ)**: мы `class="hljs language-X"`, asciidoctor `class="language-X hljs"`
+  (`start_source_block` ~725). Затрагивает ВСЕ highlightjs source-блоки. Дешёвый рендерер-фикс.
+- Дальше по рекомендации: F-D (`toc::[attrs]`) / F-C (author/inline `<url>`) → F-K → остальное.
+
+---
+
 ## Сессия (2026-06-18, 109-я) — F-G `:source-language:` дефолт (ветка `feat/source-language-default`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-A/F-B уже смержены (`f6c9b48`), следующий незакрытый frontier-класс

@@ -3163,39 +3163,28 @@ impl<'a> BlockScanner<'a> {
             content_lines.pop();
         }
 
-        if let Some(lang) = language {
-            // With language → SourceBlock
-            self.push_event(Event::End(TagEnd::SourceBlock));
-            for (i, &cline) in content_lines.iter().enumerate().rev() {
-                if i < content_lines.len() - 1 {
-                    self.push_event(Event::SoftBreak);
-                }
-                self.push_event(Event::Text(Cow::Borrowed(cline)));
+        // Asciidoctor ALWAYS renders a markdown code fence as a source block
+        // (`<pre class="highlight"><code>`), even without an info-string
+        // language. The language comes from the info string; otherwise it
+        // falls back to the `:source-language:` default. A preceding block
+        // style (`[source,lang]`, `[listing]`, …) does NOT contribute the
+        // language — the fence resets style to `source` and only the info
+        // string / `source-language` matter (verified vs asciidoctor 2.0.23).
+        let resolved_lang: Option<CowStr<'a>> = match language {
+            Some(l) => Some(Cow::Borrowed(l)),
+            None => self.default_source_language().map(Cow::Owned),
+        };
+        self.push_event(Event::End(TagEnd::SourceBlock));
+        for (i, &cline) in content_lines.iter().enumerate().rev() {
+            if i < content_lines.len() - 1 {
+                self.push_event(Event::SoftBreak);
             }
-            self.push_event(Event::Start(Tag::SourceBlock {
-                language: Some(Cow::Borrowed(lang)),
-            }));
-            self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
-        } else {
-            // Without language → DelimitedBlock { Listing }
-            let kind = DelimitedBlockKind::Listing;
-            if content_lines.len() == 1 && content_lines[0].is_empty() {
-                self.push_event(Event::End(TagEnd::DelimitedBlock));
-                self.push_event(Event::Text(Cow::Borrowed("\n")));
-                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
-            } else {
-                self.push_event(Event::End(TagEnd::DelimitedBlock));
-                for (i, &cline) in content_lines.iter().enumerate().rev() {
-                    if i < content_lines.len() - 1 {
-                        self.push_event(Event::SoftBreak);
-                    }
-                    self.push_event(Event::Text(Cow::Borrowed(cline)));
-                }
-                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
-            }
+            self.push_event(Event::Text(Cow::Borrowed(cline)));
         }
+        self.push_event(Event::Start(Tag::SourceBlock {
+            language: resolved_lang,
+        }));
+        self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
         self.push_title_then_events(title_events);
 
         self.event_buffer.pop()
@@ -5051,6 +5040,58 @@ mod tests {
             kind: DelimitedBlockKind::Listing
         })));
         assert!(!events.iter().any(|e| matches!(e, Event::Start(Tag::SourceBlock { .. }))));
+    }
+
+    #[test]
+    fn test_markdown_fence_without_language_is_source() {
+        // Asciidoctor always renders a markdown fence as a source block,
+        // even with no info-string language (F-J).
+        let input = "```\nputs 1\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing })
+        )));
+    }
+
+    #[test]
+    fn test_markdown_fence_without_language_uses_source_language_default() {
+        // A bare fence inherits :source-language: as its default (F-J × F-G).
+        let input = ":source-language: ruby\n\n```\nputs 1\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+    }
+
+    #[test]
+    fn test_markdown_fence_info_string_language_still_wins() {
+        // An explicit info-string language is honored over the default.
+        let input = ":source-language: ruby\n\n```python\nx = 1\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Borrowed("python"))
+        })));
+    }
+
+    #[test]
+    fn test_markdown_fence_block_style_language_ignored() {
+        // A preceding `[source,python]` block style does NOT set the language
+        // of a bare fence — only the info string / source-language do
+        // (matches asciidoctor 2.0.23).
+        let input = "[source,python]\n```\nx = 1\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
+    }
+
+    #[test]
+    fn test_markdown_fence_empty_is_source_without_text() {
+        // An empty fence is a source block with no body (no spurious newline).
+        let input = "```\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
+        assert!(!events.iter().any(|e| matches!(e, Event::Text(_))));
     }
 
     #[test]
