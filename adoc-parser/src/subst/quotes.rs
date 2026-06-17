@@ -339,13 +339,21 @@ fn pass_constrained(work: &mut Work, marker: u8, bare_kind: SpanKind, attr_kind:
         // `M…` would open a span here. When it would (`\*bold*`), drop the
         // backslash and emit the markers literal with the content left raw for the
         // later passes (`\*_em_*` → `*<em>em</em>*`); when it would not
-        // (`\* not bold`, `\#tag`), keep `\M` literal. Restricted to a single
-        // (non-doubled) marker not itself preceded by a backslash — the `\\M…`
-        // and `\MM…MM` forms stay deferred and fall back through the gate.
+        // (`\* not bold`, `\#tag`), keep `\M` literal. A doubled backslash before
+        // the marker (`\\*bold*`, … `\\\\*bold*`) consumes exactly the ONE
+        // backslash adjacent to the marker (the `\\?` capture sits right before
+        // it), leaving any leading backslashes as literal boundary chars
+        // (`\\*bold*` → `\*bold*`, `\\\*bold*` → `\\*bold*`); each leading `\` is
+        // copied verbatim by the fall-through until this arm fires on the adjacent
+        // one. The escape is still honoured ONLY when an unescaped span would form
+        // here (`constrained_open_close` below), so a doubled backslash inside a
+        // span whose own close is invalid (`_\\*a*_` — the inner `*` cannot close
+        // before the word char `_`) leaves BOTH backslashes literal, matching
+        // Asciidoctor. The `\MM…MM` doubled-marker form stays deferred (excluded by
+        // the `i + 2 != marker` guard).
         if bytes[i] == b'\\'
             && bytes.get(i + 1).copied() == Some(marker)
             && bytes.get(i + 2).copied() != Some(marker)
-            && (i == 0 || bytes[i - 1] != b'\\')
         {
             let mpos = i + 1;
             if let Some(close_pos) = constrained_open_close(&work.tags, bytes, mpos, marker) {
@@ -563,11 +571,13 @@ fn pass_simple_pair(work: &mut Work, marker: u8, kind: SpanKind) {
         }
 
         // Escaped marker `\^…` / `\~…` — honour the escape only when an unescaped
-        // pair would form here (see the constrained-pass escape branch).
+        // pair would form here (see the constrained-pass escape branch). A doubled
+        // backslash (`\\^sup^`) consumes only the one backslash adjacent to the
+        // marker, leaving leading backslashes literal — same cascade as the
+        // constrained pass.
         if bytes[i] == b'\\'
             && bytes.get(i + 1).copied() == Some(marker)
             && bytes.get(i + 2).copied() != Some(marker)
-            && (i == 0 || bytes[i - 1] != b'\\')
         {
             let mpos = i + 1;
             if let Some(close_pos) = simple_pair_open_close(bytes, mpos, marker) {
