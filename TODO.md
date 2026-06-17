@@ -202,7 +202,36 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (`toc_entries`). Резолв в `finish()`: секции экранируются, заголовки блоков — уже HTML.
   **Корпус: Identical 79→135 (+56).** Тесты/clippy зелёные.
 
-## АКТУАЛЬНО (2026-06-17, 97-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (28/N) attribute-ref в named-role link/inline-image (ветка `feat/subst-phase2-parity-28`)
+## АКТУАЛЬНО (2026-06-17, 98-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (29/N) attribute-ref в TARGET inline link/image (ветка `feat/subst-phase2-parity-29`)
+
+Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-28/N) СМЕРЖЕНА в master
+(`b8d95b7`). **(29/N) НЕ закоммичена** (рабочее дерево; коммит/мерж/пуш — по запросу пользователя).
+base-бинарь `/tmp/adoc_base` ПЕРЕСОБРАН чисто из master `b8d95b7`.
+- [x] **(29/N) attribute-ref в TARGET inline link/image** `link:{u}[…]`/`image:{p}[…]` → asciidoctor.
+  Прямое продолжение 28/N (документированный остаток: «`href={u}` в target макроса НЕ резолвится»).
+  - **Корень:** macros-пасс ДО attributes → `{u}` доживает литералом в `Tag::Link.url`/image `target`;
+    арм Link (`write_attr(output,"href",url)`) и `start_inline_image` (`image_uri(target)` + `link=` href)
+    писали target как есть, минуя `resolve_inline_attr_value`. asciidoctor резолвит attributes ДО macros →
+    `href="https://example.com"`. **NB:** attr-refs не резолвятся в ПАРСЕРЕ ни одним движком (docstring
+    subst/attributes.rs) — только в рендерере → фикс рендерер-side (как 27/28).
+  - **Фикс (рендерер, 3 файла):** events.rs Link-арм — `href` через `resolve_inline_attr_value`; bare-ссылка
+    (`link:{u}[]`) ставит флаг `bare_link_pending` (lib.rs struct) → Text-обработчик резолвит видимый текст
+    (он повторяет target) тем же путём, что href; media.rs `start_inline_image` — `target` (ДО `image_uri`,
+    т.е. до imagesdir) и `link=` href через `resolve_inline_attr_value`. undefined→литерал, no-`{`→borrow (no-op).
+  - **Скоуп:** ТОЛЬКО inline `link:`/`image:` (target+bare-текст+image `link=`). ОТЛОЖЕНО (остаток): блочный
+    image `image::{p}` (BlockMeta/write_meta_attrs — отд. механизм); xref `{rel}` target (xref-резолвер,
+    отд. механизм — `xref:{rel}[]`→`docs/intro.html`); inline image `alt` attr-ref.
+  - **Тест:** `test_attr_ref_in_link_and_image_target_resolves` (html_output.rs): link `home`, link+path
+    `/issues`, image+imagesdir `img/tiger.png`, image `link=` href, bare `link:{u}[]` (href+текст), undefined
+    `{undef}`, no-sentinel-leak. Работает под ОБОИМИ движками (рендерер shared) — `to_html` (legacy default).
+  - clippy 0; test --workspace зелёное (html_output 38→39). **gate_check toggle off/on 344/0** (airtight
+    base≡new — 0 файлов корпуса ставят `link:{`/`image:{` с defined-attr: единств. `{site-url}` undefined →
+    литерал в обоих; блочный `image::{imagesdir}` вне inline-пути). **blast_force Identical 344→344** (0 REGR).
+    e2e (p29/p29b/p29c/p29d): все in-scope формы == asciidoctor байт-в-байт (xref+блочный image — отложенный остаток).
+
+---
+
+## (2026-06-17, 97-я сессия): РЕРАЙТ inline — Фаза 2 ПАРИТЕТ (28/N) attribute-ref в named-role link/inline-image (ветка `feat/subst-phase2-parity-28`)
 
 Корпус неизменен **344/344** (рендерер-фикс корпус-невидим). Phase 2 (1-27/N) уже СМЕРЖЕНА в master
 (`3dd9b8e`). **(28/N) ЗАКОММИЧЕНА на ветке** (`3ecc059`), **ОЖИДАЕТ авторизации** на `git merge --no-ff`

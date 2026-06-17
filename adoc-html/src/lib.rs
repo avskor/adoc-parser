@@ -227,6 +227,10 @@ struct HtmlRenderer {
     last_updated: Option<String>,
     content_start: Option<usize>,
     in_unlabeled_xref: bool,
+    /// Set when a bare `link:` (empty bracket text) opens, so the next text event
+    /// — the link's visible text, a copy of the literal target — resolves
+    /// attribute references the same way the `href` does (`link:{u}[]` parity).
+    bare_link_pending: bool,
     xref_placeholder_counter: usize,
     /// Internal/inter-document xref link text, resolved in `finish()`. Each entry
     /// is `(placeholder, fallback, is_internal)`. `is_internal` selects the
@@ -355,6 +359,7 @@ impl HtmlRenderer {
             last_updated: None,
             content_start: None,
             in_unlabeled_xref: false,
+            bare_link_pending: false,
             xref_placeholder_counter: 0,
             xref_placeholders: Vec::new(),
             xref_href_placeholders: Vec::new(),
