@@ -392,6 +392,39 @@ fn test_link_macro_empty_text_bare_class() {
 }
 
 #[test]
+fn test_hide_uri_scheme() {
+    // :hide-uri-scheme: strips the scheme from the VISIBLE text only; href keeps
+    // the full target (matches Asciidoctor's UriSniffRx behaviour).
+    let html = to_html(":hide-uri-scheme:\n\nSee https://github.com/foo now.");
+    assert!(
+        html.contains("<a href=\"https://github.com/foo\" class=\"bare\">github.com/foo</a>"),
+        "{html}"
+    );
+
+    // link:url[] with empty text behaves the same.
+    let html2 = to_html(":hide-uri-scheme:\n\nSee link:https://example.org/a[] here.");
+    assert!(
+        html2.contains("<a href=\"https://example.org/a\" class=\"bare\">example.org/a</a>"),
+        "{html2}"
+    );
+
+    // Explicit text is never touched.
+    let html3 = to_html(":hide-uri-scheme:\n\nlink:https://example.org/a[Click]");
+    assert!(html3.contains("<a href=\"https://example.org/a\">Click</a>"), "{html3}");
+
+    // mailto is excluded from hide-uri-scheme.
+    let html4 = to_html(":hide-uri-scheme:\n\nmailto:user@example.com[]");
+    assert!(html4.contains("<a href=\"mailto:user@example.com\">user@example.com</a>"), "{html4}");
+
+    // Without the attribute the full URL shows (regression guard).
+    let html5 = to_html("See https://github.com/foo now.");
+    assert!(
+        html5.contains("<a href=\"https://github.com/foo\" class=\"bare\">https://github.com/foo</a>"),
+        "{html5}"
+    );
+}
+
+#[test]
 fn test_attribute_reference_link_target() {
     // `{url}[text^]` — attributes substitute before macros, so once the URL
     // attribute resolves the trailing `[text^]` forms a link macro with a

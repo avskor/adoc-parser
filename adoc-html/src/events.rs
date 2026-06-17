@@ -29,10 +29,24 @@ impl HtmlRenderer {
                 // escapes it — mirrors the href resolution above.
                 let text = if self.bare_link_pending {
                     self.bare_link_pending = false;
-                    if text.contains('{') {
+                    let resolved = if text.contains('{') {
                         CowStr::from(self.resolve_inline_attr_value(&text).into_owned())
                     } else {
                         text
+                    };
+                    // `:hide-uri-scheme:` strips the scheme from a bare link's
+                    // visible text only (the `href` above keeps the full target).
+                    // Falls back to the full text when stripping leaves nothing
+                    // (a bare scheme like `https://`), matching asciidoctor.
+                    if self.document_attrs.contains_key("hide-uri-scheme") {
+                        let stripped = adoc_render_core::strip_uri_scheme(&resolved);
+                        if !stripped.is_empty() && stripped.len() != resolved.len() {
+                            CowStr::from(stripped.to_owned())
+                        } else {
+                            resolved
+                        }
+                    } else {
+                        resolved
                     }
                 } else {
                     text
