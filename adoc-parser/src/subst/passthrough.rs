@@ -144,9 +144,15 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         }
 
         // `+`-delimited passthroughs: +++ / ++ / + (triple retries as double,
-        // mirroring `handle_inline_passthrough`).
+        // mirroring `handle_inline_passthrough`). In compat mode the single `+`
+        // and double `++` forms are NOT extracted here — they are claimed by the
+        // [`super::quotes`] pass as constrained/unconstrained monospace
+        // (Asciidoctor `substitutors.rb:1024` skips `++` in compat, and `+`
+        // moves to QUOTE_SUBS[true]); only the raw triple `+++…+++` stays a
+        // passthrough.
         if b == b'+'
-            && let Some((pieces, end)) = try_plus(&src, bytes, i, guard_hard_break)
+            && let Some((pieces, end)) =
+                try_plus(&src, bytes, i, guard_hard_break, options.compat_mode)
         {
             out.push_str(&work.passthrough_sentinel(pieces));
             i = end;
@@ -189,20 +195,37 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
 /// At a `+`, try `+++` then `++` (triple falls back to double like Asciidoctor's
 /// `(\+\+\+?)…\1`), else a constrained single `+`.
+///
+/// In `compat` mode the single (`+`) and double (`++`) forms are surrendered to
+/// the [`super::quotes`] pass (constrained/unconstrained monospace): they return
+/// `None` so the caller leaves the markers in the buffer. The raw triple
+/// `+++…+++` is still a passthrough; when it fails to close in compat mode it
+/// does NOT retry as `++` (that form belongs to quotes now), so it also declines.
 fn try_plus(
     src: &str,
     bytes: &[u8],
     i: usize,
     guard_hard_break: bool,
+    compat: bool,
 ) -> Option<(Vec<PassPiece>, usize)> {
     let next = bytes.get(i + 1).copied();
     let next2 = bytes.get(i + 2).copied();
     if next == Some(b'+') && next2 == Some(b'+') {
-        // +++ (raw), retrying as ++ on failure.
-        return try_triple_plus(src, i).or_else(|| try_double_plus(src, i));
+        // +++ (raw); retry as ++ on failure only outside compat mode.
+        let triple = try_triple_plus(src, i);
+        if compat {
+            return triple;
+        }
+        return triple.or_else(|| try_double_plus(src, i));
     }
     if next == Some(b'+') {
+        if compat {
+            return None;
+        }
         return try_double_plus(src, i);
+    }
+    if compat {
+        return None;
     }
     try_single_plus(src, bytes, i, guard_hard_break)
 }

@@ -1281,6 +1281,25 @@ fn test_compat_mode_language_source_default_html() {
 }
 
 #[test]
+fn test_compat_mode_plus_monospace_html() {
+    // In compat-mode `+text+` (constrained) and `++text++` (unconstrained) render
+    // as monospace `<code>`, with normal subs inside — verified vs asciidoctor 2.0.23.
+    let compat = to_html(":compat-mode:\n\nUse +git push+ and ++make++ daily.");
+    assert!(
+        compat.contains("<code>git push</code>") && compat.contains("<code>make</code>"),
+        "compat-mode +/++ → monospace. Got: {compat}"
+    );
+
+    // Regression guard: outside compat-mode the same markers are passthroughs
+    // (literal text), not monospace.
+    let plain = to_html("Use +git push+ and ++make++ daily.");
+    assert!(
+        !plain.contains("<code>") && plain.contains("git push") && plain.contains("make"),
+        "without compat-mode +/++ stay literal passthroughs. Got: {plain}"
+    );
+}
+
+#[test]
 fn test_markdown_fence_source_html() {
     // A markdown fence is always a source block, even without an info-string
     // language: `<pre class="highlight"><code>` (F-J, verified vs asciidoctor).

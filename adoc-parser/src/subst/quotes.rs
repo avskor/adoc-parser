@@ -37,13 +37,14 @@
 use super::tokenize::{
     desentinelize, sentinel_end, utf8_char_len, SpanKind, TagToken, Work, TAG_LEAD, TAG_TAIL,
 };
+use crate::inline::InlineOptions;
 
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Run every quote pass over `work`, in Asciidoctor `QUOTE_SUBS` order.
-pub(super) fn run_all(work: &mut Work) {
+pub(super) fn run_all(work: &mut Work, options: InlineOptions) {
     // strong
     pass_unconstrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
     pass_constrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
@@ -56,6 +57,15 @@ pub(super) fn run_all(work: &mut Work) {
     // monospace (runs before emphasis/mark)
     pass_unconstrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
     pass_constrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
+    // compat-mode plus-sign monospace: `+text+` (constrained) and `++text++`
+    // (unconstrained) render as monospace, occupying the slots Asciidoctor's
+    // `QUOTE_SUBS[true]` (`substitutors.rb:477-479`) puts at the monospace
+    // position — after smart quotes, before emphasis. Gated on `:compat-mode:`;
+    // outside compat these markers are passthroughs (handled in `passthrough`).
+    if options.compat_mode {
+        pass_unconstrained(work, b'+', SpanKind::Monospace, SpanKind::Monospace);
+        pass_constrained(work, b'+', SpanKind::Monospace, SpanKind::Monospace);
+    }
     // emphasis
     pass_unconstrained(work, b'_', SpanKind::Emphasis, SpanKind::Emphasis);
     pass_constrained(work, b'_', SpanKind::Emphasis, SpanKind::Emphasis);
