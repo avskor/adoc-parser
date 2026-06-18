@@ -1,10 +1,10 @@
 # Session context
 
-## Сессия (2026-06-18, 117-я) — F-H thematic break не прерывает открытый параграф (ветка `fix/thematic-break-paragraph`, НЕ закоммичено)
+## Сессия (2026-06-18, 117-я) — F-H thematic break не прерывает открытый параграф (СМЕРЖЕНА `b1e06a9`, запушена)
 
 Запрос «запланируй следующую задачу из туду» → F-I смержена (`08953b5`), следующий по рекомендации TODO — **F-H**.
-План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `f0b51a0`.
-**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя). План: `~/.claude/plans/moonlit-stirring-stonebraker.md`.
+План одобрен через plan mode, реализован, верифицирован AIRTIGHT, **закоммичен (`75e295e`), смержен в master (`b1e06a9`,
+--no-ff), запушен в origin, ветка `fix/thematic-break-paragraph` удалена**. План: `~/.claude/plans/moonlit-stirring-stonebraker.md`.
 
 ### Корень и фикс (чисто парсер; спека верифицирована пробами vs asciidoctor 2.0.23)
 - Дефолтное расхождение YAML front matter — **НЕ** про front matter: в asciidoctor thematic break
