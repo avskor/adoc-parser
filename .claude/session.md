@@ -1,5 +1,40 @@
 # Session context
 
+## Сессия (2026-06-18, 114-я) — F-F `menu:X[]` → `<b class="menuref">` (ветка `fix/menu-menuref`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-K смержена (`e21b53d`), следующий по рекомендации TODO — **F-F**
+(дешёвый рендерер-фикс). План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `e21b53d`.
+**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя).
+План: `~/.claude/plans/jiggly-tickling-elephant.md`.
+
+### Корень и фикс (чисто рендерер, спека верифицирована исходником + пробами vs `asciidoctor`)
+- Одиночная menu-ссылка с пустыми скобками (`menu:File[]`, нет menuitem/submenus): мы эмитили
+  `<span class="menu">File</span>`, asciidoctor 2.0.23 (`convert_inline_menu`) → `<b class="menuref">File</b>`.
+- Фикс: `adoc-html/src/inline.rs::render_menu`, ветка `items_str.is_empty()` (~163-167) — `<span class="menu">…</span>`
+  → `<b class="menuref">…</b>`. Мульти-ветка (`menuseq`/`submenu`/`menuitem`) и ПАРСЕР не тронуты (Event
+  `Start(Menu{target})`+опц.`Text(items)`+`End(Menu)` уже корректен; single/multi решается рендерером по пустоте items).
+
+### Файлы (2, оба adoc-html)
+- `adoc-html/src/inline.rs` — render_menu, empty-ветка.
+- `adoc-html/src/tests.rs` — `test_menu_no_items_html` → ассерт `<b class="menuref">File</b>` (ранее ассертил баг).
+  `test_menu_html`/`test_menu_submenus_html` без изм. Фикстуру `kbd-btn-menu.*` НЕ трогали (там только мульти-кейс).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html 442, parser 575, html-compat 25 — без изм.).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` пересобрана из master `e21b53d` через worktree; gate_check.py → 0 diff).
+- Пробы adoc-cli vs asciidoctor (все 3 MATCH байт-в-байт): `menu:File[]`→`<b class="menuref">File</b>`;
+  `menu:File[Save As]`→menuseq+menuitem; `menu:File[New > Save]`→menuseq+submenu+menuitem.
+- **Frontier** (`frontier_parity.py /mnt/c/tmp/adoc-frontier`): Identical **198→199 (+1)**, clean_div **34→33**.
+  Прямое new-vs-base по 250 файлам: **1 файл IMPROVED** (`asciidoctor/docs/.../tooling/pages/index.adoc` 175→173,
+  `menu:Packages[]` → `<b class="menuref">`), **0 регрессий**.
+
+### Что дальше
+F-F ЗАКРЫТ. Следующий по рекомендации TODO — **F-E** (`[%nowrap]` на source-блоке → класс `nowrap` не добавляется),
+далее F-I (UTF-8 BOM) / F-H (YAML front matter) / F-J' (`:compat-mode:`→`:language:`).
+**Follow-up F-F (вне scope):** asciidoctor `,`-fallback-разделитель подменю без `>`; каретка при `:icons: font`.
+
+---
+
 ## Сессия (2026-06-18, 113-я) — F-K порядок классов highlightjs (ветка `fix/hljs-class-order`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-C смержена (`558c26f`), следующий по рекомендации TODO — **F-K**
