@@ -1010,6 +1010,17 @@ mod tests {
             // autolink URL[text] form (keeps trailing punctuation in the URL)
             "https://example.com[Example]",
             "https://example.com[]",
+            // angle-bracketed bare URL: closed → both brackets stripped (trailing
+            // punctuation kept); unclosed → declined (literal); `<url[text]>` keeps
+            // its brackets; `<email>` is on a separate path and keeps its brackets
+            "<https://example.com>",
+            "a<https://x.org/y>z",
+            "<https://x.org/y> tail",
+            "(<https://x.org/y>)",
+            "<https://x.org/y.>",
+            "<https://x.org/y now",
+            "<https://example.com[the site]>",
+            "<user@example.com>",
             // not at a boundary → stays literal (mid-word scheme)
             "ahttps://example.com",
             // too-short scheme-only → literal
@@ -1032,6 +1043,73 @@ mod tests {
                 "new engine diverged from legacy for {c:?}"
             );
         }
+    }
+
+    /// Angle-bracketed bare URL (`<https://…>`), asserted against the Asciidoctor
+    /// reference (exact event vector, not just `pipeline == legacy`): a closed
+    /// bracket strips BOTH `<`/`>` and links the URL bare while KEEPING trailing
+    /// punctuation; an unclosed `<url` declines to link (stays literal); the
+    /// `<url[text]>` macro form keeps its literal brackets around the link; and the
+    /// `<email>` autolink keeps its brackets too (the strip is URL-only).
+    #[test]
+    fn angle_bracket_url_matches_asciidoctor() {
+        fn bare_link(url: &str) -> Vec<Event<'static>> {
+            vec![
+                Event::Start(Tag::Link {
+                    url: url.to_string().into(),
+                    window: None,
+                    nofollow: false,
+                    is_bare: true,
+                    role: None,
+                }),
+                Event::Text(url.to_string().into()),
+                Event::End(TagEnd::Link),
+            ]
+        }
+        // closed `<url>` → both brackets gone, bare link, no surrounding Text
+        assert_eq!(pipeline("<https://example.com>"), bare_link("https://example.com"));
+        // trailing punctuation is KEPT inside the brackets (the `>` is the boundary)
+        assert_eq!(pipeline("<https://x.org/y.>"), bare_link("https://x.org/y."));
+        // mid-word `<` and trailing text are preserved either side of the link
+        assert_eq!(pipeline("a<https://x.org/y>z"), {
+            let mut v = vec![Event::Text("a".into())];
+            v.extend(bare_link("https://x.org/y"));
+            v.push(Event::Text("z".into()));
+            v
+        });
+        // unclosed `<url` → no link at all (the whole run stays one literal Text)
+        assert_eq!(
+            pipeline("<https://x.org/y now"),
+            vec![Event::Text("<https://x.org/y now".into())]
+        );
+        // `<url[text]>` → brackets stay literal around the labelled link
+        assert_eq!(pipeline("<https://example.com[the site]>"), vec![
+            Event::Text("<".into()),
+            Event::Start(Tag::Link {
+                url: "https://example.com".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text("the site".into()),
+            Event::End(TagEnd::Link),
+            Event::Text(">".into()),
+        ]);
+        // `<email>` keeps its brackets (URL-only strip); the email still links
+        assert_eq!(pipeline("<user@example.com>"), vec![
+            Event::Text("<".into()),
+            Event::Start(Tag::Link {
+                url: "mailto:user@example.com".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text("user@example.com".into()),
+            Event::End(TagEnd::Link),
+            Event::Text(">".into()),
+        ]);
     }
 
     /// With the inline-image macro ported, the pipeline must reproduce legacy on

@@ -1,5 +1,53 @@
 # Session context
 
+## Сессия (2026-06-18, 112-я) — F-C author/inline `<url>` (ветка `fix/angle-url`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-D смержена (`af277fb`), следующий незакрытый frontier-класс — **F-C**.
+План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `af277fb`. **Статус: реализовано+
+проверено, готово к коммиту/мержу** (по запросу пользователя). План: `~/.claude/plans/encapsulated-tumbling-thimble.md`.
+
+### Корень и фикс (две независимые подзадачи, спецификация верифицирована пробами vs `asciidoctor -e`/`asciidoctor`)
+- **Описание в TODO было неточным**: `<https://x[@t]>` (url с `[text]`) у нас УЖЕ совпадал — не трогали. Реальные баги:
+- **(1) Строка автора.** `parse_authors` (scanner.rs) извлекает содержимое `<…>` в `email`/`email_N`; `finish.rs:350`
+  слепо оборачивал в `mailto:`. asciidoctor прогоняет адрес через `sub_macros` (`SPECIALCHARS|MACROS`, БЕЗ quotes):
+  URL→bare-link `class="bare"`, email→`mailto:`, `ftp/irc`→bare, `<*bold*>`→литерал. Фикс: новый
+  `render_inline_value_with_subs(output,value,subs)` (`lib.rs`, тело старого `render_inline_value` + явный subs);
+  `finish.rs` зовёт его с `SPECIALCHARS|MACROS` (через `let mut s=NONE; s.add(SPECIALCHARS|MACROS)` — поле приватно);
+  `render_author_details` стал `&mut self` (вызывающий в `events.rs:798` уже мутабелен). `.cloned()` на email — снять
+  immutable borrow перед `&mut self`-вызовом.
+- **(2) Inline `<url>`.** `subst/macros.rs::try_autolink` (дефолт-движок) + зеркало legacy `inline.rs::try_autolink`:
+  для BARE-автолинка, которому СЛЕВА непосредственно `<` — при закрытом `>` сразу после URL снять ОБА `<`/`>`
+  (трейлинг-пунктуация НЕ срезается, `>` = жёсткая граница: `<…/b.>`→url с точкой); при НЕзакрытом (`<url ` упирается
+  в whitespace/EOL) — **decline** (литерал, без линка). `<url[text]>` и `<email>` — скобки остаются (не тронуты).
+  Сигнатура `try_autolink` (sequential) → `Option<(Vec<Event>,usize,bool)>` (3-й = `strip_angle`); вызывающий arm
+  делает `if strip_angle && out.ends_with('<') { out.truncate(len-1); }` (паттерн retract как у email на ~410).
+  Legacy: `preceded_by_angle` до `flush_text`, флаш до `start_pos-1`, `self.pos=start_pos+url_end+1`, decline=`return false`.
+
+### Файлы (7: 2 parser-код, 2 html-код, 3 теста)
+- `adoc-parser/src/subst/macros.rs` — try_autolink (+angle-блок, сигнатура) + вызывающий arm (~395).
+- `adoc-parser/src/inline.rs` — try_autolink зеркало (angle-блок до flush).
+- `adoc-parser/src/subst/mod.rs` — тесты: +8 кейсов в `reproduces_legacy_on_link_inputs`, новый
+  `angle_bracket_url_matches_asciidoctor` (точные Event-векторы).
+- `adoc-html/src/lib.rs` — `render_inline_value_with_subs` (+ `render_inline_value` делегирует).
+- `adoc-html/src/finish.rs` — author email через sub_macros; `render_author_details`→`&mut self`.
+- `adoc-html/src/tests.rs` — `test_angle_bracket_url_autolink`.
+- `adoc-html-tests/tests/author_rendering.rs` — `author_with_url`.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 574→575, html unit 441→442, author 6→7, остальное неизм.).
+- **Гейт 344/344 байт-в-байт** vs master (base пересобран из master `af277fb` в /tmp/adoc_base через worktree; gate_check.py → 0 diff).
+- **Frontier** (`frontier_parity.py /mnt/c/tmp/adoc-frontier`): **Identical 193→198 (+5)**, clean_div 39→34. Diff
+  new-vs-master = 21 файла, ВСЕ IMPROVED, 0 same-count, 0 REGRESSED (скрипт-проверка ndiffs vs asciidoctor master vs new).
+  5 стали identical: what-is-asciidoc, asciidoctor-funding-campaign, js-1-5-0, maven-plugin-1-5-0, wow-asciidoc.
+- Точечные пробы: 15 inline-кейсов MATCH; 8/9 author-кейсов MATCH (DIFF только `<a&b@h.io>` — вне-scope `&`-charset).
+
+### Что дальше
+F-C ЗАКРЫТ. Следующий по рекомендации TODO — **F-K** (порядок классов highlightjs `class="language-X hljs"` vs наш
+`"hljs language-X"`, `start_source_block` ~725, дешёвый рендерер-фикс), далее F-F/F-E/F-I/F-H/F-J'. Follow-up'ы F-C
+(вне корпус-импакта): `<mailto:x@y.com>` plain-text; charset email-локали (`&`); `<<url>>` ложный xref.
+
+---
+
 ## Сессия (2026-06-18, 111-я) — F-D `toc::[attrs]` (ветка `feat/toc-macro-attrs`)
 
 Запрос «запланируй следующую задачу из туду» → F-J смержена (`e4a2fc8`); следующий незакрытый frontier-класс — **F-D**.
