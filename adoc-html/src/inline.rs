@@ -199,6 +199,8 @@ impl HtmlRenderer {
         let mut role = None;
         let mut link = None;
         let mut title = None;
+        let mut alt = None;
+        let mut window = None;
 
         if !attrs_str.is_empty() {
             for (i, part) in attrs_str.split(',').enumerate() {
@@ -210,6 +212,8 @@ impl HtmlRenderer {
                         "title" => title = Some(val.trim().to_string()),
                         "rotate" => rotate = Some(val.trim().to_string()),
                         "flip" => flip = Some(val.trim().to_string()),
+                        "alt" => alt = Some(val.trim().to_string()),
+                        "window" => window = Some(val.trim().to_string()),
                         _ => {}
                     }
                 } else if i == 0 {
@@ -217,6 +221,41 @@ impl HtmlRenderer {
                     size = Some(part.to_string());
                 }
             }
+        }
+
+        // When icons are not enabled (`:icons:` unset), Asciidoctor renders an
+        // inline icon as literal bracketed text `[name]` rather than a glyph:
+        // `<span class="icon">[name&#93;</span>`. The `alt` attribute replaces
+        // the name; `role` lands on the span; a `link` wraps the text in an
+        // `<a class="image">`. size/title/rotate/flip are ignored in this mode.
+        // (`:icons: font` and image modes keep the glyph path below unchanged.)
+        if !self.document_attrs.contains_key("icons") {
+            output.push_str("<span class=\"icon");
+            if let Some(ref r) = role {
+                output.push(' ');
+                html_escape(output, r);
+            }
+            output.push_str("\">");
+            if let Some(href) = &link {
+                output.push_str("<a class=\"image\" href=\"");
+                html_escape(output, href);
+                output.push('"');
+                if let Some(ref w) = window {
+                    write_attr(output, "target", w);
+                    if w == "_blank" {
+                        output.push_str(" rel=\"noopener\"");
+                    }
+                }
+                output.push('>');
+            }
+            output.push('[');
+            html_escape(output, alt.as_deref().unwrap_or(&name));
+            output.push_str("&#93;");
+            if link.is_some() {
+                output.push_str("</a>");
+            }
+            output.push_str("</span>");
+            return;
         }
 
         // Build class list
