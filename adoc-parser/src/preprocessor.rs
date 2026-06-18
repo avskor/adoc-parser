@@ -346,6 +346,10 @@ pub fn resolve_includes(input: &str, base_dir: &Path) -> String {
 /// Like [`resolve_includes`], but includes the source filename in unresolved
 /// directive placeholders (matching Asciidoctor output format).
 pub fn resolve_includes_with_source(input: &str, base_dir: &Path, source_file: Option<&str>) -> String {
+    // Strip a leading UTF-8 BOM before any directive parsing, mirroring
+    // Asciidoctor's Reader (so a BOM ahead of the first `include::`/`= Title`
+    // line does not hide it). Other entry points strip independently.
+    let input = scanner::strip_bom(input);
     let mut seen = HashSet::new();
     resolve_includes_rec(input, base_dir, source_file, 0, &mut seen)
 }
@@ -731,6 +735,9 @@ pub fn preprocess_with_attrs(
             attributes.insert(k.clone(), val.clone());
         }
     }
+    // Strip a leading UTF-8 BOM before parsing attribute entries / conditionals,
+    // mirroring Asciidoctor's Reader. Idempotent if a caller already stripped it.
+    let input = scanner::strip_bom(input);
     let mut counter_names: HashSet<String> = HashSet::new();
     let mut skip_stack: Vec<bool> = Vec::new();
     let mut output = String::with_capacity(input.len());
@@ -1724,6 +1731,18 @@ matched");
         // Note: inline content is emitted as-is, no attribute substitution in inline content
         let result = preprocess(input);
         assert_eq!(result, ":author: John Doe\nBy {author}");
+    }
+
+    #[test]
+    fn test_leading_bom_stripped_before_attribute_entry() {
+        // A leading UTF-8 BOM is removed before directive parsing (F-I, mirrors
+        // Asciidoctor's Reader). Without the strip, `\u{feff}:backend: html`
+        // would not be recognized as an attribute entry, so `backend` would be
+        // undefined and the ifdef would emit nothing.
+        let input = "\u{feff}:backend: html\nifdef::backend[Backend is set.]";
+        let result = preprocess(input);
+        assert_eq!(result, ":backend: html\nBackend is set.");
+        assert!(!result.starts_with('\u{feff}'), "BOM must be stripped from output");
     }
 
     // -----------------------------------------------------------------------

@@ -1,5 +1,48 @@
 # Session context
 
+## Сессия (2026-06-18, 116-я) — F-I UTF-8 BOM срезается на входе (ветка `fix/utf8-bom`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-E смержена (`165bcd8`), следующий по рекомендации TODO — **F-I**.
+План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `165bcd8`.
+**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя). План: `~/.claude/plans/indexed-wobbling-twilight.md`.
+
+### Корень и фикс (зеркало asciidoctor Reader, спека верифицирована пробами vs `asciidoctor` 2.0.23)
+- Ведущий UTF-8 BOM (`U+FEFF`, байты `EF BB BF`) протаскивался через весь pipeline нетронутым → `= Title` в
+  1-й строке не распознавался (baseline: `<p>﻿= Title</p>` + `<title>Untitled</title>`). asciidoctor срезает BOM
+  в Reader ДО любой обработки.
+- **Pipeline:** CLI = `read_to_string` → `resolve_includes_with_source` → `preprocess_with_attrs` → `to_html` →
+  `Parser::new`. Library/wasm `to_html` = напрямую `Parser::new` (без preprocess). preprocess протаскивает
+  `\u{feff}= Title` нетронутым (не директива) → BOM доезжает до Parser.
+- **(1)** `adoc-parser/src/scanner.rs`: новый zero-copy `pub fn strip_bom(input: &str) -> &str` рядом со `split_lines`
+  (`input.strip_prefix('\u{feff}').unwrap_or(input)`; только ВЕДУЩИЙ BOM, середина цела).
+- **(2)** `adoc-parser/src/parser.rs`: `Parser::new` → `BlockScanner::new(crate::scanner::strip_bom(input))`
+  (главная точка, закрывает scope через все pipeline). `new_nested` НЕ тронут.
+- **(3)** `adoc-parser/src/preprocessor.rs`: defensive-срез в `resolve_includes_with_source` (~348) и
+  `preprocess_with_attrs` (~727) — BOM перед `:attr:`/`include::` в 1-й строке тоже распознаётся (`scanner` уже импортирован).
+
+### Файлы (5: 3 parser-код+тесты, 1 html-тест)
+- `adoc-parser/src/scanner.rs` — `strip_bom` + `test_strip_bom`.
+- `adoc-parser/src/parser.rs` — `Parser::new` оборачивает вход; новый `mod tests` (`strips_leading_bom`, `keeps_non_leading_bom`).
+- `adoc-parser/src/preprocessor.rs` — срез в 2 точках + `test_leading_bom_stripped_before_attribute_entry`.
+- `adoc-html/src/tests.rs` — `test_leading_bom_stripped` (standalone `<h1>Title>`, embedded без `= Title`-параграфа/BOM).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 575→**579**, html unit 448→**449**, остальное неизм.).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` пересобрана из master `165bcd8` через worktree
+  `/tmp/adoc_base_wt`, удалён; gate_check.py → 0 diff; BOM-файлов в гейте нет → 0 регрессий).
+- **Frontier** identical **200→201 (+1)**, clean_div 32→31. Прямой new-vs-base по 250: **1 файл изменился** —
+  `asciidoctor/test/fixtures/file-with-utf8-bom.adoc` (`﻿= 人`): base `<title>Untitled</title>`+`<p>﻿= 人</p>` →
+  new `<title>人</title>`+`<h1>人</h1>` (embedded байт-в-байт MATCH asciidoctor). **0 регрессий** (изменение = улучшение).
+  NB: первый grep `^\xEF\xBB\xBF` этот файл пропустил — frontier_parity нашёл.
+- Пробы CLI vs asciidoctor: BOM+`= Title` (embedded MATCH), BOM+`:foo: bar`+`{foo}` first-line (→`bar here` MATCH,
+  доказывает defensive-срез в preprocess), BOM+CJK-title `= 人` (embedded MATCH).
+
+### Что дальше
+F-I ЗАКРЫТ. Следующий по рекомендации TODO — **F-H** (YAML front matter `---…---` → мы `<hr>`, asciidoctor иначе; ниша),
+далее **F-J'** (`:compat-mode:` → `:language:` алиасит `:source-language:`).
+
+---
+
 ## Сессия (2026-06-18, 115-я) — F-E `[%nowrap]` / `:prewrap!:` → `nowrap` класс (ветка `fix/nowrap-class`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-F смержена (`bc3db9c`), следующий по рекомендации TODO — **F-E**.

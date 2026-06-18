@@ -35,7 +35,7 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
-            block_scanner: BlockScanner::new(input),
+            block_scanner: BlockScanner::new(crate::scanner::strip_bom(input)),
             inline_buffer: Vec::new(),
             pending_event: None,
             subs_stack: Vec::new(),
@@ -208,5 +208,38 @@ impl<'a> Iterator for Parser<'a> {
             }
             other => Some(other),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A leading UTF-8 BOM is stripped, so `= Title` is recognized as the
+    /// document title exactly as without the BOM (F-I, mirrors Asciidoctor).
+    #[test]
+    fn strips_leading_bom() {
+        let with_bom: Vec<_> = Parser::new("\u{feff}= Title\n\nbody").collect();
+        let without: Vec<_> = Parser::new("= Title\n\nbody").collect();
+        assert_eq!(with_bom, without);
+        // Sanity: the title is actually parsed as a heading, not a paragraph.
+        assert!(
+            with_bom
+                .iter()
+                .any(|e| matches!(e, Event::Text(t) if t.as_ref() == "Title")),
+            "expected a Title text event, got {with_bom:?}"
+        );
+    }
+
+    /// Only the leading BOM is removed; a BOM in the middle of text is kept.
+    #[test]
+    fn keeps_non_leading_bom() {
+        let events: Vec<_> = Parser::new("a\u{feff}b").collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Text(t) if t.contains('\u{feff}'))),
+            "interior BOM must be preserved, got {events:?}"
+        );
     }
 }
