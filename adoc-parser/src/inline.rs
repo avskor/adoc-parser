@@ -181,6 +181,12 @@ pub struct InlineOptions {
     /// `kbd:`/`btn:`/`menu:` UI macros. When false they are left as literal
     /// text, matching Asciidoctor's default.
     pub experimental: bool,
+    /// Whether the `:compat-mode:` document attribute is set. In compat mode the
+    /// `+text+` (constrained) and `++text++` (unconstrained) markers render as
+    /// monospaced (`<code>`) with normal substitutions, instead of being
+    /// extracted as single/double-plus passthroughs — mirroring Asciidoctor's
+    /// `QUOTE_SUBS[true]` table. Triple-plus `+++…+++` stays a raw passthrough.
+    pub compat_mode: bool,
 }
 
 impl InlineOptions {
@@ -197,13 +203,18 @@ impl InlineOptions {
         };
         if base == "experimental" {
             self.experimental = set;
+        } else if base == "compat-mode" {
+            self.compat_mode = set;
         }
     }
 
     /// Build from a snapshot of the document-attribute table; `is_set` reports
     /// whether the named attribute is currently set.
     pub fn from_attr_lookup(mut is_set: impl FnMut(&str) -> bool) -> Self {
-        Self { experimental: is_set("experimental") }
+        Self {
+            experimental: is_set("experimental"),
+            compat_mode: is_set("compat-mode"),
+        }
     }
 }
 
@@ -3185,7 +3196,7 @@ mod tests {
         parse_legacy(
             text,
             SubstitutionSet::NORMAL,
-            InlineOptions { experimental: true },
+            InlineOptions { experimental: true, ..Default::default() },
         )
     }
 
@@ -4780,9 +4791,23 @@ mod tests {
         // Snapshot path mirrors the streaming result.
         assert_eq!(
             InlineOptions::from_attr_lookup(|name| name == "experimental"),
-            InlineOptions { experimental: true }
+            InlineOptions { experimental: true, ..Default::default() }
         );
         assert_eq!(InlineOptions::from_attr_lookup(|_| false), InlineOptions::default());
+
+        // compat-mode flows through the same streaming and snapshot channels.
+        let mut opts = InlineOptions::default();
+        assert!(!opts.compat_mode);
+        opts.apply_attribute("compat-mode");
+        assert!(opts.compat_mode);
+        opts.apply_attribute("compat-mode!");
+        assert!(!opts.compat_mode);
+        opts.apply_attribute("!compat-mode");
+        assert!(!opts.compat_mode);
+        assert_eq!(
+            InlineOptions::from_attr_lookup(|name| name == "compat-mode"),
+            InlineOptions { compat_mode: true, ..Default::default() }
+        );
     }
 
     // Icon macro tests

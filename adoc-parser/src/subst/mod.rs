@@ -204,7 +204,7 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -
         attributes::extract(&mut work);
     }
     if subs.has(SubstitutionSet::QUOTES) {
-        quotes::run_all(&mut work);
+        quotes::run_all(&mut work, options);
     }
     if subs.has(SubstitutionSet::REPLACEMENTS) {
         replacements::run(&mut work);
@@ -243,7 +243,7 @@ mod tests {
         crate::inline::parse_legacy(
             text,
             SubstitutionSet::NORMAL,
-            InlineOptions { experimental: true },
+            InlineOptions { experimental: true, ..Default::default() },
         )
     }
 
@@ -253,8 +253,84 @@ mod tests {
         run_pipeline(
             text,
             SubstitutionSet::NORMAL,
-            InlineOptions { experimental: true },
+            InlineOptions { experimental: true, ..Default::default() },
         )
+    }
+
+    /// Like [`pipeline`], but with `:compat-mode:` set so `+text+`/`++text++`
+    /// render as monospace instead of being extracted as passthroughs.
+    fn pipeline_compat(text: &str) -> Vec<Event<'_>> {
+        run_pipeline(
+            text,
+            SubstitutionSet::NORMAL,
+            InlineOptions { compat_mode: true, ..Default::default() },
+        )
+    }
+
+    /// In compat mode the `+`/`++` markers move from passthrough to monospace
+    /// (Asciidoctor `QUOTE_SUBS[true]`), while the raw triple `+++…+++` stays a
+    /// passthrough and the non-compat behaviour is unchanged.
+    #[test]
+    fn compat_mode_plus_renders_monospace() {
+        // constrained `+text+` → monospace with normal subs
+        assert_eq!(
+            pipeline_compat("+text+"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("text".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // unconstrained `++text++` → monospace (no word boundary needed)
+        assert_eq!(
+            pipeline_compat("a++x++b"),
+            vec![
+                Event::Text("a".into()),
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("x".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text("b".into()),
+            ],
+        );
+        // nested strong inside `+…+` (strong pass runs before the `+` pass)
+        assert_eq!(
+            pipeline_compat("+a *b* c+"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("a ".into()),
+                Event::Start(Tag::Strong { id: None, roles: vec![] }),
+                Event::Text("b".into()),
+                Event::End(TagEnd::Strong),
+                Event::Text(" c".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // attrlist id/roles on a compat-mode plus span
+        assert_eq!(
+            pipeline_compat("[#i.r]+x+"),
+            vec![
+                Event::Start(Tag::Monospace {
+                    id: Some("i".into()),
+                    roles: vec!["r".into()],
+                }),
+                Event::Text("x".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+    }
+
+    /// The raw triple `+++…+++` passthrough survives compat mode (only `+`/`++`
+    /// move to monospace), and outside compat mode `+`/`++` are unchanged.
+    #[test]
+    fn compat_mode_preserves_triple_plus_and_non_compat() {
+        // triple-plus stays a raw passthrough even in compat mode
+        assert_eq!(
+            pipeline_compat("+++raw *x*+++"),
+            vec![Event::InlinePassthrough("raw *x*".into())],
+        );
+        // non-compat: `+`/`++` are passthroughs, not monospace (regression guard)
+        assert_eq!(pipeline("+text+"), vec![Event::Text("text".into())]);
+        assert_eq!(pipeline("++mono++"), vec![Event::Text("mono".into())]);
     }
 
     /// The new pipeline must reproduce the legacy parser byte-for-byte on every

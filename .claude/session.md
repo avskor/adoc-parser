@@ -1,5 +1,52 @@
 # Session context
 
+## Сессия (2026-06-18, 119-я) — F-L compat-mode `+text+`/`++text++` → monospaced (ветка `feat/compat-mode-monospace`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → новый frontier-проход (`frontier_parity.py`: 202 identical, 30 clean-div)
+→ классификация → выбран доминирующий класс **compat-mode `+`/`++`→monospace** (21 файл с `:compat-mode:`, топ clean-div).
+План записан (`~/.claude/plans/compat-mode-plus-monospace-fjp2.md`), AskUserQuestion → «приступать» → реализовано,
+верифицировано AIRTIGHT. **Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и фикс (зеркало asciidoctor `QUOTE_SUBS[true]`, `substitutors.rb:439-485`; 20+ проб vs 2.0.23)
+- Под `:compat-mode:` asciidoctor: `+text+` (constrained, compat[5]) и `++text++` (unconstrained, compat[4]) →
+  `<code>` (monospaced) с полными normal subs. Без compat = passthrough (literal). Мы всегда трактовали как passthrough.
+- **Свойства (доказаны пробами):** content = полные normal subs (`+a *b* c+`→`<code>a <strong>b</strong> c</code>`;
+  `a*b*c`→literal т.к. нет word-boundary, НЕ из-за subs); `[#i.r]+x+`→id/roles; `+++text+++` triple → raw passthrough
+  (НЕ трогать; `substitutors.rb:1024` скипает только `++`); mid-doc on/off действует с точки (streaming `apply_attribute`
+  — MATCH); `:compat-mode!:` снимает. Backtick/single-quote/smart-quotes в compat — отдельные классы (follow-up).
+
+### Файлы (3 кода + тесты)
+- `adoc-parser/src/inline.rs` — `InlineOptions` +поле `compat_mode` (зеркало `experimental`: `apply_attribute`
+  `base=="compat-mode"`, `from_attr_lookup`); +compat-блок в `test_inline_options_channel`. 2 тест-литерала
+  `{experimental:true}`→`{..,..Default::default()}`.
+- `adoc-parser/src/subst/passthrough.rs` — `extract` `+`-arm и `try_plus` +параметр `compat`: при compat single `+`/
+  double `++` → None (отдать quotes), triple `+++` остаётся (без fallback на `++`).
+- `adoc-parser/src/subst/quotes.rs` — `run_all` +`options: InlineOptions`, +import; при compat
+  `pass_unconstrained/constrained(b'+', Monospace, Monospace)` после backtick-monospace (~58), перед emphasis.
+  +2 теста (`compat_mode_plus_renders_monospace`, `compat_mode_preserves_triple_plus_and_non_compat`), helper `pipeline_compat`.
+- `adoc-parser/src/subst/mod.rs` — `quotes::run_all(&mut work, options)`. 2 тест-литерала → `..Default::default()`.
+- `adoc-html/src/tests.rs` — `test_compat_mode_plus_monospace_html` (+/++ → code; регресс-гард без compat).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser lib 590→**592**, html unit 452→**453**, compat 233,
+  html-compat — все ok).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` из master через worktree; `gate_check.py` → 0 diff).
+  Риск НУЛЕВОЙ: в гейте нет активного compat-mode (`literal-monospace.adoc` — `:compat-mode:` только пример в listing).
+- **Frontier identical 202→208 (+6)**, clean_div 30→24. new-vs-base по 28 compat-файлам: 6 стали identical
+  (a-new-resource, asciidoclet-announcement, java-integration ×3, js-render), 13+ IMPROVED (oscon 602→69, github-0.1.4
+  543→50, enjoy-java 307→59, plain-text-diagrams 293→124, asciidoctor-0-1-3/4 −36..−45). **0 реальных регрессий.**
+  asciidoctor-0-1-2 (позиц. 417→432) — ЛОЖНАЯ регрессия наивного differ'а: LCS-diff 156→**142** (IMPROVED, `+leveloffset+`
+  etc. → `<code>`, многострочный тег сдвигает хвост, и так расходящийся из-за literalblock/`{docs-ref}`/include).
+- 10+ CLI-проб vs asciidoctor 2.0.23 MATCH (constrained/unconstrained/nested-strong/attr-list/triple-raw/specialchars/
+  link-after-space/`+x+"`-close/mid-doc-on/unset).
+
+### Что дальше
+F-L ЗАКРЫТ (корневой scope). Все frontier-классы F-A…F-L проработаны. Следующее — новый frontier-проход по
+clean-div (топ: templates 1692, asciidoc-py 1645, migration 571 — многоклассовые); либо follow-up'ы F-L (backtick-literal
+`` `text` `` в compat, single-quote `'text'`→`<em>`, smart-quotes); либо F-H (`skip-front-matter`, inline `***`/`___`).
+
+---
+
 ## Сессия (2026-06-18, 118-я) — F-J' compat-mode алиасит :language: → :source-language: (СМЕРЖЕНА `a910a53`, запушена)
 
 Запрос «запланируй следующую задачу из туду» → план составлен (исследование 13 проб vs asciidoctor 2.0.23 + исходник),
