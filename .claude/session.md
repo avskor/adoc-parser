@@ -1,5 +1,51 @@
 # Session context
 
+## Сессия (2026-06-18, 118-я) — F-J' compat-mode алиасит :language: → :source-language: (СМЕРЖЕНА `a910a53`, запушена)
+
+Запрос «запланируй следующую задачу из туду» → план составлен (исследование 13 проб vs asciidoctor 2.0.23 + исходник),
+**проверен независимым агентом** (40 инструментов, 15+ собственных проб — код-дизайн утверждён, 4 правки текста плана внесены),
+запрос «приступай» → реализовано, верифицировано AIRTIGHT, **закоммичено (`c652eac`), смержено в master (`a910a53`, --no-ff),
+запушено, ветка `feat/compat-mode-language` удалена**. План: `~/.claude/plans/compat-mode-language-alias-fjp.md`.
+
+### Корень и фикс (зеркало asciidoctor `Document#save_attributes`, `document.rb:1216-1217`)
+- В asciidoctor: после парсинга header, при наличии ОБОИХ атрибутов `compat-mode` И `language` →
+  `source-language := language` (перезапись явного значения). Вызывается ровно один раз (single call-site
+  `document.rb:819`). `parser.rb` (ветки source/listing/fenced) читают ТОЛЬКО `source-language`, никогда
+  `compat-mode`/`language` напрямую → достаточно записать `source-language` один раз, downstream подхватит.
+- **Свойства (доказаны пробами):** header-only (mid-doc `:language:`/`:compat-mode:` не действуют); порядок не важен
+  (`language` всегда побеждает `source-language`); вне compat-mode `language` игнорится; пустой `language` алиасит
+  (presence-based → `language-`/`data-lang=""`); `:compat-mode!:` снимает (существующая remove-логика).
+- **Фикс (чисто парсер, 1 файл):** `adoc-parser/src/block.rs` — новый хелпер `apply_compat_mode_source_language`
+  (рядом с `default_source_language`, ~517): `if contains_key("compat-mode") && let Some(lang)=get("language") {
+  insert("source-language", lang) }`. Вызов РОВНО ОДИН раз на переходе header→body (~1262): заменено безусловное
+  `self.body_started = true;` на `if !self.body_started { apply...(); self.body_started = true; }`.
+  `default_source_language` и рендерер (`adoc-html`) НЕ тронуты.
+
+### Файлы (2)
+- `adoc-parser/src/block.rs` — хелпер + вызов + 8 unit-тестов (`test_compat_mode_aliases_language_to_source`,
+  `test_language_without_compat_mode_ignored`, `..._overrides_explicit_source_language`, `..._promotes_bare_listing`,
+  `..._mid_document_does_not_apply`, `test_compat_mode_unset_disables_alias`, `test_compat_mode_empty_language`,
+  `test_compat_mode_explicit_block_language_wins`).
+- `adoc-html/src/tests.rs` — `test_compat_mode_language_source_default_html` (рендер `language-ruby` + регресс-гард без compat).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser lib 582→**590**, html unit 451→**452**, остальное неизм.).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` из master `3dad374` через worktree; `gate_check.py` → 0 diff).
+  `:language:` в гейт-корпусе не встречается ни разу → нулевой риск.
+- **Frontier identical 202** (без изм.), clean-div 30. Прямой new-vs-base по 250 файлам: **ровно 1 изменившийся** —
+  `asciidoctor-org/news/asciidoctor-0-1-4-released.adoc` (header `:compat-mode:`+`:language: asciidoc`): **IMPROVED**
+  `language-asciidoc` 0→**47** (= эталон asciidoctor), line-diff vs reference 996→**906**. **0 регрессий**.
+- 9 CLI-проб vs asciidoctor 2.0.23 (`--no-standalone`, MATCH байт-в-байт): compat+lang, без compat, перезапись,
+  bare-listing промоция, explicit-wins, пустой language, compat-mode! unset, mid-doc header-only, bare fence.
+
+### Что дальше
+F-J' ЗАКРЫТ. Все классы frontier-корпуса (F-A…F-K + F-J') проработаны. Следующее — новый frontier-проход
+(`frontier_parity.py` по clean-div списку, топ: `templates.adoc` 1692, `asciidoc-py.adoc` 1645,
+`oscon-2013…` 602, `migration.adoc` 571) для классификации новых расхождений, либо follow-up'ы F-H
+(`skip-front-matter`, inline `***`/`___`).
+
+---
+
 ## Сессия (2026-06-18, 117-я) — F-H thematic break не прерывает открытый параграф (СМЕРЖЕНА `b1e06a9`, запушена)
 
 Запрос «запланируй следующую задачу из туду» → F-I смержена (`08953b5`), следующий по рекомендации TODO — **F-H**.
