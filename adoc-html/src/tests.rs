@@ -1341,6 +1341,39 @@ fn test_compat_mode_plus_monospace_html() {
 }
 
 #[test]
+fn test_compat_mode_quotes_html() {
+    // In compat-mode the AsciiDoc.py quote forms apply: ``..'' → curved double
+    // quotes, '..' → emphasis, `..' → curved single quotes (asciidoctor 2.0.23).
+    let compat = to_html(":compat-mode:\n\nHe said ``hello'' and 'really' meant `it'.");
+    assert!(
+        compat.contains('\u{201C}') && compat.contains('\u{201D}'),
+        "compat ``..'' → curved double quotes. Got: {compat}"
+    );
+    assert!(
+        compat.contains("<em>really</em>"),
+        "compat '..' → emphasis. Got: {compat}"
+    );
+    assert!(
+        compat.contains('\u{2018}') && compat.contains('\u{2019}'),
+        "compat `..' → curved single quotes. Got: {compat}"
+    );
+
+    // Apostrophes do not open emphasis (constrained boundary): no stray <em>.
+    let apos = to_html(":compat-mode:\n\ndon't and O'Reilly stay plain.");
+    assert!(
+        !apos.contains("<em>"),
+        "apostrophes must not become emphasis. Got: {apos}"
+    );
+
+    // Regression guard: without compat-mode the same forms stay literal.
+    let plain = to_html("He said 'really' meant it.");
+    assert!(
+        !plain.contains("<em>really</em>"),
+        "single-quote emphasis is gated on compat-mode. Got: {plain}"
+    );
+}
+
+#[test]
 fn test_markdown_fence_source_html() {
     // A markdown fence is always a source block, even without an info-string
     // language: `<pre class="highlight"><code>` (F-J, verified vs asciidoctor).

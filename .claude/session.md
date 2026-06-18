@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-18, 121-я) — F-L′ compat-mode кавычки (ветка `feat/compat-mode-quotes`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py`: 209 identical, 23 clean-div)
+→ классификация: доминирующий кластер **`:compat-mode:` (22 файла)**. AskUserQuestion (4 кандидата: compat-кавычки /
+`[x-]` local-compat / icon-без-`:icons:` / attr-ref-в-URL) → выбран **compat-кавычки**. План
+`~/.claude/plans/compat-mode-quotes-flp.md`, запрос «приступай» → реализовано, верифицировано AIRTIGHT.
+**Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и фикс (зеркало asciidoctor `QUOTE_SUBS[true]`, `asciidoctor.rb:469-485`; 10 CLI-проб vs 2.0.23)
+- Остаток compat-кластера после F-L (`+`/`++`→mono). Три недостающих правила `COMPAT_QUOTE_SUBS`, порядок
+  double→emphasis→single (все constrained): `` ``..'' `` → curly «“..”» (U+201C/D), `'..'` → `<em>`,
+  `` `..' `` → curly ‘..’ (U+2018/9). В compat normal[2]/[3] (`"`..`"`/`'`..`'`) заменяются → non-compat
+  smart-quotes ОТКЛЮЧЕНЫ под compat; backtick-monospace ОСТАВЛЕН (asciidoctor извлекает `` `code` `` как
+  literal-passthrough ДО QUOTE_SUBS → bare `` `code` `` всё равно `<code>`; literal-vs-subs контента = follow-up).
+- **Свойства (доказаны пробами):** constrained boundary защищает апострофы (`don't`/`O'Reilly`/`it's` НЕ → `<em>`,
+  open-`'` после word-char не открывает); lazy close `(\S|\S.*?\S)CLOSE(?!\w)` → вся строка-в-кавычках `<em>`
+  (line41 `'(You don't… Let's…)'` MATCH); double перед single; emphasis перед single; attrlist `[.lead]'x'`.
+
+### Файлы (4: 2 кода + 2 теста)
+- `adoc-parser/src/subst/quotes.rs` — развилка `run_all` по `options.compat_mode`; новая `pass_compat_curved`
+  (обобщение `pass_smart_quotes` на асимметричные многобайтные open/close + `compat_open_boundary` +
+  `find_compat_curved_close`, эмит через существующий `smart_quote_sentinel`); emphasis через
+  `pass_constrained(b'\'')`.
+- `adoc-parser/src/subst/mod.rs` — +3 теста (`compat_mode_curved_quotes_and_single_emphasis`,
+  `compat_mode_single_quote_respects_word_boundary`, `compat_quote_forms_inert_without_compat`).
+- `adoc-html/src/tests.rs` — `test_compat_mode_quotes_html` (curly + `<em>` + апостроф-гард + non-compat гард).
+- `TODO.md` — добавлена `[ ]` F-L′ в раздел FRONTIER.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (1158; parser lib 594→**597**, html unit 455→**456**).
+- **Гейт 344/344 байт-в-байт** vs master (base `/tmp/adoc_base` пересобран из master `8014e18` через worktree;
+  `gate_check.py` → 0 diff). Риск нулевой: активного compat-mode в гейте нет.
+- **Frontier identical 209** (стабильно, 0 регрессий в наборе); new-vs-base (`/tmp/frontier_nvb.py`): **4 файла
+  изменились, 2 IMPROVED, 0 REGRESSION** — `oscon` 69→**4** (почти identical; остаток = attr-ref `{github-uri}` в
+  image URL, др. класс), `asciidoc-returns-to-github` 420→**273**. 2 NEUTRAL (`0-1-3`/`0-1-4`) по naive-метрике —
+  спот-чек подтвердил content-IMPROVED (`` ``OK'' ``→“OK” в параграфе; `"`air quotes`"` остался литералом в listing —
+  base ошибочно курлил verbatim, new MATCH asciidoctor).
+- 10 CLI-проб (normalize): 9/10 MATCH; 10-й (`"`page`"` под compat → `"<code>page</code>"`) требует
+  compat-backtick-passthrough (F-L #1 follow-up, не в scope; этого синтаксиса в frontier-compat-файлах нет).
+
+### Что дальше / follow-up (вне scope)
+- compat-backtick-literal passthrough `` `text` `` (F-L #1; `subst/passthrough.rs` `InlinePassRx[compat]`): даст
+  `<code>gem</code>` (новый корень asciidoc-returns-to-github 245) и `"<code>page</code>"`-кейс.
+- `''..''` сдвоенные апострофы: asciidoctor открывает `<em>` на 1-м `'`, мы — на 2-м (оба `<em>`, отличается сторона
+  апострофа; патология lazy-close в `constrained_open_close`, общий для всех маркеров — НЕ трогать без нужды). IMPROVED
+  vs master (появился `<em>`). plain-text-diagrams 124 без изм.
+- legacy `inline.rs` compat-кавычки-паритет (sequential — дефолт; legacy лишь fallback).
+- Прочие frontier-классы: `[x-]` local-compat (asciidoclet 383, migration 273), icon-без-`:icons:` (asciidoctorj 452,
+  install-macos 476), attr-ref-в-URL (templates 1692, oscon-остаток).
+
+---
+
 ## Сессия (2026-06-18, 120-я) — F-M escaped `\]` в bracketed inline-макросах (ветка `fix/escaped-bracket-macros`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → новый frontier-проход (`frontier_parity.py`: 208 identical, 24 clean-div)
