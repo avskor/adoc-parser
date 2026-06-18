@@ -392,7 +392,12 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // Bare URL autolink (http://, https://, ftp://, irc://), optionally
         // followed by a `[label]` attrlist.
         if matches!(bytes[i], b'h' | b'f' | b'i') && scheme_at(&src, i) {
-            if let Some((events, end)) = try_autolink(work, &src, i, subs, options) {
+            if let Some((events, end, strip_angle)) = try_autolink(work, &src, i, subs, options) {
+                // `<https://…>`: drop the leading `<` already copied to `out` (the
+                // closing `>` is already past `end`). See `try_autolink`.
+                if strip_angle && out.ends_with('<') {
+                    out.truncate(out.len() - 1);
+                }
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -1273,13 +1278,18 @@ fn autolink_url_limit(work: &Work, bytes: &[u8], i: usize) -> Option<usize> {
 /// scan limit both come from [`autolink_url_limit`], so a URL immediately inside a
 /// constrained quote span (`` `http…` ``) links exactly as it does after `<code>`
 /// materialises in Asciidoctor's later `macros` pass.
+///
+/// The third tuple element is `strip_angle`: `true` for the angle-bracketed bare
+/// form `<https://…>`, signalling the caller to drop the preceding `<` it already
+/// copied (the closing `>` is consumed via the returned `end`). See the
+/// `preceded_by_angle` block below.
 fn try_autolink(
     work: &Work,
     src: &str,
     start: usize,
     subs: SubstitutionSet,
     options: InlineOptions,
-) -> Option<(Vec<Event<'static>>, usize)> {
+) -> Option<(Vec<Event<'static>>, usize, bool)> {
     let limit = autolink_url_limit(work, src.as_bytes(), start)?;
     let rest = &src[start..];
     // When `start` opens a constrained span, cap the scan at the span's closing
@@ -1297,6 +1307,31 @@ fn try_autolink(
     // Trailing punctuation is stripped only from BARE urls — the `URL[text]` macro
     // form keeps it. Check for the attrlist on the UNSTRIPPED url first.
     let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+
+    // Angle-bracketed bare URL (`<https://…>`): when the scheme is immediately
+    // preceded by `<` and the URL is closed by `>` (no `[label]`), Asciidoctor
+    // consumes BOTH angle brackets and links the URL bare — and, unlike the
+    // unbracketed form, it KEEPS trailing punctuation (the `>` is the hard
+    // boundary, so `<https://a.org/b.>` links the trailing dot). Without a closing
+    // `>` (the URL runs into whitespace/EOL) Asciidoctor declines to link at all,
+    // leaving the `<` and the URL literal. The `<url[text]>` macro form is NOT
+    // stripped here — its brackets stay literal around the resulting link (handled
+    // by the URL[text] arm below). The email autolink is unaffected (`<a@b.com>`
+    // keeps its brackets), since this is the URL path only.
+    let preceded_by_angle = start > 0 && src.as_bytes()[start - 1] == b'<';
+    if preceded_by_angle && !bracket_follows {
+        if rest.as_bytes().get(url_end) == Some(&b'>') {
+            let end = start + url_end + 1; // consume the closing `>`
+            if span_has_sentinel(src, start, end) {
+                return None;
+            }
+            let events =
+                build_link(url.to_string(), None, false, None, true, None, url, subs, options);
+            return Some((events, end, true));
+        }
+        return None;
+    }
+
     if !bracket_follows {
         while url.len() > 8
             && matches!(
@@ -1332,7 +1367,7 @@ fn try_autolink(
             subs,
             options,
         );
-        return Some((events, end));
+        return Some((events, end, false));
     }
 
     // Bare form.
@@ -1341,7 +1376,7 @@ fn try_autolink(
         return None;
     }
     let events = build_link(url.to_string(), None, false, None, true, None, url, subs, options);
-    Some((events, end))
+    Some((events, end, false))
 }
 
 /// At an `@` (caller guarantees the byte), try to match a bare email autolink

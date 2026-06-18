@@ -291,7 +291,7 @@ impl HtmlRenderer {
         self.document_attrs.insert("authorcount".to_string(), "1".to_string());
     }
 
-    pub(crate) fn render_author_details(&self, output: &mut String) {
+    pub(crate) fn render_author_details(&mut self, output: &mut String) {
         // Revision spans are attribute-driven (Asciidoctor html5.rb checks the
         // revnumber/revdate/revremark document attributes, whether they came from
         // the revision line or from header attribute entries). Called at
@@ -344,14 +344,20 @@ impl HtmlRenderer {
                     .document_attrs
                     .get(&format!("email{name_suffix}"))
                     .filter(|s| !s.is_empty())
+                    .cloned()
                 {
+                    // Asciidoctor runs `sub_macros` on the author address: a plain
+                    // `email@host` autolinks to `mailto:`, but a `scheme://…` URL
+                    // becomes a bare link (`class="bare"`, no `mailto:` prefix) and
+                    // a link/mailto macro is honoured. Specialchars escape the
+                    // address; quotes/replacements do NOT run (`*x*` stays literal).
+                    let mut email_subs = SubstitutionSet::NONE;
+                    email_subs.add(SubstitutionSet::SPECIALCHARS | SubstitutionSet::MACROS);
                     output.push_str("<span id=\"email");
                     output.push_str(&id_suffix);
-                    output.push_str("\" class=\"email\"><a href=\"mailto:");
-                    html_escape(output, email);
-                    output.push_str("\">");
-                    html_escape(output, email);
-                    output.push_str("</a></span><br>\n");
+                    output.push_str("\" class=\"email\">");
+                    self.render_inline_value_with_subs(output, &email, email_subs);
+                    output.push_str("</span><br>\n");
                 }
             }
         }

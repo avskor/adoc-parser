@@ -41,6 +41,24 @@ fn author_with_email() {
 }
 
 #[test]
+fn author_with_url() {
+    // A `scheme://` address renders as a BARE link (class="bare", no `mailto:`),
+    // matching Asciidoctor's `sub_macros` on the author email attribute.
+    let html = standalone_html("= Title\nDan Allen <https://github.com/x>\n\nContent\n");
+    assert!(
+        html.contains("<span id=\"author\" class=\"author\">Dan Allen</span><br>"),
+        "should have author span: {html}"
+    );
+    assert!(
+        html.contains(
+            "<span id=\"email\" class=\"email\"><a href=\"https://github.com/x\" class=\"bare\">https://github.com/x</a></span><br>"
+        ),
+        "URL address should be a bare link, not mailto: {html}"
+    );
+    assert!(!html.contains("mailto:https://"), "must not wrap a URL in mailto: {html}");
+}
+
+#[test]
 fn author_with_revision() {
     let html =
         standalone_html("= Title\nJohn Doe\nv1.0, 2024-01-01: Initial release\n\nContent\n");

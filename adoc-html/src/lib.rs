@@ -558,13 +558,23 @@ impl HtmlRenderer {
         // specialchars run, so an apostrophe in the value stays straight rather than
         // being curled by replacements. At top level / in normal paragraphs this is
         // NORMAL, so behavior there is unchanged.
+        self.render_inline_value_with_subs(output, value, self.current_subs());
+    }
+
+    /// As [`Self::render_inline_value`] but with an explicit substitution set
+    /// instead of the current block's. Used for the author email, which
+    /// Asciidoctor renders with `sub_macros` only (`specialcharacters` + `macros`,
+    /// no `quotes`/`replacements`): an `https://…` address autolinks bare, an
+    /// `email@host` becomes a `mailto:` link, and `*x*` stays literal.
+    pub(crate) fn render_inline_value_with_subs(
+        &mut self,
+        output: &mut String,
+        value: &str,
+        subs: SubstitutionSet,
+    ) {
         let options =
             adoc_parser::InlineOptions::from_attr_lookup(|name| self.document_attrs.contains_key(name));
-        let events = adoc_parser::InlineParser::parse_str_with_subs_options(
-            value,
-            self.current_subs(),
-            options,
-        );
+        let events = adoc_parser::InlineParser::parse_str_with_subs_options(value, subs, options);
         // If inline parsing produced only a single Text event identical to the input,
         // there is no inline markup — just escape and output directly.
         if events.len() == 1

@@ -2502,6 +2502,36 @@ impl<'a> InlineState<'a> {
         // the `URL[text]` macro form keeps it (separate InlineLinkRx alternate),
         // so check for an attrlist on the unstripped url first.
         let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+
+        // Angle-bracketed bare URL (`<https://…>`): mirror of the sequential engine
+        // (`subst::macros::try_autolink`). When the scheme is immediately preceded
+        // by `<` and the URL is closed by `>` (no `[label]`), consume BOTH brackets
+        // and link the URL bare, KEEPING trailing punctuation (the `>` is the hard
+        // boundary, so `<https://a.org/b.>` links the trailing dot). Without a
+        // closing `>` (the URL runs into whitespace/EOL) decline, leaving `<` and
+        // the URL literal. The `<url[text]>` form is left to the URL[text] arm
+        // (its brackets stay literal); the email autolink is on a separate path.
+        let preceded_by_angle = start_pos > 0 && self.input.as_bytes()[start_pos - 1] == b'<';
+        if preceded_by_angle && !bracket_follows {
+            if rest.as_bytes().get(url_end) == Some(&b'>') {
+                // Drop the leading `<` from the flushed text; consume the `>`.
+                self.flush_text(*text_start, start_pos - 1, events);
+                events.push(Event::Start(Tag::Link {
+                    url: Cow::Borrowed(url),
+                    window: None,
+                    nofollow: false,
+                    is_bare: true,
+                    role: None,
+                }));
+                events.push(Event::Text(Cow::Borrowed(url)));
+                events.push(Event::End(TagEnd::Link));
+                self.pos = start_pos + url_end + 1;
+                *text_start = self.pos;
+                return true;
+            }
+            return false;
+        }
+
         if !bracket_follows {
             while url.len() > 8 && matches!(url.as_bytes()[url.len() - 1], b'.' | b',' | b';' | b':' | b'!' | b'?' | b')') {
                 url = &url[..url.len() - 1];

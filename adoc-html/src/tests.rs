@@ -392,6 +392,40 @@ fn test_link_macro_empty_text_bare_class() {
 }
 
 #[test]
+fn test_angle_bracket_url_autolink() {
+    // Closed `<url>` → both angle brackets are consumed; bare link, no `&lt;`/`&gt;`.
+    let html = to_html("Go <https://a.org/b> ok.");
+    assert!(
+        html.contains("Go <a href=\"https://a.org/b\" class=\"bare\">https://a.org/b</a> ok."),
+        "{html}"
+    );
+    assert!(!html.contains("&lt;"), "leading bracket should be stripped: {html}");
+    assert!(!html.contains("&gt;"), "trailing bracket should be stripped: {html}");
+    // Trailing punctuation is KEPT inside the brackets (the `>` is the boundary).
+    let html2 = to_html("<https://a.org/b.>");
+    assert!(
+        html2.contains("<a href=\"https://a.org/b.\" class=\"bare\">https://a.org/b.</a>"),
+        "{html2}"
+    );
+    // Unclosed `<url` → not linked at all, the `<` stays escaped literal.
+    let html3 = to_html("Go <https://a.org/b now.");
+    assert!(html3.contains("Go &lt;https://a.org/b now."), "{html3}");
+    assert!(!html3.contains("<a "), "{html3}");
+    // `<url[text]>` keeps its literal brackets around the labelled link.
+    let html4 = to_html("See <https://example.com[the site]> today.");
+    assert!(
+        html4.contains("&lt;<a href=\"https://example.com\">the site</a>&gt;"),
+        "{html4}"
+    );
+    // `<email>` keeps its brackets and links to mailto (URL-only strip).
+    let html5 = to_html("Mail <joe@example.com> please.");
+    assert!(
+        html5.contains("&lt;<a href=\"mailto:joe@example.com\">joe@example.com</a>&gt;"),
+        "{html5}"
+    );
+}
+
+#[test]
 fn test_hide_uri_scheme() {
     // :hide-uri-scheme: strips the scheme from the VISIBLE text only; href keeps
     // the full target (matches Asciidoctor's UriSniffRx behaviour).
