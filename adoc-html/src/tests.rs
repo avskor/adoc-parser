@@ -562,6 +562,48 @@ fn test_attribute_reference_path_before_brackets_link() {
 }
 
 #[test]
+fn test_attribute_reference_trailing_subs() {
+    // F-O. A trailing `[...]` captured after an attribute reference that does NOT
+    // resolve to a link target (undefined / intrinsic value) still passes its
+    // bracket content through normal inline subs in asciidoctor — only the
+    // `{name}`/intrinsic value stays literal. Verified vs asciidoctor 2.0.23.
+
+    // Undefined attribute (attribute-missing=skip): `{name}` literal, but the
+    // backtick label inside the brackets becomes <code>.
+    let h = to_html("See {undef}/Node[`code`] end.");
+    assert!(h.contains("{undef}/Node[<code>code</code>]"), "{h}");
+
+    // Full inline subs in the trailing, not just monospace.
+    let h = to_html("X {undef}/x[*bold* and `code`] end.");
+    assert!(h.contains("[<strong>bold</strong> and <code>code</code>]"), "{h}");
+
+    // Nested unresolved reference: the attribute IS defined, but its value holds
+    // an undefined `{base}` — the inner skip path must still re-parse the label.
+    // (Mirrors templates.adoc `{apidoc-*}` → `{url-api-gems}/…`.)
+    let h = to_html(":root: {base}/Thing\n\nThe {root}[`X`] node.");
+    assert!(h.contains("{base}/Thing[<code>X</code>]"), "{h}");
+
+    // Intrinsic value (`{sp}` → a space) keeps the value but re-parses the label.
+    let h = to_html("A{sp}[`code`] end.");
+    assert!(h.contains("[<code>code</code>]"), "{h}");
+
+    // --- regression guards ---
+    // A defined URL value still forms a real link (Document arm, unchanged).
+    let h = to_html(":u: https://example.com/api\n\nSee {u}/Node[`Node`] now.");
+    assert!(
+        h.contains("<a href=\"https://example.com/api/Node\"><code>Node</code></a>"),
+        "{h}"
+    );
+    // A plain (markup-free) trailing is byte-identical to before.
+    let h = to_html("Name {undef}[plain] here.");
+    assert!(h.contains("{undef}[plain]"), "{h}");
+    // In a verbatim block (subs without quotes) the backtick stays literal —
+    // `render_inline_value` honours `current_subs()`.
+    let h = to_html("[subs=\"+attributes\"]\n----\n{undef}/x[`code`]\n----");
+    assert!(h.contains("<pre>{undef}/x[`code`]</pre>"), "{h}");
+}
+
+#[test]
 fn test_link_passthrough_url_empty_text() {
     // Empty link text → the link is "bare" (matches Asciidoctor).
     let html = to_html("link:++https://example.com/my page++[]");
