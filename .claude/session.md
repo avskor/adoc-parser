@@ -1,5 +1,49 @@
 # Session context
 
+## Сессия (2026-06-18, 115-я) — F-E `[%nowrap]` / `:prewrap!:` → `nowrap` класс (ветка `fix/nowrap-class`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-F смержена (`bc3db9c`), следующий по рекомендации TODO — **F-E**.
+План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `bc3db9c`.
+**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя). План: `~/.claude/plans/keen-moseying-oasis.md`.
+
+### Корень и фикс (чисто рендерер + 1 сид; спека верифицирована исходником asciidoctor 2.0.23 + пробами)
+- Asciidoctor `html5.rb`: `convert_listing`/`convert_literal` → `nowrap = option?('nowrap') || !attr?('prewrap')`.
+  `prewrap` — дефолтный атрибут (`asciidoctor.rb:377 'prewrap' => ''`), `!attr?` истинно только при `:prewrap!:`.
+  Класс `nowrap` идёт ПОСЛЕДНИМ. Мы класс не эмитили вовсе.
+- **(1)** `adoc-html/src/lib.rs` `HtmlRenderer::new` (~310): сид `("prewrap", "")` в `document_attrs` HashMap —
+  зеркало DEFAULT_ATTRIBUTES; `:prewrap!:` снимает существующей strip-`!`-суффикс логикой (`apply_attribute` ~444-447).
+- **(2)** `adoc-html/src/blocks.rs`: хелпер `nowrap_active(&self, meta)` (опция `nowrap` ИЛИ `!document_attrs.contains_key("prewrap")`),
+  перед `start_delimited_block` (~570). Применён: `start_source_block` (~711 после linenums, `pre_classes.push("nowrap")`
+  → `highlight nowrap`/`rouge highlight nowrap`/etc.); ветки `Listing`/`Literal` в `start_delimited_block` (общий
+  `pre_open = if nowrap { "<pre class=\"nowrap\">" } else { "<pre>" }`). Verse не затронут.
+
+### Важная находка (НЕ баг): форма записи опции
+- Опцию nowrap несёт ТОЛЬКО shorthand: `[source%nowrap,ruby]` / `[%nowrap]` → options=`["nowrap"]`.
+- Comma-форма `[source,ruby,%nowrap]` → options=`["linenums"]` (3-й позиционный source = linenums) — **MATCH asciidoctor**
+  (он тоже даёт linenums, не nowrap). Парсер уже корректен. Тесты исходно писал с comma-формой → переписал на shorthand.
+
+### Файлы (3)
+- `adoc-html/src/lib.rs` — сид prewrap.
+- `adoc-html/src/blocks.rs` — хелпер `nowrap_active` + 3 точки (source/listing/literal).
+- `adoc-html/src/tests.rs` — +6 тестов (`test_nowrap_*`): source no-hl, source rouge, plain listing, literal,
+  `:prewrap!:` global, регресс-гард absent-by-default.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html 442→**448**, parser 575, html-compat 25 — без изм.).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` пересобрана из master `bc3db9c` через worktree; gate_check.py → 0 diff).
+- Пробы `adoc` vs `asciidoctor` (матрица 13 кейсов): все MATCH. Единственный «DIFF» (rouge) — asciidoctor токенизирует
+  rouge (`<span class="nb">`), мы нет (предсуществующее, ортогональное); часть `<pre class="rouge highlight nowrap">` идентична.
+- **Frontier** identical **199→200 (+1)**, clean_div 33→32. Прямое new-vs-base по 250 файлам: **2 файла IMPROVED**
+  (`html-backend/examples/wrap.adoc` `[%nowrap,java]`; `asciidoctor-0-1-4-released` — оба `highlight`→`highlight nowrap`,
+  байт-в-байт MATCH asciidoctor), **0 регрессий**.
+
+### Что дальше
+F-E ЗАКРЫТ. Следующий по рекомендации TODO — **F-I** (UTF-8 BOM не срезается → `= Title` не заголовок),
+далее F-H (YAML front matter) / F-J' (`:compat-mode:`→`:language:`).
+**Follow-up F-E (вне scope, предсуществующее):** rouge/coderay `linenums`-класс на внешнем `<pre>` (мы ставим, asciidoctor нет).
+
+---
+
 ## Сессия (2026-06-18, 114-я) — F-F `menu:X[]` → `<b class="menuref">` (ветка `fix/menu-menuref`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-K смержена (`e21b53d`), следующий по рекомендации TODO — **F-F**

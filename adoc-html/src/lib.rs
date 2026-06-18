@@ -311,6 +311,10 @@ impl HtmlRenderer {
                 ("example-caption".to_string(), "Example".to_string()),
                 ("appendix-caption".to_string(), "Appendix".to_string()),
                 ("version-label".to_string(), "Version".to_string()),
+                // Asciidoctor default attribute (`asciidoctor.rb: 'prewrap' => ''`):
+                // verbatim blocks wrap by default. `:prewrap!:` removes it, which
+                // flips every `<pre>` to the `nowrap` class (see `nowrap_active`).
+                ("prewrap".to_string(), String::new()),
             ]),
             delimited_block_stack: Vec::new(),
             admonition_block_stack: Vec::new(),
