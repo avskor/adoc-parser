@@ -1,5 +1,46 @@
 # Session context
 
+## Сессия (2026-06-18, 123-я) — F-O attr-ref хвостовой `[label]` → inline-subs (ветка `fix/attr-ref-trailing-subs`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:
+**209 identical, 23 clean-div**) → классификация топ-каскадов пробами vs asciidoctor 2.0.23 (4 кандидата:
+attr-ref→bracket-subs / `[x-]` local-compat / experimental-menu / multi-backtick mis-pair). AskUserQuestion →
+выбран **attr-ref → bracket subs** (templates 1692). План `~/.claude/plans/attr-ref-trailing-subs-fo.md`,
+запрос «да» → реализовано, верифицировано AIRTIGHT. **Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень (ЧИСТО РЕНДЕРЕР; пробы vs 2.0.23)
+- Парсер захватывает хвостовой `[label]` в `Event::AttributeReference{name,trailing}` (`subst/attributes.rs::try_attr`).
+  **Ссылку строит рендерер** (`adoc-html/src/events.rs:176`, арм AttributeReference, развилка по `AttrRefOutcome`).
+- Ветка `Document(value)` (атрибут ОПРЕДЕЛЁН): `combined=value+trailing` → `render_inline_value` → корректно.
+- Ветки **MissingSkip / Intrinsic / Env / Fallback** эмитили хвост через `html_escape_text` ЛИТЕРАЛЬНО →
+  backtick/`*` внутри `[...]` не обрабатывались. asciidoctor (attr-missing=skip) оставляет `{name}`/intrinsic-значение,
+  но `[...]` гонит через обычные subs (`[\`x\`]`→`[<code>x</code>]`).
+- **templates.adoc**: `{apidoc-abstract-node}` определён, но значение содержит нерезолвленные `{url-api-gems}`/
+  `{release-version}` → внутренний проход уходит в MissingSkip → `` `AbstractNode` `` литерал. ВОТ ГДЕ ломалось.
+
+### Фикс (1 файл, 4 строки)
+- `adoc-html/src/events.rs`: в армах MissingSkip/Intrinsic/Env/Fallback `html_escape_text(&br)` →
+  `self.render_inline_value(output, &br)`. Document-арм не тронут. Эмиссия значения не менялась.
+- Безопасно: `render_inline_value` уважает `current_subs()` (в verbatim только specialchars → backtick литерал =
+  0 риска гейт-регресса); рекурсия по вложенным attr-ref терминируется (хвост — строгий суффикс).
+- `adoc-html/src/tests.rs`: +1 тест `test_attribute_reference_trailing_subs` (undef+code/bold, nested templates-like,
+  intrinsic `{sp}`, 3 регресс-гарда: defined-URI link / plain хвост / verbatim listing).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html unit 461→**462**, parser **597** без изм.).
+- **Гейт 344/344 байт-в-байт** vs master `9d40067` (base пересобран через worktree; `gate_check.py` → 0 diff).
+- **Frontier identical 209→210 (+1)**; new-vs-base (`/tmp/frontier_nvb.py`): **2 файла, ОБА IMPROVED, 0 REGRESSION** —
+  `custom.adoc` 846→**0** (флип в identical, был include-noise), `templates.adoc` 1692→**634** (остаток = conum-класс).
+- 8 CLI-проб vs asciidoctor 2.0.23 (`-s` raw): MATCH байт-в-байт (p_t/p_scope/p_vb).
+
+### Что дальше / follow-up (вне scope)
+- Остаток templates (634) = callout-номера `<N>` в listing → `<b class="conum">` (отдельный класс, не F-O).
+- Остальные frontier-классы: `[x-]` local-compat (asciidoclet 383, migration 273); experimental-menu-shorthand
+  `"X > Y"` (install-macos 477); multi-backtick mis-pair + smart-quote leak (api/index 347); compat-backtick
+  passthrough (asciidoc-returns 273); dlist `:term::` (find-blocks 296).
+
+---
+
 ## Сессия (2026-06-18, 122-я) — F-N icon без `:icons:` → текст `[name]` (ветка `feat/icon-text-fallback`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:

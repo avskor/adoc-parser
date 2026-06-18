@@ -215,29 +215,40 @@ impl HtmlRenderer {
                     AttrRefOutcome::Intrinsic(attr) => {
                         // The `html` column is pre-encoded — push raw
                         output.push_str(attr.html);
+                        // Attributes substitute before macros: a trailing `[...]` after
+                        // the resolved value flows through the normal subs (so a backtick
+                        // label becomes `<code>`), mirroring asciidoctor. Re-parse via
+                        // `render_inline_value` (not literal `html_escape_text`), which
+                        // honours `current_subs()` — in a verbatim block only specialchars
+                        // run, leaving the bracket literal exactly as before.
                         if let Some(br) = trailing_brackets {
-                            html_escape_text(output, &br);
+                            self.render_inline_value(output, &br);
                         }
                     }
                     AttrRefOutcome::Env(value) => {
                         html_escape(output, &value);
                         if let Some(br) = trailing_brackets {
-                            html_escape_text(output, &br);
+                            self.render_inline_value(output, &br);
                         }
                     }
                     AttrRefOutcome::Fallback(fb) => {
                         let fb = fb.to_string();
                         html_escape(output, &fb);
                         if let Some(br) = trailing_brackets {
-                            html_escape_text(output, &br);
+                            self.render_inline_value(output, &br);
                         }
                     }
                     AttrRefOutcome::MissingSkip => {
                         output.push('{');
                         output.push_str(&name);
                         output.push('}');
+                        // attribute-missing=skip leaves `{name}` literal, but the trailing
+                        // `[...]` text still passes through normal inline subs in
+                        // asciidoctor (`{undef}/p[`x`]` → `…[<code>x</code>]`). Re-parse it
+                        // rather than emitting it literally; nested unresolved refs recurse
+                        // (the trailing is a strict suffix, so this terminates).
                         if let Some(br) = trailing_brackets {
-                            html_escape_text(output, &br);
+                            self.render_inline_value(output, &br);
                         }
                     }
                     AttrRefOutcome::MissingDrop => {}
