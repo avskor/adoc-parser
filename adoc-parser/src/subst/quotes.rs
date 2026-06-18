@@ -48,13 +48,28 @@ pub(super) fn run_all(work: &mut Work, options: InlineOptions) {
     // strong
     pass_unconstrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
     pass_constrained(work, b'*', SpanKind::Strong, SpanKind::Strong);
-    // curved smart quotes `"`…`"` / `'`…`'` — run after strong and before
-    // monospace (Asciidoctor `QUOTE_SUBS` order). Strong opening before this pass
-    // is why strong is *not* suppressed at a smart-quote leading edge, while the
-    // monospace/emphasis/mark passes below it are.
-    pass_smart_quotes(work, b'"', "\u{201C}", "\u{201D}");
-    pass_smart_quotes(work, b'\'', "\u{2018}", "\u{2019}");
-    // monospace (runs before emphasis/mark)
+    // curved smart quotes — run after strong and before monospace (Asciidoctor
+    // `QUOTE_SUBS` order). Strong opening before this pass is why strong is *not*
+    // suppressed at a smart-quote leading edge, while the monospace/emphasis/mark
+    // passes below it are. Under `:compat-mode:` Asciidoctor swaps the modern
+    // backtick-delimited quotes for the AsciiDoc.py forms and inserts single-quote
+    // emphasis (`asciidoctor.rb:469-485` `QUOTE_SUBS[true]`): the compat slots run
+    // in the order `` ``..'' `` (double) → `'..'` (emphasis) → `` `..' `` (single).
+    // The modern `"`…`"`/`'`…`'` forms are *not* recognised in compat (e.g.
+    // `"`page`"` renders as `"<code>page</code>"`, the backtick pair below taking
+    // the inner span), so they are gated off.
+    if options.compat_mode {
+        pass_compat_curved(work, b"``", b"''", "\u{201C}", "\u{201D}");
+        pass_constrained(work, b'\'', SpanKind::Emphasis, SpanKind::Emphasis);
+        pass_compat_curved(work, b"`", b"'", "\u{2018}", "\u{2019}");
+    } else {
+        pass_smart_quotes(work, b'"', "\u{201C}", "\u{201D}");
+        pass_smart_quotes(work, b'\'', "\u{2018}", "\u{2019}");
+    }
+    // monospace (runs before emphasis/mark). Kept active in compat too: Asciidoctor
+    // extracts `` `code` `` as a literal-monospace passthrough before `QUOTE_SUBS`
+    // runs, so a bare backtick pair still renders `<code>` (the literal-vs-subs
+    // difference of the content is the separate compat-backtick passthrough class).
     pass_unconstrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
     pass_constrained(work, b'`', SpanKind::Monospace, SpanKind::Monospace);
     // compat-mode plus-sign monospace: `+text+` (constrained) and `++text++`
@@ -513,6 +528,94 @@ fn find_smart_quote_close(bytes: &[u8], quote: u8, search_start: usize) -> Optio
             return Some(i);
         }
         i += 1;
+    }
+    None
+}
+
+/// Compat-mode curved quote pass: a generalisation of [`pass_smart_quotes`] for
+/// the AsciiDoc.py forms `` ``…'' `` (`:double`) and `` `…' `` (`:single`), whose
+/// open and close markers differ and may be one or two bytes. Constrained: the
+/// open marker must sit at a left boundary, the byte after it must be non-space,
+/// the content character before the close must be non-space, and the close must
+/// be followed by a non-word character (Asciidoctor
+/// `(^|[^\w;:}])OPEN(\S|\S#{CC_ALL}*?\S)CLOSE(?!\w)`). The lazy inner group means
+/// the *first* boundary-valid close wins, so inner apostrophes/markers are
+/// absorbed. The curly replacements reuse the modern pass's `SmartQuote`
+/// sentinel.
+fn pass_compat_curved(
+    work: &mut Work,
+    open: &[u8],
+    close: &[u8],
+    open_curly: &'static str,
+    close_curly: &'static str,
+) {
+    let old = std::mem::take(&mut work.buf);
+    let bytes = old.as_bytes();
+    let mut out = String::with_capacity(old.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            out.push_str(&old[i..end]);
+            i = end;
+            continue;
+        }
+
+        if bytes[i..].starts_with(open)
+            && compat_open_boundary(bytes, i)
+            && bytes
+                .get(i + open.len())
+                .is_some_and(|&b| !b.is_ascii_whitespace())
+            && let Some(close_pos) =
+                find_compat_curved_close(bytes, i + open.len(), close)
+        {
+            let content_start = i + open.len();
+            out.push_str(&work.smart_quote_sentinel(open_curly, true));
+            out.push_str(&old[content_start..close_pos]);
+            out.push_str(&work.smart_quote_sentinel(close_curly, false));
+            i = close_pos + close.len();
+            continue;
+        }
+
+        let len = utf8_char_len(bytes[i]);
+        out.push_str(&old[i..i + len]);
+        i += len;
+    }
+
+    work.buf = out;
+}
+
+/// Left boundary for a constrained compat curved quote: start of buffer, or the
+/// preceding byte is neither a word char nor one of `;`/`:`/`}` (Asciidoctor
+/// `(^|[^\w;:}])`). Sentinel bytes are non-word and so count as a boundary.
+fn compat_open_boundary(bytes: &[u8], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let p = bytes[i - 1];
+    !is_word(p) && p != b';' && p != b':' && p != b'}'
+}
+
+/// Find the close marker ending a compat curved quote at or after `content_start`,
+/// skipping sentinel regions. The content before the close must be non-empty and
+/// not end in a space, and the close must not be followed by a word character
+/// (Asciidoctor's lazy `(\S|\S.*?\S)CLOSE(?!\w)`).
+fn find_compat_curved_close(bytes: &[u8], content_start: usize, close: &[u8]) -> Option<usize> {
+    let mut i = content_start;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            i = sentinel_end(bytes, i);
+            continue;
+        }
+        if i > content_start && bytes[i..].starts_with(close) {
+            let prev = bytes[i - 1];
+            let after = bytes.get(i + close.len()).copied();
+            if !prev.is_ascii_whitespace() && after.is_none_or(|b| !is_word(b)) {
+                return Some(i);
+            }
+        }
+        i += utf8_char_len(bytes[i]);
     }
     None
 }

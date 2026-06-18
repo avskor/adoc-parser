@@ -333,6 +333,96 @@ mod tests {
         assert_eq!(pipeline("++mono++"), vec![Event::Text("mono".into())]);
     }
 
+    /// In compat mode the AsciiDoc.py quote forms appear in `QUOTE_SUBS[true]`:
+    /// `` ``…'' `` → curved double quotes, `'…'` → emphasis, `` `…' `` → curved
+    /// single quotes (Asciidoctor `asciidoctor.rb:469-485`, order
+    /// double → emphasis → single).
+    #[test]
+    fn compat_mode_curved_quotes_and_single_emphasis() {
+        // ``double'' → curved double quotes (U+201C/U+201D); the curly leaves are
+        // emitted as their own text events (like the modern smart-quote pass)
+        assert_eq!(
+            pipeline_compat("``page''"),
+            vec![
+                Event::Text("\u{201C}".into()),
+                Event::Text("page".into()),
+                Event::Text("\u{201D}".into()),
+            ],
+        );
+        // `single' → curved single quotes (U+2018/U+2019)
+        assert_eq!(
+            pipeline_compat("the `chunk' here"),
+            vec![
+                Event::Text("the ".into()),
+                Event::Text("\u{2018}".into()),
+                Event::Text("chunk".into()),
+                Event::Text("\u{2019}".into()),
+                Event::Text(" here".into()),
+            ],
+        );
+        // 'text' → emphasis (constrained single-quote)
+        assert_eq!(
+            pipeline_compat("'Give it a try!'"),
+            vec![
+                Event::Start(Tag::Emphasis { id: None, roles: vec![] }),
+                Event::Text("Give it a try!".into()),
+                Event::End(TagEnd::Emphasis),
+            ],
+        );
+        // attrlist id/roles on a single-quote emphasis span
+        assert_eq!(
+            pipeline_compat("[.lead]'thrilled'"),
+            vec![
+                Event::Start(Tag::Emphasis { id: None, roles: vec!["lead".into()] }),
+                Event::Text("thrilled".into()),
+                Event::End(TagEnd::Emphasis),
+            ],
+        );
+        // double runs before single: ``x'' and `y' coexist
+        assert_eq!(
+            pipeline_compat("``x'' and `y'"),
+            vec![
+                Event::Text("\u{201C}".into()),
+                Event::Text("x".into()),
+                Event::Text("\u{201D}".into()),
+                Event::Text(" and ".into()),
+                Event::Text("\u{2018}".into()),
+                Event::Text("y".into()),
+                Event::Text("\u{2019}".into()),
+            ],
+        );
+    }
+
+    /// Constrained boundaries protect apostrophes: an opening `'` after a word
+    /// character does not open emphasis, so `don't`/`O'Reilly` stay plain (the
+    /// apostrophe is later handled by replacements, not quotes).
+    #[test]
+    fn compat_mode_single_quote_respects_word_boundary() {
+        // no emphasis span emitted (no Start/End Emphasis); content is one run
+        let evs = pipeline_compat("don't and O'Reilly stay plain");
+        assert!(
+            !evs.iter().any(|e| matches!(
+                e,
+                Event::Start(Tag::Emphasis { .. }) | Event::End(TagEnd::Emphasis)
+            )),
+            "apostrophes must not open single-quote emphasis: {evs:?}"
+        );
+    }
+
+    /// Outside compat mode the new compat quote forms are inert (regression
+    /// guard): `'text'` is not emphasis and `` ``x'' `` is not curved.
+    #[test]
+    fn compat_quote_forms_inert_without_compat() {
+        // single-quote emphasis only fires under compat
+        assert!(
+            !pipeline("'thrilled' to announce").iter().any(|e| matches!(
+                e,
+                Event::Start(Tag::Emphasis { .. })
+            )),
+            "single-quote emphasis must be gated on compat mode"
+        );
+    }
+
     /// The new pipeline must reproduce the legacy parser byte-for-byte on every
     /// input that involves only the implemented `quotes` constructs and no
     /// substitution the engine defers (replacements/macros/attributes/…).
