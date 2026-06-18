@@ -32,6 +32,7 @@
 use crate::event::{Event, SubstitutionSet};
 use crate::inline::InlineOptions;
 
+use super::macros::{find_macro_close_bracket, unescape_close_bracket};
 use super::tokenize::{utf8_char_len, PassPiece, Work};
 
 /// Extract every passthrough span from `work.buf` into sentinels.
@@ -398,10 +399,10 @@ fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
     if !after.starts_with('[') {
         return None;
     }
-    let bracket_end = after.find(']')?;
-    let inner = &after[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(after, 0)?;
+    let inner = unescape_close_bracket(&after[1..bracket_end]);
     Some((
-        vec![PassPiece { text: inner.to_string(), raw: true }],
+        vec![PassPiece { text: inner.into_owned(), raw: true }],
         i + 5 + bracket_end + 1,
     ))
 }
@@ -410,7 +411,8 @@ fn try_pass_macro(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
 /// `pass:quotes[…]`). Mirror of the legacy `try_pass_macro` +
 /// `push_pass_spec_content`: the spec maps to a [`SubstitutionSet`] via
 /// [`crate::inline::pass_spec_to_subs`], the bracketed content runs to the first
-/// `]` (no `\]` unescaping — same as `parse_bracket_macro`), and the content is
+/// *unescaped* `]` (a `\]` is part of the content, unescaped to `]` before the
+/// subs run — Asciidoctor's `\]`-honouring rule), and the content is
 /// re-run through exactly those substitutions. The resulting events are returned
 /// for sealing as one opaque [`super::tokenize::TagToken::Macro`] leaf, so the
 /// later passes (quotes/replacements/…) cannot reach inside the protected
@@ -434,12 +436,12 @@ fn try_pass_spec_macro(
     if !after.starts_with('[') {
         return None;
     }
-    let bracket_end = after.find(']')?;
-    let content = &after[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(after, 0)?;
+    let content = unescape_close_bracket(&after[1..bracket_end]);
     let spec = &src[i + 5..i + 5 + spec_len];
     let set = crate::inline::pass_spec_to_subs(spec);
     let end = i + 5 + spec_len + bracket_end + 1;
-    Some((pass_spec_events(content, set, options), end))
+    Some((pass_spec_events(&content, set, options), end))
 }
 
 /// Run `content` through exactly the substitutions in `set` and downgrade the
