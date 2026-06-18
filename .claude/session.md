@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-18, 122-я) — F-N icon без `:icons:` → текст `[name]` (ветка `feat/icon-text-fallback`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:
+**209 identical, 23 clean-div**) → классификация: 3 кандидата (icon-без-`:icons:` 6 файлов / `[x-]` local-compat
+2 файла / smart-quote-в-monospace 1 файл). AskUserQuestion → выбран **icon без `:icons:`**. План
+`~/.claude/plans/jolly-knitting-sparrow.md` (исследование: reference-матрица asciidoctor 3 режима × 8 атрибутов,
+гейт-нейтральность доказана заранее), ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT.
+**Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и фикс (зеркало asciidoctor `convert_inline_image` type=:icon; CLI-пробы по 3 режимам)
+- `render_icon` (`adoc-html/src/inline.rs:189`) **никогда не читал `:icons:`** — безусловно `<span class="icon"><i
+  class="fa fa-NAME">…</i></span>`. Asciidoctor: **нет `:icons:`** → text-fallback `<span class="icon">[name&#93;</span>`
+  (литерал; закрывающая `]` = `&#93;` NCR, ведущая `[` литерал); `:icons: font` → FA (наше тек.); `:icons:` (image) → `<img>`.
+- **Свойства text-fallback (доказаны пробами 2.0.23):** size/title/rotate/flip **игнорируются**; `role` → на span
+  (`<span class="icon red">`); `alt` **заменяет** name (`icon:flag[alt=Flagged]`→`[Flagged&#93;`); `link` → внутри span
+  `<a class="image" href=…>[name&#93;</a>` (класс `image`, не `icon`); `window=_blank` → `target="_blank" rel="noopener"`.
+- **Scope (минимальный):** только ветка text при `!document_attrs.contains_key("icons")` (return до font-логики).
+  Font-путь **байт-в-байт** (захват новых `alt`/`window` в парс-цикле им игнорируется). Image-режим у нас тоже сломан
+  (даёт `<i fa>`), НО 0 корпус-импакта → documented follow-up, не трогаем.
+
+### Файлы (2: 1 код + 1 тест)
+- `adoc-html/src/inline.rs` — `render_icon`: +локали `alt`/`window` + 2 парс-арма; +блок text-fallback (≈30 строк) до
+  «Build class list». Чтение `:icons:` — паттерн как `blocks.rs:49`; эмит через `html_escape`/`write_attr`.
+- `adoc-html/src/tests.rs` — 8 существующих icon-тестов (`test_icon_basic_html`…`_combined_html`) + 2 icon-кейса
+  XSS-таблицы (строки 43/54) мигрированы на префикс `":icons: font\n\n"` (ожидания не менялись — проверено байт-в-байт).
+  +5 новых `test_icon_text_fallback_*` (plain/role-on-span/alt/link+window/ignores-title).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html unit 455→**461**, parser lib **597** без изм.).
+- **Гейт 344/344 байт-в-байт** (base `/tmp/adoc_base` пересобран из master `0b0d60d` через worktree; `gate_check.py`
+  → 0 diff). Доказано заранее: все 7 гейт-файлов с `icon:` держат его в listing-блоках → реальных inline-иконок 0.
+- **Frontier identical 209** (стабильно). New-vs-base байтовый diff по **всем 250** файлам → изменились **ровно 2**:
+  `asciidoctorj-1-5-0-released` 452→**3** (IMPROVED, near-identical); `install-asciidoctor-macos` — единственное
+  изменение = 3× `<i class="fa fa-apple">`→`[apple&#93;` (совпало с icon-контентом asciidoctor); naive 476→477 «+1» =
+  ЛОЖНАЯ регрессия от незакрытого класса **experimental-menu-shorthand** (`"icon:apple[] > Software Update"` →
+  asciidoctor оборачивает в `<span class="menuseq"><b class="menu">…`, мы нет). README-jp/de/fr/migration НЕ тронуты
+  (`+icon:fire[]+` passthrough/listing → иконка не рендерится).
+- 8 CLI-проб vs 2.0.23 (`--no-standalone`, diff): text-fallback **IDENTICAL** (8/8 атрибут-комбо); font-режим
+  (`-a icons=font`) new-vs-base IDENTICAL.
+
+### Что дальше / follow-up (вне scope)
+- Image-режим `:icons:` → `<img src="{iconsdir}/{name}.{icontype}">` (0 корпус-импакта; паттерн в `blocks.rs:49`).
+- Font link/role-паритет: asciidoctor `<span class="icon"><a class="image">`+role-на-span; мы `<a class="icon">`+role-на-`<i>`
+  (CHANGELOG/syntax.adoc — далеки от identical, не регрессия).
+- experimental-menu-shorthand `"Menu > Item"`→menuseq (корень install-macos 476).
+- Прочие frontier-классы: `[x-]` local-compat (asciidoclet 383, migration 273); smart-quote-в-monospace (api/index 347);
+  dlist `:term::` (find-blocks 296); author/details header (sample 152, manpage 160 = doctype manpage).
+
+---
+
 ## Сессия (2026-06-18, 121-я) — F-L′ compat-mode кавычки (ветка `feat/compat-mode-quotes`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py`: 209 identical, 23 clean-div)

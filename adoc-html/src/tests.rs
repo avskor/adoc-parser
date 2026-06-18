@@ -39,8 +39,9 @@ fn test_attribute_escaping_invariant() {
         ("image::a.png[align=<XSS>]", A_RAW, A_ESC),
         // section id rendered onto the heading element.
         ("[#s<XSS>]\n== Title\n\nbody", A_RAW, A_ESC),
-        // icon role appended to the <i> class list.
-        ("icon:home[role=<XSS>]", A_RAW, A_ESC),
+        // icon role appended to the <i> class list (font mode — text fallback
+        // would also escape role but on the span; `:icons: font` exercises the <i> path).
+        (":icons: font\n\nicon:home[role=<XSS>]", A_RAW, A_ESC),
         // block id / role via write_meta_attrs.
         ("[#XSS\"Q]\nHello", Q_RAW, Q_ESC),
         ("[.XSS\"Q]\nHello", Q_RAW, Q_ESC),
@@ -50,8 +51,8 @@ fn test_attribute_escaping_invariant() {
         ("image::XSS\"Q.png[]", Q_RAW, Q_ESC),
         // video width — the D1 media channel, now routed through write_attr.
         ("video::v[width=XSS\"Q]", Q_RAW, Q_ESC),
-        // icon title.
-        ("icon:home[title=XSS\"Q]", Q_RAW, Q_ESC),
+        // icon title (font mode — title is dropped in text fallback, so set :icons:).
+        (":icons: font\n\nicon:home[title=XSS\"Q]", Q_RAW, Q_ESC),
     ];
 
     for (input, raw, esc) in cases {
@@ -2100,49 +2101,87 @@ fn test_menu_no_items_html() {
 
 #[test]
 fn test_icon_basic_html() {
-    let html = to_html("icon:heart[]");
+    // Glyph path requires `:icons: font`; without it the renderer emits the
+    // literal text fallback (see test_icon_text_fallback_*).
+    let html = to_html(":icons: font\n\nicon:heart[]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_size_html() {
-    let html = to_html("icon:heart[2x]");
+    let html = to_html(":icons: font\n\nicon:heart[2x]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_role_html() {
-    let html = to_html("icon:tags[role=blue]");
+    let html = to_html(":icons: font\n\nicon:tags[role=blue]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-tags blue\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_title_html() {
-    let html = to_html("icon:info[title=Info]");
+    let html = to_html(":icons: font\n\nicon:info[title=Info]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-info\" title=\"Info\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_rotate_html() {
-    let html = to_html("icon:shield[rotate=90]");
+    let html = to_html(":icons: font\n\nicon:shield[rotate=90]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-shield fa-rotate-90\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_flip_html() {
-    let html = to_html("icon:shield[flip=vertical]");
+    let html = to_html(":icons: font\n\nicon:shield[flip=vertical]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-shield fa-flip-vertical\"></i></span></p>\n</div>\n");
 }
 
 #[test]
 fn test_icon_link_html() {
-    let html = to_html("icon:download[link=https://example.com]");
+    let html = to_html(":icons: font\n\nicon:download[link=https://example.com]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><a class=\"icon\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></p>\n</div>\n");
 }
 
 #[test]
+fn test_icon_text_fallback_plain_html() {
+    // Without `:icons:`, an inline icon renders as literal bracketed text,
+    // mirroring Asciidoctor (the closing bracket is emitted as the `&#93;` NCR).
+    let html = to_html("icon:heart[]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\">[heart&#93;</span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_text_fallback_role_on_span_html() {
+    // role lands on the span (not on an <i>), and size is ignored in text mode.
+    let html = to_html("icon:tags[2x,role=blue]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon blue\">[tags&#93;</span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_text_fallback_alt_replaces_name_html() {
+    let html = to_html("icon:flag[alt=Flagged]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\">[Flagged&#93;</span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_text_fallback_link_window_html() {
+    // link wraps the text in <a class="image"> (inside the span); window=_blank
+    // adds target + rel=noopener.
+    let html = to_html("icon:bug[link=https://x.com,window=_blank]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><a class=\"image\" href=\"https://x.com\" target=\"_blank\" rel=\"noopener\">[bug&#93;</a></span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_text_fallback_ignores_title_html() {
+    // title is dropped entirely in text mode (no title attribute on the span).
+    let html = to_html("icon:info[title=Tip]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\">[info&#93;</span></p>\n</div>\n");
+}
+
+#[test]
 fn test_icon_combined_html() {
-    let html = to_html("icon:heart[2x,role=red]");
+    let html = to_html(":icons: font\n\nicon:heart[2x,role=red]");
     assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x red\"></i></span></p>\n</div>\n");
 }
 
