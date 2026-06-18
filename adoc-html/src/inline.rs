@@ -161,10 +161,10 @@ impl HtmlRenderer {
 
         let items_str = items.unwrap_or_default();
         if items_str.is_empty() {
-            // menu:File[] — just the menu name
-            output.push_str("<span class=\"menu\">");
+            // menu:File[] — single menu reference (Asciidoctor: <b class="menuref">…)
+            output.push_str("<b class=\"menuref\">");
             html_escape(output, &target);
-            output.push_str("</span>");
+            output.push_str("</b>");
         } else {
             let parts: Vec<&str> = items_str.split('>').map(|s| s.trim()).collect();
             output.push_str("<span class=\"menuseq\"><b class=\"menu\">");

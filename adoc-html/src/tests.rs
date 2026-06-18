@@ -1944,7 +1944,7 @@ fn test_menu_html() {
 #[test]
 fn test_menu_no_items_html() {
     let html = to_html(":experimental:\n\nmenu:File[]");
-    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"menu\">File</span></p>\n</div>\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><b class=\"menuref\">File</b></p>\n</div>\n");
 }
 
 #[test]
