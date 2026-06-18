@@ -379,8 +379,21 @@ pub fn is_list_continuation(line: &str) -> bool {
     line.trim() == "+"
 }
 
+/// Matches the TOC block macro `toc::[]` / `toc::[attrs]`, mirroring
+/// Asciidoctor's `BlockTocMacroRx = /^toc::\[(#{CC_ANY}+)?\]$/`: the line
+/// (after trimming) must be exactly the macro — a leading prefix or a trailing
+/// remainder disqualifies it. Used as a block-boundary guard, so it stays a
+/// `bool`; [`toc_macro_attrs`] extracts the bracket content for the parser.
 pub fn is_toc_macro(line: &str) -> bool {
-    line.trim() == "toc::[]"
+    toc_macro_attrs(line).is_some()
+}
+
+/// Returns the bracket content of a TOC block macro: `""` for `toc::[]`,
+/// `"levels=1"` for `toc::[levels=1]`, or `None` when the line is not a TOC
+/// macro. The bracket content is left raw for the caller to parse as an
+/// attribute list.
+pub fn toc_macro_attrs(line: &str) -> Option<&str> {
+    line.trim().strip_prefix("toc::[")?.strip_suffix(']')
 }
 
 pub fn is_include_directive(line: &str) -> Option<(&str, &str)> {
@@ -1728,10 +1741,22 @@ mod tests {
     fn test_is_toc_macro() {
         assert!(is_toc_macro("toc::[]"));
         assert!(is_toc_macro("  toc::[]  "));
+        assert!(is_toc_macro("toc::[levels=3]"));
         assert!(!is_toc_macro("toc::"));
-        assert!(!is_toc_macro("toc::[levels=3]"));
+        assert!(!is_toc_macro("toc::["));
         assert!(!is_toc_macro(""));
         assert!(!is_toc_macro("something toc::[]"));
+        assert!(!is_toc_macro("toc::[]extra"));
+    }
+
+    #[test]
+    fn test_toc_macro_attrs() {
+        assert_eq!(toc_macro_attrs("toc::[]"), Some(""));
+        assert_eq!(toc_macro_attrs("  toc::[]  "), Some(""));
+        assert_eq!(toc_macro_attrs("toc::[levels=1]"), Some("levels=1"));
+        assert_eq!(toc_macro_attrs("toc::"), None);
+        assert_eq!(toc_macro_attrs("toc::[levels=1"), None);
+        assert_eq!(toc_macro_attrs("not a toc"), None);
     }
 
     #[test]

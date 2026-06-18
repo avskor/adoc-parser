@@ -1,5 +1,43 @@
 # Session context
 
+## Сессия (2026-06-18, 111-я) — F-D `toc::[attrs]` (ветка `feat/toc-macro-attrs`)
+
+Запрос «запланируй следующую задачу из туду» → F-J смержена (`e4a2fc8`); следующий незакрытый frontier-класс — **F-D**.
+План одобрен через plan mode, реализован, верифицирован. Ветка off свежего master `e4a2fc8`. **Статус: реализовано+проверено,
+готово к коммиту/мержу** (по запросу пользователя).
+
+### Корень и фикс
+- `scanner::is_toc_macro` матчил ТОЛЬКО `toc::[]` → `toc::[levels=1]` падал в параграф (каскад migration.adoc 861 diff).
+- asciidoctor (`convert_toc`/`BlockTocMacroRx`): скобки могут быть непустыми; `levels=N` переопределяет `:toclevels:` ДЛЯ
+  ЭТОГО TOC; вне `:toc: macro` макрос инертен (`<!-- toc disabled -->`, levels игнор). `.Title`/`[.role]`/`[#id]` тоже
+  honor'ятся, но в корпусе их НЕТ → вне scope.
+- Фикс: scanner `is_toc_macro`→`toc::[…]` + новый `toc_macro_attrs`; event `TocMacro`→`TocMacro { levels: Option<u8> }`;
+  parser `block.rs:927` парсит `BlockAttributes::parse(attrs).named["levels"]`; рендерер — поле `toc_macro_levels`,
+  `generate_toc(levels: u8)` (auto-TOC: `toc_levels`; macro: `toc_macro_levels.unwrap_or(toc_levels)`).
+
+### Файлы (6 кода)
+- `adoc-parser/src/scanner.rs` — `is_toc_macro` расширен + `toc_macro_attrs` (+тесты `test_is_toc_macro`/`test_toc_macro_attrs`).
+- `adoc-parser/src/event.rs` — `TocMacro { levels }` + `into_static`.
+- `adoc-parser/src/block.rs` — парс levels (+ `test_toc_macro`/`test_toc_macro_levels`).
+- `adoc-html/src/lib.rs` — поле `toc_macro_levels`. `events.rs` — сохранение levels. `finish.rs` — `generate_toc(levels)` + 2 call-сайта.
+- `adoc-html/src/tests.rs` — `test_toc_macro_levels_override` + `test_toc_macro_levels_inert_without_macro_mode`.
+- `adoc-compat-tests/src/builder.rs` — `Event::TocMacro { .. }` в exhaustive-match.
+
+### Верификация (AIRTIGHT)
+- clippy 0; `cargo test --workspace` зелёное (parser 572→574, html unit 439→441, compat 233, остальное неизм.).
+- **Гейт 344/344 байт-в-байт** vs master (`gate_check.py`, base=/tmp/adoc_base из master, new=/tmp/adoc_new, 0 diff).
+- **Frontier** (new-vs-master по 250 файлам): 2 файла изменились. `migration.adoc` **861→571** (каскад починен, IMPROVED).
+  `asciidoctor-0-1-4-released` 5423→5474 «REGRESSION» — ПОЗИЦИОННЫЙ АРТЕФАКТ: единственный хунк 575,578c575 = master
+  `<p>toc::[levels=1]</p>` (неверно) → new `<!-- toc disabled -->` (ТОЧНЫЙ маркер asciidoctor, т.к. `:toc:` тут = `left`
+  через `ifndef::env-site`); 4→1 строк сдвигает ~4900 строк уже-расходящегося (env-site не обработан) файла. Identical 193 без изм.
+- Core-проба `toc::[levels=1]` под `:toc: macro` (`/tmp/fdcore.adoc`) — TOC IDENTICAL asciidoctor.
+
+### Что дальше
+F-D ЗАКРЫТ. Следующий незакрытый frontier-класс по рекомендации TODO — **F-C** (author/inline `<url>` → mailto вместо
+bare-link), затем F-K (порядок классов highlightjs, дешёвый рендерер-фикс), далее F-F/F-E/F-I/F-H/F-J'.
+
+---
+
 ## Сессия (2026-06-18, 110-я) — F-J fenced ` ``` ` → source (ветка `feat/fenced-source`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-G смержена (`4b3f13d`), следующий незакрытый frontier-класс — **F-J**.
