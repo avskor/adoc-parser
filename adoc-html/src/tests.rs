@@ -653,6 +653,28 @@ fn test_markdown_thematic_breaks() {
 }
 
 #[test]
+fn test_thematic_break_does_not_interrupt_paragraph() {
+    // A `---` inside an open paragraph is plain text, not a thematic break —
+    // Asciidoctor recognizes one only at a block boundary (after a blank line).
+    let html = to_html("para text\n---\nmore");
+    assert!(!html.contains("<hr>"), "got:\n{html}");
+    assert_eq!(html.matches("<div class=\"paragraph\">").count(), 1, "got:\n{html}");
+}
+
+#[test]
+fn test_yaml_front_matter() {
+    // Default (no skip-front-matter), mirroring Asciidoctor 2.0.23: the opening
+    // `---` is a thematic break; the remaining lines up to the blank line —
+    // including the closing `---` and a `= Title` — collapse into ONE paragraph
+    // (not a 2nd <hr>, not a heading).
+    let html = to_html("---\ntitle: Hello\nlayout: post\n---\n= Doc Title\n\nBody.");
+    assert_eq!(html.matches("<hr>").count(), 1, "exactly one <hr>; got:\n{html}");
+    assert!(!html.contains("<h1"), "no heading from `= Doc Title`; got:\n{html}");
+    assert!(html.contains("= Doc Title"), "`= Doc Title` is paragraph text; got:\n{html}");
+    assert!(html.contains("<p>Body.</p>"), "got:\n{html}");
+}
+
+#[test]
 fn test_html_escaping() {
     let html = to_html("Use <b> & \"quotes\".");
     assert!(html.contains("&lt;b&gt;"));
