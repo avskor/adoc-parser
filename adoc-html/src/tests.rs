@@ -106,6 +106,24 @@ fn test_document_title_no_duplicate_h1() {
 }
 
 #[test]
+fn test_leading_bom_stripped() {
+    // F-I: a leading UTF-8 BOM is stripped, so `= Title` is the document title.
+    // standalone — title rendered in the header as <h1>:
+    let html = to_html_with_options(
+        "\u{feff}= Title\n\nHello",
+        HtmlOptions { standalone: true, ..Default::default() },
+    );
+    assert!(html.contains("<h1>Title</h1>"), "expected <h1>Title</h1>, got:\n{html}");
+    assert!(!html.contains('\u{feff}'), "BOM must not appear in output:\n{html}");
+    // embedded — header is suppressed; body has the paragraph but no literal
+    // `= Title` paragraph and no BOM (baseline bug emitted `<p>﻿= Title</p>`):
+    let html = to_html("\u{feff}= Title\n\nHello");
+    assert!(html.contains("<p>Hello</p>"), "body paragraph present, got:\n{html}");
+    assert!(!html.contains("= Title"), "title must not leak as a literal paragraph, got:\n{html}");
+    assert!(!html.contains('\u{feff}'), "no BOM in embedded output, got:\n{html}");
+}
+
+#[test]
 fn test_section() {
     let html = to_html("== My Section\n\nContent.");
     assert!(html.contains("<h2 id=\"_my_section\">My Section</h2>"));

@@ -1,5 +1,13 @@
 use std::borrow::Cow;
 
+/// Strip a single leading UTF-8 BOM (`U+FEFF`), mirroring Asciidoctor's Reader,
+/// which removes it before any parsing. Zero-copy: returns a sub-slice. Only the
+/// leading BOM is removed; a BOM elsewhere in the text is left intact (matches
+/// Asciidoctor).
+pub fn strip_bom(input: &str) -> &str {
+    input.strip_prefix('\u{feff}').unwrap_or(input)
+}
+
 pub fn split_lines(input: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -1476,6 +1484,18 @@ mod tests {
         assert_eq!(split_lines("a\nb\nc"), vec!["a", "b", "c"]);
         assert_eq!(split_lines("a\r\nb\r\n"), vec!["a", "b", ""]);
         assert_eq!(split_lines(""), vec![""]);
+    }
+
+    #[test]
+    fn test_strip_bom() {
+        // Leading BOM is removed (zero-copy: result is a sub-slice of the input).
+        assert_eq!(strip_bom("\u{feff}= Title"), "= Title");
+        // No BOM: returned unchanged.
+        assert_eq!(strip_bom("= Title"), "= Title");
+        assert_eq!(strip_bom(""), "");
+        // Only a single leading BOM; a BOM elsewhere is left intact.
+        assert_eq!(strip_bom("a\u{feff}b"), "a\u{feff}b");
+        assert_eq!(strip_bom("\u{feff}\u{feff}x"), "\u{feff}x");
     }
 
     #[test]
