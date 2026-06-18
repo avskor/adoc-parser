@@ -1,5 +1,53 @@
 # Session context
 
+## Сессия (2026-06-18, 120-я) — F-M escaped `\]` в bracketed inline-макросах (ветка `fix/escaped-bracket-macros`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → новый frontier-проход (`frontier_parity.py`: 208 identical, 24 clean-div)
+→ классификация топ-каскадов → выбран доминирующий класс **escaped `\]` в bracketed-макросах** (asciidoc-py 1645 +
+migration 571 — оба каскада от `pass:[[x-\]…]` / `pass:[icon:fire[\]]`). План записан
+(`~/.claude/plans/escaped-bracket-macros-fm.md`), AskUserQuestion → «Приступать к F-M» → реализовано, верифицировано
+AIRTIGHT. **Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и фикс (зеркало asciidoctor `(.*?[^\\])?\]`, для link `text.gsub ESC_R_SB, R_SB`; 14 проб vs 2.0.23)
+- Внутри `name:target[content]` экранированная `\]` должна НЕ закрывать макрос (часть content) и разэкранироваться
+  `\]`→`]`. Был наивный `rest.find(']')` → обрыв на первой `]`, хвост `\` в content + утечка остатка после `]`.
+- **Свойства (доказаны пробами):** одиночный `\` НЕ перед `]` сохраняется (`pass:[a\b c]`→`a\b c`); close = первая `]`
+  с предыдущим байтом ≠ `\`; `pass:q[x\]y *bold*]`→unescape ДО spec'd-subs (`x]y <strong>bold</strong>`);
+  `xref:a]b[c]`→`#a]b` (target non-greedy до первого `[`, было literal — legacy declined, asciidoctor линкует).
+- **Чисто парсер (2 файла):** (1) `subst/macros.rs` — `pub(super) fn find_macro_close_bracket(s, open)` (escape-aware
+  scan-loop, вынесен из `try_stem`) + `pub(super) fn unescape_close_bracket(s) -> Cow` (`\]`→`]`, Borrowed без escape).
+  Применены к xref/link/mailto/image/icon/footnote/kbd/btn/menu/anchor/indexterm/indexterm2 + URL[text]-autolink; убран
+  guard `bracket_end <= bracket_start`; `try_stem` переведён на хелпер; обновлены doc-комменты footnote/try_link.
+  (2) `subst/passthrough.rs` — `try_pass_macro`/`try_pass_spec_macro` импортят хелперы; bare verbatim разэкранирован,
+  spec'd — до прогона subs; обновлён doc-коммент. **legacy `inline.rs` НЕ тронут** (sequential — дефолт; legacy лишь
+  fallback при decline, escaped-входы не declinе'ятся).
+
+### Файлы (4: 2 кода + 2 теста)
+- `adoc-parser/src/subst/macros.rs` — 2 хелпера + 13 правок макросов + `#[cfg(test)] mod tests` (2 теста хелперов).
+- `adoc-parser/src/subst/passthrough.rs` — импорт + 2 правки pass + doc.
+- `adoc-parser/src/subst/mod.rs` — 2 reversed-bracket кейса (`xref:a]b[c]`, `icon:a]b[c]`) перенесены из
+  «reproduces_legacy_on_{cross_reference,leaf_macro}_inputs» в «adopt-asciidoctor» группы (с пояснениями).
+- `adoc-html/src/tests.rs` — `test_escaped_close_bracket_in_macros` (10 классов), `..._regression_guards`.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser lib 592→**594**, html unit 453→**455**, compat 233,
+  html-compat ok).
+- **Гейт 344/344 байт-в-байт** vs master (base `/tmp/adoc_base` пересобран из master `0ea2727` через worktree;
+  `gate_check.py` → 0 diff). Риск НУЛЕВОЙ: оба gate-файла с `\]` — неактивный контекст (`literal-monospace.adoc:113-128`
+  indented-literal block; `ui.adoc:35` `kbd:` без `:experimental:` = литеральный текст — inline-парсинг их не трогает).
+- **Frontier identical 208→209 (+1)**, clean-div 24→23. new-vs-base (`/tmp/frontier_nvb.py`): ровно **2 файла
+  изменились, ОБА IMPROVED, 0 РЕГРЕССИЙ** — `asciidoc-py.adoc` 1645→**0 (identical)**, `migration.adoc` 571→**273**
+  (остаток = bare `[x-]` local-compat, follow-up).
+- 14 CLI-проб vs asciidoctor 2.0.23 (verify.adoc): pass/pass:q/link/image/xref/mailto/footnote/kbd/menu/stem +
+  одиночный `\`/двойной `\\]`/пустой `[]` — все MATCH.
+
+### Что дальше
+F-M ЗАКРЫТ (корневой scope — sequential-движок). Follow-up'ы: bare `[x-]` local-compat-role (migration остаток 273);
+legacy `inline.rs` escaped-паритет (14 сайтов `find(']')` + готовый `parse_bracket_macro_escaped`); F-N indented→literal
+перебивает section-marker (recommended-practices 15); прочий frontier (templates 1692 — attr-ref в URL/link).
+
+---
+
 ## Сессия (2026-06-18, 119-я) — F-L compat-mode `+text+`/`++text++` → monospaced (ветка `feat/compat-mode-monospace`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → новый frontier-проход (`frontier_parity.py`: 202 identical, 30 clean-div)

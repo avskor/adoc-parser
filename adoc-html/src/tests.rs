@@ -357,6 +357,47 @@ fn test_link() {
     assert!(html.contains("<a href=\"https://example.com\">Example</a>"));
 }
 
+// F-M: an escaped `\]` inside a bracketed inline macro is part of the content
+// (does not close the macro) and is unescaped to `]` — mirror of Asciidoctor's
+// `(.*?[^\\])?\]` rule, shared across every bracketed macro.
+#[test]
+fn test_escaped_close_bracket_in_macros() {
+    // bare pass:[…] — verbatim, escaped bracket unescaped
+    assert!(to_html("pass:[[x-\\]+mono+]").contains("<p>[x-]+mono+</p>"));
+    // pass:SPEC[…] — unescaped, then the spec'd subs run (quotes here)
+    assert!(to_html("pass:q[x\\]y *bold*]").contains("<p>x]y <strong>bold</strong></p>"));
+    // link label
+    assert!(to_html("link:http://x.com[a\\]b]").contains("<a href=\"http://x.com\">a]b</a>"));
+    // image alt
+    assert!(to_html("image:f.png[alt\\]text]").contains("alt=\"alt]text\""));
+    // xref explicit label
+    assert!(to_html("xref:tgt[a\\]b]").contains("<a href=\"#tgt\">a]b</a>"));
+    // mailto label
+    assert!(to_html("mailto:x@y.com[a\\]b]").contains("<a href=\"mailto:x@y.com\">a]b</a>"));
+    // footnote definition text appears unescaped in the footnotes section
+    assert!(to_html("footnote:[a\\]b]").contains(". a]b"));
+    // STEM content (already honoured `\]`; regression guard)
+    assert!(to_html("stem:[a\\]b]").contains("\\$a]b\\$"));
+    // experimental UI macros: kbd key and menu item
+    assert!(to_html(":experimental:\n\nkbd:[Ctrl\\]]").contains("<kbd>Ctrl]</kbd>"));
+    assert!(
+        to_html(":experimental:\n\nmenu:File[Save\\]As]")
+            .contains("<b class=\"menuitem\">Save]As</b>")
+    );
+}
+
+// F-M regression guards: a lone backslash NOT before `]` is preserved, and the
+// empty-bracket / plain forms are unaffected.
+#[test]
+fn test_escaped_close_bracket_regression_guards() {
+    // lone `\` survives (only `\]` is special)
+    assert!(to_html("pass:[a\\b c]").contains("<p>a\\b c</p>"));
+    // empty brackets still a bare link (visible text = target)
+    assert!(to_html("link:http://x.com[]").contains("<a href=\"http://x.com\" class=\"bare\">http://x.com</a>"));
+    // no escape, no allocation path: ordinary label unchanged
+    assert!(to_html("link:http://x.com[plain]").contains("<a href=\"http://x.com\">plain</a>"));
+}
+
 #[test]
 fn test_link_with_window_html() {
     let html = to_html("link:https://example.com[Example,window=_blank]");

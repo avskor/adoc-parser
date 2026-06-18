@@ -1003,11 +1003,10 @@ mod tests {
             "`<<<`",
             // both macro forms together
             "<<a>> then xref:b[c]",
-            // invalid → stay literal (no brackets, empty target, reversed brackets,
-            // empty cross reference)
+            // invalid → stay literal (no brackets, empty target, empty cross
+            // reference)
             "xref:notarget",
             "xref:[]",
-            "xref:a]b[c]",
             "<<>>",
             "a < b << c",
             // a non-macro 'xref' substring mid-word
@@ -1030,6 +1029,10 @@ mod tests {
             "<<-y>>",               // leading dash
             "<<\"a\">>",            // leading quote
             "a <<<b>>",             // inner `<<` matches at `b` → `<` literal + `#b`
+            // reversed-looking brackets: the target is non-greedy up to the first
+            // `[` (Asciidoctor `xref:([\w":./]...)\[`), so `a]b` is a valid target
+            // and the close `]` is escape-aware — links to `#a]b` (legacy declined).
+            "xref:a]b[c]",
         ] {
             assert_eq!(
                 try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()),
@@ -1249,10 +1252,9 @@ mod tests {
             "icon:heart[2x,role=red]",
             "icon:tags[role=blue] ruby",
             "see icon:a[] and icon:b[fw] here",
-            // icon: invalid → literal (no brackets, empty name, reversed brackets)
+            // icon: invalid → literal (no brackets, empty name)
             "icon:noclose",
             "icon:[]",
-            "icon:a]b[c]",
             // STEM: all three spellings, empty and non-empty content
             "stem:[]",
             "stem:[x^2]",
@@ -1279,6 +1281,16 @@ mod tests {
                 "new engine diverged from legacy for {c:?}"
             );
         }
+        // Reversed-looking brackets: the icon name is non-greedy up to the first
+        // `[` (Asciidoctor `i(?:mage|con):([^:\s\[]...)\[`, name may contain `]`)
+        // and the close `]` is escape-aware, so `icon:a]b[c]` is an icon named
+        // `a]b` with attr `c` (legacy declined → literal). The engine adopts the
+        // Asciidoctor-faithful result.
+        assert_eq!(
+            try_parse("icon:a]b[c]", SubstitutionSet::NORMAL, InlineOptions::default()),
+            Some(pipeline("icon:a]b[c]")),
+            "engine should adopt the Asciidoctor-faithful icon for reversed brackets"
+        );
     }
 
     /// With the anchor family ported (`[[id]]` / `[[id,label]]`, the `[[[id]]]`

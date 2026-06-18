@@ -432,6 +432,42 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
     work.buf = out;
 }
 
+/// Find the byte index (within `s`) of the `]` that closes a bracketed inline
+/// macro whose opening `[` is at byte index `open`. A `]` immediately preceded by
+/// a backslash is *escaped* and does not close the macro — it is part of the
+/// content (Asciidoctor's `(.*?[^\\])?\]` rule). Returns `None` when no unescaped
+/// `]` follows the `[`. Shared by every bracketed macro (`pass`, `link`, `xref`,
+/// `mailto`, `image`, `icon`, `footnote`, `kbd`/`btn`/`menu`, stem) so the escape
+/// is honoured uniformly; pair with [`unescape_close_bracket`] on the content.
+/// `pub(super)` so [`super::passthrough`] shares it for `pass:[…]`/`pass:SPEC[…]`.
+pub(super) fn find_macro_close_bracket(s: &str, open: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = open + 1;
+    loop {
+        let off = bytes[i..].iter().position(|&b| b == b']')?;
+        let at = i + off;
+        // `at == open + 1` is `]` directly after `[` (empty content): never
+        // escaped (the preceding byte is `[`). Otherwise a preceding `\` escapes it.
+        if at > open + 1 && bytes[at - 1] == b'\\' {
+            i = at + 1;
+        } else {
+            return Some(at);
+        }
+    }
+}
+
+/// Unescape `\]` → `]` in extracted bracketed-macro content. No-op (and no
+/// allocation) when no escaped bracket is present. Mirrors Asciidoctor unescaping
+/// the captured attrlist/label/verbatim text before any further processing
+/// (`text.gsub ESC_R_SB, R_SB`). `pub(super)` so [`super::passthrough`] shares it.
+pub(super) fn unescape_close_bracket(s: &str) -> Cow<'_, str> {
+    if s.contains("\\]") {
+        Cow::Owned(s.replace("\\]", "]"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
 /// At an `xref:` (caller guarantees the prefix), try to match `xref:target[label]`.
 /// Returns the macro's event sequence plus the index just past the closing `]`,
 /// or `None` to leave the `xref:` literal. Mirror of
@@ -444,12 +480,9 @@ fn try_xref(
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "xref:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
     let target = &rest[..bracket_start];
-    let label_text = &rest[bracket_start + 1..bracket_end];
+    let label_text = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     if target.is_empty() {
         return None;
     }
@@ -459,7 +492,7 @@ fn try_xref(
     }
     // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
     // explicit one.
-    let label = (!label_text.is_empty()).then_some(label_text);
+    let label = (!label_text.is_empty()).then_some(label_text.as_ref());
     Some((build_cross_reference(target, label, subs, options), end))
 }
 
@@ -576,12 +609,9 @@ fn try_link(
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "link:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
     let url_part = &rest[..bracket_start];
-    let content = &rest[bracket_start + 1..bracket_end];
+    let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     if url_part.is_empty() {
         return None;
     }
@@ -609,7 +639,7 @@ fn try_link(
     if url.is_empty() {
         return None;
     }
-    let attrs = parse_link_attrs(content, LinkKind::Link);
+    let attrs = parse_link_attrs(&content, LinkKind::Link);
     // An empty attrlist text marks a "bare" link (visible text = the target).
     let is_bare = attrs.text.is_empty();
     let label = (!is_bare).then_some(attrs.text);
@@ -670,12 +700,9 @@ fn try_mailto(
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "mailto:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
     let email = &rest[..bracket_start];
-    let content = &rest[bracket_start + 1..bracket_end];
+    let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     if email.is_empty() {
         return None;
     }
@@ -684,7 +711,7 @@ fn try_mailto(
         return None;
     }
     let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
-    let attrs = parse_link_attrs(content, LinkKind::Mailto);
+    let attrs = parse_link_attrs(&content, LinkKind::Mailto);
     let url = match (attrs.subject, attrs.body) {
         (None, None) => base.to_string(),
         (subject, body) => {
@@ -731,17 +758,14 @@ fn try_mailto(
 fn try_image(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 6..]; // after "image:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
     let target = &rest[..bracket_start];
-    let content = &rest[bracket_start + 1..bracket_end];
+    let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     let end = start + 6 + bracket_end + 1;
     if span_has_sentinel(src, start, end) {
         return None;
     }
-    let a = parse_image_attrs(content);
+    let a = parse_image_attrs(&content);
     let events = vec![
         Event::Start(Tag::InlineImage {
             target: Cow::Owned(target.to_string()),
@@ -777,11 +801,8 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     if name.is_empty() {
         return None;
     }
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
-    let attrs = &rest[bracket_start + 1..bracket_end];
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
+    let attrs = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     let end = start + 5 + bracket_end + 1;
     if span_has_sentinel(src, start, end) {
         return None;
@@ -790,7 +811,7 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
         name: Cow::Owned(name.to_string()),
     })];
     if !attrs.is_empty() {
-        events.push(Event::Text(Cow::Owned(attrs.to_string())));
+        events.push(Event::Text(Cow::Owned(attrs.into_owned())));
     }
     events.push(Event::End(TagEnd::Icon));
     Some((events, end))
@@ -803,14 +824,15 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// numbering, and the document-foot list all live in the renderer (shared by both
 /// engines) — none of it is inline-parser state.
 ///
-/// The form splits exactly as legacy: an id is every byte before the first `[` and
-/// must be non-empty; the content runs to the first `]`. A named macro with empty
-/// content (`footnote:id[]`) is a *reference* to an already-defined footnote
+/// The form splits as: an id is every byte before the first `[` and must be
+/// non-empty; the content runs to the first *unescaped* `]` (a `\]` is part of the
+/// content, unescaped to `]` — Asciidoctor's `\]`-honouring rule, shared via
+/// [`find_macro_close_bracket`]/[`unescape_close_bracket`]). A named macro with
+/// empty content (`footnote:id[]`) is a *reference* to an already-defined footnote
 /// (`FootnoteRef`); every other form *defines* one (`Footnote`). Asciidoctor's
-/// `InlineFootnoteMacroRx` is stricter on both parts (id `[\p{Word}-]+`, content
-/// honouring a `\]` escape) and also accepts the deprecated `footnoteref:` spelling;
-/// the legacy parser does none of that, and this engine deliberately mirrors the
-/// legacy form rather than Asciidoctor's stricter rx, so those rare forms match
+/// `InlineFootnoteMacroRx` is also stricter on the id (`[\p{Word}-]+`) and accepts
+/// the deprecated `footnoteref:` spelling; the legacy parser does neither, and this
+/// engine deliberately mirrors the legacy form there, so those rare forms match
 /// legacy (and, like legacy, diverge from Asciidoctor). The sentinel guard
 /// declines a footnote whose span swallowed an earlier passthrough/escape/char-ref
 /// leaf (the verbatim text the legacy event would carry is no longer present).
@@ -832,8 +854,8 @@ fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)>
         }
         (Some(id), &rest[bracket_pos..])
     };
-    let bracket_end = bracket_rest.find(']')?; // offset of `]` within `bracket_rest`
-    let content = &bracket_rest[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(bracket_rest, 0)?; // `]` within `bracket_rest`
+    let content = unescape_close_bracket(&bracket_rest[1..bracket_end]);
     let id_len = id.map_or(0, str::len);
     let end = after_prefix + id_len + 1 + bracket_end;
     if span_has_sentinel(src, start, end) {
@@ -847,7 +869,7 @@ fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)>
         // `footnote:[text]` / `footnote:id[text]` — defines a footnote.
         _ => vec![Event::Footnote {
             id: id.map(|s| Cow::Owned(s.to_string())),
-            text: Cow::Owned(content.to_string()),
+            text: Cow::Owned(content.into_owned()),
         }],
     };
     Some((events, end))
@@ -874,8 +896,8 @@ fn try_bracket_ui(
     if !rest.starts_with('[') {
         return None;
     }
-    let bracket_end = rest.find(']')?;
-    let content = &rest[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(rest, 0)?;
+    let content = unescape_close_bracket(&rest[1..bracket_end]);
     if content.is_empty() {
         return None;
     }
@@ -886,7 +908,7 @@ fn try_bracket_ui(
     Some((
         vec![
             Event::Start(open),
-            Event::Text(Cow::Owned(content.to_string())),
+            Event::Text(Cow::Owned(content.into_owned())),
             Event::End(close),
         ],
         end,
@@ -918,11 +940,8 @@ fn try_menu(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     if target.is_empty() {
         return None;
     }
-    let bracket_end = rest.find(']')?;
-    if bracket_end <= bracket_start {
-        return None;
-    }
-    let items = &rest[bracket_start + 1..bracket_end];
+    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
+    let items = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     let end = start + 5 + bracket_end + 1;
     if span_has_sentinel(src, start, end) {
         return None;
@@ -931,7 +950,7 @@ fn try_menu(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
         target: Cow::Owned(target.to_string()),
     })];
     if !items.is_empty() {
-        events.push(Event::Text(Cow::Owned(items.to_string())));
+        events.push(Event::Text(Cow::Owned(items.into_owned())));
     }
     events.push(Event::End(TagEnd::Menu));
     Some((events, end))
@@ -955,28 +974,17 @@ fn try_stem(
     variant: &str,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + prefix_len..]; // starts with '[' (dispatch guaranteed)
-    let bytes = rest.as_bytes();
-    let mut i = 1;
-    let bracket_end = loop {
-        let off = bytes[i..].iter().position(|&b| b == b']')?;
-        let at = i + off;
-        if bytes[at - 1] == b'\\' {
-            i = at + 1;
-        } else {
-            break at;
-        }
-    };
+    let bracket_end = find_macro_close_bracket(rest, 0)?;
     let end = start + prefix_len + bracket_end + 1;
     if span_has_sentinel(src, start, end) {
         return None;
     }
-    let inner = &rest[1..bracket_end];
-    let content = inner.replace("\\]", "]"); // no-op when no escaped bracket
+    let content = unescape_close_bracket(&rest[1..bracket_end]);
     let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Stem {
         variant: Cow::Owned(variant.to_string()),
     })];
     if !content.is_empty() {
-        events.push(Event::Text(Cow::Owned(content)));
+        events.push(Event::Text(Cow::Owned(content.into_owned())));
     }
     events.push(Event::End(TagEnd::Stem));
     Some((events, end))
@@ -1065,16 +1073,17 @@ fn try_anchor_macro(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usi
     if id.is_empty() || id.contains(char::is_whitespace) {
         return None;
     }
-    let close = rest[bracket + 1..].find(']')?;
-    let label_text = &rest[bracket + 1..bracket + 1 + close];
-    let end = start + 7 + bracket + 1 + close + 1;
+    let bracket_end = find_macro_close_bracket(rest, bracket)?;
+    let label_text = unescape_close_bracket(&rest[bracket + 1..bracket_end]);
+    let end = start + 7 + bracket_end + 1;
     if span_has_sentinel(src, start, end) {
         return None;
     }
+    let label = (!label_text.is_empty()).then(|| Cow::Owned(label_text.into_owned()));
     let events = vec![
         Event::Start(Tag::Anchor {
             id: Cow::Owned(id.to_string()),
-            label: (!label_text.is_empty()).then(|| Cow::Owned(label_text.to_string())),
+            label,
         }),
         Event::End(TagEnd::Anchor),
     ];
@@ -1147,8 +1156,8 @@ fn try_indexterm(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)
     if !rest.starts_with('[') {
         return None;
     }
-    let bracket_end = rest.find(']')?;
-    let content = &rest[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(rest, 0)?;
+    let content = unescape_close_bracket(&rest[1..bracket_end]);
     if content.is_empty() {
         return None;
     }
@@ -1156,7 +1165,7 @@ fn try_indexterm(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)
     if span_has_sentinel(src, start, end) {
         return None;
     }
-    Some((concealed_index_term(content), end))
+    Some((concealed_index_term(&content), end))
 }
 
 /// At an `indexterm2:` (caller guarantees the prefix), try to match the flow
@@ -1168,8 +1177,8 @@ fn try_indexterm2(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize
     if !rest.starts_with('[') {
         return None;
     }
-    let bracket_end = rest.find(']')?;
-    let content = &rest[1..bracket_end];
+    let bracket_end = find_macro_close_bracket(rest, 0)?;
+    let content = unescape_close_bracket(&rest[1..bracket_end]);
     if content.is_empty() {
         return None;
     }
@@ -1178,7 +1187,7 @@ fn try_indexterm2(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize
         return None;
     }
     let events = vec![Event::IndexTerm {
-        text: Cow::Owned(content.to_string()),
+        text: Cow::Owned(content.into_owned()),
     }];
     Some((events, end))
 }
@@ -1347,13 +1356,14 @@ fn try_autolink(
 
     // URL[text] form.
     if after_url.starts_with('[')
-        && let Some(close) = after_url.find(']')
+        && let Some(close) = find_macro_close_bracket(after_url, 0)
     {
         let end = start + url_len + close + 1;
         if span_has_sentinel(src, start, end) {
             return None;
         }
-        let attrs = parse_link_attrs(&after_url[1..close], LinkKind::Link);
+        let content = unescape_close_bracket(&after_url[1..close]);
+        let attrs = parse_link_attrs(&content, LinkKind::Link);
         let is_bare = attrs.text.is_empty();
         let label = (!is_bare).then_some(attrs.text);
         let events = build_link(
@@ -1511,4 +1521,38 @@ fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
         flag_punt();
     }
     has
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_macro_close_bracket, unescape_close_bracket};
+    use std::borrow::Cow;
+
+    #[test]
+    fn find_close_bracket_honours_escape() {
+        // `[` at index 0; plain close.
+        assert_eq!(find_macro_close_bracket("[abc]", 0), Some(4));
+        // Escaped `\]` does not close; the next unescaped `]` does.
+        assert_eq!(find_macro_close_bracket("[a\\]b]", 0), Some(5));
+        // Empty content: `]` right after `[` is never treated as escaped.
+        assert_eq!(find_macro_close_bracket("[]", 0), Some(1));
+        // A non-zero open offset (target before the `[`).
+        assert_eq!(find_macro_close_bracket("tgt[a\\]b]", 3), Some(8));
+        // No unescaped close → None (trailing `\]` keeps escaping).
+        assert_eq!(find_macro_close_bracket("[a\\]", 0), None);
+        // Double backslash then `]`: the `]` is still escaped (Asciidoctor's
+        // `[^\\]\]` looks only at the single preceding byte), so we skip it and
+        // require a later unescaped `]`.
+        assert_eq!(find_macro_close_bracket("[a\\\\]x]", 0), Some(6));
+    }
+
+    #[test]
+    fn unescape_close_bracket_only_touches_escaped_bracket() {
+        // No escape → borrowed, byte-identical.
+        assert!(matches!(unescape_close_bracket("a]b? no"), Cow::Borrowed("a]b? no")));
+        // `\]` → `]`; a lone `\` not before `]` is preserved.
+        assert_eq!(unescape_close_bracket("a\\]b\\c"), "a]b\\c");
+        // Double escape: each `\]` collapses independently.
+        assert_eq!(unescape_close_bracket("x\\]y\\]z"), "x]y]z");
+    }
 }
