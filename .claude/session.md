@@ -1,5 +1,46 @@
 # Session context
 
+## Сессия (2026-06-18, 113-я) — F-K порядок классов highlightjs (ветка `fix/hljs-class-order`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-C смержена (`558c26f`), следующий по рекомендации TODO — **F-K**
+(дешёвый рендерер-фикс). План одобрен через plan mode, реализован, верифицирован. Ветка off master `558c26f`.
+**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя).
+План: `~/.claude/plans/hashed-doodling-wreath.md`.
+
+### Корень и фикс (чисто рендерер, спека верифицирована пробами vs `asciidoctor`)
+- При `:source-highlighter: highlight.js` мы эмитили на `<code>` класс `hljs language-X`; asciidoctor 2.0.23 даёт
+  `language-X hljs` (language-класс первым). Расширили на пользовательский выбор: `[source]` **без языка** под
+  highlight.js → asciidoctor `<code class="language-none hljs">` (без `data-lang`), а мы класса не ставили вовсе.
+- Фикс в `adoc-html/src/blocks.rs::start_source_block` (~720-738): `let is_hljs = …`; ветка `Some(lang)` при `is_hljs`
+  → `class="language-X hljs"`; новая ветка `else if is_hljs` (language=None) → `class="language-none hljs"`.
+  Ветки `rouge`/`pygments`/`coderay` и `highlighter.is_none()` НЕ тронуты.
+
+### Файлы (2: 1 рендерер-код, 1 тесты)
+- `adoc-html/src/blocks.rs` — переписан блок класса на `<code>` (порядок + language-none).
+- `adoc-html/src/tests.rs` — обновлены 3 ассерта: `test_source_block_highlightjs` (3917) и
+  `test_markdown_code_fence_with_highlighter` (4498) → `"language-rust hljs"`; `test_source_block_no_language` (3998)
+  → `<code class="language-none hljs">` (раньше ассертил отсутствие `language-`, т.е. сам баг). Нового теста НЕ
+  добавляли (последний уже покрывает no-lang кейс).
+- Фикстуру `adoc-html-tests/.../attribute-source-highlighter.expected.html` НЕ трогали — уже правильный порядок,
+  DOM-сравнение (scraper) нормализует порядок классов → зелёная.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html unit 442, parser 575, html-compat 25 — без изм.).
+- **Гейт 344/344 байт-в-байт** vs master (base `/tmp/adoc_base` собран из master `558c26f` через worktree; gate_check.py → 0 diff).
+  highlight.js-файлов в гейте нет → нулевой риск регресса, прогон для гарантии.
+- **Frontier** (`frontier_parity.py /mnt/c/tmp/adoc-frontier`): Identical **198** и clean_div **34** без изменений
+  (hljs-файлы имеют прочие расхождения → не флипнули в identical). Прямое base-vs-new на 3 hljs `.adoc`:
+  `asciidoc-writers-guide` 5373→5366 **IMPROVED**, `highlightjs.adoc` 0/0 same, `asciidoctor-0-1-3-released` same.
+  **0 регрессий**. (NB: `normalize_html` НЕ нормализует порядок классов — в отличие от scraper в html-tests.)
+- Пробы adoc-cli vs asciidoctor: `[source,ruby]`+hljs → `class="language-ruby hljs" data-lang="ruby"` MATCH;
+  `[source]`+hljs → `class="language-none hljs"` (без data-lang) MATCH.
+
+### Что дальше
+F-K ЗАКРЫТ. Следующий по рекомендации TODO — **F-F** (`menu:X[]` без `>` → asciidoctor `<b class="menuref">X</b>`,
+мы `<span class="menu">`), далее F-E (`[%nowrap]`) / F-I (UTF-8 BOM) / F-H (YAML front matter) / F-J' (`:compat-mode:`→`:language:`).
+
+---
+
 ## Сессия (2026-06-18, 112-я) — F-C author/inline `<url>` (ветка `fix/angle-url`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → F-D смержена (`af277fb`), следующий незакрытый frontier-класс — **F-C**.

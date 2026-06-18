@@ -3914,7 +3914,7 @@ fn test_source_block_no_highlighter() {
 fn test_source_block_highlightjs() {
     let html = to_html(":source-highlighter: highlight.js\n\n[source,rust]\n----\nfn main() {}\n----");
     assert!(html.contains("<pre class=\"highlightjs highlight\">"), "highlight.js: pre class. Got: {html}");
-    assert!(html.contains("class=\"hljs language-rust\""), "highlight.js: hljs + language class on code. Got: {html}");
+    assert!(html.contains("class=\"language-rust hljs\""), "highlight.js: language + hljs class on code (Asciidoctor order). Got: {html}");
     assert!(html.contains("data-lang=\"rust\""), "highlight.js: data-lang on code. Got: {html}");
 }
 
@@ -3986,7 +3986,8 @@ fn test_source_block_no_language() {
     let html = to_html(":source-highlighter: highlight.js\n\n[source]\n----\nsome code\n----");
     assert!(html.contains("<pre class=\"highlightjs highlight\">"), "No language: pre class should still have highlighter. Got: {html}");
     assert!(!html.contains("data-lang"), "No language: no data-lang. Got: {html}");
-    assert!(!html.contains("language-"), "No language: no language- class. Got: {html}");
+    // highlight.js with no explicit language: Asciidoctor emits `language-none hljs`.
+    assert!(html.contains("<code class=\"language-none hljs\">"), "No language: language-none hljs. Got: {html}");
 }
 
 #[test]
@@ -4495,7 +4496,7 @@ fn test_markdown_code_fence_with_highlighter() {
     let html = to_html(":source-highlighter: highlight.js\n\n```rust\nfn main() {}\n```");
     assert!(html.contains("highlightjs highlight"), "should use highlighter. Got: {html}");
     assert!(html.contains("data-lang=\"rust\""), "should have data-lang. Got: {html}");
-    assert!(html.contains("class=\"hljs language-rust\""), "should have hljs + language class. Got: {html}");
+    assert!(html.contains("class=\"language-rust hljs\""), "should have language + hljs class (Asciidoctor order). Got: {html}");
 }
 
 #[test]
