@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-18, 117-я) — F-H thematic break не прерывает открытый параграф (ветка `fix/thematic-break-paragraph`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → F-I смержена (`08953b5`), следующий по рекомендации TODO — **F-H**.
+План одобрен через plan mode, реализован, верифицирован AIRTIGHT. Ветка off master `f0b51a0`.
+**Статус: реализовано+проверено, готово к коммиту/мержу** (по запросу пользователя). План: `~/.claude/plans/moonlit-stirring-stonebraker.md`.
+
+### Корень и фикс (чисто парсер; спека верифицирована пробами vs asciidoctor 2.0.23)
+- Дефолтное расхождение YAML front matter — **НЕ** про front matter: в asciidoctor thematic break
+  (`'''`/`---`/`***`/`___`) распознаётся ТОЛЬКО как самостоятельный блок на границе (после пустой строки /
+  начало документа) и НЕ прерывает уже открытый top-level параграф (mid-paragraph → обычный текст,
+  `read_paragraph_lines`/`StartOfBlockProc`). Мы ошибочно прерывали.
+- Front matter — частный случай: открывающий `---` (граница) → `<hr>`; затем `key:val` + внутренний `---` +
+  `= Title` слипаются в ОДИН параграф до пустой строки (section marker уже корректно не прерывал, `block.rs` коммент 2380-2386).
+- **Фикс:** убрано `|| scanner::is_thematic_break(line)` из списка прерывателей открытого параграфа в 2 точках
+  `adoc-parser/src/block.rs`: `scan_paragraph` (~2396) и `scan_admonition` principal-параграф (~2799, «same break
+  conditions as scan_paragraph»). Заменено поясняющим комментарием. **Не тронуто:** `scan_leaf_blocks` (~908, эмиссия
+  `<hr>` на границе блока), `is_page_break` в обоих списках, `is_thematic_break` в `is_dlist_continuation_line` (~3367)
+  и `is_list_continuation_line` (~3538).
+
+### Файлы (2)
+- `adoc-parser/src/block.rs` — 2 удаления `is_thematic_break` из прерывателей + 3 unit-теста
+  (`test_thematic_break_does_not_interrupt_paragraph` точный Event-вектор, `test_thematic_break_at_block_boundary_still_breaks`
+  регресс-гард границы, `test_yaml_front_matter_collapses_into_paragraph`).
+- `adoc-html/src/tests.rs` — 2 теста (`test_thematic_break_does_not_interrupt_paragraph` — нет `<hr>`, 1 параграф;
+  `test_yaml_front_matter` — ровно 1 `<hr>`, нет `<h1>`, `= Doc Title` как текст, `<p>Body.</p>`).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser lib 579→**582**, html unit 449→**451**, остальное неизм.).
+- **Гейт 344/344 байт-в-байт** vs master (база `/tmp/adoc_base` пересобрана из master `f0b51a0` через worktree
+  `/tmp/adoc_base_wt`, удалён; gate_check.py → 0 diff). **0 регрессий.**
+- **Frontier identical 201→202 (+1)**, clean_div 31→30. Прямой new-vs-base по 250: **1 файл изменился** —
+  `asciidoctor/test/fixtures/with-front-matter.adoc` (`---\nname: value\n---\ncontent`): base прерывал на 2-м `---`
+  (`<p>name: value</p><hr><p>content</p>`) → new даёт `<hr>`+1 параграф `name: value\n---\ncontent` (байт-в-байт
+  MATCH asciidoctor). **0 регрессий** (изменение = улучшение).
+- Пробы CLI vs `asciidoctor -s` (MATCH байт-в-байт): полный FM (`---\nkey:val\n---\n= Title\n\nBody`), FM без `=Title`,
+  `---`/`'''` внутри параграфа, admonition `NOTE:…\n---\n…`, регресс-гард границы (`text\n\n---\n\nmore` → `<hr>`).
+
+### Остаточные DIFF (предсуществующие, ОРТОГОНАЛЬНЫЕ, НЕ введены/ухудшены фиксом)
+- `***`/`___` отдельной строкой внутри параграфа → asciidoctor `<strong>*</strong>`/`<em>_</em>`, у нас литерал
+  (inline-движок; фикс УЛУЧШИЛ — убрал лишний `<hr>`, но не до MATCH).
+- `- - -` (spaced) внутри параграфа прерывается как unordered list marker (`- ` матчится раньше thematic, стр. 2389<2396) —
+  отдельное задокументированное list-marker расхождение (block.rs коммент 2407-2408).
+
+### Что дальше
+F-H ЗАКРЫТ (корневой scope). Следующий по рекомендации TODO — **F-J'** (`:compat-mode:` → `:language:` алиасит
+`:source-language:`), либо follow-up'ы F-H: `skip-front-matter` атрибут (срез ведущего `---\n…\n---\n` в препроцессоре),
+inline `***`/`___`.
+
+---
+
 ## Сессия (2026-06-18, 116-я) — F-I UTF-8 BOM срезается на входе (СМЕРЖЕНА `08953b5`, запушена)
 
 Запрос «запланируй следующую задачу из туду» → F-E смержена (`165bcd8`), следующий по рекомендации TODO — **F-I**.

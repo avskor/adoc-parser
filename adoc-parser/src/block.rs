@@ -2393,7 +2393,13 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_block_video(line).is_some()
                 || scanner::is_block_audio(line).is_some()
                 || scanner::is_toc_macro(line)
-                || scanner::is_thematic_break(line)
+                // NOTE: a thematic break (`'''`/`---`/`***`/`___`) does NOT
+                // interrupt an open paragraph — like a section title, Asciidoctor
+                // recognizes it only at a block boundary (after a blank line) via
+                // the scan_leaf_blocks dispatcher; mid-paragraph it is ordinary
+                // text (read_paragraph_lines / StartOfBlockProc). This is why a
+                // YAML front-matter `---\n…\n---\n= Title` block collapses into one
+                // paragraph after the opening `---` boundary.
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_description_list_marker(line).is_some()
@@ -2796,7 +2802,9 @@ impl<'a> BlockScanner<'a> {
                 || scanner::is_block_video(line).is_some()
                 || scanner::is_block_audio(line).is_some()
                 || scanner::is_toc_macro(line)
-                || scanner::is_thematic_break(line)
+                // A thematic break does not interrupt an open paragraph — see the
+                // note in scan_paragraph; the admonition's principal paragraph
+                // follows the same Asciidoctor rule.
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
                 || scanner::is_description_list_marker(line).is_some()
@@ -3996,6 +4004,63 @@ mod tests {
             Event::Text(Cow::Borrowed(".NotATitle")),
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("more")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_thematic_break_does_not_interrupt_paragraph() {
+        // A thematic break (`---`/`'''`/etc.) inside an open paragraph is plain
+        // text — Asciidoctor recognizes it only at a block boundary (after a
+        // blank line). This is the root of correct YAML front-matter handling.
+        let input = "para text\n---\nmore";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("para text")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("---")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("more")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_thematic_break_at_block_boundary_still_breaks() {
+        // Regression guard: a `---` standing alone after a blank line is still
+        // a standalone thematic break (we only stopped *interrupting* paragraphs).
+        let input = "para text\n\n---\n\nmore";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("para text")),
+            Event::End(TagEnd::Paragraph),
+            Event::ThematicBreak,
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("more")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_yaml_front_matter_collapses_into_paragraph() {
+        // YAML front matter: the opening `---` is a boundary thematic break,
+        // then everything up to the blank line — including the closing `---`
+        // and a `= Title` line — collapses into one paragraph (Asciidoctor).
+        let input = "---\ntitle: Hello\n---\n= Doc Title\n\nBody.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::ThematicBreak,
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("title: Hello")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("---")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("= Doc Title")),
+            Event::End(TagEnd::Paragraph),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Body.")),
             Event::End(TagEnd::Paragraph),
         ]);
     }
