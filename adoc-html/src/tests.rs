@@ -1263,6 +1263,24 @@ fn test_source_language_default_html() {
 }
 
 #[test]
+fn test_compat_mode_language_source_default_html() {
+    // In compat-mode, :language: aliases :source-language: (F-J'), so a bare
+    // `[source]` renders with the language class — verified vs asciidoctor 2.0.23.
+    let aliased = to_html(":compat-mode:\n:language: ruby\n\n[source]\n----\nputs 1\n----");
+    assert!(
+        aliased.contains("<pre class=\"highlight\"><code class=\"language-ruby\" data-lang=\"ruby\">"),
+        "compat-mode :language: aliases source-language. Got: {aliased}"
+    );
+
+    // Regression guard: outside compat-mode, :language: is inert.
+    let no_compat = to_html(":language: ruby\n\n[source]\n----\nputs 1\n----");
+    assert!(
+        !no_compat.contains("language-ruby"),
+        ":language: without compat-mode → no language class. Got: {no_compat}"
+    );
+}
+
+#[test]
 fn test_markdown_fence_source_html() {
     // A markdown fence is always a source block, even without an info-string
     // language: `<pre class="highlight"><code>` (F-J, verified vs asciidoctor).

@@ -515,6 +515,22 @@ impl<'a> BlockScanner<'a> {
         self.doc_attrs.get("source-language").cloned()
     }
 
+    /// Mirror of Asciidoctor's `save_attributes` (document.rb): when the
+    /// document header sets both `compat-mode` and `language`, `source-language`
+    /// is aliased to `language` (overwriting any explicit value). This runs once
+    /// at the header→body transition — mid-document attribute entries do not
+    /// apply, and outside compat-mode `language` never affects the default
+    /// source language. Presence-based (an empty `language` still aliases) and
+    /// order-independent (`language` always wins over an explicit
+    /// `source-language`, matching Asciidoctor 2.0.23).
+    fn apply_compat_mode_source_language(&mut self) {
+        if self.doc_attrs.contains_key("compat-mode")
+            && let Some(lang) = self.doc_attrs.get("language").cloned()
+        {
+            self.doc_attrs.insert("source-language".to_string(), lang);
+        }
+    }
+
     /// Substitute `{name}` attribute references against the recorded entries.
     /// Used on section/heading titles before auto-id generation (Asciidoctor
     /// applies attribute substitution to the title before deriving the id)
@@ -1259,8 +1275,13 @@ impl<'a> BlockScanner<'a> {
             return r;
         }
 
-        // From here on, we're in the document body
-        self.body_started = true;
+        // From here on, we're in the document body. The header just finished:
+        // apply Asciidoctor's compat-mode `language` → `source-language` alias
+        // exactly once, before any block consumes the default source language.
+        if !self.body_started {
+            self.apply_compat_mode_source_language();
+            self.body_started = true;
+        }
 
         if let Some(r) = self.scan_leaf_blocks(line) {
             return r;
@@ -5173,6 +5194,99 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
         assert!(!events.iter().any(|e| matches!(e, Event::Text(_))));
+    }
+
+    #[test]
+    fn test_compat_mode_aliases_language_to_source() {
+        // In compat-mode, :language: aliases :source-language: — a bare
+        // `[source]` inherits it as the default language (F-J').
+        let input = ":compat-mode:\n:language: ruby\n\n[source]\n----\nputs 1\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+    }
+
+    #[test]
+    fn test_language_without_compat_mode_ignored() {
+        // Outside compat-mode, :language: never sets the default source
+        // language — a bare `[source]` stays language-less.
+        let input = ":language: ruby\n\n[source]\n----\nputs 1\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
+    }
+
+    #[test]
+    fn test_compat_mode_language_overrides_explicit_source_language() {
+        // :language: always wins over an explicit :source-language: in
+        // compat-mode (order-independent overwrite, matches asciidoctor).
+        let input =
+            ":compat-mode:\n:source-language: python\n:language: ruby\n\n[source]\n----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::Start(Tag::SourceBlock { language: Some(l) }) if l == "python"
+        )));
+    }
+
+    #[test]
+    fn test_compat_mode_language_promotes_bare_listing() {
+        // The aliased source-language drives the F-G bare-listing promotion.
+        let input = ":compat-mode:\n:language: ruby\n\n----\nputs 1\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("ruby".into()))
+        })));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing })
+        )));
+    }
+
+    #[test]
+    fn test_compat_mode_language_mid_document_does_not_apply() {
+        // Header-only: :language: declared after the first body block does not
+        // alias source-language (matches asciidoctor's save_attributes timing).
+        let input = ":compat-mode:\n\n[source]\n----\nbefore\n----\n\n\
+                     :language: ruby\n\n[source]\n----\nafter\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        // No source block gets a language — neither before nor after.
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::Start(Tag::SourceBlock { language: Some(_) })
+        )));
+    }
+
+    #[test]
+    fn test_compat_mode_unset_disables_alias() {
+        // :compat-mode!: removes the attribute, so the alias does not run.
+        let input = ":compat-mode:\n:compat-mode!:\n:language: ruby\n\n[source]\n----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
+    }
+
+    #[test]
+    fn test_compat_mode_empty_language() {
+        // An empty :language: still aliases (presence-based) — promotion with
+        // an empty language, matching asciidoctor's `language-`/`data-lang=""`.
+        let input = ":compat-mode:\n:language:\n\n[source]\n----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("".into()))
+        })));
+    }
+
+    #[test]
+    fn test_compat_mode_explicit_block_language_wins() {
+        // An explicit `[source,python]` still beats the compat-mode default.
+        let input = ":compat-mode:\n:language: ruby\n\n[source,python]\n----\nx\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(events.contains(&Event::Start(Tag::SourceBlock {
+            language: Some(Cow::Owned("python".into()))
+        })));
     }
 
     #[test]
