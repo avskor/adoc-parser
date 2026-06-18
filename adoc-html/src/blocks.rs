@@ -567,7 +567,22 @@ impl HtmlRenderer {
         }
     }
 
+    /// Asciidoctor adds the `nowrap` class to a verbatim block's `<pre>` when the
+    /// block carries the `nowrap` option (`[%nowrap]`) or the document-wide
+    /// `prewrap` attribute has been unset (`:prewrap!:`). `prewrap` is seeded as a
+    /// default attribute in `HtmlRenderer::new`, so the second arm fires only when
+    /// the user explicitly removed it. Mirrors `convert_listing`/`convert_literal`.
+    fn nowrap_active(&self, meta: &Option<BlockMeta>) -> bool {
+        meta.as_ref().is_some_and(|m| m.options.iter().any(|o| o == "nowrap"))
+            || !self.document_attrs.contains_key("prewrap")
+    }
+
     pub(crate) fn start_delimited_block(&mut self, output: &mut String, kind: &DelimitedBlockKind, meta: &Option<BlockMeta>) {
+        let pre_open = if self.nowrap_active(meta) {
+            "<pre class=\"nowrap\">"
+        } else {
+            "<pre>"
+        };
         match kind {
             DelimitedBlockKind::Listing => {
                 self.delimited_block_stack.push((*kind, false));
@@ -575,7 +590,8 @@ impl HtmlRenderer {
                 Self::write_meta_attrs(output, &Self::strip_block_style(meta), "listingblock");
                 output.push_str(">\n");
                 self.emit_pending_block_title(output);
-                output.push_str("<div class=\"content\">\n<pre>");
+                output.push_str("<div class=\"content\">\n");
+                output.push_str(pre_open);
             }
             DelimitedBlockKind::Literal => {
                 self.delimited_block_stack.push((*kind, false));
@@ -583,7 +599,8 @@ impl HtmlRenderer {
                 Self::write_meta_attrs(output, &Self::strip_block_style(meta), "literalblock");
                 output.push_str(">\n");
                 self.emit_pending_block_title(output);
-                output.push_str("<div class=\"content\">\n<pre>");
+                output.push_str("<div class=\"content\">\n");
+                output.push_str(pre_open);
             }
             DelimitedBlockKind::Example => {
                 let is_collapsible = meta.as_ref()
@@ -710,6 +727,11 @@ impl HtmlRenderer {
         pre_classes.push("highlight");
         if linenums {
             pre_classes.push("linenums");
+        }
+        // `nowrap` is appended last (`[%nowrap]` option or `:prewrap!:`), matching
+        // Asciidoctor's `<pre class="… highlight … nowrap">` ordering.
+        if self.nowrap_active(meta) {
+            pre_classes.push("nowrap");
         }
         if !pre_classes.is_empty() {
             output.push_str(" class=\"");

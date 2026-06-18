@@ -4006,6 +4006,55 @@ fn test_source_block_coderay() {
 }
 
 #[test]
+fn test_nowrap_source_no_highlighter() {
+    // `nowrap` option (shorthand `[source%nowrap,ruby]`) appends `nowrap` after
+    // `highlight`. NB: the comma form `[source,ruby,%nowrap]` is NOT a nowrap
+    // trigger — Asciidoctor reads a 3rd source positional as `linenums`.
+    let html = to_html("[source%nowrap,ruby]\n----\nputs 1\n----");
+    assert!(html.contains("<pre class=\"highlight nowrap\">"), "source nowrap no-hl. Got: {html}");
+}
+
+#[test]
+fn test_nowrap_source_rouge() {
+    // `nowrap` is the last class, after the highlighter and `highlight`.
+    let html = to_html(":source-highlighter: rouge\n\n[source%nowrap,ruby]\n----\nputs 1\n----");
+    assert!(html.contains("<pre class=\"rouge highlight nowrap\">"), "source nowrap rouge. Got: {html}");
+}
+
+#[test]
+fn test_nowrap_plain_listing() {
+    let html = to_html("[%nowrap]\n----\nputs 1\n----");
+    assert!(html.contains("<pre class=\"nowrap\">"), "plain listing nowrap. Got: {html}");
+}
+
+#[test]
+fn test_nowrap_literal_block() {
+    let html = to_html("[%nowrap]\n....\nx\n....");
+    assert!(html.contains("<pre class=\"nowrap\">"), "literal nowrap. Got: {html}");
+}
+
+#[test]
+fn test_nowrap_prewrap_unset_global() {
+    // `:prewrap!:` flips every verbatim block to `nowrap`, even without the option.
+    let html = to_html(":prewrap!:\n\n----\nx\n----");
+    assert!(html.contains("<pre class=\"nowrap\">"), "prewrap unset → listing nowrap. Got: {html}");
+    let src = to_html(":prewrap!:\n\n[source,ruby]\n----\nputs 1\n----");
+    assert!(src.contains("<pre class=\"highlight nowrap\">"), "prewrap unset → source nowrap. Got: {src}");
+}
+
+#[test]
+fn test_nowrap_absent_by_default() {
+    // Regression guard: without the option (and with prewrap on by default),
+    // no `nowrap` class is emitted.
+    let src = to_html("[source,ruby]\n----\nputs 1\n----");
+    assert!(src.contains("<pre class=\"highlight\">"), "default source: no nowrap. Got: {src}");
+    assert!(!src.contains("nowrap"), "default source: nowrap absent. Got: {src}");
+    let listing = to_html("----\nputs 1\n----");
+    assert!(listing.contains("<div class=\"content\">\n<pre>"), "default listing: bare pre. Got: {listing}");
+    assert!(!listing.contains("nowrap"), "default listing: nowrap absent. Got: {listing}");
+}
+
+#[test]
 fn test_source_highlight_single_line() {
     let html = to_html("[source,rust,highlight=2]\n----\nlet a = 1;\nlet b = 2;\nlet c = 3;\n----");
     assert!(html.contains("let a = 1;\n<span class=\"hll\">let b = 2;</span>\nlet c = 3;"), "single line highlight. Got: {html}");
