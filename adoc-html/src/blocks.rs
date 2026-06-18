@@ -720,17 +720,23 @@ impl HtmlRenderer {
         output.push_str("><code");
 
         // Build <code> attrs
+        let is_hljs = matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs"));
         if let Some(lang) = language {
-            if matches!(highlighter.as_deref(), Some("highlight.js" | "highlightjs")) {
-                output.push_str(" class=\"hljs language-");
+            if is_hljs {
+                // Asciidoctor order: `language-X hljs` (language class first).
+                output.push_str(" class=\"language-");
                 html_escape(output, lang);
-                output.push('"');
+                output.push_str(" hljs\"");
             } else if highlighter.is_none() {
                 output.push_str(" class=\"language-");
                 html_escape(output, lang);
                 output.push('"');
             }
             write_attr(output, "data-lang", lang);
+        } else if is_hljs {
+            // highlight.js without a language: Asciidoctor emits `language-none hljs`
+            // and no data-lang attribute.
+            output.push_str(" class=\"language-none hljs\"");
         }
 
         if let Some(hl_spec) = meta.as_ref()
