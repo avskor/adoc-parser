@@ -121,7 +121,11 @@ pub enum Event<'a> {
     /// Distinct from [`Self::Toc`] because the parser cannot otherwise tell the
     /// two apart by order (the macro can appear with no `:toc:` attribute, so it
     /// would be the only `Toc` event).
-    TocMacro,
+    ///
+    /// `levels` carries the macro's `levels=N` attribute override (Asciidoctor's
+    /// `toc::[levels=1]`): when set it overrides the document `:toclevels:` for
+    /// this TOC only. `None` means no override — the renderer uses `:toclevels:`.
+    TocMacro { levels: Option<u8> },
     Include {
         path: CowStr<'a>,
         attrs: CowStr<'a>,
@@ -197,7 +201,7 @@ impl<'a> Event<'a> {
                 label: label.map(cow_owned),
             },
             Event::Toc => Event::Toc,
-            Event::TocMacro => Event::TocMacro,
+            Event::TocMacro { levels } => Event::TocMacro { levels },
             Event::Include { path, attrs } => Event::Include {
                 path: cow_owned(path),
                 attrs: cow_owned(attrs),

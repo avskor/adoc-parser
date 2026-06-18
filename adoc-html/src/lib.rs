@@ -170,6 +170,9 @@ struct HtmlRenderer {
     /// A `toc::[]` macro spliced a [`TOC_MACRO_PLACEHOLDER`] (under `:toc: macro`)
     /// that `finish` must replace with the rendered TOC.
     toc_macro_used: bool,
+    /// `levels=N` override from a `toc::[levels=N]` macro (overrides `:toclevels:`
+    /// for the macro-placed TOC only). `None` = use `toc_levels`.
+    toc_macro_levels: Option<u8>,
     /// Doctype latched at the end of the document header (Asciidoctor locks
     /// it there; body `:doctype:` entries don't change section semantics).
     doctype_book: bool,
@@ -320,6 +323,7 @@ impl HtmlRenderer {
             toc_title: String::from(DEFAULT_TOC_TITLE),
             toc_auto_seen: false,
             toc_macro_used: false,
+            toc_macro_levels: None,
             doctype_book: false,
             in_section_title: false,
             current_toc_entry: None,

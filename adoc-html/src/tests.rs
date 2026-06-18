@@ -993,6 +993,27 @@ fn test_toc_macro_in_preamble_wrapped() {
 }
 
 #[test]
+fn test_toc_macro_levels_override() {
+    // `toc::[levels=1]` overrides `:toclevels:` for this TOC only: with toclevels=3
+    // the macro still renders just the top-level sections (sectlevel1), no deeper.
+    let input = "= Doc\n:toc: macro\n:toclevels: 3\n\ntoc::[levels=1]\n\n== Sec A\n\n=== Sub A1\n\n==== Deep A1a\n\n== Sec B";
+    let html = to_html(input);
+    assert!(html.contains("<ul class=\"sectlevel1\">"), "top level present. got: {html}");
+    assert!(!html.contains("sectlevel2"), "levels=1 must not emit deeper levels. got: {html}");
+    assert!(html.contains("#_sec_a") && html.contains("#_sec_b"), "both top sections. got: {html}");
+    assert!(!html.contains("#_sub_a1"), "sub-section excluded by levels=1. got: {html}");
+}
+
+#[test]
+fn test_toc_macro_levels_inert_without_macro_mode() {
+    // Without `:toc: macro` the macro is inert regardless of attributes — the
+    // `levels` override is ignored and the marker is emitted.
+    let input = "= Doc\n:toc:\n\ntoc::[levels=1]\n\n== Sec A\n\n=== Sub A1";
+    let html = to_html(input);
+    assert!(html.contains("<!-- toc disabled -->"), "macro inert. got: {html}");
+}
+
+#[test]
 fn test_unresolved_include_html() {
     // Includes are resolved by the preprocessor (reader); a line reaching the
     // parser — e.g. from an escaped `\include::` — is plain paragraph text,

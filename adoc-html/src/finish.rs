@@ -74,7 +74,7 @@ impl HtmlRenderer {
         self.preamble_start = None;
 
         if let Some(pos) = self.toc_insert_position {
-            let toc_html = self.generate_toc();
+            let toc_html = self.generate_toc(self.toc_levels);
             if !toc_html.is_empty() {
                 output.insert_str(pos, &toc_html);
                 // Shift content_start if TOC was inserted before it
@@ -91,7 +91,7 @@ impl HtmlRenderer {
         // path above — the placeholder was spliced into the content stream, so it
         // already moved with the preamble wrap and sits at the right position.
         if self.toc_macro_used {
-            let toc_html = self.generate_toc();
+            let toc_html = self.generate_toc(self.toc_macro_levels.unwrap_or(self.toc_levels));
             if output.contains(TOC_MACRO_PLACEHOLDER) {
                 *output = output.replace(TOC_MACRO_PLACEHOLDER, &toc_html);
             }
@@ -197,8 +197,8 @@ impl HtmlRenderer {
         output.push_str("</div>\n");
     }
 
-    pub(crate) fn generate_toc(&self) -> String {
-        let steps = self.toc_builder.toc_steps(self.toc_levels);
+    pub(crate) fn generate_toc(&self, levels: u8) -> String {
+        let steps = self.toc_builder.toc_steps(levels);
         if steps.is_empty() {
             return String::new();
         }

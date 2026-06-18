@@ -924,9 +924,16 @@ impl<'a> BlockScanner<'a> {
         // TOC macro `toc::[]` — distinct from the `:toc:`-attribute auto TOC so
         // the renderer can honour Asciidoctor's rule that the macro renders only
         // under `:toc: macro` (otherwise it is inert).
-        if scanner::is_toc_macro(line) {
+        if let Some(attrs) = scanner::toc_macro_attrs(line) {
+            // `toc::[levels=N]` overrides `:toclevels:` for this TOC only
+            // (Asciidoctor reads only the named `levels` attribute; a positional
+            // like `toc::[2]` is ignored, matching `named.get` returning None).
+            let levels = BlockAttributes::parse(attrs)
+                .named
+                .get("levels")
+                .and_then(|v| v.parse::<u8>().ok());
             self.advance();
-            return Some(Some(Event::TocMacro));
+            return Some(Some(Event::TocMacro { levels }));
         }
 
         // NOTE: `include::path[attrs]` is NOT detected here. Asciidoctor resolves
@@ -4942,7 +4949,16 @@ mod tests {
     fn test_toc_macro() {
         let input = "toc::[]";
         let events: Vec<_> = BlockScanner::new(input).collect();
-        assert_eq!(events, vec![Event::TocMacro]);
+        assert_eq!(events, vec![Event::TocMacro { levels: None }]);
+    }
+
+    #[test]
+    fn test_toc_macro_levels() {
+        let events: Vec<_> = BlockScanner::new("toc::[levels=2]").collect();
+        assert_eq!(events, vec![Event::TocMacro { levels: Some(2) }]);
+        // Positional value is not `levels` → no override (matches Asciidoctor).
+        let events: Vec<_> = BlockScanner::new("toc::[2]").collect();
+        assert_eq!(events, vec![Event::TocMacro { levels: None }]);
     }
 
     #[test]
