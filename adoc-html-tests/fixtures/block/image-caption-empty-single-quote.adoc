@@ -1,0 +1,4 @@
+[[main-classes]]
+.The PlantUML block extension class
+[caption='']
+image::sample-plantuml-diagram.png[Class diagram,135,118]

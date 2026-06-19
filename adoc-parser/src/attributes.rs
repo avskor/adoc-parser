@@ -52,13 +52,21 @@ fn split_respecting_quotes(s: &str) -> Vec<&str> {
     parts
 }
 
-/// Strip a single matching pair of enclosing double quotes, mirroring the
-/// quote-awareness of `split_respecting_quotes`. Returns the input unchanged
-/// when both quotes are not present (so `"x` or `x"` are left intact).
+/// Strip a single matching pair of enclosing quotes — either double (`"…"`) or
+/// single (`'…'`) — mirroring the quote-awareness of `split_respecting_quotes`.
+/// Asciidoctor drops the enclosing quotes for both forms (the difference is only
+/// in substitution semantics: single-quoted values additionally get normal subs
+/// applied — not yet reproduced for named values). Returns the input unchanged
+/// when a matching pair is not present (so `"x`, `x"`, `'x`, or `x'` are intact,
+/// and a mismatched `'x"` is left as-is).
 fn strip_enclosing_quotes(s: &str) -> &str {
-    s.strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .unwrap_or(s)
+    let b = s.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        // The quote byte is ASCII, so slicing past it stays on a char boundary.
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -251,13 +259,11 @@ impl BlockAttributes {
                 continue;
             }
             if let Some((key, value)) = part.split_once('=') {
-                // named: key=value
+                // named: key=value — drop a matching pair of enclosing quotes
+                // (`caption=''` → empty, `caption='Foo. '` → `Foo. `), both
+                // single and double, as Asciidoctor does.
                 let key = key.trim();
-                let value = value.trim();
-                let value = value
-                    .strip_prefix('"')
-                    .and_then(|v| v.strip_suffix('"'))
-                    .unwrap_or(value);
+                let value = strip_enclosing_quotes(value.trim());
                 // Promote id=, role= and options=/opts= to structural fields
                 match key {
                     "id" => { attrs.id = Some(value.to_string()); }
@@ -1161,6 +1167,50 @@ mod tests {
         );
         assert!(merged.has_option("header"));
         assert_eq!(merged.table_cols_count(), Some(2));
+    }
+
+    #[test]
+    fn test_named_attr_single_quoted_value_unquoted() {
+        // Asciidoctor drops the enclosing quotes for both single- and
+        // double-quoted named values. An empty single-quoted caption
+        // (`[caption='']`) becomes the empty string, which the renderer
+        // treats as "no caption prefix" (matches asciidoctor 2.0.23).
+        let attrs = BlockAttributes::parse("caption=''");
+        assert_eq!(attrs.named.get("caption").map(String::as_str), Some(""));
+
+        let attrs = BlockAttributes::parse("caption='Foo. '");
+        assert_eq!(attrs.named.get("caption").map(String::as_str), Some("Foo. "));
+
+        // Double-quoted form unchanged (regression guard).
+        let attrs = BlockAttributes::parse("caption=\"Bar. \"");
+        assert_eq!(attrs.named.get("caption").map(String::as_str), Some("Bar. "));
+
+        // A bare value with an inner apostrophe is left intact — the value
+        // neither starts nor ends with a quote.
+        let attrs = BlockAttributes::parse("caption=don't");
+        assert_eq!(attrs.named.get("caption").map(String::as_str), Some("don't"));
+
+        // A lone quote (no matching closer) is not stripped.
+        let attrs = BlockAttributes::parse("caption='");
+        assert_eq!(attrs.named.get("caption").map(String::as_str), Some("'"));
+
+        // Single quotes are also dropped for structural keys (id/role).
+        let attrs = BlockAttributes::parse("role='myrole'");
+        assert_eq!(attrs.roles, vec!["myrole"]);
+    }
+
+    #[test]
+    fn test_strip_enclosing_quotes_both_forms() {
+        assert_eq!(strip_enclosing_quotes("\"abc\""), "abc");
+        assert_eq!(strip_enclosing_quotes("'abc'"), "abc");
+        assert_eq!(strip_enclosing_quotes("''"), "");
+        assert_eq!(strip_enclosing_quotes("\"\""), "");
+        // Mismatched / lone / inner quotes are preserved.
+        assert_eq!(strip_enclosing_quotes("'abc\""), "'abc\"");
+        assert_eq!(strip_enclosing_quotes("'"), "'");
+        assert_eq!(strip_enclosing_quotes("\""), "\"");
+        assert_eq!(strip_enclosing_quotes("don't"), "don't");
+        assert_eq!(strip_enclosing_quotes("abc"), "abc");
     }
 
     #[test]

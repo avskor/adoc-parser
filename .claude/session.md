@@ -1,5 +1,48 @@
 # Session context
 
+## Сессия (2026-06-20, 135-я) — F-AA single-quoted значение именованного block-атрибута снимает кавычки (ветка `fix/single-quoted-named-attr`, НЕ смержена, ожидает мержа/пуша)
+
+Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 217, clean-div 16. Триаж минимальных
+расхождений (diff=1) пробами vs asciidoctor 2.0.23: `doctime-localtime` — `{localtime}` intrinsic (зависит от момента
+рендеринга, не actionable); `migration` — `{asciidoctor-version}`→`2.0.23` (intrinsic версии самого asciidoctor,
+version-specific, вне scope); `plain-text-diagrams` — `[caption='']` (единственный чистый одно-классовый кандидат,
+даёт флип 1→0). Это в точности кандидат C из 133-й сессии, теперь дающий identical после F-Z. Реализовано без
+AskUserQuestion/plan-mode (кандидат вынужденный, фикс субтрактивный по конструкции). **Закоммичено на ветке; ожидает мержа/пуша.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/attributes.rs`)
+- `[caption='']` (пустое одинарно-кавыченное значение) над block-image: asciidoctor → пустая caption (заголовок без
+  префикса `The PlantUML…`); мы → литерал `''The PlantUML…`. `BlockAttributes::parse` именованных значений снимал
+  ТОЛЬКО двойные кавычки (`strip_prefix('"').and_then(strip_suffix('"'))`); single-quoted тёк литералом. То же в
+  `strip_enclosing_quotes` (image-макрос). `split_respecting_quotes` УЖЕ single-quote-aware (открытие в начале значения),
+  не хватало лишь СНЯТИЯ. `caption_prefix` (render-core) уже даёт `Some("")`→`CaptionPrefix::None` — после анкования всё совпадает.
+- asciidoctor снимает кавычки для ОБОИХ видов; различие — single-quoted доп. получают normal subs (мы их к named-значениям
+  не применяем; caption рендерится html_escape'ом → для пустого/plain-text значения no-op; задокументировано follow-up).
+
+### Фикс (1 файл)
+- `strip_enclosing_quotes` обобщён: byte-скан `b[0]∈{",'} && b[len-1]==b[0] && len>=2` → срез `[1..len-1]` (квоты ASCII →
+  char-boundary safe). Mismatched `'x"`, одиночные `'x`/`x'`/`"`/`'` — не трогаются (regression-safe). Doc-комментарий обновлён.
+- Инлайновый double-only strip в `BlockAttributes::parse` (named branch) заменён вызовом `strip_enclosing_quotes`
+  → single+double для всех named-ключей, включая структурные id/role/opts.
+- +2 unit (`test_named_attr_single_quoted_value_unquoted`, `test_strip_enclosing_quotes_both_forms`),
+  +1 html-фикстура `block/image-caption-empty-single-quote` (anchor + `.Title` + `[caption='']` + image, эталон asciidoctor).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser 614→**616** +2 unit; html-фикстуры +1).
+- **Гейт 344/344 байт-в-байт** vs master (base через worktree → /tmp/adoc_base, gate_check **0 diff**). Single-quoted
+  named block-атрибутов в гейте (`grep '^\[.*='` по 344) — **0 вхождений** → нулевой риск по конструкции.
+- **Frontier identical 217→218 (+1)**, clean-div 16→15. frontier_regress new-vs-base: **1 файл изменился,
+  `plain-text-diagrams` IMPROVED 1→0, 0 регрессий** (во всём frontier 250 файлов single-quoted named block-атрибут — только этот).
+- 7 CLI-проб vs asciidoctor 2.0.23 — содержимое байт-в-байт (empty/non-empty single caption, double-guard,
+  single/double role, single id, table caption; разница лишь в `<div id="content">`-обёртке — наш бинарь не honor'ит `-s`).
+
+### Дальше / follow-up (вне scope)
+- normal subs для single-quoted named-значений (`caption='*x*'`→bold; мы html_escape без subs — пре-существующий gap,
+  актуален и для double-quoted, не в корпусе). `pass:[]`/`pass:subs[]` форма значения атрибута. single-quoted в inline `[attrlist]`.
+- **Прочие топ-каскады frontier** (многоклассовые): asciidoc-returns 273, sample 152, manpage 146, index 136, debuter 118.
+  Малые остатки: `mdbasics` 3 (escaped `\'`/`++`-`+-` маркеры списка), `doctime-localtime`/`migration` — intrinsic (не actionable).
+
+---
+
 ## Сессия (2026-06-19, 134-я) — F-Z callout-guard под `:icons: font` (ветка `fix/callout-guard-icons-font`, НЕ смержена, ожидает мержа/пуша)
 
 Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 217, clean-div 16. Триаж мелких
