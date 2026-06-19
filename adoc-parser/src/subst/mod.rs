@@ -848,6 +848,64 @@ mod tests {
         }
     }
 
+    /// F-W. A backslash-escaped typographic replacement (`\...`, `\--`, `\(C)`, …)
+    /// inside the path of an attribute reference with a trailing `[...]` is sealed
+    /// by the `escape` pass into a `Literal` sentinel. `attributes::extract` captures
+    /// the path as a raw buffer slice, so that sentinel used to leak into the
+    /// emitted `AttributeReference.trailing_brackets` — and its index digit then
+    /// surfaced as a spurious `0` when the renderer re-parsed it in a fresh table.
+    /// The pass now desentinelizes the trailing, so the event carries clean literal
+    /// text (the backslash already dropped, no control bytes). The engine
+    /// intentionally diverges from legacy here (legacy keeps the raw `\...` in its
+    /// trailing, which renders the wrong href) — these inputs are not in any
+    /// `reproduces_legacy_on_*` set.
+    #[test]
+    fn attr_ref_trailing_desentinelizes_escaped_typographic() {
+        fn trailing_of(text: &str) -> String {
+            let evs = pipeline(text);
+            let ev = evs
+                .iter()
+                .find(|e| matches!(e, Event::AttributeReference { .. }))
+                .unwrap_or_else(|| panic!("no AttributeReference for {text:?}: {evs:?}"));
+            match ev {
+                Event::AttributeReference { trailing_brackets, .. } => trailing_brackets
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("no trailing for {text:?}"))
+                    .to_string(),
+                _ => unreachable!(),
+            }
+        }
+
+        // Flagship (CHANGELOG.adoc pattern): the `\...` Literal is resolved to a
+        // bare `...` (backslash dropped), with no sentinel control bytes left.
+        let t = trailing_of("{url-repo}/compare/v2.0.25\\...v2.0.26[full diff]");
+        assert_eq!(t, "/compare/v2.0.25...v2.0.26[full diff]");
+
+        // Every non-angle-bracket typographic escape resolves to its literal form.
+        assert_eq!(trailing_of("{u}/a\\--b[d]"), "/a--b[d]");
+        assert_eq!(trailing_of("{u}/a\\(C)b[d]"), "/a(C)b[d]");
+        assert_eq!(trailing_of("{u}/a\\(R)b[d]"), "/a(R)b[d]");
+        assert_eq!(trailing_of("{u}/a\\(TM)b[d]"), "/a(TM)b[d]");
+
+        // No trailing ever contains a reserved control byte (the leak signature).
+        for c in [
+            "{url-repo}/compare/v2.0.25\\...v2.0.26[full diff]",
+            "{u}/a\\--b[d]",
+            "{u}/a\\(C)b[d]",
+        ] {
+            assert!(
+                !trailing_of(c).bytes().any(|b| b == TAG_LEAD || b == TAG_TAIL),
+                "sentinel byte leaked into trailing for {c:?}"
+            );
+        }
+
+        // Regression guard: a sentinel-free trailing is untouched (desentinelize
+        // fast-path), so the common `{url}[text]` link path still matches legacy.
+        for c in ["{url}[text]", "{url}/issues[text]", "{a}[.role]*x*"] {
+            assert_eq!(pipeline(c), legacy(c), "diverged from legacy for {c:?}");
+        }
+    }
+
     /// With the `:double`/`:single` curved smart quotes ported, the pipeline must
     /// reproduce legacy on every `"`…`"`/`'`…`'` form: the separate curly-quote
     /// `Text` events, the leading-edge suppression of constrained

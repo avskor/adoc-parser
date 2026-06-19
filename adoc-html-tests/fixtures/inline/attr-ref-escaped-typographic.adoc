@@ -1,0 +1,15 @@
+:url-repo: https://github.com/asciidoctor/asciidoctor
+
+A backslash-escaped typographic replacement in the path of an attribute reference
+with a trailing bracket stays literal in the link target (matching the
+replacements-before-macros order of Asciidoctor), instead of leaking a spurious `0`.
+
+The flagship CHANGELOG pattern: {url-repo}/compare/v2.0.25\...v2.0.26[full diff].
+
+Em-dash escape: {url-repo}/a\--b[dash].
+
+Copyright escape: {url-repo}/a\(C)b[copy].
+
+Registered escape: {url-repo}/a\(R)b[reg].
+
+Trademark escape: {url-repo}/a\(TM)b[tm].
