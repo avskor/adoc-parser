@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-19, 134-я) — F-Z callout-guard под `:icons: font` (ветка `fix/callout-guard-icons-font`, НЕ смержена, ожидает мержа/пуша)
+
+Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 217, clean-div 16. Триаж мелких
+расхождений пробами vs asciidoctor 2.0.23. **Ключевое открытие:** в `plain-text-diagrams` (`:icons: font`) asciidoctor
+вырезает комментарный префикс `# `/`// `/`;; ` перед conum, мы — оставляем; НО gate (`verbatim/examples/callout.adoc`
+тоже с `:icons: font`) проходит 344/344 — потому что там `:icons: font` идёт ПОСЛЕ callout-примеров → они рендерятся
+text-иконками. Первопричина найдена точно по исходникам asciidoctor 2.0.23. AskUserQuestion (A/B/C) → выбран **A**.
+EnterPlanMode → Explore-агент (полный инвентарь call-site `CalloutRef`) + ручной трейс → план
+`~/.claude/plans/modular-foraging-fern.md`, ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT.
+**Закоммичено на ветке; ожидает мержа/пуша по запросу.**
+
+### Корень (asciidoctor 2.0.23)
+- `sub_callouts` (substitutors.rb:920) матчит `CalloutSourceRx` (rx.rb:375) с группой `((?://|#|--|;;) ?)?` → кладёт
+  префикс в атрибут `guard` инлайна. `convert_inline_callout` (html5.rb:1159-1170): `:icons: font`/image → конум БЕЗ
+  guard (отброшен); иначе (text-иконки, default) → `#{guard}<b class="conum">(N)</b>` (guard РЕ-вставлен).
+- У нас guard оставался в `Event::Text` перед `Event::CalloutRef`. Для text-иконок случайно совпадал (gate проходил),
+  но под `:icons: font` мы тёк лишний `# `.
+
+### Фикс (5 файлов)
+- **scanner.rs**: новый pure `callout_guard_offset(text) -> usize` (рядом с `strip_callout_markers`, который НЕ тронут).
+  Зеркало правила: `strip_suffix(' ')` (один опц. пробел) → ends_with `//`/`;;`/`--`(2) или `#`(1); иначе `text.len()`.
+  Два пробела `#  <1>` → не guard (совпадает с движком). +unit `test_callout_guard_offset`.
+- **event.rs**: `CalloutRef(u32)` → `CalloutRef { num: u32, guard: CowStr<'a> }`; `into_static` обновлён. `XmlCalloutRef` не тронут.
+- **block.rs** `push_callout_events_resolved`: guard сплитим из `stripped` ТОЛЬКО если первый маркер `Standard`
+  (Borrowed→zero-copy слайсы, Owned→truncate); guard на idx==0 через `std::mem::take`. +2 event-vector теста. 8 тест-векторов обновлены.
+- **events.rs** арм `CalloutRef { num, guard }`: `Some(m)` (font/image) → конум без guard; `None` (text) → `guard`+`<b class="conum">…`.
+- **builder.rs** (compat): паттерн `Event::CalloutRef(_)` → `Event::CalloutRef { .. }`.
+- +2 html-фикстуры: `block/callout-guard-icons-font` (font, guard снят) + `…-text-icons` (text, разные префиксы сохранены).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0** (3 `--all-targets` warning'а в adoc-html/src/tests.rs:2801 + attributes.rs:1023/1026 —
+  пре-существующие, НЕ мои). test --workspace зелёное (parser 614, html 478, html-фикстур **78→80**).
+- **Гейт 344/344 байт-в-байт** vs master (base через worktree → /tmp/adoc_base, gate_check **0 diff** — все gate-callout'ы
+  text-иконочные → guard ре-вставляется идентично; font-icon comment-callout'ов в gate нет).
+- **Frontier identical 217** (без изм., нет флипа но и нет регресса), clean-div 16. frontier_regress new-vs-base: 4 файла
+  изменились — `plain-text-diagrams` **IMPROVED 4→1** (3 callout-диффа сняты; остаток `''`-префикс на `.Title` — др. класс);
+  3 include-noise (syntax 448, writers-guide 3725, 0-1-4-released 5053) NEUTRAL (spot-check syntax.adoc: master `puts '…' # <i`,
+  наш `puts '…' <i` = MATCH asciidoctor — guard снят верно, позиционный метрик маскирован нерезолвленными `include::`),
+  **0 регрессий**.
+- 10 CLI-проб vs asciidoctor 2.0.23 MATCH (font снят / text сохранён `#`/`//`/`;;`/`--` / `arr<5>` без guard /
+  `#<6>` без пробела / `#  <8>` два пробела не-guard / `code # <6> <7>` guard только на первом).
+
+### Дальше / follow-up (вне scope)
+- **F-Z follow-up:** `[source,…,line-comment=%]`/`line-comment=` (block-attr кастомного/пустого комментария,
+  asciidoctor `CalloutSourceRxMap`); `# <!--1-->` (line-comment перед XML-comment callout). Оба вне корпуса.
+- **`''`-префикс на `.Title`** в plain-text-diagrams (стр.241, `.The PlantUML block extension class` → `''The…`) —
+  отдельный класс (inline-кавычки), не callout. Кандидат для следующей задачи (даст plain-text-diagrams 1→0 = флип в identical?).
+- **Прочие топ-каскады frontier** (многоклассовые): asciidoc-returns 273, sample 152, manpage 146, index 136, debuter 118.
+
+---
+
 ## Сессия (2026-06-19, 133-я) — F-Y вложенный attr-ref резолвится в момент ОПРЕДЕЛЕНИЯ (ветка `feat/attr-ref-resolve-at-definition`, НЕ смержена, ожидает мержа/пуша)
 
 Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 216, clean-div 17. Триаж мелких

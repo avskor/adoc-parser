@@ -252,13 +252,44 @@ impl<'a> BlockScanner<'a> {
         markers: &[scanner::CalloutMarker],
         stripped: Cow<'a, str>,
     ) {
+        // Split off the leading-comment guard (`"# "`, `"// "`, …) that precedes
+        // the FIRST marker, so the renderer can drop it under `:icons:` and
+        // re-insert it under text icons (Asciidoctor's conum `guard`). Only a
+        // standard (numbered) callout takes a comment guard; an XML-comment
+        // callout carries its own `<!-- -->` guard handled by the renderer.
+        let first_is_standard = matches!(markers.first(), Some(scanner::CalloutMarker::Standard(_)));
+        let off = if first_is_standard {
+            scanner::callout_guard_offset(&stripped)
+        } else {
+            stripped.len()
+        };
+        let (text_before, mut guard): (Cow<'a, str>, Cow<'a, str>) = if off == stripped.len() {
+            (stripped, Cow::Borrowed(""))
+        } else {
+            match stripped {
+                Cow::Borrowed(s) => (Cow::Borrowed(&s[..off]), Cow::Borrowed(&s[off..])),
+                Cow::Owned(s) => {
+                    let g = s[off..].to_string();
+                    let mut t = s;
+                    t.truncate(off);
+                    (Cow::Owned(t), Cow::Owned(g))
+                }
+            }
+        };
+
         // Push in reverse order (last marker first) for FIFO via pop.
         // Space separators are pushed AFTER the callout ref so they appear
-        // BEFORE it in the pop (FIFO) output stream.
+        // BEFORE it in the pop (FIFO) output stream. The guard belongs to the
+        // first marker (idx 0), which the reversed loop visits last.
         for (idx, marker) in markers.iter().enumerate().rev() {
             match *marker {
                 scanner::CalloutMarker::Standard(n) => {
-                    self.push_event(Event::CalloutRef(n));
+                    let g = if idx == 0 {
+                        std::mem::take(&mut guard)
+                    } else {
+                        Cow::Borrowed("")
+                    };
+                    self.push_event(Event::CalloutRef { num: n, guard: g });
                 }
                 scanner::CalloutMarker::XmlComment(n) => {
                     self.push_event(Event::XmlCalloutRef(n));
@@ -269,7 +300,7 @@ impl<'a> BlockScanner<'a> {
                 self.push_event(Event::Text(Cow::Borrowed(" ")));
             }
         }
-        self.push_event(Event::Text(stripped));
+        self.push_event(Event::Text(text_before));
     }
 
     fn current_line(&self) -> Option<&'a str> {
@@ -5279,13 +5310,13 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::SourceBlock { language: Some(Cow::Owned("ruby".into())) }),
             Event::Text(Cow::Borrowed("require 'sinatra' ")),
-            Event::CalloutRef(1),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("") },
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("get '/hi' do ")),
-            Event::CalloutRef(2),
+            Event::CalloutRef { num: 2, guard: Cow::Borrowed("") },
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("  \"Hello World!\" ")),
-            Event::CalloutRef(3),
+            Event::CalloutRef { num: 3, guard: Cow::Borrowed("") },
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("end")),
             Event::End(TagEnd::SourceBlock),
@@ -5299,9 +5330,9 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::SourceBlock { language: None }),
             Event::Text(Cow::Borrowed("code ")),
-            Event::CalloutRef(1),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("") },
             Event::Text(Cow::Borrowed(" ")),
-            Event::CalloutRef(2),
+            Event::CalloutRef { num: 2, guard: Cow::Borrowed("") },
             Event::End(TagEnd::SourceBlock),
         ]);
     }
@@ -5315,10 +5346,10 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing }),
             Event::Text(Cow::Borrowed("foo ")),
-            Event::CalloutRef(1),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("") },
             Event::SoftBreak,
             Event::Text(Cow::Borrowed("bar ")),
-            Event::CalloutRef(2),
+            Event::CalloutRef { num: 2, guard: Cow::Borrowed("") },
             Event::End(TagEnd::DelimitedBlock),
         ]);
     }
@@ -5331,8 +5362,42 @@ mod tests {
         assert_eq!(events, vec![
             Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Literal }),
             Event::Text(Cow::Borrowed("foo ")),
-            Event::CalloutRef(1),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("") },
             Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_callout_comment_guard_captured() {
+        // A line-comment prefix before the marker is split off the text and
+        // carried on the first CalloutRef as `guard` (Asciidoctor conum guard).
+        // The space that sat before the comment token stays in the text.
+        let input = "[source,ruby]\n----\nrequire 'a' # <1>\nget '/' do // <2>\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::SourceBlock { language: Some(Cow::Owned("ruby".into())) }),
+            Event::Text(Cow::Borrowed("require 'a' ")),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("# ") },
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("get '/' do ")),
+            Event::CalloutRef { num: 2, guard: Cow::Borrowed("// ") },
+            Event::End(TagEnd::SourceBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_callout_comment_guard_only_first_marker() {
+        // With multiple callouts on one line only the leftmost takes the guard;
+        // a `#` not adjacent to a marker (two spaces) is left in the text.
+        let input = "[source]\n----\ncode # <1> <2>\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::SourceBlock { language: None }),
+            Event::Text(Cow::Borrowed("code ")),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("# ") },
+            Event::Text(Cow::Borrowed(" ")),
+            Event::CalloutRef { num: 2, guard: Cow::Borrowed("") },
+            Event::End(TagEnd::SourceBlock),
         ]);
     }
 

@@ -97,7 +97,13 @@ pub enum Event<'a> {
     FootnoteRef {
         id: CowStr<'a>,
     },
-    CalloutRef(u32),
+    /// A conum (callout reference) in a verbatim block. `guard` carries the
+    /// line-comment prefix (`"# "`, `"// "`, …) that preceded the marker, so
+    /// the renderer can re-insert it under text icons or drop it under
+    /// `:icons: font`/image — mirroring Asciidoctor's `convert_inline_callout`.
+    /// Empty when there was no comment prefix; only the first marker on a line
+    /// can carry one.
+    CalloutRef { num: u32, guard: CowStr<'a> },
     XmlCalloutRef(u32),
     IndexTerm {
         text: CowStr<'a>,
@@ -182,7 +188,7 @@ impl<'a> Event<'a> {
             Event::FootnoteRef { id } => Event::FootnoteRef {
                 id: cow_owned(id),
             },
-            Event::CalloutRef(n) => Event::CalloutRef(n),
+            Event::CalloutRef { num, guard } => Event::CalloutRef { num, guard: cow_owned(guard) },
             Event::XmlCalloutRef(n) => Event::XmlCalloutRef(n),
             Event::IndexTerm { text } => Event::IndexTerm {
                 text: cow_owned(text),

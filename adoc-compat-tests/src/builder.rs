@@ -414,7 +414,7 @@ pub fn build_asg<'a>(
 
             Event::Footnote { .. }
             | Event::FootnoteRef { .. }
-            | Event::CalloutRef(_)
+            | Event::CalloutRef { .. }
             | Event::XmlCalloutRef(_)
             | Event::IndexTerm { .. }
             | Event::ConcealedIndexTerm { .. }

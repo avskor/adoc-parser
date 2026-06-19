@@ -501,6 +501,31 @@ pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
     (&line[..end], markers)
 }
 
+/// Byte offset in `text` at which a leading-comment callout *guard* begins —
+/// the line-comment prefix Asciidoctor strips before a conum. Mirrors
+/// `CalloutSourceRx` group 1 (`((?://|#|--|;;) ?)?`): a comment token
+/// (`//`, `#`, `--`, `;;`) immediately before the marker, optionally followed
+/// by a single space. Returns `text.len()` when there is no guard.
+///
+/// `text` is the run preceding the first callout on a verbatim line (e.g.
+/// `"require 'asciidoctor' # "`). The guard slice `&text[offset..]` keeps the
+/// trailing space (`"# "`); the part before it (`"require 'asciidoctor' "`)
+/// retains the space that sat before the comment token. Asciidoctor allows at
+/// most one space between the comment token and the marker, so two spaces
+/// (`"x #  "`) do not form a guard — matching the engine.
+pub fn callout_guard_offset(text: &str) -> usize {
+    let trimmed = text.strip_suffix(' ').unwrap_or(text);
+    let token_len = if trimmed.ends_with("//") || trimmed.ends_with(";;") || trimmed.ends_with("--")
+    {
+        2
+    } else if trimmed.ends_with('#') {
+        1
+    } else {
+        return text.len();
+    };
+    trimmed.len() - token_len
+}
+
 pub fn is_callout_list_item(line: &str) -> Option<(u32, &str)> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with('<') {
@@ -2164,6 +2189,31 @@ mod tests {
             strip_callout_markers("  <title>Title</title> <!--1-->"),
             ("  <title>Title</title> ", vec![XmlComment(1)])
         );
+    }
+
+    #[test]
+    fn test_callout_guard_offset() {
+        // Comment token + single space → guard starts at the token, keeps the
+        // trailing space in the slice; the space before the token stays in the
+        // preceding text.
+        let s = "require 'asciidoctor' # ";
+        assert_eq!(&s[callout_guard_offset(s)..], "# ");
+        let s = "get '/hi' do // ";
+        assert_eq!(&s[callout_guard_offset(s)..], "// ");
+        // No trailing space (marker was directly adjacent).
+        let s = "foo ;;";
+        assert_eq!(&s[callout_guard_offset(s)..], ";;");
+        let s = "x--";
+        assert_eq!(&s[callout_guard_offset(s)..], "--");
+        let s = "code #";
+        assert_eq!(&s[callout_guard_offset(s)..], "#");
+        // Two spaces before the marker → not a guard (Asciidoctor allows one).
+        let s = "x #  ";
+        assert_eq!(callout_guard_offset(s), s.len());
+        // No comment token.
+        let s = "plain text ";
+        assert_eq!(callout_guard_offset(s), s.len());
+        assert_eq!(callout_guard_offset(""), 0);
     }
 
     #[test]

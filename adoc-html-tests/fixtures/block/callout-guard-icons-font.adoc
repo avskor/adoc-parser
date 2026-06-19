@@ -1,0 +1,18 @@
+:icons: font
+
+[source,ruby]
+----
+require 'asciidoctor' # <1>
+get '/hi' do // <2>
+foo ;; <3>
+bar -- <4>
+arr<5>
+code # <6> <7>
+----
+<1> hash comment
+<2> slash comment
+<3> double-semicolon comment
+<4> double-dash comment
+<5> no comment, no space
+<6> first of two on a line
+<7> second on the line
