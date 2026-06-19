@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-20, 136-я) — F-AB отступленный section/heading-маркер → literal (ветка `feat/indented-section-literal`, ЗАКОММИЧЕНО на ветке, ожидает мержа/пуша)
+
+Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 218, clean-div 15. Триаж минимальных
+расхождений пробами vs asciidoctor 2.0.23: diff=1 (`doctime-localtime` `{localtime}`, `migration` `{asciidoctor-version}`)
+— intrinsic, не actionable; mdbasics 3 — 2 класса (`\'`-семантика + `+`/`-` list-marker мангленье); asciidoclet 12 /
+sample 152 / index 136 / enjoy 59 / multi-special 87 / github-0.1.4 50 — многоклассовые. **Чистый кандидат:
+`asciidoc-recommended-practices` (15)** — ВСЕ диффы про отступленные section-маркеры (` == First Section`, ` == … ==`)
++ counter; класс **indented-section→literal** явно перечислен в рекомендации TODO (стр. 214). Реализовано без
+AskUserQuestion/plan-mode (кандидат вынужденно-чистый, фикс субтрактивный по конструкции — распознаём МЕНЬШЕ секций).
+**Закоммичено на ветке; ожидает мержа/пуша.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/scanner.rs`)
+- asciidoctor `SectionTitleRx` (`/^=={0,5}[ \t]+(\S.*?)[ \t]*$/`) якорится в колонке 0 → ведущий пробел/таб дисквалифицирует
+  строку как заголовок, она падает в literal-параграф. Markdown-ATX (`## …`) — то же правило (`asciidoctor -e` подтвердил:
+  ` == Foo`/`  ## Bar` → `<pre>`, col-0 `== Real`/`## MdReal` → `<h2>`).
+- Мы `strip_section_marker`/`strip_markdown_heading` делали `let trimmed = line.trim_start();` ПЕРЕД `count_leading(=/#)`
+  → отступленный ` == Foo` распознавался как секция; `{counter:cnt-step}`/attr-ref в нём резолвились (литерал-блок должен
+  получать только specialchars-subs, не attributes).
+
+### Фикс (1 файл, scanner.rs)
+- В обеих функциях убран `trim_start()`: `count_leading(line, '=')`/`(line, '#')` по `line` напрямую. Ведущий пробел →
+  count=0 → `None` → строка уходит в literal-параграф (который мы уже корректно рендерим — `Tag::LiteralParagraph`).
+- Гарды continuation (`is_dlist/list_continuation_line` через `strip_any_section_marker(line).is_none()`): отступленный
+  `==` теперь None (не секция) → корректнее (asciidoctor его секцией не считает).
+- +6 scanner-ассертов (test_strip_section_marker / _markdown_heading / _any_section_marker); тест `  ## Indented`
+  изменён `Some((2,…))`→`None`. +1 parser integration (`test_indented_section_marker_is_literal_paragraph`: точный
+  event-вектор `LiteralParagraph` + markdown + col-0 регресс-гард `Section{level:2}`). +1 html-фикстура
+  `block/indented-section-marker-literal` (3 формы: atx/symmetric/markdown, эталон `asciidoctor -e`).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser integration 28→29, html-фикстур 81→82).
+- **Гейт 344/344 байт-в-байт** vs master `a521930` (base через worktree → /tmp/adoc_base, gate_check **0 diff**).
+  Отступленных section-маркеров в гейте (`grep '^[ ]+={1,6}[ ]+'` по 344) — **0** → нулевой риск по конструкции.
+- **Frontier identical 218** (стабильно, без флипа — counter-in-literal остался отдельным классом), clean-div 15.
+  frontier_regress new-vs-base (difflib edit + позиционный): **1 файл изменился, `asciidoc-recommended-practices`
+  IMPROVED 15→1, 0 регрессий**.
+- 8 CLI-проб vs asciidoctor 2.0.23 MATCH (indented `==`/`== ==`/`##`/tab; col-0 `==`/`##`/`=`-doctitle регресс-гарды;
+  multi-line indented literal).
+
+### Дальше / follow-up (вне scope)
+- **counter/attr subs ВНУТРИ literal-блока** (остаток recommended-practices = 1): препроцессор резолвит `{counter}`
+  независимо от блок-контекста; asciidoctor literal = `[:specialcharacters]` без `:attributes`. Известный остаток
+  «счётчики в verbatim» (counters.adoc). Кандидат на следующую задачу (даст recommended-practices 1→0 = флип в identical?).
+- отступленные block-делимитеры/list-маркеры (тот же column-0-класс, не в текущих расхождениях — отдельная задача с гейт-проверкой).
+- **Прочие топ-каскады frontier** (многоклассовые): asciidoc-returns 273 (compat-backtick), sample 152 (header не распознан),
+  manpage 146 (doctype), index 136 (table-cell literal), debuter 118; callouts в markdown-fence ` ``` ` (enjoy 59, +implicit table-header).
+
+---
+
 ## Сессия (2026-06-20, 135-я) — F-AA single-quoted значение именованного block-атрибута снимает кавычки (ветка `fix/single-quoted-named-attr`, НЕ смержена, ожидает мержа/пуша)
 
 Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 217, clean-div 16. Триаж минимальных
