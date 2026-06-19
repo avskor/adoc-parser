@@ -2945,17 +2945,29 @@ impl<'a> BlockScanner<'a> {
         if let Some(style) = block_attrs.block_style_kind() {
             match style {
                 "source" | "verse" => {} // already handled above
-                "listing" | "literal" | "pass" => {
-                    let kind = match style {
-                        "listing" => DelimitedBlockKind::Listing,
-                        "literal" => DelimitedBlockKind::Literal,
-                        _ => DelimitedBlockKind::Passthrough,
-                    };
-                    let default_subs = if style == "pass" {
-                        SubstitutionSet::NONE
+                "listing" | "literal" => {
+                    // Explicit verbatim style: same content model as a bare
+                    // `----`/`....` block (specialchars + callouts), so route
+                    // through the shared verbatim path. `kind` comes from the
+                    // style and may differ from `delim_type` (e.g. `[listing]`
+                    // over `....`/`====`).
+                    let kind = if style == "listing" {
+                        DelimitedBlockKind::Listing
                     } else {
-                        SubstitutionSet::VERBATIM
+                        DelimitedBlockKind::Literal
                     };
+                    return self.scan_verbatim_delimited_block(
+                        kind,
+                        delim_type,
+                        delim_len,
+                        &block_attrs,
+                        title_events,
+                    );
+                }
+                "pass" => {
+                    // Passthrough (content_model :raw → NO_SUBS): emit content
+                    // verbatim with no substitutions (no callouts/specialchars).
+                    let kind = DelimitedBlockKind::Passthrough;
                     let mut content_lines: Vec<&'a str> = Vec::new();
                     let mut closed = false;
                     while let Some(line) = self.current_line() {
@@ -2982,7 +2994,7 @@ impl<'a> BlockScanner<'a> {
                         self.push_event(Event::Text(Cow::Borrowed(cline)));
                     }
                     self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                    self.emit_block_metadata(&block_attrs, default_subs);
+                    self.emit_block_metadata(&block_attrs, SubstitutionSet::NONE);
                     self.push_title_then_events(title_events);
                     return self.event_buffer.pop();
                 }
@@ -3022,71 +3034,13 @@ impl<'a> BlockScanner<'a> {
         );
 
         if is_verbatim {
-            let mut content_lines: Vec<&'a str> = Vec::new();
-            let mut closed = false;
-            while let Some(line) = self.current_line() {
-                if let Some((dt, dl)) = scanner::is_delimiter(line)
-                    && dt == delim_type && dl == delim_len {
-                        self.advance();
-                        closed = true;
-                        break;
-                }
-                if self.closes_parent_block(line) {
-                    break;
-                }
-                content_lines.push(line);
-                self.advance();
-            }
-
-            // For unclosed blocks, trim one trailing empty line (artifact of split_lines)
-            if !closed
-                && content_lines.last().is_some_and(|l| l.is_empty())
-            {
-                content_lines.pop();
-            }
-
-            // Handle single empty line: emit "\n" instead of ""
-            if content_lines.len() == 1 && content_lines[0].is_empty() {
-                self.push_event(Event::End(TagEnd::DelimitedBlock));
-                self.push_event(Event::Text(Cow::Borrowed("\n")));
-                self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-                self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
-                self.push_title_then_events(title_events);
-                return self.event_buffer.pop();
-            }
-
-            // Push content (bottom of buffer)
-            let resolved_subs = block_attrs
-                .substitution_set(SubstitutionSet::VERBATIM)
-                .unwrap_or(SubstitutionSet::VERBATIM);
-            let process_callouts = matches!(kind, DelimitedBlockKind::Listing)
-                || resolved_subs.has(SubstitutionSet::CALLOUTS);
-            // Reindent per the `indent` attribute, then resolve callout markers.
-            let content = match block_attrs.verbatim_indent() {
-                Some(indent) => reindent_verbatim_lines(content_lines, indent),
-                None => content_lines.into_iter().map(Cow::Borrowed).collect(),
-            };
-            let parsed_lines = resolve_callouts_in_lines(content, process_callouts);
-
-            self.push_event(Event::End(TagEnd::DelimitedBlock));
-            let line_count = parsed_lines.len();
-            for (i, (text, markers)) in parsed_lines.into_iter().enumerate().rev() {
-                if i < line_count - 1 {
-                    self.push_event(Event::SoftBreak);
-                }
-                if markers.is_empty() {
-                    self.push_event(Event::Text(text));
-                } else {
-                    self.push_callout_events_resolved(&markers, text);
-                }
-            }
-            // Push Start on top of content
-            self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
-            self.emit_block_metadata(&block_attrs, SubstitutionSet::VERBATIM);
-            // Push title events on very top (emitted first)
-            self.push_title_then_events(title_events);
-
-            return self.event_buffer.pop();
+            return self.scan_verbatim_delimited_block(
+                kind,
+                delim_type,
+                delim_len,
+                &block_attrs,
+                title_events,
+            );
         }
 
         // Structural blocks (example, sidebar, quote, open): recursively parse content.
@@ -3113,6 +3067,86 @@ impl<'a> BlockScanner<'a> {
         }
         self.emit_block_metadata(&block_attrs, SubstitutionSet::NORMAL);
         self.push_title_then_events(title_events);
+        self.event_buffer.pop()
+    }
+
+    /// Emit a verbatim delimited block (listing / literal). Shared by the bare
+    /// `----`/`....` path and the explicit `[listing]`/`[literal]` style path so
+    /// both apply identical VERBATIM subs (specialchars + callouts), reindent, and
+    /// single-empty-line handling. `kind` is supplied by the caller and may differ
+    /// from `delim_type` (e.g. `[listing]` over a `....`/`====` delimiter); `delim_type`
+    /// is used only to locate the matching closing delimiter. Passthrough
+    /// (`[pass]`/`++++`) is raw and handled separately by the caller.
+    fn scan_verbatim_delimited_block(
+        &mut self,
+        kind: DelimitedBlockKind,
+        delim_type: scanner::DelimiterType,
+        delim_len: usize,
+        block_attrs: &BlockAttributes,
+        title_events: Vec<Event<'a>>,
+    ) -> Option<Event<'a>> {
+        let mut content_lines: Vec<&'a str> = Vec::new();
+        let mut closed = false;
+        while let Some(line) = self.current_line() {
+            if let Some((dt, dl)) = scanner::is_delimiter(line)
+                && dt == delim_type && dl == delim_len {
+                    self.advance();
+                    closed = true;
+                    break;
+            }
+            if self.closes_parent_block(line) {
+                break;
+            }
+            content_lines.push(line);
+            self.advance();
+        }
+
+        // For unclosed blocks, trim one trailing empty line (artifact of split_lines)
+        if !closed && content_lines.last().is_some_and(|l| l.is_empty()) {
+            content_lines.pop();
+        }
+
+        // Handle single empty line: emit "\n" instead of ""
+        if content_lines.len() == 1 && content_lines[0].is_empty() {
+            self.push_event(Event::End(TagEnd::DelimitedBlock));
+            self.push_event(Event::Text(Cow::Borrowed("\n")));
+            self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+            self.emit_block_metadata(block_attrs, SubstitutionSet::VERBATIM);
+            self.push_title_then_events(title_events);
+            return self.event_buffer.pop();
+        }
+
+        // Push content (bottom of buffer)
+        let resolved_subs = block_attrs
+            .substitution_set(SubstitutionSet::VERBATIM)
+            .unwrap_or(SubstitutionSet::VERBATIM);
+        let process_callouts = matches!(kind, DelimitedBlockKind::Listing)
+            || resolved_subs.has(SubstitutionSet::CALLOUTS);
+        // Reindent per the `indent` attribute, then resolve callout markers.
+        let content = match block_attrs.verbatim_indent() {
+            Some(indent) => reindent_verbatim_lines(content_lines, indent),
+            None => content_lines.into_iter().map(Cow::Borrowed).collect(),
+        };
+        let parsed_lines = resolve_callouts_in_lines(content, process_callouts);
+
+        self.push_event(Event::End(TagEnd::DelimitedBlock));
+        let line_count = parsed_lines.len();
+        for (i, (text, markers)) in parsed_lines.into_iter().enumerate().rev() {
+            if i < line_count - 1 {
+                self.push_event(Event::SoftBreak);
+            }
+            if markers.is_empty() {
+                self.push_event(Event::Text(text));
+            } else {
+                self.push_callout_events_resolved(&markers, text);
+            }
+        }
+        // Push Start on top of content
+        self.push_event(Event::Start(Tag::DelimitedBlock { kind }));
+        self.emit_block_metadata(block_attrs, SubstitutionSet::VERBATIM);
+        // Push title events on very top (emitted first)
+        self.push_title_then_events(title_events);
+
         self.event_buffer.pop()
     }
 
@@ -5085,6 +5119,61 @@ mod tests {
             Event::Text(Cow::Borrowed(" ")),
             Event::CalloutRef(2),
             Event::End(TagEnd::SourceBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_listing_style_callouts() {
+        // Explicit `[listing]` must process callouts like a bare `----` block
+        // (content_model :verbatim → specialchars + callouts).
+        let input = "[listing]\n----\nfoo <1>\nbar <2>\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing }),
+            Event::Text(Cow::Borrowed("foo ")),
+            Event::CalloutRef(1),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("bar ")),
+            Event::CalloutRef(2),
+            Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_literal_style_callouts() {
+        // Explicit `[literal]` is also :verbatim → callouts apply.
+        let input = "[literal]\n....\nfoo <1>\n....";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Literal }),
+            Event::Text(Cow::Borrowed("foo ")),
+            Event::CalloutRef(1),
+            Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_pass_style_no_callouts() {
+        // `[pass]` is content_model :raw → NO_SUBS, so `<1>` stays literal text.
+        let input = "[pass]\n++++\nfoo <1>\n++++";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Passthrough }),
+            Event::Text(Cow::Borrowed("foo <1>")),
+            Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_listing_style_without_callouts_unchanged() {
+        // Regression guard: explicit `[listing]` with no callout markers must
+        // still emit a single borrowed Text run (no spurious CalloutRef).
+        let input = "[listing]\n----\nplain code\n----";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing }),
+            Event::Text(Cow::Borrowed("plain code")),
+            Event::End(TagEnd::DelimitedBlock),
         ]);
     }
 

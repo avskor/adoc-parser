@@ -1271,6 +1271,40 @@ fn test_callout_multiple_per_line_html() {
 }
 
 #[test]
+fn test_listing_style_callouts_html() {
+    // Explicit `[listing]` renders callouts and an associated colist, matching
+    // asciidoctor (content_model :verbatim → specialchars + callouts).
+    let input = "[listing]\n----\nfoo <1>\nbar <2>\n----\n<1> first\n<2> second";
+    let html = to_html(input);
+    assert!(html.contains("<div class=\"listingblock\">"));
+    assert!(html.contains("foo <b class=\"conum\">(1)</b>"));
+    assert!(html.contains("bar <b class=\"conum\">(2)</b>"));
+    assert!(html.contains("<div class=\"colist arabic\">"));
+    assert!(html.contains("<li><p>first</p></li>"));
+    assert!(html.contains("<li><p>second</p></li>"));
+}
+
+#[test]
+fn test_literal_style_callouts_html() {
+    // Explicit `[literal]` is also :verbatim → callouts apply.
+    let input = "[literal]\n....\nfoo <1>\n....\n<1> first";
+    let html = to_html(input);
+    assert!(html.contains("<div class=\"literalblock\">"));
+    assert!(html.contains("foo <b class=\"conum\">(1)</b>"));
+    assert!(html.contains("<li><p>first</p></li>"));
+}
+
+#[test]
+fn test_pass_style_no_callouts_html() {
+    // Regression guard: `[pass]` is :raw (NO_SUBS), so `<1>` stays literal and
+    // no conum is emitted.
+    let input = "[pass]\n++++\nfoo <1>\n++++";
+    let html = to_html(input);
+    assert!(!html.contains("class=\"conum\""));
+    assert!(html.contains("foo <1>"));
+}
+
+#[test]
 fn test_callout_item_with_continuation_note_html() {
     // A NOTE attached to a callout item with `+` is a child block: the
     // item's principal `<p>` must close before the admonition, not nest it.

@@ -1,6 +1,56 @@
 # Session context
 
-## Сессия (2026-06-19, 124-я) — F-P `[x-]` literal-monospace маркер (ветка `feat/x-literal-monospace`, НЕ закоммичено)
+## Сессия (2026-06-19, 125-я) — F-Q conum в явных `[listing]`/`[literal]` (ветка `feat/listing-literal-callouts`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:
+**210 identical, 23 clean-div**) → классификация топ-каскадов пробами vs asciidoctor 2.0.23. AskUserQuestion
+(4 кандидата: conum в `[listing]`/`[literal]` / dlist `:term::` / conum под `:icons: font` / отступный literal в `a|`) →
+выбран **conum в `[listing]`/`[literal]`** (крупнейший: templates 634). EnterPlanMode → исследование (Explore-агент по
+коду + Explore-агент по локальному исходнику asciidoctor + Plan-агент валидации рефакторинга) → план
+`~/.claude/plans/lexical-gliding-snowglobe.md`, ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT.
+**Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и спека (ЧИСТО ПАРСЕР; верифицировано исходником asciidoctor 2.0.23 + CLI-пробы)
+- Callout `<N>` обрабатывались в голых `----`/`....` и `[source]`, но НЕ в явных `[listing]`/`[literal]` (→ литерал `&lt;N&gt;`).
+- Asciidoctor: subs по `content_model` (`:listing`/`:literal`→`:verbatim`=`[:specialcharacters,:callouts]`), независимо от
+  наличия явного стиля (`substitutors.rb:1287-1315`, `block.rb:12-24`). `:verse`→NORMAL_SUBS, `:pass`/`++++`→`:raw`/NO_SUBS.
+- Корень в `block.rs::scan_delimited_block`: ДВЕ почти идентичные ветки эмиссии verbatim — ветка ЯВНОГО стиля (≈2945-2988)
+  пушила сырой `Event::Text` БЕЗ `resolve_callouts_in_lines`; голая ветка (≈3008-3090) обрабатывала. Разошлись.
+
+### Фикс (1 файл кода — root-cause рефакторинг)
+- `adoc-parser/src/block.rs`: извлечён метод `scan_verbatim_delimited_block(&mut self, kind, delim_type, delim_len,
+  block_attrs: &BlockAttributes, title_events) -> Option<Event<'a>>` = ДОСЛОВНЫЙ код голой ветки (цикл сбора + trailing-trim
+  + single-empty-line + reindent через `verbatim_indent` + `resolve_callouts_in_lines` + `push_callout_events_resolved` +
+  эмиссия). `kind` — из параметра (может ≠ `delim_type`, напр. `[listing]\n....`). Зеркало `scan_source_block`/`scan_verse_block`.
+- Голая `if is_verbatim {…}` → `return self.scan_verbatim_delimited_block(kind, …)` (поведение идентично — тот же код).
+- Явная ветка стиля: split `"listing"|"literal"` (→ метод, kind из стиля) и `"pass"` (оставлен raw, NONE subs).
+- Унификация попутно подтянула резолв `subs=`/`indent=`/single-empty к явным verbatim (всё MATCH asciidoctor).
+
+### Тесты (2 файла)
+- `block.rs`: +4 (`test_listing_style_callouts`, `test_literal_style_callouts`, `test_pass_style_no_callouts` регресс,
+  `test_listing_style_without_callouts_unchanged` регресс).
+- `adoc-html/src/tests.rs`: +3 (`test_listing_style_callouts_html` + colist, `test_literal_style_callouts_html`,
+  `test_pass_style_no_callouts_html` регресс).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 598→**602**, html 463→**466**).
+- **Гейт 344/344 байт-в-байт** vs master `725ae8d` (base пересобран через worktree; `gate_check.py` → 0 diff).
+  Предпроверено: ~8 гейт-файлов с явными делимитед `[listing]`/`[literal]`, но НИ ОДИН без end-of-line `<N>`/`indent=`.
+- **Frontier identical 210→211 (+1)**, clean_div 23→22; new-vs-base (`/tmp/frontier_nvb.py`): **1 файл, IMPROVED, 0 REGRESSION** —
+  `templates.adoc` 634→**0** (флип в identical).
+- 7 CLI-форм vs asciidoctor 2.0.23: `[listing]`/`[literal]`/голый `----`/`[pass]` (raw)/пустой `[literal]`/пустой `[listing]`/
+  `[listing,subs="+macros"]` — MATCH байт-в-байт (0 mismatch). `[listing]\n====` (example-делимитер) — пред-существующее
+  расхождение (ремап в listing, наш тест `test_listing_style_on_example_delimiter`), не введено фиксом.
+
+### Что дальше / follow-up (вне scope)
+- conum под `:icons: font` (`<i class="conum" data-value="N">`, plain-text-diagrams 124, рендерер); параграф-стиль listing с callouts.
+- Топ остаток frontier: install-macos 477 (experimental-menu-shorthand); 0-1-2-released 432 (literal-каскад); api/index 347
+  (multi-backtick mis-pair); find-blocks 296 (dlist `:term::` с ведущим `:` — теряем список, серьёзный); asciidoc-returns 273
+  (compat-backtick `+gem+`); manpage 160 / sample 152 / ROOT/index 136 (literal в `a|` cell) — НЕ классиф./узкие.
+
+---
+
+## Сессия (2026-06-19, 124-я) — F-P `[x-]` literal-monospace маркер (ветка `feat/x-literal-monospace`, смержена `725ae8d`)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:
 **210 identical, 23 clean-div**, как после F-O) → классификация топ-каскадов пробами vs asciidoctor 2.0.23.
