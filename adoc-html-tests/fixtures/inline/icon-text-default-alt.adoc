@@ -1,0 +1,12 @@
+Without `:icons:`, an inline icon renders as literal bracketed text whose
+default alt is `basename(name).tr('_-', ' ')`.
+
+A hyphenated icon icon:fast-forward[] becomes spaced.
+
+An underscored icon icon:my_cool_icon[] becomes spaced.
+
+An icon with an extension icon:foo.bar[] drops the extension.
+
+An icon with a path icon:path/to/heart[] drops the directory.
+
+A plain icon icon:heart[] stays as-is, and an explicit icon:flag[alt=Flagged] wins.

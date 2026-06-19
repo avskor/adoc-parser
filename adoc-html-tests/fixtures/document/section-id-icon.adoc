@@ -1,0 +1,15 @@
+An icon macro in a section title contributes its alt text to the auto-generated
+id rather than the literal macro source, mirroring how Asciidoctor generates the
+id from the macro-substituted title.
+
+== icon:fast-forward[] Migration
+
+Body of the migration section.
+
+== icon:ticket[] Resolved Issues
+
+Body of the resolved issues section.
+
+== Some icon:heart[] thing
+
+Body of the heart section.
