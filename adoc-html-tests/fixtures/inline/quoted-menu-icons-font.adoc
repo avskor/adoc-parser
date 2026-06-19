@@ -1,0 +1,4 @@
+:experimental:
+:icons: font
+
+Open "File > Edit > Copy" with a FontAwesome caret.

@@ -226,7 +226,7 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Tag, TagEnd};
+    use crate::event::{MenuPart, Tag, TagEnd};
 
     fn legacy(text: &str) -> Vec<Event<'_>> {
         crate::inline::parse_legacy(text, SubstitutionSet::NORMAL, InlineOptions::default())
@@ -2019,6 +2019,113 @@ mod tests {
         assert!(pipeline_exp("kbd:[Ctrl+C]")
             .iter()
             .any(|e| matches!(e, Event::Start(Tag::Keyboard))));
+    }
+
+    /// Quoted inline menu (`"A > B"` under `:experimental:`, Asciidoctor
+    /// `InlineMenuRx`): a double-quoted run whose content starts with `[\w&]` and
+    /// holds a space-flanked `>` becomes a `MenuSeq` of one `MenuPart` per segment,
+    /// each segment re-parsed (so `icon:`/`link:`/quotes render inside).
+    #[test]
+    fn quoted_inline_menu_matches_asciidoctor() {
+        let menu = |role| Event::Start(Tag::MenuPart { role });
+        // Two segments → menu + menuitem (no submenu).
+        assert_eq!(
+            pipeline_exp("\"File > Save\""),
+            vec![
+                Event::Start(Tag::MenuSeq),
+                menu(MenuPart::Menu),
+                Event::Text("File".into()),
+                Event::End(TagEnd::MenuPart),
+                menu(MenuPart::Item),
+                Event::Text("Save".into()),
+                Event::End(TagEnd::MenuPart),
+                Event::End(TagEnd::MenuSeq),
+            ]
+        );
+        // Three segments → middle is a submenu.
+        assert_eq!(
+            pipeline_exp("\"File > New > Tab\""),
+            vec![
+                Event::Start(Tag::MenuSeq),
+                menu(MenuPart::Menu),
+                Event::Text("File".into()),
+                Event::End(TagEnd::MenuPart),
+                menu(MenuPart::Submenu),
+                Event::Text("New".into()),
+                Event::End(TagEnd::MenuPart),
+                menu(MenuPart::Item),
+                Event::Text("Tab".into()),
+                Event::End(TagEnd::MenuPart),
+                Event::End(TagEnd::MenuSeq),
+            ]
+        );
+        // The menu segment is re-parsed: an inner `icon:` becomes Icon events
+        // (the corpus case `"icon:apple[] > Software Update"`).
+        assert_eq!(
+            pipeline_exp("\"icon:apple[] > Software Update\""),
+            vec![
+                Event::Start(Tag::MenuSeq),
+                menu(MenuPart::Menu),
+                Event::Start(Tag::Icon { name: "apple".into() }),
+                Event::End(TagEnd::Icon),
+                Event::End(TagEnd::MenuPart),
+                menu(MenuPart::Item),
+                Event::Text("Software Update".into()),
+                Event::End(TagEnd::MenuPart),
+                Event::End(TagEnd::MenuSeq),
+            ]
+        );
+        // A macro also renders in a non-first segment (full-subs re-parse).
+        assert_eq!(
+            pipeline_exp("\"File > link:http://x[T]\""),
+            vec![
+                Event::Start(Tag::MenuSeq),
+                menu(MenuPart::Menu),
+                Event::Text("File".into()),
+                Event::End(TagEnd::MenuPart),
+                menu(MenuPart::Item),
+                Event::Start(Tag::Link {
+                    url: "http://x".into(),
+                    window: None,
+                    nofollow: false,
+                    is_bare: false,
+                    role: None,
+                }),
+                Event::Text("T".into()),
+                Event::End(TagEnd::Link),
+                Event::End(TagEnd::MenuPart),
+                Event::End(TagEnd::MenuSeq),
+            ]
+        );
+
+        // Non-matches: no `MenuSeq` is produced (stay literal / smart-quote pass).
+        let no_menuseq = |t: &str| {
+            assert!(
+                !pipeline_exp(t)
+                    .iter()
+                    .any(|e| matches!(e, Event::Start(Tag::MenuSeq))),
+                "unexpected MenuSeq for {t:?}"
+            );
+        };
+        no_menuseq("\"a>b\""); // no whitespace around `>`
+        no_menuseq("\"File >Save\""); // space only before `>`
+        no_menuseq("\"File> Save\""); // space only after `>`
+        no_menuseq("\"*bold* > x\""); // first content char `*` ∉ [\w&]
+        no_menuseq("\"hello world\""); // no `>` at all
+
+        // Leading `\` escapes the rule: the quoted run stays literal, no MenuSeq.
+        no_menuseq("\\\"File > Save\"");
+        assert!(
+            pipeline_exp("\\\"File > Save\"")
+                .iter()
+                .any(|e| matches!(e, Event::Text(t) if t.contains("File > Save"))),
+            "escaped quoted-menu should keep the literal text"
+        );
+
+        // The rule fires ONLY under `:experimental:`. Without it, no MenuSeq.
+        assert!(!pipeline("\"File > Save\"")
+            .iter()
+            .any(|e| matches!(e, Event::Start(Tag::MenuSeq))));
     }
 
     /// The signature cross-span case: a constrained strong that opens inside one

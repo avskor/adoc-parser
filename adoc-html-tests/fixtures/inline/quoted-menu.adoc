@@ -1,0 +1,15 @@
+:experimental:
+
+A software update ("icon:apple[] > Software Update").
+
+Open "File > Edit > Copy" from the menu.
+
+Save with "File > link:http://example.com[Save]".
+
+Format with "File > *bold* item".
+
+A plain "File > Save" sequence.
+
+Escaped \"File > Save" stays a literal quote.
+
+No menu in "a>b" or "File >Save" or "File> Save".

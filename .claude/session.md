@@ -1,5 +1,58 @@
 # Session context
 
+## Сессия (2026-06-19, 128-я) — F-T quoted inline menu `"X > Y"` (ветка `feat/quoted-inline-menu`, НЕ смержена)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (212 identical, 21 clean-div) → классификация топ-каскадов
+пробами vs asciidoctor 2.0.23 (3 кандидата: A quoted-menu / B dlist-indent / C compat-`+gem+`). AskUserQuestion →
+выбран **A quoted-menu** (нулевой риск гейта, install-macos 477). EnterPlanMode → 2 Explore-агента (наш код + исходник
+asciidoctor) + 2 Plan-агента (чистая vs минимальная модель) → план `~/.claude/plans/lexical-twirling-iverson.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Реализовано и закоммичено на ветке; ожидает мержа/пуша.**
+
+### Корень и спека (верифицирована исходником asciidoctor 2.0.23 + 16 CLI-проб)
+- `InlineMenuRx = /\\?"([\w&][^"]*?[ \n]+&gt;[ \n]+[^"]*)"/` (`rx.rb:571`), активна при атрибуте `experimental`.
+  Под `:experimental:` строка в двойных кавычках с space/newline-обрамлённым `>` → menu-sequence.
+- Сегментирование (`substitutors.rb:401`): `menu, *submenus = $1.split('&gt;').map(&:strip); menuitem = submenus.pop`.
+  Каждый сегмент проходит МАКРО-подстановку (icon/image/link/quotes рендерятся внутри `<b>`).
+- caret (`html5.rb:1280`): `&#160;<b class="caret">&#8250;</b> `; при `:icons: font` — `&#160;<i class="fa fa-angle-right caret"></i> `.
+- НАШ обратный порядок проходов (macros→quotes, у asciidoctor quotes→macros) НЕ даёт дивергенции: first-char `[\w&]`
+  на до-quotes (литеральном) тексте отклоняет ровно те же случаи, что asciidoctor на post-quotes (маркеры `_*\`#^~<[`
+  ∉ `[\w&]`); full-subs inner-reparse сегмента воспроизводит post-quotes-состояние (проба `"File > *bold*"` MATCH).
+
+### Дизайн: ЧИСТАЯ структурная модель (НЕ трогает `Tag::Menu`/`menu:`-макрос → 0 риска F-F)
+- `event.rs`: `pub enum MenuPart{Menu,Submenu,Item}` (Copy); `Tag::MenuSeq`+`Tag::MenuPart{role}`; `TagEnd::MenuSeq/MenuPart`;
+  плечи в `into_static`/`to_end`.
+- `subst/macros.rs::extract`: 2 плеча под `options.experimental` — `\"` (снять backslash → литерал) и `"`
+  (`try_quoted_menu` → sentinel). Хелперы `quoted_menu_span_end` (close=первый `"`; first-char `[\w&]`;
+  `has_spaced_gt`), `has_spaced_gt` (space/newline с обеих сторон `>`, не tab), `try_quoted_menu` (span_has_sentinel
+  guard → деклайн; split по всем `>` + trim), `build_menuseq` (Start(MenuSeq) + per-segment MenuPart{role} с
+  inner-reparse `super::run_pipeline(seg, subs, options)` — subs БЕЗ изм., MACROS ON → recursion bounded `[^"]*` без `"`).
+- `adoc-html`: `lib.rs` импорт `MenuPart`; `events.rs` stateless start/end плечи (caret перед не-Menu частью);
+  `inline.rs::menu_caret()` (font vs default). `render_menu`/`menu_target`/`menu_items` НЕ тронуты.
+- `adoc-compat-tests/src/builder.rs`: +2 фрейма `MenuSeq`/`MenuPart` (для компиляции исчерпывающего Start-match).
+- Legacy `inline.rs` НЕ тронут (нет `InlineMenuRx`; fallback недостижим — quoted-menu требует QUOTES-sub).
+
+### Тесты
+- parser unit `quoted_inline_menu_matches_asciidoctor` (subst/mod.rs): точные event-векторы 2/3-сегмента, icon-в-menu
+  (корпус), link-в-menuitem, 5 не-matches (`"a>b"`/`"File >Save"`/`"File> Save"`/`"*bold* > x"`/`"hello world"`),
+  escape `\"`, gating (без experimental → нет MenuSeq).
+- html-фикстуры `quoted-menu.adoc` + `quoted-menu-icons-font.adoc` (+`.expected.html` от asciidoctor `-e`).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 603→**604**, html unit 476, compat 44, html-фикстур 70→**72**).
+- **Гейт 344/344 байт-в-байт** vs master `a4e7bde` (base пересобран через worktree → /tmp/adoc_base; gate_check.py → 0 diff).
+  Гейт-безопасность: нет `:experimental:` с ` > `-строками → правило мёртвый код; `Tag::Menu` цел → menu-фикстур идентичен.
+- **Frontier identical 212→213 (+1)**, clean_div 21→20; new-vs-base (binary diff по всем frontier-файлам): **1 файл,
+  IMPROVED, 0 регрессий** — `install-asciidoctor-macos.adoc` **477→0** (флип в identical; 3× `"icon:apple[] > Software Update"`).
+- 16 CLI-проб vs asciidoctor 2.0.23: icon/image/link/bold × menu/submenu/menuitem, multi-`>`, escape, не-matches,
+  `:icons: font` caret, multiline — MATCH байт-в-байт.
+
+### Что дальше / follow-up (вне scope)
+- Сегмент, чей 1-й символ asciidoctor превратил бы в `<` (отклоняется обоими — OK); сентинель внутри `"…"` → деклайн
+  (корпусно недостижимо). Прочие топ-каскады: literal/dlist-indent (0-1-2 432), multi-backtick (api/index 347),
+  compat-`+gem+` десинк (asciidoc-returns 273 — кумулятивный триггер, нужна фаза расследования), manpage doctype (160).
+
+---
+
 ## Сессия (2026-06-19, 127-я) — F-S conum/colist под `:icons:` (ветка `feat/icons-conum-colist`, НЕ смержена)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (212 identical, 21 clean-div) → классификация топ-каскадов

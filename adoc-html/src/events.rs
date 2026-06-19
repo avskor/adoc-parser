@@ -817,6 +817,18 @@ impl HtmlRenderer {
             Tag::Menu { target } => {
                 self.menu_target = Some(target.to_string());
             }
+            Tag::MenuSeq => output.push_str("<span class=\"menuseq\">"),
+            Tag::MenuPart { role } => {
+                // The caret joins parts; the leading `menu` part is never prefixed.
+                if !matches!(role, MenuPart::Menu) {
+                    output.push_str(self.menu_caret());
+                }
+                output.push_str(match role {
+                    MenuPart::Menu => "<b class=\"menu\">",
+                    MenuPart::Submenu => "<b class=\"submenu\">",
+                    MenuPart::Item => "<b class=\"menuitem\">",
+                });
+            }
             Tag::Icon { name } => {
                 self.icon_name = Some(name.to_string());
                 self.icon_attrs = None;
@@ -1342,6 +1354,8 @@ impl HtmlRenderer {
             TagEnd::Menu => {
                 self.render_menu(output);
             }
+            TagEnd::MenuPart => output.push_str("</b>"),
+            TagEnd::MenuSeq => output.push_str("</span>"),
             TagEnd::Icon => {
                 self.render_icon(output);
             }
