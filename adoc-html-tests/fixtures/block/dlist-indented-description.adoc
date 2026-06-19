@@ -1,0 +1,20 @@
+empty desc multiline::
+
+  Asciidoctor now ships a default stylesheet!
+  This stylesheet gives documents a modern look.
+  Resolves several issues.
+
+inline desc::  first line
+  wrapped second line
+  wrapped third line
+
+mixed indent::
+
+  base line
+      more indented line
+
+genuine literal::
+
+  Principal paragraph.
+
+  Indented block after a blank line stays literal.
