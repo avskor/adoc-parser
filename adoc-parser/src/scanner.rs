@@ -205,8 +205,17 @@ pub fn is_attribute_entry(line: &str) -> Option<(&str, &str)> {
     if end == 0 {
         return None;
     }
+    let after_sep = &rest[end + 1..];
+    // Mirror Asciidoctor's AttributeEntryRx value clause `:name:(?:[ \t]+value)?$`:
+    // after the separator colon there must be whitespace or end-of-line. A `::`
+    // (or `:value` with no leading space) is NOT an attribute entry — e.g.
+    // `:context:: desc` is a description-list term `:context`, and
+    // `:foo:bar:: desc` is the term `:foo:bar`.
+    if !after_sep.is_empty() && !after_sep.starts_with(' ') && !after_sep.starts_with('\t') {
+        return None;
+    }
     let name = &rest[..end];
-    let value = rest[end + 1..].trim_start();
+    let value = after_sep.trim_start();
     Some((name, value))
 }
 
@@ -1683,6 +1692,15 @@ mod tests {
         assert_eq!(is_attribute_entry(":key: value"), Some(("key", "value")));
         assert_eq!(is_attribute_entry(":toc:"), Some(("toc", "")));
         assert_eq!(is_attribute_entry("not attr"), None);
+        // A `::` after the name is NOT an attribute entry — it's a description-list
+        // term (`:context::` → term `:context`). Mirror of AttributeEntryRx: the
+        // separator colon must be followed by whitespace or end-of-line.
+        assert_eq!(is_attribute_entry(":context:: A single block."), None);
+        assert_eq!(is_attribute_entry(":foo:bar:: desc"), None);
+        // No-space value (`:key:value`) is also not an attribute entry in Asciidoctor.
+        assert_eq!(is_attribute_entry(":key:value"), None);
+        // Value whose first char is `:` (after a space) stays a valid entry.
+        assert_eq!(is_attribute_entry(":author: :smile:"), Some(("author", ":smile:")));
     }
 
     #[test]
@@ -1754,6 +1772,16 @@ mod tests {
         assert_eq!(
             is_description_list_marker("Term::"),
             Some((1, "Term", ""))
+        );
+        // A term may begin with a colon — the leading colon is part of the term
+        // (matches Asciidoctor's `<dt>:context</dt>`).
+        assert_eq!(
+            is_description_list_marker(":context:: A single block."),
+            Some((1, ":context", "A single block."))
+        );
+        assert_eq!(
+            is_description_list_marker(":foo:bar:: desc"),
+            Some((1, ":foo:bar", "desc"))
         );
     }
 

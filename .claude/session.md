@@ -1,5 +1,46 @@
 # Session context
 
+## Сессия (2026-06-19, 126-я) — F-R dlist-терм с ведущим `:` (ветка `feat/colon-prefixed-dlist-term`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (211 identical, 22 clean-div) → классификация топ-каскадов
+пробами vs asciidoctor 2.0.23 (6 кандидатов). AskUserQuestion → выбран **dlist `:context::` (find-blocks 296)**.
+EnterPlanMode → 2 Explore-агента (код парсера + исходник asciidoctor) → план `~/.claude/plans/fizzy-stirring-dijkstra.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень (ЧИСТО ПАРСЕР; верифицирован исходником asciidoctor + line-level flip-детектором)
+- Термы dlist, начинающиеся с `:` (`:context::`, `:style::`, `:id::`, `:role::`), НЕ распознавались — терялся весь список.
+- `scanner::is_attribute_entry` (scanner.rs:198) слишком слаба: для `:context:: …` возвращала `Some(("context", ": …"))`,
+  и `scan_leaf_blocks` (block.rs:901) перехватывал строку как document-attr ДО dlist (`scan_list_constructs`, block.rs:1172).
+- Asciidoctor `AttributeEntryRx` (rx.rb:125): после разделяющего `:` обязателен пробел/таб/EOL → `:context::` падает в
+  `DescriptionListRx` (rx.rb:337, term-группа `[^ \t].*?` без ограничения на 1-й символ → term `:context`).
+- `is_description_list_marker` (scanner.rs:314) УЖЕ корректна (возвращает `:context` с двоеточием) — НЕ тронута.
+
+### Фикс (1 функция, ~4 строки)
+- `scanner::is_attribute_entry`: после разделяющего `:` (`after_sep = &rest[end+1..]`) — если непустой и не нач. с ` `/`\t`
+  → `None`. Зеркало value-клаузы `(?:[ \t]+…)?$`. `:foo:bar::`→терм `:foo:bar`; `:key:value` no-space→больше не attr;
+  `:key: value`/`:toc:`/`:author: :smile:` без изменений. Word-char-start-проверка имени НЕ внесена (вне scope).
+
+### Тесты
+- `scanner.rs`: +3 ассерта в `test_is_attribute_entry` (`:context::`/`:foo:bar::`/`:key:value`→None, `:author: :smile:`→Some),
+  +2 в `test_is_description_list_marker` (`:context::`→`(1,":context","…")`, `:foo:bar::`→`(1,":foo:bar","desc")`).
+- `block.rs`: `test_colon_prefixed_dlist_term` (event-вектор для 2 термов с `:`).
+- `adoc-html/src/tests.rs`: `test_colon_prefixed_dlist_term_html` (`<dt class="hdlist1">:context</dt>` байт-сверка).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 602→**603**, html unit 466→**467**).
+- **Гейт 344/344 байт-в-байт** vs master `7f8430a` (base пересобран через worktree; gate_check.py → 0 diff;
+  line-level flip-детектор: 0 строк гейта меняют классификацию `is_attribute_entry`).
+- **Frontier identical 211→212 (+1)**, clean_div 22→21; new-vs-base (по всем 250+ файлам): **1 файл, IMPROVED, 0 REGRESSION** —
+  `find-blocks.adoc` **296→0** (флип в identical).
+- 5 CLI-проб vs asciidoctor 2.0.23: `:context::`/`:foo:bar::`/`:key:value`/`:key: value`/multi-term — MATCH байт-в-байт.
+
+### Что дальше / follow-up (вне scope)
+- word-char-start-проверка имени атрибута (`:-x:`); experimental-menu (install-macos 477); dlist отступная multiline desc
+  (0-1-2 432); multi-backtick mis-pair (api/index 347); compat-backtick `+gem+` (asciidoc-returns 273); conum под
+  `:icons: font` (plain-text-diagrams 124).
+
+---
+
 ## Сессия (2026-06-19, 125-я) — F-Q conum в явных `[listing]`/`[literal]` (ветка `feat/listing-literal-callouts`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:

@@ -833,6 +833,17 @@ fn test_description_list_html() {
 }
 
 #[test]
+fn test_colon_prefixed_dlist_term_html() {
+    // `:context::` is a description-list term `:context` (leading colon kept),
+    // byte-identical to Asciidoctor. Regression for the find-blocks cascade.
+    let html = to_html(":context:: A single block.\n:style:: A single block style.");
+    assert_eq!(
+        html,
+        "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">:context</dt>\n<dd>\n<p>A single block.</p>\n</dd>\n<dt class=\"hdlist1\">:style</dt>\n<dd>\n<p>A single block style.</p>\n</dd>\n</dl>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_nested_description_list_html() {
     let html = to_html("CPU:: The brain\nSpeed::: Fast");
     assert_eq!(

@@ -4336,6 +4336,31 @@ mod tests {
     }
 
     #[test]
+    fn test_colon_prefixed_dlist_term() {
+        // A term starting with a colon (`:context::`) must be a description-list
+        // term `:context`, not mistaken for an attribute entry. Regression for
+        // the find-blocks frontier cascade.
+        let input = ":context:: A single block.\n:style:: A single block style.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed(":context")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("A single block.")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed(":style")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("A single block style.")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
     fn test_description_list_empty_desc() {
         let input = "Term::";
         let events: Vec<_> = BlockScanner::new(input).collect();
