@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-19, 132-я) — F-X icon-макрос в text-mode: default alt + section-id (ветка `fix/icon-macro-id-alt`, СМЕРЖЕНА, коммит `cf67379`)
+
+Запрос «приступай к следующей задаче из туду». Frontier-проход (215 identical, 18 clean-div, без изменений с 131-й).
+Триаж пробами vs asciidoctor 2.0.23 топ/малых расхождений → 3 чистых кандидата (A icon id+alt / B section
+с ведущим пробелом→literal / C inline role span `[.path]_..._`). `callout-#` отброшен (наш вывод уже совпадал
+изолированно). AskUserQuestion → выбран **A (icon id+alt)**. EnterPlanMode → 2 Explore-агента (наш icon-путь +
+asciidoctor spec/legacy) + 1 Plan-агент (валидация, нашёл Finding A) → план `~/.claude/plans/bubbly-marinating-lamport.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Смержена в master, запушена, ветка удалена.**
+
+### Корень (две грани одного inline-макроса `icon:NAME[]` в text-mode без `:icons:`)
+- **alt-текст** (`adoc-html/src/inline.rs::render_icon` стр.263): `alt.unwrap_or(&name)` брал СЫРОЙ name → `[fast-forward]`
+  вместо `[fast forward]`. Правило asciidoctor (`substitutors.rb:431`): default alt = `Helpers.basename(name, drop_ext).tr('_-',' ')`.
+- **section-id** (`adoc-parser/src/scanner.rs::strip_urls_for_id`): обрабатывал `link:`/`http(s)://`, но НЕ `icon:` →
+  литерал `icon` тёк в id (`_iconfast_forward_migration` вместо `_fast_forward_migration`). asciidoctor генерит id
+  из title ПОСЛЕ macros-sub (icon → `<span>[fast forward]</span>` → strip tags → `fast forward` → норма).
+- **Ключевой инсайт по id:** наш `generate_id` уже трактует `-`/`_`/`.`/пробел одинаково как separator → для id
+  значение tr несущественно, важен только basename. Кавычки в alt тоже отфильтровываются char-фильтром (`"A B" Z`→`_a_b_z`).
+
+### Фикс (4 файла, чисто парсер + рендерер)
+1. `scanner.rs`: новый `pub fn icon_default_alt(name)` = basename(drop dir + last ext, guard `i>0` для ведущей точки)
+   `.replace(['_','-'], " ")`. Re-export `pub use scanner::icon_default_alt;` в lib.rs (parser zero-dep сохранён).
+2. `scanner.rs::strip_urls_for_id`: ветка `icon:` (let-chain) — name до `[`, attrs между `[]`; alt = явный `alt=`
+   (простой split) иначе `icon_default_alt(name)`; push alt, advance за `]`. Невалидные скобки → fall-through (литерал).
+3. `adoc-html/src/inline.rs::render_icon`: text-mode при `alt==None` → `adoc_parser::icon_default_alt(&name)`.
+   Явный `alt=` и font/image-mode ветки НЕ тронуты.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace **0** (схлопнул вложенные `if let` в let-chain); test --workspace зелёное
+  (**parser 609→611** +1 unit icon_default_alt +8 generate_id-кейсов; **html 477→478** +1 default-alt;
+  **html-фикстур 18** +2: `inline/icon-text-default-alt`, `document/section-id-icon`).
+- **Гейт 344/344 байт-в-байт** vs master (base через worktree → /tmp/adoc_base, gate_check new-vs-base **0 diff** —
+  гейт icon-имена простые bolt/check/download/heart/shield/tags/times → identity alt; icon-в-заголовке в гейте 0).
+- **Frontier identical 215→216 (+1)**, clean-div 18→17: `asciidoctorj-1-5-0-released` ФЛИП в identical (showdiff пусто).
+  new-vs-base = 4 строки ТОЛЬКО в asciidoctorj (IMPROVED), 0 регрессий. CHANGELOG/github/migration 0 изменений
+  (их расхождения от других классов, не icon → не улучшены и не регрессировали).
+- 14 CLI-проб vs asciidoctor 2.0.23 MATCH: alt (fast-forward/my_cool_icon/foo.bar/path/to/heart/heart/явный alt) +
+  id (fast-forward/ticket/foo.bar/path/heart/a.b.c/heart[Big]/malformed icon:noclose/quoted alt="A B").
+
+### Дальше / follow-up
+- **F-X follow-up (вне scope):** снятие кавычек у named-атрибутов icon (`alt`/`role`) — `icon:home[role="a b"]` →
+  у нас `class="icon "a b""`, у asciidoctor `class="icon a b"`. Пре-существующий латентный баг (quote-blind `split(',')`
+  в render_icon 216-235); затрагивает ГЕЙТ (quoted `role=` в `asciidoc-lang/subs/*`) → отдельная задача с ручной
+  верификацией. Зеркало техники: `adoc-html/src/media.rs:36-55`.
+- **Прочие frontier-кандидаты (не выбраны):** section с ведущим пробелом→literalblock (чистое правило col-0,
+  гейт-safe 0 файлов, но малый impact ~1 файл); inline role span `[.path]__...._` (static-awe 41, сложнее — inline emphasis-движок).
+- **Топ-каскады frontier (многоклассовые/специфичные):** asciidoc-returns 273 (compat-`+gem+`), sample 152 (header/doctype),
+  manpage 146 (manpage backend), index 136 (indent-literal в table-cell), debuter 118 (французский).
+
+---
+
 ## Сессия (2026-06-19, 131-я) — F-W экранированная типографская замена в attr-ref trailing → паразитный `0` (ветка `fix/attr-ref-escaped-typographic`, НЕ смержена, коммит `9e3c322`)
 
 Запрос «запланируй следующую задачу из туду». Frontier-проход (identical 215, clean-div 18). Триаж топ/малых
