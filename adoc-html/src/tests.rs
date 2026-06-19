@@ -5734,3 +5734,21 @@ fn test_listing_indented_conditional_directive_is_literal() {
     assert!(html.contains(":x: 1"), "guarded content survives: {html}");
     assert!(!html.contains(" ifdef::backend-html5[]"), "indent should be stripped: {html}");
 }
+
+#[test]
+fn test_x_marker_literal_monospace() {
+    // `[x-]` literal-monospace marker (Asciidoctor `InlinePassRx` old behaviour):
+    // role `x-` dropped, content as `<code>`.
+    // backtick close → BASIC_SUBS: `*bold*`/`{version}` stay literal.
+    let bt = to_html("[x-]`*bold* {version}`");
+    assert!(bt.contains("<code>*bold* {version}</code>"), "backtick BASIC_SUBS: {bt}");
+    // plus close → NORMAL_SUBS: emphasis applied, attr would resolve.
+    let pl = to_html("[x-]+cat _filename_+");
+    assert!(pl.contains("<code>cat <em>filename</em></code>"), "plus NORMAL_SUBS: {pl}");
+    // `[<attrs> x-]` keeps the leading role.
+    let role = to_html("[method x-]+save()+");
+    assert!(role.contains("<code class=\"method\">save()</code>"), "role preserved: {role}");
+    // regress: a non-`x-` attrlist is an ordinary monospace role (class kept).
+    let reg = to_html("[x-y]`c`");
+    assert!(reg.contains("<code class=\"x-y\">c</code>"), "non-marker role: {reg}");
+}
