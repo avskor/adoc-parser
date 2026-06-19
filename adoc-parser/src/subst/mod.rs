@@ -892,6 +892,64 @@ mod tests {
         }
     }
 
+    /// A monospace span whose content starts with an apostrophe (`` `'a'` ``)
+    /// must NOT let the modern single-smart-quote pass falsely open at that inner
+    /// `'`+`` ` `` and swallow a following span. Asciidoctor's `:single`/`:double`
+    /// `QUOTE_SUBS` are constrained — the opener needs a non-word left boundary —
+    /// so `` `'a'` and `'b'` `` is two independent `<code>` spans with literal
+    /// apostrophes, NOT one collapsed span with curly quotes (the
+    /// `docs/modules/api/pages/index.adoc` frontier cascade). Matches asciidoctor
+    /// 2.0.23. The positive smart-quote cases stay covered by
+    /// [`reproduces_legacy_on_smart_quote_inputs`] and the HTML fixtures.
+    #[test]
+    fn monospace_apostrophe_does_not_leak_smart_quote() {
+        let mono = || Event::Start(Tag::Monospace { id: None, roles: vec![] });
+        // Core: two monospace spans, each literal `'a'`/`'b'`, plain text between.
+        assert_eq!(
+            pipeline("`'a'` and `'b'`"),
+            vec![
+                mono(),
+                Event::Text("'a'".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text(" and ".into()),
+                mono(),
+                Event::Text("'b'".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // Same with surrounding text (positional: the bug was independent of the
+        // line start).
+        assert_eq!(
+            pipeline("it `'a'` and `'b'` end"),
+            vec![
+                Event::Text("it ".into()),
+                mono(),
+                Event::Text("'a'".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text(" and ".into()),
+                mono(),
+                Event::Text("'b'".into()),
+                Event::End(TagEnd::Monospace),
+                Event::Text(" end".into()),
+            ],
+        );
+        // A genuine smart quote beside such spans still forms (left boundary is a
+        // space): the curly opener/closer wrap the words, the backtick span is
+        // untouched. `'plain'` (no backtick) stays literal in modern mode.
+        assert_eq!(
+            pipeline("\"`q`\" and `'x'`"),
+            vec![
+                Event::Text("\u{201C}".into()),
+                Event::Text("q".into()),
+                Event::Text("\u{201D}".into()),
+                Event::Text(" and ".into()),
+                mono(),
+                Event::Text("'x'".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+    }
+
     /// With the `escape` pass ported, the pipeline must reproduce legacy on the
     /// NON-marker backslash escapes it handles: the `\{name}` attribute-reference
     /// escape, the `\"`/`\'` smart-quote opener escapes, and the generic
