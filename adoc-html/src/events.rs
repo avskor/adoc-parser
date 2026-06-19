@@ -3,6 +3,51 @@
 use crate::*;
 
 impl HtmlRenderer {
+    /// Render a callout number marker per the `icons` document attribute,
+    /// mirroring asciidoctor's `convert_inline_callout` / `convert_colist`.
+    /// `parens` wraps the bold number as `(n)` (verbatim inline refs) vs `n`
+    /// (colist markers). Returns `None` when `icons` is unset, so the caller
+    /// emits the legacy `<b class="conum">` form.
+    pub(crate) fn callout_marker(&self, n: u32, parens: bool) -> Option<String> {
+        match self.document_attrs.get("icons").map(|v| v.as_str()) {
+            Some("font") => {
+                let mut s = format!("<i class=\"conum\" data-value=\"{n}\"></i><b>");
+                if parens {
+                    s.push('(');
+                }
+                s.push_str(&n.to_string());
+                if parens {
+                    s.push(')');
+                }
+                s.push_str("</b>");
+                Some(s)
+            }
+            Some(_) => {
+                let iconsdir = self
+                    .document_attrs
+                    .get("iconsdir")
+                    .map(|s| s.as_str())
+                    .unwrap_or("./images/icons");
+                let icontype = self
+                    .document_attrs
+                    .get("icontype")
+                    .map(|s| s.as_str())
+                    .unwrap_or("png");
+                let mut s = String::from("<img src=\"");
+                html_escape(&mut s, iconsdir);
+                s.push_str("/callouts/");
+                s.push_str(&n.to_string());
+                s.push('.');
+                html_escape(&mut s, icontype);
+                s.push_str("\" alt=\"");
+                s.push_str(&n.to_string());
+                s.push_str("\">");
+                Some(s)
+            }
+            None => None,
+        }
+    }
+
     pub(crate) fn push_event<'a>(&mut self, output: &mut String, event: Event<'a>) {
         // Wrap preamble content when a section starts
         if matches!(event, Event::Start(Tag::Section { .. }))
@@ -308,26 +353,42 @@ impl HtmlRenderer {
                 self.bibliography_reftexts.push((id.to_string(), reftext));
             }
             Event::CalloutRef(num) => {
+                // Build the marker before borrowing the write target (the
+                // immutable `&self` borrow must end before `&mut source_code_buffer`).
+                let marker = self.callout_marker(num, true);
                 let target = if self.in_source_block {
                     if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
                 } else {
                     output
                 };
-                target.push_str("<b class=\"conum\">(");
-                target.push_str(&num.to_string());
-                target.push_str(")</b>");
+                match marker {
+                    Some(m) => target.push_str(&m),
+                    None => {
+                        target.push_str("<b class=\"conum\">(");
+                        target.push_str(&num.to_string());
+                        target.push_str(")</b>");
+                    }
+                }
             }
             Event::XmlCalloutRef(num) => {
+                let marker = self.callout_marker(num, true);
                 let target = if self.in_source_block {
                     if let Some(ref mut buf) = self.source_code_buffer { buf } else { output }
                 } else {
                     output
                 };
-                target.push_str("&lt;!--");
-                target.push_str("<b class=\"conum\">(");
-                target.push_str(&num.to_string());
-                target.push_str(")</b>");
-                target.push_str("--&gt;");
+                match marker {
+                    // Under icons the `<!-- -->` guard is dropped — asciidoctor's
+                    // `convert_inline_callout` renders just the icon.
+                    Some(m) => target.push_str(&m),
+                    None => {
+                        target.push_str("&lt;!--");
+                        target.push_str("<b class=\"conum\">(");
+                        target.push_str(&num.to_string());
+                        target.push_str(")</b>");
+                        target.push_str("--&gt;");
+                    }
+                }
             }
             Event::Toc => {
                 if !self.toc_auto_seen {
@@ -609,17 +670,37 @@ impl HtmlRenderer {
                 }
             }
             Tag::CalloutList => {
+                // Under `:icons:` the colist renders as a `<table>` with an
+                // explicit, positional marker per row (asciidoctor `convert_colist`).
+                self.callout_list_num = 0;
                 output.push_str("<div class=\"colist arabic\">\n");
                 self.emit_pending_block_title(output);
-                output.push_str("<ol>\n");
+                output.push_str(if self.document_attrs.contains_key("icons") {
+                    "<table>\n"
+                } else {
+                    "<ol>\n"
+                });
             }
             Tag::CalloutListItem { .. } => {
-                output.push_str("<li><p>");
-                // Track the principal `<p>` like a regular list item so a
-                // continuation block (e.g. a `+`-attached NOTE) closes it
-                // before the block is emitted, instead of nesting the block
-                // inside the still-open `<p>`.
-                self.open_li_paragraph();
+                if self.document_attrs.contains_key("icons") {
+                    // Positional number — ignore the source `<N>` (matches asciidoctor).
+                    self.callout_list_num += 1;
+                    let marker = self
+                        .callout_marker(self.callout_list_num, false)
+                        .unwrap_or_default();
+                    output.push_str("<tr>\n<td>");
+                    output.push_str(&marker);
+                    output.push_str("</td>\n<td>");
+                    // Table mode has no principal `<p>`; do NOT touch the
+                    // li-paragraph stacks (see TagEnd::CalloutListItem).
+                } else {
+                    output.push_str("<li><p>");
+                    // Track the principal `<p>` like a regular list item so a
+                    // continuation block (e.g. a `+`-attached NOTE) closes it
+                    // before the block is emitted, instead of nesting the block
+                    // inside the still-open `<p>`.
+                    self.open_li_paragraph();
+                }
             }
             Tag::Admonition { kind, block } => self.start_admonition(output, kind, *block, &meta),
             Tag::Table => self.start_table(output, &meta),
@@ -1092,13 +1173,23 @@ impl HtmlRenderer {
                 }
             }
             TagEnd::CalloutList => {
-                output.push_str("</ol>\n</div>\n");
+                output.push_str(if self.document_attrs.contains_key("icons") {
+                    "</table>\n</div>\n"
+                } else {
+                    "</ol>\n</div>\n"
+                });
             }
             TagEnd::CalloutListItem => {
-                // A closed principal `<p>` means a continuation block (e.g. a
-                // NOTE attached with `+`) already emitted `</p>`.
-                let p_open = self.close_li_paragraph();
-                output.push_str(if p_open { "</p></li>\n" } else { "</li>\n" });
+                if self.document_attrs.contains_key("icons") {
+                    // Table mode: no `<p>` was opened, so leave the li-paragraph
+                    // stacks untouched (must pair with Tag::CalloutListItem).
+                    output.push_str("</td>\n</tr>\n");
+                } else {
+                    // A closed principal `<p>` means a continuation block (e.g. a
+                    // NOTE attached with `+`) already emitted `</p>`.
+                    let p_open = self.close_li_paragraph();
+                    output.push_str(if p_open { "</p></li>\n" } else { "</li>\n" });
+                }
             }
             TagEnd::Admonition => {
                 self.admonition_block_stack.pop();

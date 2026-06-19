@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-19, 127-я) — F-S conum/colist под `:icons:` (ветка `feat/icons-conum-colist`, НЕ смержена)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (212 identical, 21 clean-div) → классификация топ-каскадов
+пробами vs asciidoctor 2.0.23 (4 кандидата). AskUserQuestion → выбран **conum под `:icons: font`** (6 frontier-файлов,
+0 гейт-риска). EnterPlanMode → 2 Explore-агента (код рендерера + исходник asciidoctor) + 1 Plan-агент (валидация) →
+план `~/.claude/plans/vectorized-zooming-charm.md`, ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT.
+**Реализовано и закоммичено на ветке; ожидает мержа/пуша по запросу.**
+
+### Корень (ЧИСТО РЕНДЕРЕР `adoc-html`; парсер не тронут)
+При активном document-attr `icons` Asciidoctor меняет рендеринг callout-ов в ДВУХ местах, мы — нет:
+- (A) маркер conum в verbatim (listing/literal/source);
+- (B) сам callout-список (colist) становится `<table>` вместо `<ol>`.
+Парсер уже эмитит всё нужное (`Event::CalloutRef(n)`/`XmlCalloutRef(n)`, `Tag::CalloutList`/`CalloutListItem{number}`).
+Спека: `html5.rb:490 convert_colist`, `:1191 convert_inline_callout`, `abstract_node.rb:292 icon_uri`.
+
+### Фикс (3 файла кода, всё в adoc-html)
+- `lib.rs`: поле `callout_list_num: u32` (struct + `new()`=0) — позиционный счётчик colist-маркеров.
+- `events.rs`: новый хелпер `callout_marker(&self, n, parens) -> Option<String>` (3 ветки font/image/none; owned-return
+  снимает borrow-конфликт — вызывать ДО взятия `&mut` на target-буфер). `Some("font")`→`<i class="conum" data-value=
+  "n"></i><b>(n)/n</b>`; `Some(_)`→`<img src="{iconsdir}/callouts/n.{icontype}" alt="n">` (дефолты `./images/icons`,`png`,
+  reuse паттерна admonition); `None`→None (caller рендерит legacy).
+- `events.rs` verbatim (`CalloutRef`/`XmlCalloutRef`): borrow-safe `let marker = self.callout_marker(num,true)` до
+  выбора target; под icons у Xml обёртка `&lt;!--…--&gt;` ИСЧЕЗАЕТ (просто иконка).
+- `events.rs` colist (4 плеча, ветвление на `document_attrs.contains_key("icons")`): CalloutList→reset счётчик +
+  `<table>`/`<ol>`; CalloutListItem→icons:`+=1`, `<tr>\n<td>{marker(pos,false)}</td>\n<td>` (БЕЗ open_li_paragraph);
+  TagEnd item→icons:`</td>\n</tr>` (БЕЗ close_li_paragraph); TagEnd list→`</table>`/`</ol>`.
+  **R1 (критично):** open/close_li_paragraph пушат/попают в ДВА стека (`li_p_open`+`li_para_count`) — в table-режиме
+  пропускаются ОБА по одинаковому условию (иначе рассинхрон). Маркер colist ПОЗИЦИОННЫЙ (`<1> <5>`→1,2), verbatim — исходный.
+
+### Тесты (adoc-html/src/tests.rs, +9)
+font verbatim, image verbatim (+custom iconsdir/type), font colist table, image colist, XML-под-font (drop guard) +
+none-counterpart, позиционность `<1><5>`, continuation NOTE в `<td>`, title под icons, none-регресс.
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (html unit 467→**476**, parser 603, html-tests 25, compat 44).
+- **Гейт 344/344 байт-в-байт** vs master `779639f` (base пересобран через worktree → /tmp/adoc_base; gate_check.py → 0 diff).
+  Гейт-безопасность: ни один файл не рендерит conum/colist при активных иконках (callout.adoc/admonitions.adoc — callout-
+  события ДО `:icons:`; callout.adoc `:icons: font <1>` не активирует, conum=17 `<b>` MATCH; CHANGELOG icons активен но 0 conum).
+- **Frontier identical 212 (без изм.)**; new-vs-base через **difflib edit-distance** (НЕ позиционный `nd` —
+  он ложно показал 2 «REGRESSED» из-за каскада на структурном ol→table; difflib корректен): **5 файлов, все IMPROVED,
+  0 регрессий** — syntax 47→31, asciidoc-writers-guide 158→56, 0-1-3-released 104→74, 0-1-4-released 306→207, plain-text-diagrams 48→4.
+- CLI-пробы vs asciidoctor 2.0.23: font/image × (verbatim/colist/XML/positional/title) MATCH; continuation нормализуется identical.
+
+### Что дальше / follow-up (вне scope)
+- icon-role inline `icon:name[role=x]` (syntax 316: `<span class="icon blue">` vs наш `<i class="fa fa-flag blue">`);
+  checklist `<i class="fa fa-check-square-o">` (syntax 589); experimental-menu (install-macos 477); literal-каскад (0-1-2 432);
+  multi-backtick (api/index 347); compat-backtick (asciidoc-returns 273 — `+gem+` одиночный контекстно падает).
+- **Заметка по методологии:** для new-vs-base использовать difflib (SequenceMatcher), а не позиционный `nd()` —
+  при структурных изменениях (ol→table) `nd` каскадит и ложно репортит регрессии.
+
+---
+
 ## Сессия (2026-06-19, 126-я) — F-R dlist-терм с ведущим `:` (ветка `feat/colon-prefixed-dlist-term`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (211 identical, 22 clean-div) → классификация топ-каскадов

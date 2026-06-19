@@ -1332,6 +1332,106 @@ fn test_callout_item_with_continuation_note_html() {
 }
 
 #[test]
+fn test_callout_font_verbatim_conum_html() {
+    // `:icons: font` → verbatim conum is `<i class="conum" data-value="N"></i><b>(N)</b>`
+    // (parens kept), not the legacy `<b class="conum">(N)</b>`.
+    let input = ":icons: font\n\n[source,ruby]\n----\nputs \"a\" <1>\n----\n<1> first";
+    let html = to_html(input);
+    assert!(html.contains("<i class=\"conum\" data-value=\"1\"></i><b>(1)</b>"));
+    assert!(!html.contains("<b class=\"conum\">"));
+}
+
+#[test]
+fn test_callout_image_verbatim_conum_html() {
+    // Legacy image icons → conum is an `<img>` to `{iconsdir}/callouts/N.{icontype}`.
+    let html = to_html(":icons: image\n\n----\nx <1>\n----\n<1> a");
+    assert!(html.contains("<img src=\"./images/icons/callouts/1.png\" alt=\"1\">"));
+    assert!(!html.contains("<b class=\"conum\">"));
+    // Custom :iconsdir:/:icontype: are honored.
+    let html2 = to_html(":icons: image\n:iconsdir: /custom\n:icontype: svg\n\n----\nx <1>\n----\n<1> a");
+    assert!(html2.contains("<img src=\"/custom/callouts/1.svg\" alt=\"1\">"));
+}
+
+#[test]
+fn test_callout_font_colist_table_html() {
+    // `:icons:` set → colist renders as a `<table>` with positional markers
+    // (`<b>N</b>` WITHOUT parens), not an `<ol>`.
+    let input = ":icons: font\n\n----\nx <1>\ny <2>\n----\n<1> first\n<2> second";
+    let html = to_html(input);
+    assert!(html.contains("<div class=\"colist arabic\">\n<table>\n"));
+    assert!(html.contains("<tr>\n<td><i class=\"conum\" data-value=\"1\"></i><b>1</b></td>\n<td>first</td>\n</tr>"));
+    assert!(html.contains("<tr>\n<td><i class=\"conum\" data-value=\"2\"></i><b>2</b></td>\n<td>second</td>\n</tr>"));
+    assert!(html.contains("</table>\n</div>"));
+    assert!(!html.contains("<ol>"));
+    assert!(!html.contains("<li>"));
+}
+
+#[test]
+fn test_callout_image_colist_table_html() {
+    let html = to_html(":icons: image\n\n----\nx <1>\n----\n<1> a");
+    assert!(html.contains("<td><img src=\"./images/icons/callouts/1.png\" alt=\"1\"></td>\n<td>a</td>"));
+    assert!(!html.contains("<ol>"));
+}
+
+#[test]
+fn test_callout_xml_under_icons_drops_guard_html() {
+    // Under icons the `<!-- -->` guard is dropped — just the icon is rendered.
+    let html = to_html(":icons: font\n\n[source,xml]\n----\n<tag/> <!--1-->\n----\n<1> note");
+    assert!(html.contains("<i class=\"conum\" data-value=\"1\"></i><b>(1)</b>"));
+    assert!(!html.contains("&lt;!--"));
+    // Regression: without icons the guard wrapper is preserved.
+    let none = to_html("[source,xml]\n----\n<tag/> <!--1-->\n----\n<1> note");
+    assert!(none.contains("&lt;!--<b class=\"conum\">(1)</b>--&gt;"));
+}
+
+#[test]
+fn test_callout_colist_marker_positional_html() {
+    // colist markers are positional (1, 2, …), ignoring the source `<N>`,
+    // while the verbatim conum keeps the source number.
+    let input = ":icons: font\n\n----\na <1>\nb <5>\n----\n<1> first\n<5> second";
+    let html = to_html(input);
+    // Verbatim: source numbers.
+    assert!(html.contains("<i class=\"conum\" data-value=\"5\"></i><b>(5)</b>"));
+    // colist: positional.
+    assert!(html.contains("<td><i class=\"conum\" data-value=\"1\"></i><b>1</b></td>"));
+    assert!(html.contains("<td><i class=\"conum\" data-value=\"2\"></i><b>2</b></td>"));
+    assert!(!html.contains("data-value=\"5\"></i><b>5</b>"));
+}
+
+#[test]
+fn test_callout_colist_continuation_in_td_html() {
+    // A `+`-attached NOTE renders directly inside the `<td>` (no `<p>` wrapper
+    // in table mode), then the cell/row close.
+    let input = ":icons: font\n\n----\nx <1>\n----\n<1> has note\n+\nNOTE: the note";
+    let html = to_html(input);
+    assert!(html.contains("<td>has note<div class=\"admonitionblock note\">"));
+    // Admonition closes, then the colist cell/row/table/div close (table mode).
+    assert!(html.contains("</div>\n</td>\n</tr>\n</table>\n</div>"));
+    assert!(!html.contains("<li>"));
+    assert!(!html.contains("has note</p>"));
+}
+
+#[test]
+fn test_callout_colist_title_under_icons_html() {
+    let input = ":icons: font\n\n----\nx <1>\n----\n.MyTitle\n<1> a";
+    let html = to_html(input);
+    assert!(html.contains("<div class=\"colist arabic\">\n<div class=\"title\">MyTitle</div>\n<table>\n"));
+}
+
+#[test]
+fn test_callout_none_mode_regression_html() {
+    // Without `:icons:`, the legacy `<ol>` + `<b class="conum">(N)</b>` shape is
+    // preserved (no `<i class="conum">`, no `<table>`).
+    let input = "----\nx <1>\n----\n<1> a";
+    let html = to_html(input);
+    assert!(html.contains("<b class=\"conum\">(1)</b>"));
+    assert!(html.contains("<div class=\"colist arabic\">\n<ol>\n"));
+    assert!(html.contains("<li><p>a</p></li>"));
+    assert!(!html.contains("<i class=\"conum\""));
+    assert!(!html.contains("<table>"));
+}
+
+#[test]
 fn test_callout_marker_top_level_paragraph_not_colist_html() {
     // A `<N>` line following paragraph content at top level is plain text, not a
     // new callout list (the `|=== <1>` table-doc shape). The whole run is one
