@@ -294,6 +294,11 @@ struct HtmlRenderer {
     /// asciidoctor substitutes linearly and never re-scans an inserted
     /// value, so `:x: {x}` must not recurse.
     attr_refs_in_progress: Vec<String>,
+    /// Positional 1-based marker counter for the current callout list under
+    /// `:icons:` (table render mode). Reset on `Tag::CalloutList`, `+= 1` per
+    /// item. Asciidoctor numbers colist markers positionally, ignoring the
+    /// source `<N>` (`convert_colist`).
+    callout_list_num: u32,
 }
 
 impl HtmlRenderer {
@@ -399,6 +404,7 @@ impl HtmlRenderer {
             quote_citetitle: None,
             authors: AuthorRegistry::new(),
             attr_refs_in_progress: Vec::new(),
+            callout_list_num: 0,
         }
     }
 
