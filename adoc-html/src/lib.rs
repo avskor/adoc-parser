@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
-use adoc_parser::{CellStyle, CowStr, Event, HAlign, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
+use adoc_parser::{CellStyle, CowStr, Event, HAlign, MenuPart, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 use adoc_render_core::{
     Author, AuthorRegistry, CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry,
     RefText, Revision, SectionNumberer, TocBuilder, TocEntry, TocStep, XrefResolver,

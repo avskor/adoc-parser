@@ -131,6 +131,12 @@ enum BuildFrame {
     Menu {
         inlines: Vec<AsgNode>,
     },
+    MenuSeq {
+        inlines: Vec<AsgNode>,
+    },
+    MenuPart {
+        inlines: Vec<AsgNode>,
+    },
     Icon {
         inlines: Vec<AsgNode>,
     },
@@ -236,6 +242,8 @@ pub fn build_asg<'a>(
                     Tag::Keyboard => BuildFrame::Keyboard { inlines: vec![] },
                     Tag::Button => BuildFrame::Button { inlines: vec![] },
                     Tag::Menu { .. } => BuildFrame::Menu { inlines: vec![] },
+                    Tag::MenuSeq => BuildFrame::MenuSeq { inlines: vec![] },
+                    Tag::MenuPart { .. } => BuildFrame::MenuPart { inlines: vec![] },
                     Tag::Icon { .. } => BuildFrame::Icon { inlines: vec![] },
                     Tag::Stem { .. } => BuildFrame::Stem { inlines: vec![] },
                     Tag::StemBlock { .. } => BuildFrame::StemBlock { children: vec![] },
@@ -683,6 +691,20 @@ fn finish_frame(frame: BuildFrame, _tag_end: &TagEnd) -> Option<AsgNode> {
                 inlines: merged,
             })
         }
+        BuildFrame::MenuSeq { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "menuseq".to_string(),
+                inlines: merged,
+            })
+        }
+        BuildFrame::MenuPart { inlines } => {
+            let merged = merge_adjacent_text(inlines);
+            Some(AsgNode::Span {
+                variant: "menupart".to_string(),
+                inlines: merged,
+            })
+        }
         BuildFrame::Icon { inlines } => {
             let merged = merge_adjacent_text(inlines);
             Some(AsgNode::Span {
@@ -832,6 +854,8 @@ fn push_node_to_frame(frame: &mut BuildFrame, node: AsgNode) {
         BuildFrame::Keyboard { inlines }
         | BuildFrame::Button { inlines }
         | BuildFrame::Menu { inlines }
+        | BuildFrame::MenuSeq { inlines }
+        | BuildFrame::MenuPart { inlines }
         | BuildFrame::Icon { inlines }
         | BuildFrame::Stem { inlines } => inlines.push(node),
         BuildFrame::StemBlock { children } => children.push(node),

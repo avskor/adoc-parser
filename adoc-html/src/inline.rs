@@ -152,6 +152,17 @@ impl HtmlRenderer {
         }
     }
 
+    /// The caret separator between menu-sequence parts. Under `:icons: font`
+    /// Asciidoctor uses a FontAwesome glyph; otherwise a bold `&#8250;`. Both carry
+    /// a leading `&#160;` and a trailing space (`html5.rb` `convert_inline_menu`).
+    pub(crate) fn menu_caret(&self) -> &'static str {
+        if self.document_attrs.get("icons").map(|v| v.as_str()) == Some("font") {
+            "&#160;<i class=\"fa fa-angle-right caret\"></i> "
+        } else {
+            "&#160;<b class=\"caret\">&#8250;</b> "
+        }
+    }
+
     pub(crate) fn render_menu(&mut self, output: &mut String) {
         let target = match self.menu_target.take() {
             Some(t) => t,

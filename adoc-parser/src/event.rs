@@ -251,6 +251,16 @@ pub enum AdmonitionKind {
     Caution,
 }
 
+/// Role of a segment within a quoted inline menu sequence (`"File > Edit > Copy"`
+/// under `:experimental:`). The first segment is the [`MenuPart::Menu`], the last
+/// is the [`MenuPart::Item`], and any in between are [`MenuPart::Submenu`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuPart {
+    Menu,
+    Submenu,
+    Item,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HAlign {
     #[default]
@@ -359,6 +369,12 @@ pub enum Tag<'a> {
     Keyboard,
     Button,
     Menu { target: CowStr<'a> },
+    /// Quoted inline menu sequence (`"File > Edit"` under `:experimental:`).
+    /// Wraps one [`Tag::MenuPart`] per segment; renders as `<span class="menuseq">`.
+    MenuSeq,
+    /// A single segment of a [`Tag::MenuSeq`]; its nested inline events render
+    /// inside `<b class="menu|submenu|menuitem">`.
+    MenuPart { role: MenuPart },
     Icon { name: CowStr<'a> },
 
     // STEM (math)
@@ -428,6 +444,8 @@ pub enum TagEnd {
     Keyboard,
     Button,
     Menu,
+    MenuSeq,
+    MenuPart,
     Icon,
 
     Stem,
@@ -536,6 +554,8 @@ impl<'a> Tag<'a> {
             Tag::Menu { target } => Tag::Menu {
                 target: Cow::Owned(target.into_owned()),
             },
+            Tag::MenuSeq => Tag::MenuSeq,
+            Tag::MenuPart { role } => Tag::MenuPart { role },
             Tag::Icon { name } => Tag::Icon {
                 name: Cow::Owned(name.into_owned()),
             },
@@ -604,6 +624,8 @@ impl<'a> Tag<'a> {
             Tag::Keyboard => TagEnd::Keyboard,
             Tag::Button => TagEnd::Button,
             Tag::Menu { .. } => TagEnd::Menu,
+            Tag::MenuSeq => TagEnd::MenuSeq,
+            Tag::MenuPart { .. } => TagEnd::MenuPart,
             Tag::Icon { .. } => TagEnd::Icon,
             Tag::Stem { .. } => TagEnd::Stem,
             Tag::StemBlock { .. } => TagEnd::StemBlock,

@@ -90,7 +90,7 @@
 use std::borrow::Cow;
 
 use crate::attributes::{LinkKind, parse_image_attrs, parse_link_attrs};
-use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
+use crate::event::{Event, MenuPart, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
 use super::flag_decline;
@@ -307,6 +307,38 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         }
         if options.experimental && bytes[i] == b'm' && src[i..].starts_with("menu:") {
             if let Some((events, end)) = try_menu(&src, i) {
+                out.push_str(&work.macro_sentinel(events));
+                i = end;
+                continue;
+            }
+            out.push_str(&src[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        // Escaped quoted inline menu (`\"…"`): drop the backslash, keep the quoted
+        // string literal (no menu). Only when the `"…"` would otherwise match the
+        // quoted-menu rule; otherwise fall through so `\` is copied verbatim by the
+        // catch-all. Mirrors `InlineMenuRx`'s leading-`\` branch (`next $&.slice 1,
+        // …`). `escape` leaves a `\"` not followed by a backtick intact, so the
+        // backslash reaches here.
+        if options.experimental
+            && bytes[i] == b'\\'
+            && bytes.get(i + 1) == Some(&b'"')
+            && let Some(end) = quoted_menu_span_end(&src, i + 1)
+        {
+            out.push_str(&src[i + 1..end]); // literal `"…"`, backslash dropped
+            i = end;
+            continue;
+        }
+        // Quoted inline menu (`"File > Edit > Copy"`): a double-quoted run whose
+        // content starts with `[\w&]` and holds a space-flanked `>` becomes a menu
+        // sequence. Detected here, BEFORE the `quotes` pass turns the `"`
+        // typographic (Asciidoctor runs `InlineMenuRx` in `sub_macros`, so the menu
+        // wins over smart quotes). On a non-match the `"` is copied literally for
+        // the later smart-quote pass. We match a literal `>` (the renderer escapes
+        // to `&gt;`), the pre-specialchars stand-in for Asciidoctor's `&gt;`.
+        if options.experimental && bytes[i] == b'"' {
+            if let Some((events, end)) = try_quoted_menu(&src, i, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -954,6 +986,102 @@ fn try_menu(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     }
     events.push(Event::End(TagEnd::Menu));
     Some((events, end))
+}
+
+/// At an opening `"` (byte index `open`), test whether the double-quoted run is a
+/// quoted-menu candidate per Asciidoctor `InlineMenuRx`
+/// (`/\\?"([\w&][^"]*?[ \n]+&gt;[ \n]+[^"]*)"/`). The close is the FIRST `"` after
+/// `open` (`[^"]*` forbids an embedded quote); the content must start with `[\w&]`
+/// and hold at least one space/newline-flanked `>` ([`has_spaced_gt`]). We match a
+/// literal `>` because specialchars (`>`→`&gt;`) is not a pipeline pass — the HTML
+/// escape happens only in the renderer. Returns the index just past the closing
+/// `"`. Used both by the `"` arm (build the menu) and the `\"` arm (strip escape).
+fn quoted_menu_span_end(src: &str, open: usize) -> Option<usize> {
+    let rel = src[open + 1..].find('"')?;
+    let close = open + 1 + rel;
+    let content = &src[open + 1..close];
+    let first = *content.as_bytes().first()?;
+    if !(first.is_ascii_alphanumeric() || first == b'_' || first == b'&') {
+        return None;
+    }
+    if !has_spaced_gt(content) {
+        return None;
+    }
+    Some(close + 1)
+}
+
+/// Whether `content` holds a `>` with a space or newline IMMEDIATELY on both sides
+/// (Asciidoctor's `[ \n]+&gt;[ \n]+` — space/newline only, never a tab). The first
+/// content byte is `[\w&]` (guaranteed by [`quoted_menu_span_end`]), so a `>` can
+/// never sit at index 0.
+fn has_spaced_gt(content: &str) -> bool {
+    let b = content.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b'>' {
+            let left = i > 0 && matches!(b[i - 1], b' ' | b'\n');
+            let right = matches!(b.get(i + 1), Some(b' ' | b'\n'));
+            if left && right {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build a quoted inline menu sequence from the `"…"` run opening at `start`.
+/// Splits the content on EVERY `>` and strips each segment (Asciidoctor
+/// `menu, *submenus = $1.split('&gt;').map(&:strip); menuitem = submenus.pop`);
+/// the first segment is the menu, the last the menuitem, the rest submenus. Each
+/// segment is re-parsed through the full pipeline (MACROS kept ON) so an inner
+/// `icon:`/`image:`/`link:`/quote renders inside its `<b>` — mirroring
+/// Asciidoctor's later whole-buffer macro pass over the generated menuseq. The
+/// `[^"]*` content forbids an inner `"`, so the `"`-arm cannot re-fire on a
+/// segment and the recursion terminates. Declines on a sentinel in the span
+/// (corpus-unreachable; the inner `icon:` is parsed here, not lifted earlier).
+fn try_quoted_menu(
+    src: &str,
+    start: usize,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
+    let end = quoted_menu_span_end(src, start)?;
+    if span_has_sentinel(src, start, end) {
+        return None;
+    }
+    let content = &src[start + 1..end - 1];
+    let segments: Vec<&str> = content.split('>').map(str::trim).collect();
+    Some((build_menuseq(&segments, subs, options), end))
+}
+
+/// Emit the structural menuseq events for `segments` (≥2, guaranteed by the
+/// space-flanked `>`): `Start(MenuSeq)`, one `MenuPart{role}` per segment with its
+/// re-parsed inline events nested inside, `End(MenuSeq)`. Roles: index 0 = `Menu`,
+/// last = `Item`, middle = `Submenu`. An empty segment emits an empty part.
+fn build_menuseq(
+    segments: &[&str],
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'static>> {
+    let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::MenuSeq)];
+    let last = segments.len() - 1;
+    for (i, seg) in segments.iter().enumerate() {
+        let role = if i == 0 {
+            MenuPart::Menu
+        } else if i == last {
+            MenuPart::Item
+        } else {
+            MenuPart::Submenu
+        };
+        events.push(Event::Start(Tag::MenuPart { role }));
+        if !seg.is_empty() {
+            // Full subs (MACROS ON) so a nested macro/quote renders inside the part.
+            let inner: Vec<Event<'static>> = super::run_pipeline(seg, subs, options);
+            events.extend(inner);
+        }
+        events.push(Event::End(TagEnd::MenuPart));
+    }
+    events.push(Event::End(TagEnd::MenuSeq));
+    events
 }
 
 /// At a STEM-macro prefix (`stem:[` / `latexmath:[` / `asciimath:[`, caller
