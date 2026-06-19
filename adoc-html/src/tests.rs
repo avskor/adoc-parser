@@ -604,6 +604,43 @@ fn test_attribute_reference_trailing_subs() {
 }
 
 #[test]
+fn test_attribute_reference_trailing_escaped_typographic() {
+    // F-W. A backslash-escaped typographic replacement (`\...`, `\--`, `\(C)`, …)
+    // in the path of an attribute reference with a trailing `[...]` used to leak
+    // the internal sentinel index as a spurious `0` into the href (`\...` → `0`).
+    // The sequential engine now desentinelizes the captured trailing before
+    // emitting the event, so the renderer re-parses clean literal text. The
+    // URL-valued attribute forms a link whose target carries the literal pattern,
+    // matching asciidoctor 2.0.23 (replacements run before macros there, so the
+    // escaped pattern is literal by the time the link forms). Verified vs 2.0.23.
+    let base = ":url-repo: https://github.com/asciidoctor/asciidoctor\n\n";
+
+    // Flagship (CHANGELOG.adoc pattern ×22): `\...` stays literal in the href.
+    let h = to_html(&format!("{base}{{url-repo}}/compare/v2.0.25\\...v2.0.26[full diff]"));
+    assert!(
+        h.contains(
+            "<a href=\"https://github.com/asciidoctor/asciidoctor/compare/v2.0.25...v2.0.26\">full diff</a>"
+        ),
+        "{h}"
+    );
+    assert!(!h.contains("v2.0.250"), "spurious 0 leaked into href: {h}");
+
+    // Other non-angle-bracket typographic escapes keep the literal pattern in
+    // the href (em-dash `\--`, copyright `\(C)`, registered `\(R)`, trademark
+    // `\(TM)`) — and never the spurious `0`.
+    for lit in ["a--b", "a(C)b", "a(R)b", "a(TM)b"] {
+        let escaped = lit.replacen('a', "a\\", 1); // a--b -> a\--b, a(C)b -> a\(C)b, …
+        let h = to_html(&format!("{base}{{url-repo}}/{escaped}[d]"));
+        assert!(
+            h.contains(&format!(
+                "<a href=\"https://github.com/asciidoctor/asciidoctor/{lit}\">d</a>"
+            )),
+            "{lit}: {h}"
+        );
+    }
+}
+
+#[test]
 fn test_link_passthrough_url_empty_text() {
     // Empty link text → the link is "bare" (matches Asciidoctor).
     let html = to_html("link:++https://example.com/my page++[]");

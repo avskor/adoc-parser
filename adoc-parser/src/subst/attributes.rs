@@ -29,7 +29,7 @@
 //! the earlier [`super::escape`] pass already dropped the backslash and sealed
 //! `{name}` as a literal leaf, exactly as the legacy parser leaves it as text.
 
-use super::tokenize::{utf8_char_len, Work};
+use super::tokenize::{desentinelize, utf8_char_len, Work};
 
 /// Extract every attribute reference / `{set:…}` macro from `work.buf` into
 /// sentinels.
@@ -44,7 +44,23 @@ pub(super) fn extract(work: &mut Work) {
             && let Some((extracted, end)) = try_attr(&src, i)
         {
             let sentinel = match extracted {
-                Extracted::Ref { name, trailing } => work.attr_ref_sentinel(name, trailing),
+                Extracted::Ref { name, trailing } => {
+                    // The trailing `[brackets]`/`/path[...]` is a raw slice of the
+                    // post-escape/macro buffer, so it can still hold sentinel bytes
+                    // from an EARLIER pass (most often an escaped typographic literal
+                    // `\...`/`\--`/`\(C)` sealed by `escape::run`). Those bytes index
+                    // THIS pipeline's tag table; once they reach the renderer they are
+                    // re-parsed in a fresh `Work` whose table is empty, orphaning the
+                    // sentinel — its index digit leaks into the output (`\...` → `0`).
+                    // Resolve them back to their literal source text here so the
+                    // `AttributeReference` event the renderer re-parses is clean
+                    // (a URL-valued attribute then forms a link whose target carries
+                    // the literal `...`, matching Asciidoctor's replacements-before-
+                    // macros order). A trailing with no sentinel byte is returned
+                    // unchanged (fast-path in `desentinelize`).
+                    let trailing = trailing.map(|t| desentinelize(&work.tags, &t));
+                    work.attr_ref_sentinel(name, trailing)
+                }
                 Extracted::Set { name, value } => work.attr_set_sentinel(name, value),
             };
             out.push_str(&sentinel);

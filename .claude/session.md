@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-19, 131-я) — F-W экранированная типографская замена в attr-ref trailing → паразитный `0` (ветка `fix/attr-ref-escaped-typographic`, НЕ смержена, коммит `9e3c322`)
+
+Запрос «запланируй следующую задачу из туду». Frontier-проход (identical 215, clean-div 18). Триаж топ/малых
+расхождений пробами vs asciidoctor 2.0.23 → 4 кандидата (A escaped-replacement→`0` / B вложенный attr-ref в значении /
+C callout-comment-stripping / D icon в section-id). AskUserQuestion → выбран **A**. EnterPlanMode → 2 Explore-агента
+(наш макро-путь + asciidoctor spec/legacy) + 1 Plan-агент (валидация) → план `~/.claude/plans/flickering-moseying-moler.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Закоммичено на ветке; ожидает мержа/пуша.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/subst/attributes.rs`)
+- Порядок проходов: passthrough → **escape** → char_refs → macros → **attributes** → quotes → replacements → tokenize.
+- `escape::run` (escape.rs:185-188): `\...` → `work.literal_sentinel("...")` (sentinel `TAG_LEAD+индекс+TAG_TAIL`).
+- `attributes::try_attr` (attributes.rs:108-126): `trailing` для `{attr}/path[brackets]` берётся СЫРЫМ срезом буфера →
+  sentinel-байты Literal'а попадают в `trailing` (path-скан `take_while(b != '[' && b != ']' && !whitespace)` пропускает
+  control-байт `0x01`).
+- tokenize → `Event::AttributeReference.trailing_brackets` с сырым sentinel. Рендерер (events.rs:250-256) ре-парсит
+  `value+trailing_brackets` в СВЕЖЕМ `Work` (пустая таблица тегов) → `try_parse` (mod.rs:98) отказ на `TAG_LEAD` →
+  legacy → сырые control-байты → цифра индекса `0` в href.
+- Баг ТОЛЬКО при захвате trailing через `[...]`; `{attr}/path\X` без скобок УЖЕ корректен.
+
+### Фикс (1 файл)
+- `attributes::extract`, арм `Extracted::Ref`: `trailing.map(|t| desentinelize(&work.tags, &t))` перед `attr_ref_sentinel`.
+  Существующая `tokenize::desentinelize` (`Literal("...")`→`...`; no-op для trailing без `TAG_LEAD`). Импорт `desentinelize`.
+- URL-значный атрибут → ссылка, таргет verbatim → href с литеральным `...` = байт-в-байт asciidoctor (replacements ДО
+  macros → `\X` литерален к формированию ссылки). Намеренная дивергенция от legacy (legacy держит сырой `\...`).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0 (3 `--all-targets`-warning'а пре-существующие в тест-коде на master); test --workspace зелёное
+  (**parser 609→610**, **html 476→477**, html-фикстур **17→18**, compat 44).
+- +1 parser Event-вектор (`attr_ref_trailing_desentinelizes_escaped_typographic`, subst/mod.rs) — trailing без
+  control-байтов для `\.../\--/\(C)/\(R)/\(TM)` + регресс-гарды `{url}[text]`/`{a}[.role]*x*`.
+- +1 рендерер (`test_attribute_reference_trailing_escaped_typographic`, adoc-html/src/tests.rs) — href с литералом, без `0`.
+- +1 HTML-фикстура `attr-ref-escaped-typographic` (авто-дискавери, эталон `asciidoctor -e`).
+- **Гейт 344/344 байт-в-байт** vs master (base через worktree → /tmp/adoc_base; gate_check new-vs-base **0 diff**).
+- **Frontier identical 215 (без регресса)**, clean-div 18. new-vs-base difflib = **2 файла, 0 регрессий**:
+  `CHANGELOG.adoc` IMPROVED **84→75** (атрибут-форма `{url-repo}/...\...`, v2.0.x, ~9 строк), `mdbasics.adoc` NEUTRAL
+  (мусорный `0` устранён: `\'.text'`→`'.text'`). 5/5 CLI-проб (`\.../\--/\(C)/\(R)/\(TM)`) MATCH asciidoctor.
+
+### Дальше / follow-up (вне scope)
+- CHANGELOG ОСТАТОК (84→75, ещё ~13 строк): прямой bare-URL link-макрос `\...` (форма `https://…/\...` без атрибута,
+  v1.5.x) — legacy сохраняет бэкслеш в таргете прямого link-макроса; ОТДЕЛЬНЫЙ путь, не attr-trailing.
+- неэкранированный `...` в attr-trailing link-таргете: asciidoctor применяет ellipsis `…`, мы держим `...` (мы не
+  прогоняем replacements по таргету ре-парсенной ссылки).
+- arrow-escapes `\->`/`\=>`/`\<-`/`\<=`: пре-существующая `>`-граница URL-автолинка (обрезка; UNescaped тоже ломается).
+- `\'`-семантика (mdbasics): asciidoctor держит `\'`, когда `'` не smart-quote-кандидат; мы дропаем бэкслеш.
+- Прочие топ-каскады frontier: asciidoc-returns 273 (compat-`+gem+`), sample 152 (header/doctype), manpage 146,
+  index 136 (indent-literal в table-cell), debuter 118 (французский).
+
+---
+
 ## Сессия (2026-06-19, 130-я) — F-V dlist отступленное многострочное описание → один параграф (ветка `feat/dlist-indented-description`, СМЕРЖЕНА в master `8637c9e`)
 
 Запрос «запланируй следующую задачу из туду» → «приступай». Перемер frontier (после F-U): **identical 214, clean-div 19**.
