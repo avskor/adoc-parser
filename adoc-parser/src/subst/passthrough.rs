@@ -29,11 +29,19 @@
 //! flags a decline (Asciidoctor's own handling is self-inconsistent) so
 //! [`super::try_parse`] falls back to legacy.
 
-use crate::event::{Event, SubstitutionSet};
+use std::borrow::Cow;
+
+use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 use crate::inline::InlineOptions;
 
 use super::macros::{find_macro_close_bracket, unescape_close_bracket};
+use super::quotes::parse_attrs;
 use super::tokenize::{utf8_char_len, PassPiece, Work};
+
+/// Word character for the `[x-]` open-boundary test (mirrors `quotes::is_word`).
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
 
 /// Extract every passthrough span from `work.buf` into sentinels.
 ///
@@ -141,6 +149,25 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         {
             out.push_str(&src[i + 1..i + 1 + prefix_len]); // drop `\`, keep `pass:SPEC[`
             i += 1 + prefix_len;
+            continue;
+        }
+
+        // `[x-]`text`` / `[x-]+text+` literal-monospace marker (Asciidoctor's
+        // `InlinePassRx[false]` `x-` branch, `substitutors.rb:1083-1116`). The
+        // `[x-]` attrlist drops the role and renders the content as monospace
+        // (`type: :monospaced`) with the OLD behaviour: a backtick close subs the
+        // content with BASIC_SUBS (specialchars only — `_em_`/`{attr}` stay
+        // literal), a `+` close with NORMAL_SUBS. `[<attrs> x-]` keeps the leading
+        // role (`[method x-]+save()+` → `<code class="method">`). Extracted FIRST
+        // (like every passthrough) so the content never reaches a later pass; the
+        // marker becomes one opaque `Macro` leaf. An escaped `\[x-]…` is left to
+        // the fall-through (the open-boundary test excludes a leading `\`).
+        if b == b'['
+            && x_marker_open_boundary(bytes, i)
+            && let Some((events, end)) = try_x_marker(&src, bytes, i, options)
+        {
+            out.push_str(&work.macro_sentinel(events));
+            i = end;
             continue;
         }
 
@@ -469,4 +496,119 @@ fn pass_spec_events(
             ev => ev,
         })
         .collect()
+}
+
+/// Open-boundary for the `[x-]` literal-monospace marker: start of buffer, or
+/// the preceding byte is neither a word char nor one of `;`/`:`/`\` (mirror
+/// Asciidoctor `(?:^|[^#{CC_WORD};:\\])`). A preceding `\` (the escaped
+/// `\[x-]…` form) is excluded, so it falls through to the later passes — a
+/// deliberate simplification (Asciidoctor keeps `` \[x-]`text` `` fully literal;
+/// the escaped form is absent from the corpus and not a regression vs master).
+fn x_marker_open_boundary(bytes: &[u8], i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let p = bytes[i - 1];
+    !is_word(p) && p != b';' && p != b':' && p != b'\\'
+}
+
+/// `` [x-]`text` `` / `[x-]+text+` (and the `[<attrs> x-]` role-bearing forms) —
+/// the literal-monospace marker. Mirror of the `x-` branch of Asciidoctor's
+/// `InlinePassRx[false]` handler (`substitutors.rb:1083-1116`): the `[x-]`
+/// attrlist drops the role and renders the content as monospace
+/// (`type: :monospaced`) with the OLD behaviour — a backtick close subs the
+/// content with `BASIC_SUBS` (specialchars only, so `_em_`/`{attr}` stay
+/// literal), a `+` close with `NORMAL_SUBS`. `[<attrs> x-]` keeps the leading
+/// role (`[method x-]+save()+` → `<code class="method">`). Returns the monospace
+/// event sequence (sealed by the caller as one opaque `Macro` leaf) and the byte
+/// index just past the closing marker, or `None` when this is not an `x-` marker
+/// (a plain `[role]…` then falls through to the normal passes — regress-safe).
+///
+/// The attrlist runs to the first `]` on the same line and must not contain `[`
+/// (Asciidoctor's `[^\[\]]+` excludes both brackets; the newline allowance is
+/// dropped as a single-line simplification, consistent with `find_attr_close`).
+fn try_x_marker(
+    src: &str,
+    bytes: &[u8],
+    lbrack: usize,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
+    // attrlist: up to the first `]` on this line, no inner `[`.
+    let mut j = lbrack + 1;
+    while j < bytes.len() && bytes[j] != b']' {
+        if bytes[j] == b'\n' || bytes[j] == b'[' {
+            return None;
+        }
+        j += 1;
+    }
+    if j >= bytes.len() {
+        return None;
+    }
+    let attrlist = &src[lbrack + 1..j];
+
+    let is_x = attrlist == "x-";
+    if !is_x && !attrlist.ends_with(" x-") {
+        return None;
+    }
+
+    let marker_pos = j + 1;
+    let mark = match bytes.get(marker_pos).copied() {
+        Some(m @ (b'`' | b'+')) => m,
+        _ => return None,
+    };
+
+    let content_start = marker_pos + 1;
+    if content_start >= bytes.len() || bytes[content_start] == b' ' {
+        return None;
+    }
+    let close = find_pass_close(bytes, content_start, mark)?;
+    let content = &src[content_start..close];
+
+    // `[x-]` drops the role; `[<attrs> x-]` keeps the leading attrs (attrlist
+    // minus the trailing ` x-`).
+    let (id, roles) = if is_x {
+        (None, Vec::new())
+    } else {
+        parse_attrs(&attrlist[..attrlist.len() - 3])?
+    };
+
+    let content_events: Vec<Event<'static>> = if mark == b'`' {
+        // BASIC_SUBS: one literal `Text` leaf — the renderer escapes specialchars
+        // only, leaving `_em_`/`*b*`/`{attr}` as written.
+        vec![Event::Text(Cow::Owned(content.to_string()))]
+    } else {
+        // NORMAL_SUBS: re-run the content through the engine. The annotated
+        // `'static` binding fixes `run_pipeline`'s free `'a` (its result is all
+        // `Cow::Owned`), so the events seal into the `Macro` leaf — same pattern
+        // as `pass_spec_events`.
+        super::run_pipeline(content, SubstitutionSet::NORMAL, options)
+    };
+
+    let mut events = Vec::with_capacity(content_events.len() + 2);
+    events.push(Event::Start(Tag::Monospace {
+        id: id.map(Cow::Owned),
+        roles: roles.into_iter().map(Cow::Owned).collect(),
+    }));
+    events.extend(content_events);
+    events.push(Event::End(TagEnd::Monospace));
+    Some((events, close + 1))
+}
+
+/// Find the closing `marker` (`` ` `` or `+`) for an `[x-]` marker's content
+/// starting at `content_start`. Mirror Asciidoctor's lazy
+/// `(\S|\S#{CC_ALL}*?\S)\7(?!#{CG_WORD})`: the first `marker` whose preceding
+/// byte is non-whitespace (content does not end in a space) and whose following
+/// byte is absent or a non-word char. Content may span newlines (`CC_ALL`).
+fn find_pass_close(bytes: &[u8], content_start: usize, marker: u8) -> Option<usize> {
+    let mut i = content_start + 1;
+    while i < bytes.len() {
+        if bytes[i] == marker
+            && !bytes[i - 1].is_ascii_whitespace()
+            && bytes.get(i + 1).copied().is_none_or(|b| !is_word(b))
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }

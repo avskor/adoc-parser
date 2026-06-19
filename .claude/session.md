@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-19, 124-я) — F-P `[x-]` literal-monospace маркер (ветка `feat/x-literal-monospace`, НЕ закоммичено)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:
+**210 identical, 23 clean-div**, как после F-O) → классификация топ-каскадов пробами vs asciidoctor 2.0.23.
+AskUserQuestion (4 кандидата: `[x-]` literal-mono / dlist `:term::` / conum в literal / compat `+text+` каскад) →
+выбран **`[x-]` literal-mono**. EnterPlanMode → исследование (Explore-агент по коду + ЛОКАЛЬНЫЙ исходник asciidoctor
+в `/mnt/c/tmp/adoc-frontier/asciidoctor` + Plan-агент валидации рисков) → план `~/.claude/plans/majestic-mixing-lobster.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Ожидает коммита/мержа/пуша по запросу пользователя.**
+
+### Корень и спека (ЧИСТО ПАРСЕР; верифицировано исходником asciidoctor 2.0.23 + CLI-пробы)
+- `[x-]` (и `[<attrs> x-]`) перед inline-monospace — магический passthrough-маркер (старое AsciiDoc-поведение).
+  Источник: `lib/asciidoctor/rx.rb:585` (`InlinePassRx[false]`, `x-`-ветка) + `substitutors.rb:1076-1121`.
+- **Правила:** роль `x-` ОТБРАСЫВАЕТСЯ; content → `<code>` (type: :monospaced) с OLD behaviour:
+  backtick close → **BASIC_SUBS** (specialchars only; `*b*`/`_em_`/`{attr}` ЛИТЕРАЛ), `+` close → **NORMAL_SUBS**
+  (`_em_`→`<em>`, attr резолвится). `[<attrs> x-]` сохраняет ведущую роль (`[method x-]+save()+`→`<code class="method">`).
+- Был баг: `x-` трактовался как обычная роль + применялись subs (`<code class="x-"><strong>`).
+
+### Фикс (2 файла кода)
+- `subst/quotes.rs`: `parse_attrs` (стр. 98) → `pub(super)` (переиспользование, +комментарий-ограничение vs named-роли).
+- `subst/passthrough.rs`: обработка в `extract()` — FIRST pass, до всех subs (зеркало `extract_passthroughs`,
+  content абсолютно сырой). Новый arm для `[` с `x_marker_open_boundary` (preceding ∉ {word,`;`,`:`,`\`});
+  `try_x_marker` (matchит `[x-]`/`[… x-]` + backtick/`+`; строит `[Start(Monospace{id,roles}), content, End]` →
+  `macro_sentinel` опаковый leaf; backtick→`Text` BASIC_SUBS, plus→`run_pipeline(content, NORMAL)` с lifetime-аннотацией);
+  `find_pass_close` (lazy first-valid, зеркало `(\S|\S.*?\S)\7(?!WORD)`, content может span `\n`).
+- Регресс-safe: не-`x-` attrlist → None → fall-through (1 байт `[`) → обычная роль в quotes pass.
+
+### Тесты
+- `subst/mod.rs`: `x_marker_literal_monospace` (backtick BASIC, plus NORMAL+emphasis, `[method x-]` role, regress `[x-y]`/`[foo]`).
+- `adoc-html/src/tests.rs`: `test_x_marker_literal_monospace` (backtick/plus/role/regress на уровне HTML).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 597→**598**, html unit 462→**463**).
+- **Гейт 344/344 байт-в-байт** vs master `c65c14a` (base пересобран через worktree; gate_check.py → 0 diff; в гейте нет `[x-]`).
+- **Frontier identical 210** (стабильно); new-vs-base (`/tmp/frontier_nvb.py`): **2 файла, ОБА IMPROVED, 0 REGRESSION** —
+  `asciidoclet-1.5.0-released` 383→**12**, `migration` 273→**1** (остатки = intrinsic/custom attr-ref `{asciidoctor-version}`, ДРУГОЙ класс).
+- 8 CLI-форм vs asciidoctor 2.0.23 (`p_final.adoc`): backtick/plus/role×2/regress×4/edge×2 — MATCH байт-в-байт (0 mismatch).
+
+### Что дальше / follow-up (вне scope)
+- escaped `\[x-]…`/`[x-]\+text+` (preceding `\` блокирует arm); `[`/`\n` в attrlist (отвергаются); named-роли.
+- Остальные frontier-классы: conum `<N>`→`<b class="conum">` (templates 634); experimental-menu-shorthand (install-macos 477);
+  `0-1-2-released` literalblock-каскад (432); multi-backtick mis-pair (api/index 347); dlist `:term::` (find-blocks 296,
+  ТЕРЯЕМ контент — серьёзный); compat-backtick `+gem+` каскад (asciidoc-returns 273); intrinsic-attr резолв (migration остаток).
+
+---
+
 ## Сессия (2026-06-18, 123-я) — F-O attr-ref хвостовой `[label]` → inline-subs (ветка `fix/attr-ref-trailing-subs`, НЕ закоммичено)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (`frontier_parity.py /mnt/c/tmp/adoc-frontier`:

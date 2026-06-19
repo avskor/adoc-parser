@@ -95,7 +95,14 @@ pub(super) fn run_all(work: &mut Work, options: InlineOptions) {
 /// Parsed `[attrlist]` content: the first positional attribute as an optional
 /// id and a list of roles. Returns `None` when the attrlist yields neither
 /// (e.g. `[]`), matching the legacy `try_inline_attr_span` rejection.
-fn parse_attrs(attr_content: &str) -> Option<(Option<String>, Vec<String>)> {
+///
+/// `pub(super)` so the `passthrough` pass can reuse it for the `[x-]`
+/// literal-monospace marker (`[<attrs> x-]` carries a leading role). NOTE this
+/// is narrower than Asciidoctor's `parse_quoted_text_attributes`: it reads only
+/// the first positional attribute (a bare role or a `.role`/`#id` shorthand),
+/// not named `role=`/`id=` forms — which inline `[… x-]` roles never use in the
+/// corpus.
+pub(super) fn parse_attrs(attr_content: &str) -> Option<(Option<String>, Vec<String>)> {
     let first = attr_content
         .split(',')
         .next()

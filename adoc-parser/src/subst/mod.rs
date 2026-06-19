@@ -319,6 +319,65 @@ mod tests {
         );
     }
 
+    /// `[x-]` (and `[<attrs> x-]`) is Asciidoctor's literal-monospace marker:
+    /// the role `x-` is dropped and the content renders as `<code>` with the OLD
+    /// behaviour — a backtick close uses BASIC_SUBS (specialchars only, so
+    /// `*b*`/`_em_`/`{attr}` stay literal), a `+` close uses NORMAL_SUBS.
+    /// `[<attrs> x-]` keeps the leading role. A non-`x-` attrlist (`[x-y]`,
+    /// `[foo]`) is an ordinary role and is left untouched.
+    #[test]
+    fn x_marker_literal_monospace() {
+        // backtick → BASIC_SUBS: role dropped, content literal (no strong, `{v}`
+        // unresolved).
+        assert_eq!(
+            pipeline("[x-]`*b* {v}`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Text("*b* {v}".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // plus → NORMAL_SUBS: role dropped, emphasis applied.
+        assert_eq!(
+            pipeline("[x-]+_em_+"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec![] }),
+                Event::Start(Tag::Emphasis { id: None, roles: vec![] }),
+                Event::Text("em".into()),
+                Event::End(TagEnd::Emphasis),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // `[<attrs> x-]` keeps the leading role (here `method`), NORMAL_SUBS.
+        assert_eq!(
+            pipeline("[method x-]+save()+"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec!["method".into()] }),
+                Event::Text("save()".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        // regress: a non-`x-` attrlist is an ordinary monospace role, NOT a
+        // marker — `*b*` inside is still literal under BASIC_SUBS? No: an ordinary
+        // role keeps the content in the buffer, so the quotes passes DO apply.
+        assert_eq!(
+            pipeline("[x-y]`c`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec!["x-y".into()] }),
+                Event::Text("c".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+        assert_eq!(
+            pipeline("[foo]`c`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec!["foo".into()] }),
+                Event::Text("c".into()),
+                Event::End(TagEnd::Monospace),
+            ],
+        );
+    }
+
     /// The raw triple `+++…+++` passthrough survives compat mode (only `+`/`++`
     /// move to monospace), and outside compat mode `+`/`++` are unchanged.
     #[test]
