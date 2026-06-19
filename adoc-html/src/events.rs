@@ -352,7 +352,7 @@ impl HtmlRenderer {
                 output.push_str(&reftext);
                 self.bibliography_reftexts.push((id.to_string(), reftext));
             }
-            Event::CalloutRef(num) => {
+            Event::CalloutRef { num, guard } => {
                 // Build the marker before borrowing the write target (the
                 // immutable `&self` borrow must end before `&mut source_code_buffer`).
                 let marker = self.callout_marker(num, true);
@@ -362,8 +362,14 @@ impl HtmlRenderer {
                     output
                 };
                 match marker {
+                    // `:icons: font`/image → conum only; the line-comment guard
+                    // is dropped (Asciidoctor's `convert_inline_callout`).
                     Some(m) => target.push_str(&m),
                     None => {
+                        // Text icons → re-insert the comment guard before the
+                        // conum (e.g. `# <b class="conum">(1)</b>`). The guard
+                        // is only `//`/`#`/`--`/`;;`(+space) → no HTML escaping.
+                        target.push_str(&guard);
                         target.push_str("<b class=\"conum\">(");
                         target.push_str(&num.to_string());
                         target.push_str(")</b>");

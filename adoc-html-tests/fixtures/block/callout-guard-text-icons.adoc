@@ -1,0 +1,11 @@
+[source,ruby]
+----
+require 'asciidoctor' # <1>
+get '/hi' do // <2>
+foo ;; <3>
+bar -- <4>
+----
+<1> hash comment kept
+<2> slash comment kept
+<3> double-semicolon kept
+<4> double-dash kept
