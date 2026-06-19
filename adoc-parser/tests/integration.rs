@@ -201,6 +201,51 @@ fn test_attribute_entry_and_reference() {
 }
 
 #[test]
+fn test_attribute_value_resolved_at_definition_time() {
+    // Asciidoctor resolves `{ref}` in an attribute value when the entry is
+    // *defined*, using attributes seen so far. `:dan-uri:` therefore stores the
+    // fully expanded URL, so the emitted Event::Attribute carries it.
+    let events = parse(":github-uri: https://github.com\n:dan-uri: {github-uri}/mojavelinux\n\nx");
+
+    let dan = events.iter().find_map(|e| match e {
+        Event::Attribute { name, value } if name == "dan-uri" => Some(value.as_ref()),
+        _ => None,
+    });
+    assert_eq!(dan, Some("https://github.com/mojavelinux"));
+}
+
+#[test]
+fn test_attribute_value_nested_resolution_is_deep() {
+    // Each entry is resolved at its own definition, so chained references
+    // collapse fully (no leftover braces) regardless of nesting depth.
+    let events = parse(
+        ":id: asciidoclet\n\
+         :base: https://bintray.com/maven/{id}\n\
+         :detail: {base}/view\n\n\
+         x",
+    );
+    let detail = events.iter().find_map(|e| match e {
+        Event::Attribute { name, value } if name == "detail" => Some(value.as_ref()),
+        _ => None,
+    });
+    assert_eq!(detail, Some("https://bintray.com/maven/asciidoclet/view"));
+}
+
+#[test]
+fn test_attribute_value_forward_reference_stays_literal() {
+    // A reference to a not-yet-defined attribute resolves to nothing at
+    // definition time (default `attribute-missing=skip`) and stays literal —
+    // it is NOT back-patched once the target is later defined.
+    let events = parse(":b: {a}/x\n:a: https://example.com\n\nx");
+
+    let b = events.iter().find_map(|e| match e {
+        Event::Attribute { name, value } if name == "b" => Some(value.as_ref()),
+        _ => None,
+    });
+    assert_eq!(b, Some("{a}/x"));
+}
+
+#[test]
 fn test_comment_block_not_in_output() {
     let events = parse("Before\n\n////\nThis is a comment\n////\n\nAfter");
 
