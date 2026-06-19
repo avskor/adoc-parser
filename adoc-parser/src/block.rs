@@ -496,14 +496,30 @@ impl<'a> BlockScanner<'a> {
     /// `{refs}` resolved against the entries seen so far (definition-time
     /// resolution, like Asciidoctor). Names are lowercased on both store and
     /// lookup.
-    fn record_attribute_entry(&mut self, name: &str, value: &str) {
+    ///
+    /// Returns the resolved value **only when a `{ref}` was actually expanded**
+    /// (so the caller can emit the resolved string on the `Event::Attribute`,
+    /// keeping the renderer's attribute table in sync with the definition-time
+    /// resolution). Unset forms and values that did not change return `None`,
+    /// letting the caller keep the original zero-copy slice.
+    fn record_attribute_entry(&mut self, name: &str, value: &str) -> Option<String> {
         if let Some(n) = name.strip_prefix('!') {
             self.doc_attrs.remove(&n.to_ascii_lowercase());
+            None
         } else if let Some(n) = name.strip_suffix('!') {
             self.doc_attrs.remove(&n.to_ascii_lowercase());
+            None
         } else {
-            let resolved = self.resolve_title_attr_refs(value).into_owned();
-            self.doc_attrs.insert(name.to_ascii_lowercase(), resolved);
+            match self.resolve_title_attr_refs(value) {
+                Cow::Borrowed(s) => {
+                    self.doc_attrs.insert(name.to_ascii_lowercase(), s.to_string());
+                    None
+                }
+                Cow::Owned(s) => {
+                    self.doc_attrs.insert(name.to_ascii_lowercase(), s.clone());
+                    Some(s)
+                }
+            }
         }
     }
 
@@ -901,7 +917,7 @@ impl<'a> BlockScanner<'a> {
         if let Some((name, value)) = scanner::is_attribute_entry(line) {
             self.advance();
             let value = self.read_multiline_attribute_value(value);
-            self.record_attribute_entry(name, &value);
+            let resolved = self.record_attribute_entry(name, &value);
             if name == "leveloffset" {
                 self.update_leveloffset(&value);
                 return Some(Some(Event::Attribute {
@@ -914,6 +930,11 @@ impl<'a> BlockScanner<'a> {
             if name == "doctype" {
                 return Some(self.next());
             }
+            // Emit the definition-time-resolved value so the renderer's
+            // attribute table matches Asciidoctor (`:b: {a}/x` stores the
+            // expanded string); `None` means no `{ref}` expanded, keep the
+            // original zero-copy slice.
+            let value = resolved.map(Cow::Owned).unwrap_or(value);
             return Some(Some(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value,
@@ -1353,11 +1374,13 @@ impl<'a> BlockScanner<'a> {
             };
             self.advance();
             let value = self.read_multiline_attribute_value(value);
-            self.record_attribute_entry(name, &value);
+            let resolved = self.record_attribute_entry(name, &value);
             if name == "leveloffset" {
                 self.update_leveloffset(&value);
             }
             self.update_id_settings(name, &value);
+            // Emit the definition-time-resolved value (see scan_leaf_blocks).
+            let value = resolved.map(Cow::Owned).unwrap_or(value);
             header_events.push(Event::Attribute {
                 name: Cow::Borrowed(name),
                 value,
@@ -1514,11 +1537,13 @@ impl<'a> BlockScanner<'a> {
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
                 self.advance();
                 let value = self.read_multiline_attribute_value(value);
-                self.record_attribute_entry(name, &value);
+                let resolved = self.record_attribute_entry(name, &value);
                 if name == "leveloffset" {
                     self.update_leveloffset(&value);
                 }
                 self.update_id_settings(name, &value);
+                // Emit the definition-time-resolved value (see scan_leaf_blocks).
+                let value = resolved.map(Cow::Owned).unwrap_or(value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value,
@@ -1564,7 +1589,9 @@ impl<'a> BlockScanner<'a> {
             if let Some((name, value)) = scanner::is_attribute_entry(line) {
                 self.advance();
                 let value = self.read_multiline_attribute_value(value);
-                self.record_attribute_entry(name, &value);
+                let resolved = self.record_attribute_entry(name, &value);
+                // Emit the definition-time-resolved value (see scan_leaf_blocks).
+                let value = resolved.map(Cow::Owned).unwrap_or(value);
                 header_events.push(Event::Attribute {
                     name: Cow::Borrowed(name),
                     value,

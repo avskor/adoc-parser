@@ -1,5 +1,61 @@
 # Session context
 
+## Сессия (2026-06-19, 133-я) — F-Y вложенный attr-ref резолвится в момент ОПРЕДЕЛЕНИЯ (ветка `feat/attr-ref-resolve-at-definition`, НЕ смержена, ожидает мержа/пуша)
+
+Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 216, clean-div 17. Триаж мелких
+расхождений пробами vs asciidoctor 2.0.23 → 3 чистых кандидата: A nested attr-ref в значении (oscon 4 diff),
+B `+++`/`+-+` single-plus passthrough (mdbasics 3), C `[caption='']` (plain-text 1). AskUserQuestion → выбран **A**
+(единственный даёт флип к identical + gate-safe + чистое правило). 2 Explore/general-агента (наш путь определения
+атрибутов + правило asciidoctor из исходников v2.0.20) подтвердили механизм. Реализовано, верифицировано AIRTIGHT.
+**Закоммичено на ветке; ожидает мержа/пуша по запросу.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/block.rs`)
+- asciidoctor резолвит attr-ref в значении attribute entry в момент ОПРЕДЕЛЕНИЯ по уже определённым атрибутам
+  (`Document#set_attribute` → `apply_attribute_value_subs` → `apply_header_subs`, document.rb). `:dan-uri: {github-uri}/x`
+  (github-uri определён выше) → хранит `https://github.com/x`. Forward-ref → литерал (default `attribute-missing=skip`).
+- У нас `record_attribute_entry` УЖЕ резолвил значение в `self.doc_attrs` (для section-id), НО эмитимый `Event::Attribute`
+  нёс СЫРОЕ значение. Рендерер строит свою `document_attrs` из сырых событий → разворачивал лишь 1 уровень при
+  использовании. В inline-тексте `{dan-uri}` резолвился глубже (autolink-граница рвалась), в macro-атрибуте
+  (`link="{dan-uri}"`) литерал `{github-uri}` тёк в href — НЕПОСЛЕДОВАТЕЛЬНО.
+- Ключевой инсайт: один уровень резолва НА ОПРЕДЕЛЕНИЕ достаточен для произвольной глубины — каждый атрибут уже
+  полностью резолвлен на момент своего определения (зеркало asciidoctor; рекурсия НЕ нужна).
+
+### Фикс (1 файл, block.rs)
+- `record_attribute_entry` → `Option<String>`: Some(resolved) только при Cow::Owned (реально развернулся `{ref}`);
+  None для unset-форм и Cow::Borrowed (нет изменений) → caller держит zero-copy slice (без лишних аллокаций в общем случае).
+- Все 4 точки эмиссии `Event::Attribute` (body `scan_leaf_blocks` + 3 header-пути: `consume_header_attr_entries`,
+  pre-attrs-before-title, header-with-pre-attrs) эмитят `resolved.map(Cow::Owned).unwrap_or(value)`.
+- Revision-вызовы (revnumber/revdate/revremark) игнорируют возврат — корректно (записывают в doc_attrs, не эмитят Attribute).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0 (3 `--all-targets`-warning'а в adoc-html/src/tests.rs + adoc-parser/src/attributes.rs —
+  пре-существующие, НЕ в моих файлах). test --workspace зелёное (**1197 passed**; parser integration 25→28 +3,
+  html-фикстур **18→19**).
+- +3 parser integration-теста: `test_attribute_value_resolved_at_definition_time`, `..._nested_resolution_is_deep`
+  (3-уровневая цепочка → полный коллапс), `..._forward_reference_stays_literal` (`:b: {a}/x` до `:a:` → `{a}/x`).
+- +1 HTML-фикстура `inline/attr-ref-resolve-at-definition` (oscon-зеркало: autolink + image-macro link= + chained ref;
+  эталон `asciidoctor -e`, наш вывод байт-в-байт).
+- **Гейт 344/344 байт-в-байт** vs master (gate_check new-vs-base 0 diff). Опасение по `image.adoc` (реальные
+  `:imagesdir-old: {imagesdir}`/`:imagesdir: {imagesdir-old}`) НЕ подтвердилось — значение после reset не рендерится.
+  Прочие gate-определения с вложенными ref — литеральные примеры в `[source]----` / `subs=+attributes` listing.
+- **Frontier identical 216→217** (oscon-2013-docs-workshop-preview флип 4→0), clean-div 17→16.
+  new-vs-base difflib (frontier_regress.py в /tmp): **6 файлов, ВСЕ IMPROVED, 0 регрессий**: oscon 4→0; README.adoc
+  646→503, README-de/jp 591→497, README-fr 593→499, README-zh_CN 1628→1627 (взаимоссылающиеся `{uri-*}`-атрибуты).
+- Пробы vs asciidoctor 2.0.23 MATCH (nested paragraph autolink + forward-ref-в-значении).
+
+### Дальше / follow-up (вне scope, нет в текущих расхождениях)
+- **specialchars при определении:** asciidoctor `HEADER_SUBS=[:specialcharacters,:attributes]` — `<>&` в значении
+  экранируются ОДИН раз в момент определения (replacement из ref вставляется verbatim, не ре-экранируется). Мы не
+  применяем specialchars к значению. Не встречается в расхождениях (значения — URL).
+- **`pass:[]`/`pass:subs[]` форма значения:** `AttributeEntryPassMacroRx` (`\Apass:([a-z,]*)\[(.*)\]\Z`) — целиком
+  bypass header subs (только указанные subs, или никакие). Не реализовано.
+- **Прочие топ-кандидаты frontier:** B `+++`/`+-+` single-plus passthrough (mdbasics, плюс-матчер деликатный, gate-риск),
+  C `[caption='']` пустое одинарно-кавыченное значение (plain-text, файл смешанный с `#`-в-source). Каскады: asciidoc-returns
+  273 (compat-`+gem+`), sample 152 (header/doctype), manpage 146, index 136 (indent-literal в table-cell), debuter 118 (фр.).
+- `/tmp/frontier_regress.py` — новый скрипт регресс-проверки frontier (new-vs-base difflib с вердиктом IMPROVED/REGRESSED/NEUTRAL).
+
+---
+
 ## Сессия (2026-06-19, 132-я) — F-X icon-макрос в text-mode: default alt + section-id (ветка `fix/icon-macro-id-alt`, СМЕРЖЕНА, коммит `cf67379`)
 
 Запрос «приступай к следующей задаче из туду». Frontier-проход (215 identical, 18 clean-div, без изменений с 131-й).

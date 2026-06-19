@@ -1,0 +1,13 @@
+:github-uri: https://github.com
+:dan-uri: {github-uri}/mojavelinux
+:bintray-base: https://bintray.com/asciidoctor/maven/asciidoclet
+:bintray-detail: {bintray-base}/1.5.0/view
+
+Asciidoctor resolves an attribute reference inside an attribute value when the
+entry is defined, so `dan-uri` holds the fully expanded URL.
+
+As a bare autolink it covers the whole target: {dan-uri}.
+
+Inside a macro attribute it also expands fully: image:{dan-uri}.png[Dan,40,40,link="{dan-uri}"].
+
+Chained references collapse to the end: {bintray-detail}.
