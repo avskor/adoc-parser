@@ -1,5 +1,46 @@
 # Session context
 
+## Сессия (2026-06-19, 130-я) — F-V dlist отступленное многострочное описание → один параграф (ветка `feat/dlist-indented-description`, СМЕРЖЕНА в master `8637c9e`)
+
+Запрос «запланируй следующую задачу из туду» → «приступай». Перемер frontier (после F-U): **identical 214, clean-div 19**.
+Топ-расхождение — `asciidoctor-0-1-2-released.adoc` (432 diff, в F-T follow-up = «literal/dlist-indent»). Триаж пробами
+изолировал класс: dlist-термин с пустым inline-desc + отступленный многострочный параграф-описание.
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/block.rs::scan_description_list_item`)
+- asciidoctor собирает смежные (без пустой строки) отступленные строки в ОДИН `<p>` внутри `<dd>` со срезом общего
+  min-отступа (`adjust_indentation!`, indent 0); наш парсер брал 1-ю строку как `<p>`, остаток (отступленный) делал
+  `literalblock` с нерезолвленными `{attr}`.
+- Цикл сбора continuation-строк (был ~3540) имел гард `!line.starts_with(' ') && !line.starts_with('\t')` →
+  отступленные строки отбрасывались блок-сканеру → literal. У ulist/olist гарда нет (P2/P3 MATCH asciidoctor); обычный
+  параграф тоже корректен (P1). **Баг ТОЛЬКО в dlist.**
+- Правило дедента реверс-инжинирено 6 пробами: общий MIN-отступ блока (не per-line lstrip). config 4 (2/6 → дедент 2 →
+  «    six.»), config 3 (4/2 → min 2). Inline-принципал (`term:: text`, col 0) в min-расчёт НЕ входит.
+
+### Фикс (1 файл, чистый парсер)
+1. Снят indent-гард (цикл прерывается на blank через `is_dlist_continuation_line` → case C «literal после пустой
+   строки» сохранён — отдельный тест-guard).
+2. `principal_raw: Option<&str>` — отступленный принципал-из-след-строки участвует в min-расчёте вместе с continuation;
+   объединённый блок дедентится `reindent_verbatim_lines(_, 0)` (zero-copy `&line[n..]`). Inline-принципал исключён
+   (else-ветка: continuation дедентится сам по себе).
+3. Per-line `trim_end` (asciidoctor rstrip'ит хвостовые пробелы — проба подтвердила).
+
+### Верификация (AIRTIGHT)
+- clippy 0; test --workspace зелёное (**parser 605→609** +4 теста: empty-desc multiline / inline-desc+indent /
+  common-indent дедент / case-C literal-guard; +1 html-фикстура `dlist-indented-description` 4 кейса).
+- **Гейт 344/344 байт-в-байт** vs master `f7cd349` (gate_check new-vs-base **0 diff** — отступленных dlist-continuation
+  в гейте нет → фикс гейт-safe; base пересобран чисто из master через worktree).
+- **Frontier identical 214→215 (+1)**, clean-div 19→18. new-vs-base = **4 файла, ВСЕ IMPROVED, 0 регрессий**:
+  `0-1-2-released` **432→0** (флип в identical), `manpage` 160→146, `man-asciidoctor`/`asciidoctor`(man) 864→779.
+- 14 CLI-проб vs asciidoctor 2.0.23 MATCH (inline/empty desc, uniform/mixed/tab indent, multi-term, inline-markup `{attr}`,
+  nested dlist, case C, точный corpus-сниппет с `{issue-ref}`).
+- **СМЕРЖЕНА в master (`8637c9e`, --no-ff).** НЕ запушено (ожидает по запросу). Worktree base удалён.
+
+### Дальше (новый frontier-проход)
+Топ clean-div после F-V: `asciidoc-returns-to-github` 273 (compat-`+gem+` десинк), `sample` 152, `manpage` 146
+(manpage doctype), `index` 136, `debuter-avec-asciidoctor` 118 (французский, отдельный корень). Многоклассовые.
+
+---
+
 ## Сессия (2026-06-19, 129-я) — F-U smart-quote утечка сквозь моноширинные спаны (ветка `fix/smart-quote-monospace-boundary`, НЕ смержена)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (213 identical, 20 clean-div) → триаж топ-каскадов
