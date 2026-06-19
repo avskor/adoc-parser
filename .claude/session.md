@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-19, 129-я) — F-U smart-quote утечка сквозь моноширинные спаны (ветка `fix/smart-quote-monospace-boundary`, НЕ смержена)
+
+Запрос «запланируй следующую задачу из туду» → frontier-проход (213 identical, 20 clean-div) → триаж топ-каскадов
+пробами vs asciidoctor 2.0.23 (4 кандидата: A апостроф-сквозь-`code` / B setext / C indent→literal / D compat-`+gem+`).
+AskUserQuestion → выбран **A** (чистый движковый баг, top-каскад, ~0 риск гейта). EnterPlanMode → 2 Explore-агента
+(наш inline-движок + исходник asciidoctor) + 1 Plan-агент (валидация) → план `~/.claude/plans/immutable-questing-trinket.md`,
+ExitPlanMode одобрен → реализовано, верифицировано AIRTIGHT. **Закоммичено на ветке; ожидает мержа/пуша по запросу.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/subst/quotes.rs`; верифицирован исходником asciidoctor + пробами)
+- Кручёная single/double smart-quote замена «протекала» сквозь границы моноширинных `` `…` ``-спанов.
+- Репро: `` `'a'` and `'b'` `` → asciidoctor `<code>'a'</code> and <code>'b'</code>`; наш БАГ `<code>'a‘ and ’b'</code>`
+  (два спана схлопнуты, апострофы стали кручёными). Реальный файл: docs/modules/api/pages/index.adoc (каскад 347).
+- В `run_all` smart-quote проходы идут ДО monospace (как asciidoctor QUOTE_SUBS). Старый `pass_smart_quotes` детектил
+  открыватель `quote`+`` ` `` и закрыватель `` ` ``+`quote` БЕЗ проверки границ (док-коммент признавал "no open-boundary").
+  Для `` `'a'` and `'b'` `` ложно матчился `` '` `` (на `'` после word-char `a`) как открыватель smart-quote →
+  оборачивал середину в кручёную пару, а monospace-проход видел разрушенную backtick-структуру → схлоп.
+- Asciidoctor modern QUOTE_SUBS `:single`/`:double` КОНСТРЕЙНЕД: `(^|[^\w;:}])OPEN(\S|\S.*?\S)CLOSE(?!\w)`.
+
+### Фикс (делегация в существующую констрейнед-машинерию)
+- `quotes.rs:66-67` (non-compat ветка `run_all`): заменил `pass_smart_quotes(work,b'"',…)` / `(b'\'',…)` на
+  `pass_compat_curved(work, b"\"`", b"`\"", …)` / `pass_compat_curved(work, b"'`", b"`'", …)`. `pass_compat_curved`
+  (стр. 552) УЖЕ реализует все 3 asciidoctor-проверки: `compat_open_boundary` (левая граница `(^|[^\w;:}])`),
+  content-start non-space, `find_compat_curved_close` (content-before non-space + close-not-followed-by-word).
+- Удалил осиротевшие `pass_smart_quotes` + `find_smart_quote_close` (вызывались только из `run_all`). Обновил комменты.
+- Фикс СТРОГО СУБТРАКТИВНЫЙ (только отклоняет матчи, что asciidoctor тоже отклоняет; новых не создаёт) → 0 риска гейта.
+- **legacy `inline.rs::try_smart_quotes` НЕ тронут** — там бага нет (позиционный сканер: на `` `'a'` `` сначала
+  срабатывает monospace-арм). compat-mode НЕ затронут.
+
+### Тесты
+- parser direct event-vector `monospace_apostrophe_does_not_leak_smart_quote` (subst/mod.rs): `` `'a'` and `'b'` ``
+  и с обрамлением → два `Monospace`-спана + литеральные апострофы; + позитив `"`q`" and `'x'`` (smart-quote формируется).
+- html-фикстура `adoc-html-tests/fixtures/inline/smart-quote-monospace.adoc` (+`.expected.html` от `asciidoctor -e`):
+  баг-кейсы, реальная api/index-строка, позитивы (real/single/nested/don't/plain). Авто-дискаверится.
+- `reproduces_legacy_on_smart_quote_inputs` (mod.rs:858) НЕ тронут и зелёный (все 17 входов проверены — 0 флипов).
+
+### Верификация (AIRTIGHT)
+- clippy --workspace 0; `cargo test --workspace` зелёное (parser 604→**605**, html unit 476, html-tests 25, compat 44).
+- **Гейт 344/344 байт-в-байт** vs master `5678867` (base пересобран через worktree → /tmp/adoc_base; gate_check.py → 0 diff).
+- **Frontier identical 213→214 (+1)**, clean_div 20→19; api/index.adoc (был топ-2, 347) ФЛИПНУЛ в identical.
+  new-vs-base через **difflib (SequenceMatcher)**: ровно 1 файл изменился — `index.adoc` IMPROVED 11→0, **0 регрессий**.
+- 10/10 CLI-проб vs asciidoctor 2.0.23 MATCH (через нормализатор): core, позиционное подавление, `don't`-внутри,
+  nested single/double, unclosed, empty, attrlist `]'`text`'`, `;:}`-граница `}"`x`"`, `'plain'`+`` `'code'` ``.
+
+### Что дальше / follow-up (вне scope)
+- Прочие топ-каскады frontier: literal/dlist-indent (0-1-2 432), compat-`+gem+` десинк (asciidoc-returns 273),
+  manpage doctype (160), setext-заголовки (sample 152 + debuter 118 — фича), indent→literal в table-cell (ROOT/index 136).
+
+---
+
 ## Сессия (2026-06-19, 128-я) — F-T quoted inline menu `"X > Y"` (ветка `feat/quoted-inline-menu`, НЕ смержена)
 
 Запрос «запланируй следующую задачу из туду» → frontier-проход (212 identical, 21 clean-div) → классификация топ-каскадов
