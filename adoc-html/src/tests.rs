@@ -2389,6 +2389,29 @@ fn test_icon_text_fallback_alt_replaces_name_html() {
 }
 
 #[test]
+fn test_icon_text_fallback_default_alt_html() {
+    // Without an explicit `alt=`, the default alt is `basename(name).tr('_-', ' ')`
+    // (mirroring Asciidoctor): hyphens/underscores become spaces, the directory and
+    // trailing extension are dropped.
+    assert_eq!(
+        to_html("icon:fast-forward[]"),
+        "<div class=\"paragraph\">\n<p><span class=\"icon\">[fast forward&#93;</span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("icon:my_cool_icon[]"),
+        "<div class=\"paragraph\">\n<p><span class=\"icon\">[my cool icon&#93;</span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("icon:foo.bar[]"),
+        "<div class=\"paragraph\">\n<p><span class=\"icon\">[foo&#93;</span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("icon:path/to/heart[]"),
+        "<div class=\"paragraph\">\n<p><span class=\"icon\">[heart&#93;</span></p>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_icon_text_fallback_link_window_html() {
     // link wraps the text in <a class="image"> (inside the span); window=_blank
     // adds target + rel=noopener.

@@ -260,7 +260,10 @@ impl HtmlRenderer {
                 output.push('>');
             }
             output.push('[');
-            html_escape(output, alt.as_deref().unwrap_or(&name));
+            match alt {
+                Some(ref a) => html_escape(output, a),
+                None => html_escape(output, &adoc_parser::icon_default_alt(&name)),
+            }
             output.push_str("&#93;");
             if link.is_some() {
                 output.push_str("</a>");

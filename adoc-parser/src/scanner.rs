@@ -1070,10 +1070,28 @@ pub fn strip_any_section_marker(line: &str) -> Option<(u8, &str)> {
     strip_section_marker(line).or_else(|| strip_markdown_heading(line))
 }
 
-/// Strip URLs from title text for ID generation.
+/// Asciidoctor default alt for an inline icon in text mode:
+/// `File.basename(name, File.extname(name)).tr('_-', ' ')` — drop the directory
+/// (everything up to the last `/`), drop the trailing `.ext`, then replace `_`/`-`
+/// with spaces. A leading dot is not an extension (`File.extname(".hidden") == ""`).
+pub fn icon_default_alt(name: &str) -> String {
+    let base = match name.rfind('/') {
+        Some(i) => &name[i + 1..],
+        None => name,
+    };
+    let stem = match base.rfind('.') {
+        Some(i) if i > 0 => &base[..i],
+        _ => base,
+    };
+    stem.replace(['_', '-'], " ")
+}
+
+/// Strip URLs and inline `icon:` macros from title text for ID generation.
 /// - `https://url[text]` / `http://url[text]` → `text`
 /// - `link:url[text]` → `text`
 /// - bare `https://url` / `http://url` (no bracket text) → removed
+/// - `icon:name[attrs]` → its alt text (explicit `alt=` or [`icon_default_alt`]),
+///   mirroring Asciidoctor generating the id from the macro-substituted title.
 fn strip_urls_for_id(title: &str) -> String {
     let mut result = String::with_capacity(title.len());
     let mut rest = title;
@@ -1105,6 +1123,27 @@ fn strip_urls_for_id(title: &str) -> String {
             // Bare URL (no brackets) — skip entirely
             let url_end = rest.find(' ').unwrap_or(rest.len());
             rest = &rest[url_end..];
+            continue;
+        }
+
+        // `icon:name[attrs]` → its alt text. Quotes in `alt=` need no stripping:
+        // the char filter in `generate_id` drops them. Malformed (no `[`/`]`) falls
+        // through to per-char handling so `icon:noclose` degrades to literal text.
+        if let Some(after) = rest.strip_prefix("icon:")
+            && let Some(bopen) = after.find('[')
+            && let Some(rel_close) = after[bopen..].find(']')
+        {
+            let bclose = bopen + rel_close;
+            let name = &after[..bopen];
+            let attrs = &after[bopen + 1..bclose];
+            let alt = attrs
+                .split(',')
+                .filter_map(|p| p.trim().split_once('='))
+                .find(|(k, _)| k.trim() == "alt")
+                .map(|(_, v)| v.trim().to_string())
+                .unwrap_or_else(|| icon_default_alt(name));
+            result.push_str(&alt);
+            rest = &after[bclose + 1..];
             continue;
         }
 
@@ -1685,6 +1724,45 @@ mod tests {
         );
         // A run of separators (dot + space) collapses to a single separator.
         assert_eq!(generate_id("Foo. Bar", "_", "_"), "_foo_bar");
+
+        // icon: macro in a heading → uses its alt text (default = basename.tr('_-',' ')),
+        // not the literal `icon:name[]`. Mirrors Asciidoctor's macro-substituted title.
+        assert_eq!(
+            generate_id("icon:fast-forward[] Migration", "_", "_"),
+            "_fast_forward_migration"
+        );
+        assert_eq!(
+            generate_id("icon:ticket[] Resolved Issues", "_", "_"),
+            "_ticket_resolved_issues"
+        );
+        // basename drops the extension and the path.
+        assert_eq!(generate_id("icon:foo.bar[] X", "_", "_"), "_foo_x");
+        assert_eq!(generate_id("icon:path/to/heart[] Y", "_", "_"), "_heart_y");
+        // dots in the stem stay (become separators in the id).
+        assert_eq!(generate_id("Pre icon:a.b.c[] Post", "_", "_"), "_pre_a_b_post");
+        // positional arg is `size`, ignored for alt.
+        assert_eq!(generate_id("icon:heart[Big] End", "_", "_"), "_heart_end");
+        // explicit alt= wins (quotes are dropped by the char filter).
+        assert_eq!(generate_id("icon:heart[alt=\"A B\"] Z", "_", "_"), "_a_b_z");
+        // malformed icon macro degrades to literal text.
+        assert_eq!(generate_id("icon:noclose Heading", "_", "_"), "_iconnoclose_heading");
+    }
+
+    #[test]
+    fn test_icon_default_alt() {
+        // tr('_-', ' ')
+        assert_eq!(icon_default_alt("fast-forward"), "fast forward");
+        assert_eq!(icon_default_alt("my_cool_icon"), "my cool icon");
+        assert_eq!(icon_default_alt("foo_bar-baz"), "foo bar baz");
+        // basename: drop directory and trailing extension.
+        assert_eq!(icon_default_alt("foo.bar"), "foo");
+        assert_eq!(icon_default_alt("path/to/heart"), "heart");
+        // only the LAST extension is dropped.
+        assert_eq!(icon_default_alt("a.b.c"), "a.b");
+        // a leading dot is not an extension.
+        assert_eq!(icon_default_alt(".hidden"), ".hidden");
+        // plain name unchanged (identity for the gate's simple icons).
+        assert_eq!(icon_default_alt("heart"), "heart");
     }
 
     #[test]
