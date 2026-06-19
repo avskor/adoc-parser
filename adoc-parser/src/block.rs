@@ -3461,6 +3461,10 @@ impl<'a> BlockScanner<'a> {
 
         // Collect principal text: desc on same line + wrapped continuation lines
         let mut principal_desc = desc;
+        // Raw (un-dedented) principal when it lives on a following indented line
+        // (empty inline desc). Used to compute the description paragraph's common
+        // leading indent together with the continuation lines (see emit below).
+        let mut principal_raw: Option<&'a str> = None;
         let mut continuation_lines: Vec<&'a str> = Vec::new();
 
         if desc.is_empty() {
@@ -3511,6 +3515,11 @@ impl<'a> BlockScanner<'a> {
                         || scanner::is_attribute_entry(check).is_some())
                 {
                     principal_desc = check;
+                    // Keep the raw line (indentation intact) so the common-indent
+                    // of the whole description paragraph can be stripped uniformly.
+                    if line.starts_with(' ') || line.starts_with('\t') {
+                        principal_raw = Some(line);
+                    }
                     self.advance();
                 } else {
                     self.pos = saved_pos;
@@ -3537,9 +3546,11 @@ impl<'a> BlockScanner<'a> {
                     self.advance();
                     continue;
                 }
-                if self.is_dlist_continuation_line(line)
-                    && !line.starts_with(' ') && !line.starts_with('\t')
-                {
+                // Indented lines join the principal paragraph too: Asciidoctor
+                // reads all contiguous (non-blank) wrapped lines as one paragraph
+                // and strips their common leading indent (it is NOT a literal
+                // block — that only starts after a blank line; see emit below).
+                if self.is_dlist_continuation_line(line) {
                     continuation_lines.push(line);
                     self.advance();
                 } else {
@@ -3548,13 +3559,41 @@ impl<'a> BlockScanner<'a> {
             }
         }
 
+        // Strip the description paragraph's common leading indent (Asciidoctor
+        // `adjust_indentation!`, indent 0) and drop trailing whitespace per line.
+        // An indented following-line principal participates in the common-indent
+        // computation; an inline principal (`term:: text`) sits at column 0 and
+        // is excluded (kept verbatim) so the continuation lines dedent on their
+        // own. A flush-left line cancels stripping entirely (block indent None).
+        let rstrip = |c: Cow<'a, str>| -> Cow<'a, str> {
+            match c {
+                Cow::Borrowed(s) => Cow::Borrowed(s.trim_end()),
+                Cow::Owned(s) => Cow::Owned(s.trim_end().to_string()),
+            }
+        };
+        let (principal_text, cont_texts): (Cow<'a, str>, Vec<Cow<'a, str>>) =
+            if let Some(praw) = principal_raw {
+                let mut block: Vec<&'a str> = Vec::with_capacity(1 + continuation_lines.len());
+                block.push(praw);
+                block.extend(continuation_lines);
+                let mut it = reindent_verbatim_lines(block, 0).into_iter();
+                let p = it.next().map(&rstrip).unwrap_or(Cow::Borrowed(""));
+                (p, it.map(&rstrip).collect())
+            } else {
+                let cont = reindent_verbatim_lines(continuation_lines, 0)
+                    .into_iter()
+                    .map(&rstrip)
+                    .collect();
+                (Cow::Borrowed(principal_desc), cont)
+            };
+
         // Event buffer (bottom to top for FIFO via pop):
-        for &cline in continuation_lines.iter().rev() {
-            self.push_event(Event::Text(Cow::Borrowed(cline)));
+        for cline in cont_texts.into_iter().rev() {
+            self.push_event(Event::Text(cline));
             self.push_event(Event::SoftBreak);
         }
-        if !principal_desc.is_empty() {
-            self.push_event(Event::Text(Cow::Borrowed(principal_desc)));
+        if !principal_text.is_empty() {
+            self.push_event(Event::Text(principal_text));
         }
         self.push_event(Event::Start(Tag::DescriptionDescription));
 
@@ -4370,6 +4409,99 @@ mod tests {
             Event::Text(Cow::Borrowed("Term")),
             Event::End(TagEnd::DescriptionTerm),
             Event::Start(Tag::DescriptionDescription),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_dlist_indented_multiline_description() {
+        // Empty inline desc + a following indented multi-line paragraph: all
+        // contiguous indented lines join the description as ONE paragraph with
+        // the common leading indent stripped — NOT a literal block (Asciidoctor
+        // parity). Frontier regression: asciidoctor-0-1-2-released.adoc.
+        let input = "term::\n\n  Line one.\n  Line two.\n  Line three.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("term")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("Line one.")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("Line two.")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("Line three.")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_dlist_inline_desc_indented_continuation() {
+        // Inline desc on the term line + indented wrapped continuation lines.
+        // The inline principal sits at column 0 (excluded from the common-indent
+        // computation); the continuation lines dedent on their own.
+        let input = "term:: first line\n  Line two.\n  Line three.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("term")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("first line")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("Line two.")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("Line three.")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_dlist_continuation_common_indent_dedent() {
+        // Only the COMMON (minimum) leading indent is stripped, preserving
+        // relative indentation between wrapped lines (mirror Asciidoctor
+        // `adjust_indentation!`, indent 0): `two.`(2) and `six.`(6) dedent by 2.
+        let input = "term:: first\n  two.\n      six.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("term")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("first")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("two.")),
+            Event::SoftBreak,
+            Event::Text(Cow::Borrowed("    six.")),
+            Event::End(TagEnd::DescriptionDescription),
+            Event::End(TagEnd::DescriptionList),
+        ]);
+    }
+
+    #[test]
+    fn test_dlist_blank_then_indented_stays_literal() {
+        // A blank line BETWEEN the principal paragraph and a following indented
+        // block ends the paragraph: the indented block becomes a literal block
+        // attached to the description (Asciidoctor parity). Guards against the
+        // fix over-reaching into the genuine-literal case.
+        let input = "term::\n\n  Para one.\n\n  Literal two.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DescriptionList),
+            Event::Start(Tag::DescriptionTerm),
+            Event::Text(Cow::Borrowed("term")),
+            Event::End(TagEnd::DescriptionTerm),
+            Event::Start(Tag::DescriptionDescription),
+            Event::Text(Cow::Borrowed("Para one.")),
+            Event::Start(Tag::LiteralParagraph),
+            Event::Text(Cow::Borrowed("Literal two.")),
+            Event::End(TagEnd::LiteralParagraph),
             Event::End(TagEnd::DescriptionDescription),
             Event::End(TagEnd::DescriptionList),
         ]);
