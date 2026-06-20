@@ -445,9 +445,13 @@ pub enum CalloutMarker {
     XmlComment(u32),
 }
 
-pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
+pub fn strip_callout_markers(line: &str) -> (Cow<'_, str>, Vec<CalloutMarker>) {
     let mut markers = Vec::new();
     let mut end = line.len();
+    // Byte position (in `line`) of a single escaping backslash to drop. An
+    // escaped marker (`\<1>` / `\<!--1-->`) is NOT a conum: Asciidoctor keeps
+    // it literal and removes the backslash (`CalloutSourceRx` escape group).
+    let mut escape_at: Option<usize> = None;
 
     loop {
         let trimmed = line[..end].trim_end();
@@ -467,6 +471,11 @@ pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
                     None
                 };
                 if let Some(n) = num {
+                    if open_pos > 0 && trimmed.as_bytes()[open_pos - 1] == b'\\' {
+                        // Escaped — keep the marker literal, drop the backslash.
+                        escape_at = Some(open_pos - 1);
+                        break;
+                    }
                     markers.push(CalloutMarker::XmlComment(n));
                     end = open_pos;
                     continue;
@@ -493,6 +502,11 @@ pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
         };
         match num {
             Some(n) => {
+                if open > 0 && trimmed.as_bytes()[open - 1] == b'\\' {
+                    // Escaped — keep the marker literal, drop the backslash.
+                    escape_at = Some(open - 1);
+                    break;
+                }
                 markers.push(CalloutMarker::Standard(n));
                 end = open;
             }
@@ -501,7 +515,16 @@ pub fn strip_callout_markers(line: &str) -> (&str, Vec<CalloutMarker>) {
     }
 
     markers.reverse();
-    (&line[..end], markers)
+    match escape_at {
+        None => (Cow::Borrowed(&line[..end]), markers),
+        Some(bs) => {
+            // Drop the single escaping backslash; the marker text stays.
+            let mut s = String::with_capacity(end - 1);
+            s.push_str(&line[..bs]);
+            s.push_str(&line[bs + 1..end]);
+            (Cow::Owned(s), markers)
+        }
+    }
 }
 
 /// Byte offset in `text` at which a leading-comment callout *guard* begins —
@@ -2154,49 +2177,37 @@ mod tests {
     #[test]
     fn test_strip_callout_markers() {
         use super::CalloutMarker::*;
+        // Compare against the borrowed/owned text uniformly via `as_ref`.
+        let check = |input: &str, text: &str, markers: Vec<CalloutMarker>| {
+            let (t, m) = strip_callout_markers(input);
+            assert_eq!((t.as_ref(), m), (text, markers), "input={input:?}");
+        };
         // Standard numbered
-        assert_eq!(
-            strip_callout_markers("require 'sinatra' <1>"),
-            ("require 'sinatra' ", vec![Standard(1)])
-        );
-        assert_eq!(
-            strip_callout_markers("code <1> <2>"),
-            ("code ", vec![Standard(1), Standard(2)])
-        );
-        assert_eq!(
-            strip_callout_markers("no callouts"),
-            ("no callouts", vec![])
-        );
-        assert_eq!(
-            strip_callout_markers("<1>"),
-            ("", vec![Standard(1)])
-        );
-        assert_eq!(
-            strip_callout_markers("code <12>"),
-            ("code ", vec![Standard(12)])
-        );
+        check("require 'sinatra' <1>", "require 'sinatra' ", vec![Standard(1)]);
+        check("code <1> <2>", "code ", vec![Standard(1), Standard(2)]);
+        check("no callouts", "no callouts", vec![]);
+        check("<1>", "", vec![Standard(1)]);
+        check("code <12>", "code ", vec![Standard(12)]);
         // Autonumbered
-        assert_eq!(
-            strip_callout_markers("code <.>"),
-            ("code ", vec![Standard(0)])
-        );
-        assert_eq!(
-            strip_callout_markers("code <.> <.>"),
-            ("code ", vec![Standard(0), Standard(0)])
-        );
+        check("code <.>", "code ", vec![Standard(0)]);
+        check("code <.> <.>", "code ", vec![Standard(0), Standard(0)]);
         // XML comment callouts
-        assert_eq!(
-            strip_callout_markers("code <!--1-->"),
-            ("code ", vec![XmlComment(1)])
+        check("code <!--1-->", "code ", vec![XmlComment(1)]);
+        check("code <!--.-->", "code ", vec![XmlComment(0)]);
+        check(
+            "  <title>Title</title> <!--1-->",
+            "  <title>Title</title> ",
+            vec![XmlComment(1)],
         );
-        assert_eq!(
-            strip_callout_markers("code <!--.-->"),
-            ("code ", vec![XmlComment(0)])
-        );
-        assert_eq!(
-            strip_callout_markers("  <title>Title</title> <!--1-->"),
-            ("  <title>Title</title> ", vec![XmlComment(1)])
-        );
+        // Escaped markers (`\<N>` / `\<!--N-->`): NOT a conum — the backslash is
+        // dropped and the marker stays literal (Asciidoctor `CalloutSourceRx`).
+        check("x = 1 \\<1>", "x = 1 <1>", vec![]);
+        check("// \\<1>", "// <1>", vec![]);
+        check("\\<1>", "<1>", vec![]);
+        check("  <title>T</title> \\<!--1-->", "  <title>T</title> <!--1-->", vec![]);
+        // Escaped marker to the LEFT of a real one: the run stops at the escape;
+        // the real (right) marker is still a conum, the escaped one stays literal.
+        check("code \\<1> <2>", "code <1> ", vec![Standard(2)]);
     }
 
     #[test]
