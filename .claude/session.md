@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-20, 137-я) — F-AC indented literal-параграф не резолвит counter/attr (ветка `feat/indented-literal-no-counter`, СМЕРЖЕНА в master `8559bb3`)
+
+Запрос «приступай к следующей задаче из туду». F-AB уже смержена (`a7609cf`). Следующий явный кандидат из рекомендации
+TODO (стр. 213) и follow-up F-AB: **counter/attr subs внутри literal-блока** (остаток `asciidoc-recommended-practices` = 1).
+`showdiff` подтвердил единственный дифф: строка 264 ` {counter:cnt-step}` (indented после blank, стр. 263) — asciidoctor
+выдаёт литерал, мы резолвим в `1`. Реализовано без AskUserQuestion/plan-mode (кандидат вынужденно-чистый, фикс
+субтрактивный по конструкции — резолвим МЕНЬШЕ). **Смержена в master `8559bb3` (--no-ff, как в истории).**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/preprocessor.rs`)
+- Препроцессор резолвил `{counter:...}` (5a), attribute-entry (5b) и attrlist-ref (5a') line-based, БЕЗ учёта блок-контекста.
+  Asciidoctor даёт literal-блокам только specialchars-subs (`[:specialcharacters]`, без `:attributes`) → counter/attr-ref
+  внутри literal остаются литералом.
+- Препроцессор УЖЕ умел не раскрывать в delimited-fence'ах (`----`/`....`/` ``` `, verbatim_fence) и styled-verbatim-para
+  (`[source]`), но НЕ обрабатывал **indented literal-параграф** (ведущий пробел/таб).
+
+### Правило (probe-verified vs asciidoctor 2.0.23, 10/10 MATCH)
+- indented (пробел/таб) непустая строка НА ГРАНИЦЕ БЛОКА → открывает literal-параграф до следующей blank.
+- Граница блока = старт документа ИЛИ после blank-строки ИЛИ после закрытия delimited/fence-блока (P6: ` {counter}` сразу
+  за `----`-close без blank — ТОЖЕ literal у asciitoctor!).
+- continuation (indented сразу за непустой строкой, без blank) → обычный текст параграфа, counter РЕЗОЛВИТСЯ (P2/P3).
+- list-attached (list-item + blank + indented) → attached literal, НЕ резолвится (P4). list-cont (item + indented без blank)
+  → резолвится (P3). Контекст списка отслеживать НЕ нужно — правило чисто по границе блока.
+
+### Фикс (1 файл, preprocessor.rs)
+- Новое состояние `at_boundary` (init true; = "предыдущая эмитированная строка завершила блок") и `in_indented_literal`.
+- Блок **4c** ПЕРЕД «5a. Expand counters»: если `in_indented_literal` — эмит untouched до blank; иначе если
+  `at_boundary && !blank && line.starts_with([' ','\t'])` — открыть literal, эмит untouched.
+- `at_boundary` обновляется во ВСЕХ точках эмиссии (escaped-cond/inline-cond/verbatim_para/verbatim_fence open+close/
+  4c/attr-entry/section6); reader-level строки (block-conditional/endif/skip) его НЕ трогают (они невидимы блок-сканеру).
+  fence-close → `at_boundary = closes` (граница). Section6 → `at_boundary = line_is_blank`.
+- +1 unit `test_counters_and_attr_entries_untouched_in_indented_literal` (7 кейсов).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 616→**617**).
+- **Гейт 344/344 байт-в-байт** vs master `a7609cf` (base через worktree → /tmp/adoc_base, gate_check **0 diff**).
+  Скан гейта: indented-after-blank кандидаты (xref-text-and-style ` :xrefstyle: full::`, sdr-002 ` {escaped}`/` [...]`)
+  — `{escaped}` не counter, indented `[...]` не матчит 5a' (нужен `starts_with('[')` без пробела), ` :xrefstyle:` теперь
+  не сетит атрибут НО эмит-текст идентичен и downstream не использует → 0 diff подтверждён.
+- **Frontier identical 218→219:** new-vs-base по всем 250 файлам → изменился **РОВНО 1** (`asciidoc-recommended-practices`
+  IMPROVED 1→0, флип в identical), **0 регрессий**.
+- 10/10 CLI-проб vs asciitoctor 2.0.23 MATCH (P1 after-blank / P2 continuation / P3 list-cont / P4 list-attached /
+  P5 indented-attr-entry / P6 after-fence-close / P7 multi-line+after / P8 col-0-guard / P9 after-section / P10 tab).
+
+### Дальше / follow-up (вне scope)
+- html-compat harness вызывает `to_html` БЕЗ препроцессинга (counter резолвится лишь в CLI-пути `preprocess_with_attrs`)
+  → фичу нельзя покрыть html-фикстурой, покрыта препроцессор-юнитами (фикстура удалена при разработке).
+- Топ clean-div frontier (многоклассовые): asciidoc-returns 273 (compat-backtick), sample 152 (header не распознан),
+  manpage 146 (doctype manpage), index 136 (table-cell literal), debuter 118, multi-special-ex 87, CHANGELOG 75, enjoy 59
+  (callouts в markdown-fence). Минимальные intrinsic-остатки: doctime-localtime/migration (diff=1, не actionable).
+
+---
+
 ## Сессия (2026-06-20, 136-я) — F-AB отступленный section/heading-маркер → literal (ветка `feat/indented-section-literal`, ЗАКОММИЧЕНО на ветке, ожидает мержа/пуша)
 
 Запрос «приступай к следующей задаче из туду». Frontier-проход: identical 218, clean-div 15. Триаж минимальных
