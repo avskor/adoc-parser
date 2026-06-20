@@ -2528,4 +2528,62 @@ mod tests {
             );
         }
     }
+
+    /// An attrlist-prefixed *constrained* span whose content begins with the same
+    /// marker (`[.path]__config_`) falls back from the unconstrained form to the
+    /// constrained one, exactly like Asciidoctor's pass order: the unconstrained
+    /// `__…__` pass finds no closing `__`, so the constrained `_(\S|\S.*?\S)_`
+    /// pass matches with the second marker folded into the content. Verified
+    /// against `asciidoctor 2.0.23` for every quote marker.
+    #[test]
+    fn attrlist_constrained_falls_back_from_doubled_marker() {
+        // `[.path]__config/site.yml_` → <em class="path">_config/site.yml</em>
+        assert_eq!(
+            pipeline("[.path]__config/site.yml_"),
+            vec![
+                Event::Start(Tag::Emphasis {
+                    id: None,
+                    roles: vec!["path".to_string().into()],
+                }),
+                Event::Text("_config/site.yml".to_string().into()),
+                Event::End(TagEnd::Emphasis),
+            ]
+        );
+        // Same fall-back for strong / monospace / mark-span (generic over marker).
+        assert_eq!(
+            pipeline("[.r]**bold_x*"),
+            vec![
+                Event::Start(Tag::Strong { id: None, roles: vec!["r".to_string().into()] }),
+                Event::Text("*bold_x".to_string().into()),
+                Event::End(TagEnd::Strong),
+            ]
+        );
+        assert_eq!(
+            pipeline("[.r]``code_x`"),
+            vec![
+                Event::Start(Tag::Monospace { id: None, roles: vec!["r".to_string().into()] }),
+                Event::Text("`code_x".to_string().into()),
+                Event::End(TagEnd::Monospace),
+            ]
+        );
+        assert_eq!(
+            pipeline("[.r]##mark_x#"),
+            vec![
+                Event::Start(Tag::InlineSpan { id: None, roles: vec!["r".to_string().into()] }),
+                Event::Text("#mark_x".to_string().into()),
+                Event::End(TagEnd::InlineSpan),
+            ]
+        );
+        // The genuinely-unconstrained form (`[.r]__closed__`, closing `__` present)
+        // is still owned by the earlier unconstrained pass: content has NO leading
+        // marker, so the fall-back must not double-process it.
+        assert_eq!(
+            pipeline("[.r]__closed__"),
+            vec![
+                Event::Start(Tag::Emphasis { id: None, roles: vec!["r".to_string().into()] }),
+                Event::Text("closed".to_string().into()),
+                Event::End(TagEnd::Emphasis),
+            ]
+        );
+    }
 }

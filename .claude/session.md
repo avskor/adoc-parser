@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-20, 138-я) — F-AD attrlist-constrained span откатывается от удвоенного маркера (ветка `fix/attrlist-constrained-doubled-marker`, ЗАКОММИЧЕНО на ветке, ожидает мержа/пуша)
+
+Запрос «начни следующую задачу из TODO.md». Сначала по предыдущему запросу смержена F-AC, запушен master (`892ce90`),
+удалена ветка `feat/indented-literal-no-counter`. Frontier-проход (release из master `892ce90`): identical 219, clean-div 14.
+Триаж кандидатов через `showdiff.py`: diff=1 (doctime-localtime/migration) — intrinsic, не actionable; mdbasics (3) —
+2 класса (`\'`-escape + `+++`/`+-+` single-plus passthrough), не чистый; asciidoclet (12) — `` `data-uri` `` monospace
+в list-item, сложный. **Чистый одноклассовый кандидат: `static-awe` (41)** — весь diff позиционный каскад от ОДНОГО корня
+(`[.path]__config/site.yml_`). Реализовано без AskUserQuestion/plan-mode (кандидат вынужденно-чистый, гейт-риск нулевой
+по конструкции). **Закоммичено на ветке; ожидает мержа/пуша.**
+
+### Корень (ЧИСТО ПАРСЕР `adoc-parser/src/subst/quotes.rs`)
+- `[.path]__config/site.yml_` = attrlist `[.path]` + constrained emphasis `_`, где **содержимое начинается с `_`**
+  (`_config/site.yml`). asciitoctor pass-order: unconstrained-пасс `__…__` бежит первым, НЕ находит закрывающий `__` →
+  оставляет нетронутым; constrained-пасс `_(\S|\S.*?\S)_` затем матчит content `_config/site.yml` (второй `_` сворачивается в content).
+- Мы в `attrlist_constrained` намеренно отбраковывали удвоенный маркер (`bytes[marker_pos+1] == marker`, старый комментарий
+  «legacy does not fall back from unconstrained to constrained for the attrlist form») → строка тёк литералом.
+- Строки 7/9 (`[.path]_/images_`, одиночный `_`) уже рендерились ИДЕНТИЧНО — падала только строка 16 (content с ведущим `_`).
+
+### Фикс (1 файл, quotes.rs)
+- В `attrlist_constrained` убрана ветка `|| bytes.get(marker_pos + 1).copied() == Some(marker)` — осталась только проверка
+  `bytes.get(marker_pos) != Some(marker)`. Безопасно: unconstrained-пасс уже забрал все настоящие `[attr]__…__` (заменил
+  сентинелями) ДО constrained-пасса → до constrained доживают только формы без `__`-закрытия. Generic по маркеру.
+- Комментарий переписан под asciidoctor-семантику (pass-order fall-through).
+- +1 unit `attrlist_constrained_falls_back_from_doubled_marker` (subst/mod.rs): 4 маркера `_`/`*`/`` ` ``/`#` + closed-гард
+  `[.r]__closed__` (unconstrained не должен дабл-процесситься). +1 html-фикстура `inline/attrlist-constrained-doubled-marker`
+  (эталон `asciidoctor -e`).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 617→**618**, html-compat фикстур +1, PASS).
+- **Гейт 344/344 байт-в-байт** vs master `892ce90` (base из чистого master → /tmp/adoc_base, gate_check **0 diff**).
+  В гейте `grep -rl ']__'` по 344 = **0 файлов** → нулевой риск по конструкции (одиночные `[.path]_x_` фикс не трогает).
+- **Frontier identical 219→220 (+1):** new-vs-base = static-awe IMPROVED 41→0 (флип в identical), clean-div 14→13,
+  **0 регрессий** (список frontier идентичен прежнему минус static-awe).
+- 5/5 CLI-проб vs asciidoctor 2.0.23 MATCH: `_`/`*`/`` ` ``/`#` все дают `<em/strong/code/span class="path/r">_content</...>`;
+  closed `[.r]__closed__`→`<em class="r">closed</em>`.
+
+### Дальше / follow-up (вне scope)
+- **БЕЗ attrlist** (`__leading_` голый): `constrained_open_close` (quotes.rs:232) тоже отбраковывает удвоенный маркер;
+  asciitoctor даёт `<em>_leading</em>`. Не в текущих расхождениях, шире по импакту (escape/macros-арки используют) →
+  отдельная задача с гейт-проверкой.
+- Следующие clean-div кандидаты: asciidoclet 12 (`` `data-uri` `` monospace в list-item), mdbasics 3 (`\'`-escape +
+  `+++`/`+-+` passthrough — 2 класса). Топ-каскады (многоклассовые): asciidoc-returns 273, sample 152, manpage 146, index 136.
+
+---
+
 ## Сессия (2026-06-20, 137-я) — F-AC indented literal-параграф не резолвит counter/attr (ветка `feat/indented-literal-no-counter`, СМЕРЖЕНА в master `8559bb3`)
 
 Запрос «приступай к следующей задаче из туду». F-AB уже смержена (`a7609cf`). Следующий явный кандидат из рекомендации
