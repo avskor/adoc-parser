@@ -1,5 +1,52 @@
 # Session context
 
+## Сессия (2026-06-21, 142-я) — F-AH `\'` escape снимается только в word-flanked контексте (ветка `fix/escaped-apostrophe-non-word-flanked`, ЗАКОММИЧЕНО, ожидает мержа/пуша)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`db28ca6`). Frontier-проход (release из master, **NB: пересобирать
+`-p adoc-cli`, не `-p adoc-html` — бинарь `adoc` из крейта adoc-cli!**): identical 221, clean-div 12 — точно как запись 141-й.
+Реализовано без AskUserQuestion/plan-mode (вынужденно-чистый, гейт-риск нулевой по конструкции). **Закоммичено; ожидает мержа/пуша.**
+
+### Диагностика (триаж мелких clean-div через showdiff)
+- mdbasics (3) = 2 класса: `\'`-escape ([78],[109]) + single-plus passthrough ([169]). Footnote-кандидаты
+  (asciidoclet 12, asciidoc-returns 12) — общий класс «footnote с attr-ref-значением-link-макросом», ШИРОКИЙ/рискованный:
+  asciidoctor `subs` порядок (attributes ДО macros) рекурсивно меняет границы footnote-скобки (синтетический репро
+  `footnote:[link={url-x}.]` где `{url-x}`=`http://…[t]` → asciidoctor обрезает скобку по первому `]` из значения).
+  Взят чистый одноклассовый `\'`-escape.
+- **Правило (зонды asciidoctor 2.0.23):** `\` перед `'` снимается ТОЛЬКО где apostrophe-replacement `(\w)\\?'(?=\w)`
+  реально матчит (апостроф между word-char): `it\'s`→`it's` (литерал, НЕ кручёный `&#8217;`). Вне word-flank `\'`
+  остаётся литералом: `\'.text'`→`\'.text'`, `\'word'`, `\'>'`. Наш движок дропал `\` ВЕЗДЕ.
+
+### Корень (ЧИСТО ПАРСЕР, 1 файл `adoc-parser/src/subst/escape.rs`)
+- generic-арм `matches!(m, b'{'|b'['|b'<'|b'\'')` безусловно запечатывал `\'`→`Literal('')`, дропая backslash во всех
+  позициях (как `\{`/`\[`/`\<`). Asciidoctor же не имеет standalone `\'`-escape — backslash значим лишь в
+  apostrophe-replacement.
+- **Фикс:** `'` вынесен из generic-арма (теперь `{`/`[`/`<`); новый арм `m == b'\'' && i>0 &&
+  bytes[i-1].is_ascii_alphanumeric() && bytes.get(i+2).is_some_and(u8::is_ascii_alphanumeric)` → seal `Literal('')`
+  (word-flanked, точное зеркало apostrophe-replacement в `inline.rs::apply_typographic_replacements`). Не-word-flanked
+  → blanket-арм (backslash литерал). Smart-quote opener `\'`+backtick (арм выше) не тронут.
+- Compat-mode `\'em'` отрабатывает в `pass_constrained` (escape-арм quotes-прохода дропает `\` когда формируется span);
+  compat `it\'s` — word-flank-гейтом в escape.rs. legacy `inline.rs:1035` НЕ тронут (fallback-only) → документированная divergence.
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 621→**622**, html unit 479, compat 233, прочее).
+  +1 parser (`subst::escaped_apostrophe_matches_asciidoctor` — 4 non-word-flanked exact-vector + 2 word-flanked boundary)
+  +1 html-фикстура (`inline/escaped-apostrophe`, эталон `asciidoctor -s`).
+- **Гейт 344/344 байт-в-байт** vs master `db28ca6` (base пересобран из master через worktree; gate_check 0 diff). 4 gate-файла
+  с `\'` (asciidoc-lang: positional-and-named-attributes, subs-symbol-repl, quotation-marks-and-apostrophes, sdr-002) — не
+  изменились (word-flanked / внутри listing) → нулевой риск.
+- **Frontier identical 221 (стабильно), clean-div 12:** mdbasics **3→1** (оба `\'`-диффа ушли; остаток = single-plus).
+  new-vs-base = ровно 1 файл IMPROVED, 0 регрессий (список clean-div идентичен прежнему минус mdbasics-улучшение).
+- 6 CLI-проб vs asciidoctor 2.0.23 MATCH (`\'.text'`, `it\'s`, `\'word'`, `\'>'`, `it's` curly, compat — все).
+
+### Дальше (чистых одно-классовых кандидатов не осталось)
+- **single-plus `+++`→`+`** (mdbasics остаток diff=1): `+++` не матчится как single-plus passthrough с content `+`
+  (`+-+`→`-` работает, `+*+`→`*` работает). ВЫСОКИЙ риск гейта — `+` повсеместен. Отдельная сессия.
+- Топ clean-div (многоклассовые): sample 152, manpage 146, index 136, debuter 118, multi-special-ex 87, CHANGELOG 75,
+  github-0.1.4 50, asciidoclet 12 (multiline footnote), asciidoc-returns 12 (footnote attr-ref-link, остаток F-AG).
+- diff=1 intrinsic (не actionable): doctime-localtime (`{localtime}`), migration (`{asciidoctor-version}`).
+
+---
+
 ## Сессия (2026-06-21, 141-я) — F-AG вложенная AsciiDoc-ячейка наследует `:compat-mode:`/`:experimental:` (ветка `feat/asciidoc-cell-inline-options`, СМЕРЖЕНА в master `ba9a11f`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`3e4e63d`). Frontier-проход (release из master): identical 221,
