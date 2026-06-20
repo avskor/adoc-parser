@@ -85,12 +85,15 @@ pub fn is_delimiter(line: &str) -> Option<(DelimiterType, usize)> {
 }
 
 pub fn strip_section_marker(line: &str) -> Option<(u8, &str)> {
-    let trimmed = line.trim_start();
-    let level = count_leading(trimmed, '=');
+    // Asciidoctor's `SectionTitleRx` (`/^=={0,5}[ \t]+(\S.*?)[ \t]*$/`) is anchored
+    // at column 0, so any leading whitespace disqualifies the line as a section
+    // title — it falls through to a literal paragraph instead. Operate on `line`
+    // directly (no `trim_start`): a leading space makes `count_leading` return 0.
+    let level = count_leading(line, '=');
     if level == 0 || level > 6 {
         return None;
     }
-    let rest = &trimmed[level..];
+    let rest = &line[level..];
     if !rest.starts_with(' ') {
         return None;
     }
@@ -1058,12 +1061,13 @@ pub fn parse_table_cells_with_sep(line: &str, sep: u8) -> Option<TableLineCells<
 }
 
 pub fn strip_markdown_heading(line: &str) -> Option<(u8, &str)> {
-    let trimmed = line.trim_start();
-    let level = count_leading(trimmed, '#');
+    // Like section titles, Markdown-style ATX headings are recognised only at
+    // column 0 (Asciidoctor treats an indented `## …` as a literal paragraph).
+    let level = count_leading(line, '#');
     if level == 0 || level > 6 {
         return None;
     }
-    let rest = &trimmed[level..];
+    let rest = &line[level..];
     if !rest.starts_with(' ') {
         return None;
     }
@@ -1585,6 +1589,10 @@ mod tests {
         assert_eq!(strip_section_marker("== Sub"), Some((2, "Sub")));
         assert_eq!(strip_section_marker("=NoSpace"), None);
         assert_eq!(strip_section_marker("= "), None);
+        // Indented section marker is a literal paragraph, not a section (column 0 only).
+        assert_eq!(strip_section_marker(" == Indented"), None);
+        assert_eq!(strip_section_marker("  = Two spaces"), None);
+        assert_eq!(strip_section_marker("\t== Tab"), None);
     }
 
     #[test]
@@ -2649,7 +2657,9 @@ mod tests {
         assert_eq!(strip_markdown_heading("#NoSpace"), None);
         assert_eq!(strip_markdown_heading("# "), None); // empty title
         assert_eq!(strip_markdown_heading("not heading"), None);
-        assert_eq!(strip_markdown_heading("  ## Indented"), Some((2, "Indented")));
+        // Indented ATX heading is a literal paragraph, not a heading (column 0 only).
+        assert_eq!(strip_markdown_heading("  ## Indented"), None);
+        assert_eq!(strip_markdown_heading(" # One space"), None);
     }
 
     #[test]
@@ -2683,5 +2693,8 @@ mod tests {
         assert_eq!(strip_any_section_marker("## Sub"), Some((2, "Sub")));
         // Neither
         assert_eq!(strip_any_section_marker("just text"), None);
+        // Indented markers fall through to a literal paragraph (column 0 only).
+        assert_eq!(strip_any_section_marker(" == Indented"), None);
+        assert_eq!(strip_any_section_marker("  ## Indented"), None);
     }
 }

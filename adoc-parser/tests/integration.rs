@@ -390,3 +390,43 @@ fn test_many_block_title_lines_no_stack_overflow() {
         "paragraph after a large run of block-title lines must still parse"
     );
 }
+
+#[test]
+fn test_indented_section_marker_is_literal_paragraph() {
+    // Asciidoctor's section/heading detection is anchored at column 0; a leading
+    // space turns `== First Section` into a literal paragraph rather than a
+    // section. We must not strip the indentation and parse it as a heading.
+    let events = parse("Intro.\n\n == First Section\n\nAfter.\n");
+    assert_eq!(events, vec![
+        Event::Start(Tag::Paragraph),
+        Event::Text(Cow::Borrowed("Intro.")),
+        Event::End(TagEnd::Paragraph),
+        Event::Start(Tag::LiteralParagraph),
+        Event::Text(Cow::Borrowed("== First Section")),
+        Event::End(TagEnd::LiteralParagraph),
+        Event::Start(Tag::Paragraph),
+        Event::Text(Cow::Borrowed("After.")),
+        Event::End(TagEnd::Paragraph),
+    ]);
+
+    // The same holds for an indented Markdown-style ATX heading.
+    let md = parse(" ## Indented\n");
+    assert!(
+        md.iter()
+            .any(|e| matches!(e, Event::Start(Tag::LiteralParagraph))),
+        "indented Markdown heading must be a literal paragraph: {md:?}"
+    );
+    assert!(
+        !md.iter()
+            .any(|e| matches!(e, Event::Start(Tag::Section { .. }))),
+        "indented Markdown heading must not open a section: {md:?}"
+    );
+
+    // Regression guard: a column-0 section marker is still a section.
+    let sec = parse("== Real Section\n\nBody.\n");
+    assert!(
+        sec.iter()
+            .any(|e| matches!(e, Event::Start(Tag::Section { level: 2 }))),
+        "column-0 section marker must still open a section: {sec:?}"
+    );
+}
