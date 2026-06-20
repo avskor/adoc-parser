@@ -29,10 +29,20 @@ fn split_respecting_quotes(s: &str) -> Vec<&str> {
     // slot start.
     let mut quote: Option<char> = None;
     let mut at_value_start = true;
+    // True immediately after a closing quote (before any other character). In
+    // Asciidoctor's AttributeList a quoted value's closing quote terminates the
+    // attribute, so the following run of whitespace acts as a separator —
+    // `[cols="1,2" options="header"]` is two attributes, not one. Whitespace
+    // after an *unquoted* value or a shorthand token is part of that token
+    // (scan_to_delimiter consumes up to the next comma), so it does not split.
+    let mut after_close_quote = false;
 
     for (i, ch) in s.char_indices() {
         match ch {
-            _ if quote == Some(ch) => quote = None,
+            _ if quote == Some(ch) => {
+                quote = None;
+                after_close_quote = true;
+            }
             '"' | '\'' if quote.is_none() && at_value_start => {
                 quote = Some(ch);
                 at_value_start = false;
@@ -43,9 +53,21 @@ fn split_respecting_quotes(s: &str) -> Vec<&str> {
                     start = i + 1;
                 }
                 at_value_start = true;
+                after_close_quote = false;
             }
-            c if c.is_whitespace() => {}
-            _ => at_value_start = false,
+            c if c.is_whitespace() => {
+                // Whitespace directly after a closing quote splits attributes.
+                if after_close_quote {
+                    parts.push(&s[start..i]);
+                    start = i + ch.len_utf8();
+                    at_value_start = true;
+                    after_close_quote = false;
+                }
+            }
+            _ => {
+                at_value_start = false;
+                after_close_quote = false;
+            }
         }
     }
     parts.push(&s[start..]);
@@ -1060,6 +1082,36 @@ mod tests {
 
         let attrs = BlockAttributes::new();
         assert_eq!(attrs.table_cols_count(), None);
+    }
+
+    #[test]
+    fn test_whitespace_after_quote_splits_attributes() {
+        // Asciidoctor: a quoted value's closing quote terminates the attribute,
+        // so the following whitespace separates it from the next one. Both
+        // `cols` and `options` must be recognized in `[cols="1,2" options="header"]`.
+        let attrs = BlockAttributes::parse("cols=\"1,2\" options=\"header\"");
+        assert_eq!(attrs.table_cols_count(), Some(2));
+        assert!(attrs.has_option("header"));
+
+        // Order does not matter; multiple spaces collapse the same way.
+        let attrs = BlockAttributes::parse("options=\"header\"    cols=\"1,2\"");
+        assert_eq!(attrs.table_cols_count(), Some(2));
+        assert!(attrs.has_option("header"));
+
+        // A quoted value followed by an unquoted attribute also splits.
+        let attrs = BlockAttributes::parse("cols=\"1,2\" options=header");
+        assert_eq!(attrs.table_cols_count(), Some(2));
+        assert!(attrs.has_option("header"));
+
+        // Whitespace after an *unquoted* value does NOT split — it is consumed
+        // into that value up to the next comma (so `options` is not a separate
+        // attribute here), matching Asciidoctor's scan_to_delimiter.
+        let attrs = BlockAttributes::parse("cols=2 options=header");
+        assert!(!attrs.has_option("header"));
+
+        // Whitespace after a shorthand token likewise does not split.
+        let attrs = BlockAttributes::parse(".cls options=\"header\"");
+        assert!(!attrs.has_option("header"));
     }
 
     #[test]
