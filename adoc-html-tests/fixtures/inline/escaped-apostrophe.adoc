@@ -1,0 +1,10 @@
+A backslash before an apostrophe is an escape ONLY between two word characters
+(where the apostrophe replacement would otherwise produce a curly quote). There
+the backslash drops for a literal apostrophe: it\'s fine, the value\'s here.
+
+Anywhere else the backslash has nothing to escape, so it stays literal: see the
+source by adding \'.text' to the URL, the \'word' quote, and the email-style
+\'>' bracket.
+
+Without a backslash, a word-flanked apostrophe still becomes a curly quote:
+plain it's word.

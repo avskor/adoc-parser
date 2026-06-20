@@ -24,9 +24,16 @@
 //!   — the pattern is kept literal, bypassing the `replacements` pass.
 //! - **`\"`** / **`\'`** smart-quote openers — the `"`/`'` plus its backtick are
 //!   kept literal, before the `:double`/`:single` quote passes.
-//! - **`\{`/`\[`/`\<`/`\'`** — the attribute-ref / bracket / `<` / apostrophe is
-//!   kept literal. These are safe because none of them is a *closing* span
-//!   marker: hiding one inside a `Literal` cannot tear an enclosing span apart.
+//! - **`\{`/`\[`/`\<`** — the attribute-ref / bracket / `<` is kept literal. These
+//!   are safe because none of them is a *closing* span marker: hiding one inside a
+//!   `Literal` cannot tear an enclosing span apart.
+//! - **`\'` between two word characters** (`it\'s`) — the apostrophe replacement's
+//!   `\\?` capture: Asciidoctor's `replacements` pass matches `(\w)\\?'(?=\w)` and,
+//!   when the backslash is present, drops it for a LITERAL apostrophe (not the
+//!   curly `&#8217;`). We seal that apostrophe as a `Literal` so the later
+//!   `replacements` pass leaves it alone. A `\'` that is NOT word-flanked has no
+//!   replacement to escape, so its backslash stays literal (`\'.text'` →
+//!   `\'.text'`) — matching Asciidoctor.
 //! - **`\&#…;`** — an escaped character reference (`\&#174;`, `\&copy;`): the
 //!   backslash drops and the reference becomes a `Text` event (escaped `&`),
 //!   restored as a [`CharRef`](super::tokenize::TagToken::CharRef) leaf with
@@ -229,13 +236,31 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                     // later `macros` pass never fires on the `((…))`.
                     out.push_str(&work.macro_sentinel(evs));
                     i += consumed;
-                } else if matches!(m, b'{' | b'[' | b'<' | b'\'') {
+                } else if matches!(m, b'{' | b'[' | b'<') {
                     // Generic single-character escapes for NON-marker characters
-                    // (attribute ref / bracket / `<` / apostrophe): drop the
-                    // backslash, keep the character literal. These never serve as a
-                    // span's closing marker, so hiding them in a `Literal` cannot
-                    // break an enclosing span — unlike the quote markers below.
+                    // (attribute ref / bracket / `<`): drop the backslash, keep the
+                    // character literal. These never serve as a span's closing
+                    // marker, so hiding them in a `Literal` cannot break an
+                    // enclosing span — unlike the quote markers below.
                     out.push_str(&work.literal_sentinel((m as char).to_string()));
+                    i += 2;
+                } else if m == b'\''
+                    && i > 0
+                    && bytes[i - 1].is_ascii_alphanumeric()
+                    && bytes.get(i + 2).is_some_and(u8::is_ascii_alphanumeric)
+                {
+                    // `\'` between two word characters — the apostrophe
+                    // replacement's `\\?` capture. Asciidoctor's `replacements`
+                    // pass matches `(\w)\\?'(?=\w)`; when the backslash is present it
+                    // drops it and keeps a LITERAL apostrophe (NOT the curly
+                    // `&#8217;`). We seal that apostrophe as a `Literal` so the later
+                    // `replacements` pass leaves it alone (`it\'s` → `it's`). The
+                    // backslash is consumed ONLY here, where the curly-quote rule
+                    // would otherwise fire — outside that word-flanked context the
+                    // `\` has no replacement to escape and stays literal (falls to
+                    // the blanket arm below): `\'.text'` / `\'word'` / `\'>'` keep
+                    // their backslash, matching Asciidoctor.
+                    out.push_str(&work.literal_sentinel("'".to_string()));
                     i += 2;
                 } else {
                     // Everything else keeps the backslash literal. This includes
