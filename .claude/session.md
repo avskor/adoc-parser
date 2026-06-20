@@ -1,5 +1,60 @@
 # Session context
 
+## Сессия (2026-06-21, 140-я) — F-AF пробел после quoted-значения разделяет атрибуты в attrlist (ветка `feat/implicit-table-header`, СМЕРЖЕНА в master `c0fd8c5`, ЗАПУШЕНО, ветка удалена)
+
+Запрос «начни следующую задачу из TODO.md». F-AE уже смержена (`1daa0eb`/merge `417a949`), master чист. Frontier-проход
+(release из master): identical 220, clean-div 13 — точно как в записи 139-й. Рекомендация 139-й указывала на `enjoy` (227)
+как «implicit table-header». **При триаже через `showdiff.py` оказалось иначе:** таблица в enjoy имеет ЯВНЫЙ
+`[cols="1m,2" options="header"]`, где атрибуты разделены **пробелом**, а не запятой. Это другой класс — парсинг attrlist,
+не header-детекция. Реализовано без AskUserQuestion/plan-mode (вынужденно-чистый, гейт-риск нулевой по конструкции).
+Пользователь прервал на финальной верификации и попросил смержить → **смержена `--no-ff`, запушена, ветка удалена.**
+
+### Диагностика (важная — рекомендация прошлой сессии была неточна)
+- showdiff enjoy: `[112] ADOC <thead> / OUR <tbody>`, `<th>`→`<td>` — выглядело как implicit-header, но исходник имеет
+  явный `options="header"`. Матрица 4 кейсов (разделитель × раскладка ячеек) изолировала корень:
+  - `m_space_sep` (пробел + ячейки на отдельных строках) → OUR thead=0, ADOC=1 → БАГ
+  - `m_comma_sep` (запятая + отдельные строки) → OUR=1 → OK
+  - `m_space_one` (пробел + ячейки на одной строке) → OUR=0 → БАГ
+  → раскладка ячеек НИ ПРИ ЧЁМ; падает именно **пробел-разделитель** после quoted-значения.
+- Зонды asciidoctor вывели правило (подтверждено исходником `attribute_list.rb`): закрывающая кавычка quoted-значения
+  завершает атрибут → последующий пробел = разделитель (`skip_delimiter` best-effort + `parse_attribute` leading
+  `skip_blank`). Для UNQUOTED-значений `scan_to_delimiter` (`/.*?(?=[ \t]*(,|$))/`) тянет значение до запятой → пробел
+  поглощается значением, НЕ разделяет. Shorthand (`.cls`) аналогично. Зонды: `[cols=2 options=header]` thead=0,
+  `[.cls options="header"]` thead=0 (оба MATCH asciidoctor — БЕЗ header).
+
+### Корень (ЧИСТО ПАРСЕР, 1 функция `adoc-parser/src/attributes.rs`)
+- `split_respecting_quotes` делил attrlist только по запятой (и трекал `=`/quotes для positional-индексации). Добавлен
+  флаг `after_close_quote` (ставится в арме закрывающей кавычки, сбрасывается на `,`/`=`/любом не-ws символе): пробел
+  при активном флаге → `parts.push(&s[start..i]); start = i + ch.len_utf8(); at_value_start = true`. Сегменты тримятся
+  downstream (стр. 257) → ведущий пробел при multi-space безопасен.
+- Общая функция → автоматически покрывает `parse_image_attrs` и `parse_link_attrs` (тоже через
+  `split_respecting_quotes`) — корректно по asciidoctor (один AttributeList).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 619→**620**, html-compat фикстур +1, PASS).
+- +1 unit `whitespace_after_quote_splits_attributes` (5 кейсов: space-split cols+opts, порядок, quoted+unquoted, + 2
+  NEGATIVE `cols=2 options=header` / `.cls options="header"`). +1 html-фикстура `block/table-header-space-attrlist`
+  (зеркало enjoy, эталон `asciidoctor -e`, наш вывод байт-в-байт).
+- **Гейт 344/344 байт-в-байт** vs master (`gate_check.py` 0 diff). grep риск-паттерна (`["…"] <space> attr`) по 344 =
+  единственное совпадение `link-macro-attribute-parsing.adoc:51` лежит ВНУТРИ `[source]`-листинга (литеральный пример,
+  не парсится) → нулевой риск по конструкции.
+- **Frontier identical 220→221 (+1):** `enjoy` флипнул в identical (`showdiff` пуст). clean-div 13→12, **0 регрессий**
+  (new-vs-base = только enjoy; список frontier идентичен прежнему минус enjoy).
+- Зонды vs asciidoctor 2.0.23: space-after-quoted / comma / опции-первыми / multi-space / tab — все thead=1+cols=2 MATCH.
+
+### Метрика-напоминание
+- Counter `frontier_parity`/`ndiffs` = ПОЗИЦИОННЫЙ differ; рекомендация прошлой сессии («implicit table-header») была
+  выведена из позиционного diff БЕЗ проверки исходника attrlist. **Урок: триажить через showdiff + читать исходник
+  кандидата, не доверять метке прошлой сессии.**
+
+### Дальше (чистых одно-классовых кандидатов не осталось)
+- Топ clean-div теперь многоклассовые: asciidoc-returns 273 (compat-backtick passthrough), sample 152 (header не
+  распознан), manpage 146 (doctype manpage), index 136, debuter 118, multi-special-ex 87, CHANGELOG 75, github-0.1.4 50
+  (TOC-позиция), asciidoclet 12 (multiline footnote — широкий), mdbasics 3 (`\'`-escape + `+++`/`+-+` single-plus pass).
+- diff=1 intrinsic (не actionable): doctime-localtime (`{localtime}`), migration (`{asciidoctor-version}`).
+
+---
+
 ## Сессия (2026-06-21, 139-я) — F-AE callout-маркеры `<N>` в markdown ```-fence + escape `\<N>` (ветка `feat/markdown-fence-callouts`, СМЕРЖЕНА в master `1daa0eb`, ЗАПУШЕНО)
 
 Запрос «начни следующую задачу из TODO.md». F-AD уже смержена (`688a5bd`), master чист. Frontier-проход подтвердил
