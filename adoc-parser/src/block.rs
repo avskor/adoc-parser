@@ -138,16 +138,15 @@ fn resolve_callouts_in_lines<'a>(
         .into_iter()
         .map(|cow| {
             let (text, markers) = match cow {
-                Cow::Borrowed(s) => {
-                    let (stripped, markers) = scanner::strip_callout_markers(s);
-                    (Cow::Borrowed(stripped), markers)
-                }
+                Cow::Borrowed(s) => scanner::strip_callout_markers(s),
                 Cow::Owned(s) => {
                     let (stripped, markers) = scanner::strip_callout_markers(&s);
-                    if markers.is_empty() {
+                    // Reuse the original allocation only when nothing changed
+                    // (no markers stripped and no escaping backslash dropped).
+                    if markers.is_empty() && stripped.len() == s.len() {
                         (Cow::Owned(s), markers)
                     } else {
-                        (Cow::Owned(stripped.to_string()), markers)
+                        (Cow::Owned(stripped.into_owned()), markers)
                     }
                 }
             };
@@ -3302,12 +3301,29 @@ impl<'a> BlockScanner<'a> {
             Some(l) => Some(Cow::Borrowed(l)),
             None => self.default_source_language().map(Cow::Owned),
         };
+
+        // A markdown fence is a verbatim source block, whose content model is
+        // `[:specialcharacters,:callouts]` — so callout markers (`<1>`) are
+        // resolved to conums just like `[source]`/`----`/`....` blocks (mirror
+        // of `scan_source_block`). A `[subs=...]` override can disable them.
+        let resolved_subs = block_attrs
+            .substitution_set(SubstitutionSet::VERBATIM)
+            .unwrap_or(SubstitutionSet::VERBATIM);
+        let process_callouts = resolved_subs.has(SubstitutionSet::CALLOUTS);
+        let content: Vec<Cow<'a, str>> = content_lines.into_iter().map(Cow::Borrowed).collect();
+        let parsed_lines = resolve_callouts_in_lines(content, process_callouts);
+
         self.push_event(Event::End(TagEnd::SourceBlock));
-        for (i, &cline) in content_lines.iter().enumerate().rev() {
-            if i < content_lines.len() - 1 {
+        let line_count = parsed_lines.len();
+        for (i, (text, markers)) in parsed_lines.into_iter().enumerate().rev() {
+            if i < line_count - 1 {
                 self.push_event(Event::SoftBreak);
             }
-            self.push_event(Event::Text(Cow::Borrowed(cline)));
+            if markers.is_empty() {
+                self.push_event(Event::Text(text));
+            } else {
+                self.push_callout_events_resolved(&markers, text);
+            }
         }
         self.push_event(Event::Start(Tag::SourceBlock {
             language: resolved_lang,
@@ -5532,6 +5548,25 @@ mod tests {
         let events: Vec<_> = BlockScanner::new(input).collect();
         assert!(events.contains(&Event::Start(Tag::SourceBlock { language: None })));
         assert!(!events.iter().any(|e| matches!(e, Event::Text(_))));
+    }
+
+    #[test]
+    fn test_markdown_fence_callouts() {
+        // A markdown fence is a verbatim source block, so callout markers
+        // (`<N>`) are resolved to conums just like `[source]`/`----` blocks
+        // (matches asciidoctor 2.0.23). An escaped `\<N>` stays literal (the
+        // backslash is dropped, no conum).
+        let input = "```ruby\nputs \"hi\" <1>\nx = 1 \\<2>\n```";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::SourceBlock { language: Some(Cow::Borrowed("ruby")) }),
+            Event::Text(Cow::Borrowed("puts \"hi\" ")),
+            Event::CalloutRef { num: 1, guard: Cow::Borrowed("") },
+            Event::SoftBreak,
+            // `\<2>` is escaped → literal `<2>` with the backslash removed.
+            Event::Text(Cow::Owned("x = 1 <2>".into())),
+            Event::End(TagEnd::SourceBlock),
+        ]);
     }
 
     #[test]
