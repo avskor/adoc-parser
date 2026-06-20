@@ -627,7 +627,7 @@ Follow-up'ы: F-L (backtick-literal/single-quote в compat); F-H (`skip-front-ma
   asciidoctor), clean-div 13→12, **0 регрессий** (new-vs-base = только enjoy). Зонды vs asciidoctor 2.0.23: space/comma/
   опции-порядок/multi-space/tab — все MATCH.
 - [x] **F-AG. Вложенная AsciiDoc-ячейка (`a|`) наследует `:compat-mode:`/`:experimental:`** (ветка
-  `feat/asciidoc-cell-inline-options`, смержена `?`, 2026-06-21). Запрос «начни следующую задачу из TODO.md». Топ clean-div
+  `feat/asciidoc-cell-inline-options`, смержена `ba9a11f`, ЗАПУШЕНО, ветка удалена, 2026-06-21). Запрос «начни следующую задачу из TODO.md». Топ clean-div
   `asciidoc-returns` (273) рекомендация помечала «compat-backtick passthrough» — **при триаже showdiff оказалось иначе**
   (урок [[feedback_frontier_triage]]): корень = `+gem+`/`+yum+` под `:compat-mode:` ВНУТРИ AsciiDoc-ячейки таблицы. Ячейка
   рендерилась через свежий `Parser::new(&raw)`, не наследовавший inline-влияющие doc-attrs внешнего документа → `+text+`

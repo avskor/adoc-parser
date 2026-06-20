@@ -1,6 +1,6 @@
 # Session context
 
-## Сессия (2026-06-21, 141-я) — F-AG вложенная AsciiDoc-ячейка наследует `:compat-mode:`/`:experimental:` (ветка `feat/asciidoc-cell-inline-options`, ЗАКОММИЧЕНО `cca5334`, ожидает мержа/пуша)
+## Сессия (2026-06-21, 141-я) — F-AG вложенная AsciiDoc-ячейка наследует `:compat-mode:`/`:experimental:` (ветка `feat/asciidoc-cell-inline-options`, СМЕРЖЕНА в master `ba9a11f`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`3e4e63d`). Frontier-проход (release из master): identical 221,
 clean-div 12 — точно как запись 140-й. Топ clean-div = `asciidoc-returns` (273), рекомендация (стр. 213) помечала
