@@ -1272,7 +1272,14 @@ impl HtmlRenderer {
                             // leading attribute entries don't hijack the outer
                             // document's `#header`/content-div placement.
                             self.cell_render_depth += 1;
-                            for ev in adoc_parser::Parser::new(&raw) {
+                            // Inherit inline-affecting document attributes
+                            // (`:compat-mode:`/`:experimental:`) so the embedded
+                            // cell parses inline markup like the outer document,
+                            // matching Asciidoctor's inner-document inheritance.
+                            let cell_opts = adoc_parser::InlineOptions::from_attr_lookup(
+                                |name| self.document_attrs.contains_key(name),
+                            );
+                            for ev in adoc_parser::Parser::new_with_inline_options(&raw, cell_opts) {
                                 self.push_event(output, ev);
                             }
                             self.cell_render_depth -= 1;

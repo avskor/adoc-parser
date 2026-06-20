@@ -1881,6 +1881,46 @@ fn test_asciidoc_cell_leading_attribute_entries_no_header_html() {
 }
 
 #[test]
+fn test_asciidoc_cell_inherits_inline_options_html() {
+    // An `a|` cell is an embedded document that inherits the outer document's
+    // attributes (asciidoctor inner-document semantics). Inline-affecting
+    // attributes set in the outer header — `:compat-mode:` (turns `+text+`
+    // into monospaced) and `:experimental:` (enables kbd:/btn:/menu:) — must
+    // therefore govern inline parsing inside the cell. Byte-for-byte with
+    // asciidoctor 2.0.23.
+
+    // compat-mode: constrained `+gem+` and unconstrained `++gem++` → <code>.
+    let html = to_html(":compat-mode:\n\n|===\na|\nUse +gem+ and ++run++ here.\n|===");
+    assert!(
+        html.contains("<p>Use <code>gem</code> and <code>run</code> here.</p>"),
+        "compat-mode +text+ must render monospaced inside the cell. Got:\n{html}"
+    );
+
+    // experimental: kbd: macro resolves inside the cell.
+    let html = to_html(":experimental:\n\n|===\na|\nPress kbd:[Ctrl] now.\n|===");
+    assert!(
+        html.contains("<p>Press <kbd>Ctrl</kbd> now.</p>"),
+        "experimental kbd: must resolve inside the cell. Got:\n{html}"
+    );
+
+    // Regression guard: without compat-mode the single-plus stays a literal
+    // passthrough (the `+` markers are dropped, no <code>).
+    let html = to_html("|===\na|\nUse +gem+ here.\n|===");
+    assert!(
+        html.contains("<p>Use gem here.</p>"),
+        "no compat-mode → +text+ stays literal. Got:\n{html}"
+    );
+
+    // Regression guard: the seeded options are still overridable by the cell's
+    // own attribute entries (a local `:compat-mode!:` turns it back off).
+    let html = to_html(":compat-mode:\n\n|===\na|\n:compat-mode!:\n\nUse +gem+ here.\n|===");
+    assert!(
+        html.contains("<p>Use gem here.</p>"),
+        "local :compat-mode!: must override the inherited flag. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_nested_bang_table_inside_asciidoc_cell_html() {
     // A `!===` table nested inside an `a` cell: the inner table uses `!` as its
     // cell separator (so it does not clash with the enclosing `|`), and its
