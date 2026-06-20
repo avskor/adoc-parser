@@ -1,5 +1,54 @@
 # Session context
 
+## Сессия (2026-06-21, 139-я) — F-AE callout-маркеры `<N>` в markdown ```-fence + escape `\<N>` (ветка `feat/markdown-fence-callouts`, СМЕРЖЕНА в master `1daa0eb`, ЗАПУШЕНО)
+
+Запрос «начни следующую задачу из TODO.md». F-AD уже смержена (`688a5bd`), master чист. Frontier-проход подтвердил
+рекомендацию (стр. 213): identical 220, clean-div 13. Триаж кандидатов через `showdiff.py`: asciidoclet 12 = multiline
+footnote (`]` на следующей строке → footnote дропается, `#footnotes` пуст — широкий/рискованный); mdbasics 3 = 2 класса
+(`\'`-escape + single-plus passthrough); github-0.1.4 50 = TOC-позиция; CHANGELOG 75 / multi-special-ex 87 = многоклассовые.
+**Выбран: callouts в markdown ```-fence** (рекомендован как чистый одноклассовый; естественное продолжение F-Q). Реализовано
+без AskUserQuestion/plan-mode (вынужденно-чистый, гейт-риск нулевой по конструкции). **Смержена `--no-ff` + запушено.**
+
+### Корень (ЧИСТО ПАРСЕР, 2 файла)
+- `block.rs::scan_markdown_code_fence` пушил сырой `Event::Text` БЕЗ `resolve_callouts_in_lines` (в отличие от
+  `scan_source_block`/`scan_verbatim_delimited_block`). Markdown ```-fence = verbatim source (content_model `:verbatim` =
+  `[:specialcharacters,:callouts]`) → `<N>` должен → conum. Фикс: добавлен `resolve_callouts_in_lines` +
+  `push_callout_events_resolved` (зеркало `scan_source_block`; `process_callouts` из VERBATIM-subs; reindent НЕ добавлен).
+- **ВАЖНО — обнаружено при new-vs-base:** фикс fence ВНЁС бы регрессию на ЭКРАНИРОВАННЫХ `\<N>` (0-1-4 demo-строки),
+  т.к. `strip_callout_markers` НЕ обрабатывал escape — ПРЕДСУЩЕСТВУЮЩИЙ баг, есть и в `scan_source_block` (`----`/`[source]`
+  тоже курлили `\<N>` в conum, проверено пробой). **ROOT-CAUSE фикс `scanner.rs::strip_callout_markers`:** `\<N>`/`\<!--N-->`
+  → НЕ conum, backslash дропается, маркер литерал (asciidoctor `CalloutSourceRx` escape-группа). Сигнатура → `Cow` (escape =
+  аллокация); `resolve_callouts_in_lines` обновлён (Borrowed делегирует, Owned реюзает при `len==len`). Escape слева от
+  реального (`\<1> <2>`): run стопится на escape (правый conum, левый литерал).
+
+### Ключевая ловушка (потратил время)
+- `cargo build --release -p adoc-html` НЕ пересобирает CLI-бинарник `adoc` (он в крейте **`adoc-cli`**)! Первая проба
+  не сработала из-за stale-бинарника. ВСЕГДА `cargo build --release -p adoc-cli` (или `--release` целиком) перед пробами.
+
+### Метрика (важно понимать)
+- `frontier_parity`/`ndiffs` = ПОЗИЦИОННЫЙ differ. Починка upstream-расхождения МОЖЕТ раздуть счётчик (downstream
+  переалайнивается). `enjoy` 59→227 — НЕ регрессия: единственное контент-изменение = 1 строка `<1>`→conum (байт-в-байт
+  asciidoctor), 227 = каскад предсущ. table-header ниже. ВСЕГДА верифицировать new-vs-base ПОСТРОЧНО vs asciidoctor.
+
+### Верификация (AIRTIGHT)
+- clippy 0; test --workspace зелёное (parser 618→**619**, html-compat фикстур +1: `block/markdown-fence-callouts`).
+  +1 parser event-vector + 5 escape-кейсов в `test_strip_callout_markers`.
+- **Гейт 344/344 байт-в-байт** vs master `688a5bd` (base /tmp/adoc_base из чистого master, gate_check 0 diff). В гейте
+  0 файлов с fence+callout И 0 с `\<N>` в verbatim → нулевой риск по конструкции.
+- **Frontier identical 220 (стабильно), clean-div 13 (стабильно)** — 0 флипов в обе стороны. new-vs-base = 3 файла,
+  ВСЕ байт-в-байт vs asciidoctor: `enjoy` (clean) `<1>`→conum; `0-1-4` (noise) IMPROVED 5053→**4752** (escape + conum +
+  front-matter `--- <1>` guard); `writers-guide` (noise) 2× `\<N>`→литерал (+10 артефакт, контент IMPROVED).
+- 6/6 CLI-проб MATCH: std `<N>` / autonum `<.>` / guard `# <1>` / escape `\<N>` / XML `\<!--N-->` / escape-в-`----`.
+
+### Дальше / follow-up (вне scope)
+- pathological `<1> \<2>` (escaped справа от реального — run стопится, левый не conum; нет в корпусе, base тоже неверен).
+- `enjoy` остаток = **implicit table-header** (первый ряд таблицы без пустой строки после → `<thead>`) — чистый
+  одноклассовый кандидат (рекомендация стр. 213).
+- Прочие clean-div: asciidoclet 12 (multiline footnote — широкий), mdbasics 3 (`\'`-escape + single-plus passthrough),
+  github-0.1.4 50 (TOC-позиция). Топ-каскады: asciidoc-returns 273, sample 152, manpage 146, index 136.
+
+---
+
 ## Сессия (2026-06-20, 138-я) — F-AD attrlist-constrained span откатывается от удвоенного маркера (ветка `fix/attrlist-constrained-doubled-marker`, ЗАКОММИЧЕНО на ветке, ожидает мержа/пуша)
 
 Запрос «начни следующую задачу из TODO.md». Сначала по предыдущему запросу смержена F-AC, запушен master (`892ce90`),
