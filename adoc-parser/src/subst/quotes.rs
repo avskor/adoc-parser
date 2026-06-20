@@ -459,12 +459,16 @@ fn attrlist_constrained(
     let rbrack = find_attr_close(bytes, lbrack)?;
     let (id, roles) = parse_attrs(&desentinelize(tags, &old[lbrack + 1..rbrack]))?;
     let marker_pos = rbrack + 1;
-    // single marker only (a doubled marker is the unconstrained form, which the
-    // earlier pass owns; legacy does not fall back from unconstrained to
-    // constrained for the attrlist form)
-    if bytes.get(marker_pos).copied() != Some(marker)
-        || bytes.get(marker_pos + 1).copied() == Some(marker)
-    {
+    // The char after `]` must be the marker. A *doubled* marker (`[.path]__x_`) is
+    // NOT rejected here: Asciidoctor runs the unconstrained pass (`__…__`) over the
+    // whole string before the constrained one, so any `[attr]__…__` that could be
+    // unconstrained has already been consumed — only forms whose unconstrained
+    // close (`__`) is missing survive to here, and Asciidoctor's constrained
+    // `_(\S|\S.*?\S)_` then matches them with the leading second marker folded into
+    // the content (`[.path]__config_` → `<em class="path">_config</em>`). Mirroring
+    // that fall-through requires no doubled-marker guard; the single opening marker
+    // is consumed and the rest (incl. the second marker) becomes content.
+    if bytes.get(marker_pos).copied() != Some(marker) {
         return None;
     }
     let content_start = marker_pos + 1;

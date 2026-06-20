@@ -1,0 +1,9 @@
+You can define attributes in the [.path]__config/site.yml_ file.
+
+A leading-marker role span [.path]__leading_ stays constrained.
+
+The single-marker form [.path]_/images_ is unchanged.
+
+Generic over markers: [.r]**bold_x*, [.r]``code_x`, [.r]##mark_x#.
+
+The closed unconstrained form [.r]__closed__ is still owned by the earlier pass.
