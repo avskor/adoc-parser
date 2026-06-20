@@ -1,0 +1,12 @@
+.Method description
+[cols="1m,2" options="header"]
+|===
+|Name
+|Description
+
+|render
+|Parse the AsciiDoc content into a Document and render it.
+
+|renderFile
+|Parse the content of an AsciiDoc file and render it.
+|===
