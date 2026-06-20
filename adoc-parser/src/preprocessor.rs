@@ -759,9 +759,22 @@ pub fn preprocess_with_attrs(
     // untouched (until the next blank line ends the block).
     let mut verbatim_para_pending = false;
     let mut in_verbatim_para = false;
+    // Indented literal paragraph: at a block boundary (document start, after a
+    // blank line, or after a delimited/fence close), a non-blank line that
+    // starts with a space or tab opens a literal paragraph. Asciidoctor gives
+    // literal blocks only specialchars subs, so counter macros, attribute
+    // entries and attrlist references inside them stay literal. An indented line
+    // that merely *continues* a preceding non-blank line is wrapped paragraph
+    // text (where counters DO resolve), so detection keys on the block boundary,
+    // not on indentation alone. `at_boundary` tracks whether the previously
+    // emitted output line ended a block; reader-level lines (conditionals,
+    // includes) emit nothing and leave it unchanged.
+    let mut at_boundary = true;
+    let mut in_indented_literal = false;
 
     while let Some(line) = lines_iter.next() {
         let trimmed = line.trim();
+        let line_is_blank = trimmed.is_empty();
         // Conditional directives (`ifdef`/`ifndef`/`ifeval`/`endif`) are only
         // recognized at column 0. An INDENTED directive is literal text — this
         // is how authors keep `ifdef::`/`endif::` lines verbatim inside a
@@ -781,6 +794,7 @@ pub fn preprocess_with_attrs(
             if !is_skipping(&skip_stack) {
                 output.push_str(rest);
                 output.push('\n');
+                at_boundary = false;
             }
             continue;
         }
@@ -809,6 +823,7 @@ pub fn preprocess_with_attrs(
                     if condition_met && !is_skipping(&skip_stack) {
                         output.push_str(content);
                         output.push('\n');
+                        at_boundary = content.trim().is_empty();
                     }
                 }
                 None => {
@@ -844,6 +859,7 @@ pub fn preprocess_with_attrs(
             } else {
                 output.push_str(line);
                 output.push('\n');
+                at_boundary = false;
                 continue;
             }
         }
@@ -864,6 +880,9 @@ pub fn preprocess_with_attrs(
                 }
                 output.push_str(line);
                 output.push('\n');
+                // A closing delimiter ends a block: a following indented line
+                // opens a literal paragraph, mirroring Asciidoctor.
+                at_boundary = closes;
                 continue;
             }
             None => {
@@ -873,15 +892,39 @@ pub fn preprocess_with_attrs(
                         verbatim_fence = Some(VerbatimFence::Adoc(dt, dl));
                         output.push_str(line);
                         output.push('\n');
+                        at_boundary = false;
                         continue;
                     }
                 } else if let Some((c, _)) = crate::scanner::is_markdown_code_fence(line) {
                     verbatim_fence = Some(VerbatimFence::Markdown(c));
                     output.push_str(line);
                     output.push('\n');
+                    at_boundary = false;
                     continue;
                 }
             }
+        }
+
+        // 4c. Indented literal paragraph: a non-blank, space/tab-indented line at
+        //     a block boundary opens a literal paragraph that runs until the next
+        //     blank line. Its lines are emitted untouched — no counter expansion,
+        //     no attribute entries, no attrlist substitution (Asciidoctor applies
+        //     only specialchars subs to literal blocks). A blank line ends it.
+        if in_indented_literal {
+            if line_is_blank {
+                in_indented_literal = false; // blank ends it; emitted normally below
+            } else {
+                output.push_str(line);
+                output.push('\n');
+                at_boundary = false;
+                continue;
+            }
+        } else if at_boundary && !line_is_blank && line.starts_with([' ', '\t']) {
+            in_indented_literal = true;
+            output.push_str(line);
+            output.push('\n');
+            at_boundary = false;
+            continue;
         }
 
         // 5a. Expand counters
@@ -927,12 +970,14 @@ pub fn preprocess_with_attrs(
                     attributes.remove(name);
                 }
             }
+            at_boundary = false;
             continue;
         }
 
         // 6. Output the line
         output.push_str(&effective_line);
         output.push('\n');
+        at_boundary = line_is_blank;
         // A verbatim-style block-attr line arms the styled-paragraph tracking in
         // 4a so the following plain paragraph (if any) is treated as verbatim.
         if is_verbatim_style_attr_line(&effective_line) {
@@ -2228,6 +2273,51 @@ end::foo[]";
             preprocess(input),
             "-----\n{counter:x}\n----\n{counter:x}\n-----\n1\n"
         );
+    }
+
+    #[test]
+    fn test_counters_and_attr_entries_untouched_in_indented_literal() {
+        // An indented (space/tab) line at a block boundary opens a literal
+        // paragraph; Asciidoctor gives it only specialchars subs, so counters,
+        // attribute entries and `[…]` attrlists inside stay literal (probe-
+        // verified vs asciidoctor 2.0.23).
+
+        // After a blank line → literal: counter stays literal.
+        assert_eq!(
+            preprocess("text\n\n {counter:x}\n"),
+            "text\n\n {counter:x}\n"
+        );
+
+        // Wrapped continuation (no blank before the indented line) → normal
+        // paragraph text, counter DOES resolve.
+        assert_eq!(preprocess("text\n  {counter:y}\n"), "text\n  1\n");
+
+        // Indented attribute entry after a blank stays literal (not consumed as
+        // an attribute definition) — the reference below it stays unresolved.
+        assert_eq!(
+            preprocess("text\n\n :foo: bar\n\n{foo}\n"),
+            "text\n\n :foo: bar\n\n{foo}\n"
+        );
+
+        // A delimited-block close is also a block boundary: an immediately
+        // following indented line (no blank) opens a literal paragraph.
+        assert_eq!(
+            preprocess("text\n\n----\nlisting\n----\n {counter:q}\n"),
+            "text\n\n----\nlisting\n----\n {counter:q}\n"
+        );
+
+        // Multi-line literal stays literal; the next flush-left line after a
+        // blank resolves normally.
+        assert_eq!(
+            preprocess("p\n\n {counter:a}\n {counter:a}\n\nafter {counter:a}\n"),
+            "p\n\n {counter:a}\n {counter:a}\n\nafter 1\n"
+        );
+
+        // Regression guard: a column-0 counter still resolves.
+        assert_eq!(preprocess("p\n\n{counter:b}\n"), "p\n\n1\n");
+
+        // Tab indentation behaves like space indentation.
+        assert_eq!(preprocess("p\n\n\t{counter:t}\n"), "p\n\n\t{counter:t}\n");
     }
 
     #[test]
