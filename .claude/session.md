@@ -1,5 +1,51 @@
 # Session context
 
+## Сессия (2026-06-21, 141-я) — F-AG вложенная AsciiDoc-ячейка наследует `:compat-mode:`/`:experimental:` (ветка `feat/asciidoc-cell-inline-options`, ЗАКОММИЧЕНО `cca5334`, ожидает мержа/пуша)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`3e4e63d`). Frontier-проход (release из master): identical 221,
+clean-div 12 — точно как запись 140-й. Топ clean-div = `asciidoc-returns` (273), рекомендация (стр. 213) помечала
+«compat-backtick passthrough» (follow-up F-L'). **При триаже через showdiff оказалось иначе** (снова урок: не доверять метке).
+Реализовано без AskUserQuestion/plan-mode (вынужденно-чистый, гейт-риск нулевой по конструкции). **Закоммичено; ожидает мержа/пуша.**
+
+### Диагностика (метка рекомендации опять была неточна)
+- showdiff asciidoc-returns: первое расхождение [245] = `+gem+` → ADOC `<code>gem</code>`, OUR литерал `gem`. Источник имеет
+  `:compat-mode:` (стр. 6) + `+gem+` (стр. 58/101). F-L (`+text+`→`<code>` в compat) — РАБОТАЕТ на top-level (минимальный
+  репро `:compat-mode:\n\n+gem+` дал `<code>`).
+- Бисекция: header(1-12)+параграф → OK. Полный файл → литерал. Падающий параграф лежит ВНУТРИ AsciiDoc-ячейки (`a|`
+  «Rendered HTML Output», стр. 91-115 — `++++`pass + секции + `+gem+`/`+yum+`). Минимальный репро
+  `:compat-mode:\n\n|===\na|\nUse +gem+ command.\n|===` → OUR `gem` литерал, ADOC `<code>gem</code>` → ПОДТВЕРЖДЕНО:
+  **вложенная AsciiDoc-ячейка не наследует compat-mode**.
+
+### Корень (РЕНДЕРЕР + 1 конструктор парсера)
+- `adoc-html/events.rs` `CellStyle::AsciiDoc` арм рендерил cell через свежий `adoc_parser::Parser::new(&raw)` — НЕ
+  наследовал inline-влияющие doc-attrs. Asciidoctor парсит `a|`-ячейку как inner document, наследующий атрибуты родителя.
+  Attr-рефы `{x}` уже резолвились (через `document_attrs` рендерера), но решение «`+text+` = passthrough или monospace» —
+  парс-тайм во вложенном парсере, который compat-mode не знал.
+- **Фикс:** (1) `parser.rs` — новый `Parser::new_with_inline_options(input, options)` (`Self { inline_options: options,
+  ..Self::new(input) }`); seed остаётся изменяемым `apply_attribute` от локальных attribute-entries ячейки. (2) `events.rs` —
+  `InlineOptions::from_attr_lookup(|n| self.document_attrs.contains_key(n))` → во вложенный cell-парсер. Покрывает compat-mode
+  (`+text+`/`++text++`/`'em'`) И experimental (`kbd:`/`btn:`/`menu:`).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 620→**621**, html unit 478→**479**). +1 parser
+  (`seeds_compat_mode_inline_options`) +1 html (`test_asciidoc_cell_inherits_inline_options_html`, 4 кейса вкл. 2 регресс-гарда).
+- **Гейт 344/344 байт-в-байт** vs master `3e4e63d` (`gate_check.py` 0 diff). Нет активного compat/experimental в РЕАЛЬНЫХ
+  header'ах гейта — единственный `:compat-mode:` (`literal-monospace.adoc`) лежит в listing-примерах (стр. 49-51/97-99),
+  не парсится; `a|`-ячеек в нём нет → нулевой риск по конструкции.
+- **Frontier identical 221 (стабильно):** asciidoc-returns НЕ флипнул (остаток 12 — footnote-класс), но 273→12. new-vs-base
+  по всем 250 = **РОВНО 1 файл, IMPROVED, 0 регрессий** (`asciidoc-returns-to-github` 273→12).
+- 7 CLI-проб vs asciidoctor 2.0.23: compat `+`/`++`/`'em'` в ячейке, experimental `kbd:` в ячейке, 3 регресс-гарда
+  (no-compat литерал, experimental-off литерал, локальный `:compat-mode!:` override в ячейке) — все MATCH.
+
+### Дальше (чистых одно-классовых кандидатов не осталось)
+- Топ clean-div: sample 152 (header), manpage 146 (doctype manpage), index 136, debuter 118, multi-special-ex 87,
+  CHANGELOG 75, github-0.1.4 50 (TOC-позиция), asciidoclet 12 (multiline footnote — широкий), asciidoc-returns 12
+  (footnote attr-ref-значение-link-макрос — остаток F-AG), mdbasics 3 (`\'`-escape + single-plus pass).
+- Follow-up F-AG: `source-language`/полные doc_attrs во вложенной ячейке (block-уровень, отдельный seed `doc_attrs`).
+- diff=1 intrinsic (не actionable): doctime-localtime (`{localtime}`), migration (`{asciidoctor-version}`).
+
+---
+
 ## Сессия (2026-06-21, 140-я) — F-AF пробел после quoted-значения разделяет атрибуты в attrlist (ветка `feat/implicit-table-header`, СМЕРЖЕНА в master `c0fd8c5`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». F-AE уже смержена (`1daa0eb`/merge `417a949`), master чист. Frontier-проход
