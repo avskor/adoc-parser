@@ -45,6 +45,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Like [`Parser::new`], but seeds the initial inline-parsing options from an
+    /// enclosing document. Asciidoctor parses the body of an AsciiDoc table cell
+    /// (`a|`) as an inner document that inherits the parent's attributes, so
+    /// `:compat-mode:`/`:experimental:` set in the outer header must also govern
+    /// inline parsing inside the cell. The seeded options are still updated by any
+    /// attribute entries the cell content carries (e.g. a local `:compat-mode!:`).
+    pub fn new_with_inline_options(input: &'a str, options: InlineOptions) -> Self {
+        Self {
+            inline_options: options,
+            ..Self::new(input)
+        }
+    }
+
     fn next_block_event(&mut self) -> Option<Event<'a>> {
         self.pending_event.take().or_else(|| self.block_scanner.next())
     }
@@ -240,6 +253,27 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::Text(t) if t.contains('\u{feff}'))),
             "interior BOM must be preserved, got {events:?}"
+        );
+    }
+
+    /// `new_with_inline_options` seeds compat-mode so `+text+` is parsed as a
+    /// monospaced span (`Tag::Monospace`) instead of a single-plus passthrough —
+    /// the channel through which an AsciiDoc table cell inherits the outer
+    /// document's `:compat-mode:`.
+    #[test]
+    fn seeds_compat_mode_inline_options() {
+        let opts = InlineOptions { compat_mode: true, ..Default::default() };
+        let seeded: Vec<_> = Parser::new_with_inline_options("use +gem+", opts).collect();
+        assert!(
+            seeded.iter().any(|e| matches!(e, Event::Start(Tag::Monospace { .. }))),
+            "compat-mode +gem+ must open a Monospace span, got {seeded:?}"
+        );
+        // Default options leave `+gem+` a passthrough: it never opens a
+        // Monospace span.
+        let plain: Vec<_> = Parser::new("use +gem+").collect();
+        assert!(
+            !plain.iter().any(|e| matches!(e, Event::Start(Tag::Monospace { .. }))),
+            "without compat-mode +gem+ must not open a Monospace span, got {plain:?}"
         );
     }
 }
