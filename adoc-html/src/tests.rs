@@ -1283,6 +1283,20 @@ fn test_toc_preamble() {
     let toc_pos = html.find("<div id=\"toc\"").unwrap();
     let section_pos = html.find("<div class=\"sect1\"").unwrap();
     assert!(toc_pos < section_pos, "TOC should be before first section");
+    // The TOC sits inside the preamble div, between the sectionbody close and the
+    // preamble close (Asciidoctor's convert_preamble), not as a sibling after it.
+    // Verify by div-balance: the preamble div must still be open at the TOC, i.e.
+    // there are more `<div` opens than `</div>` closes between them.
+    let preamble = html.find("<div id=\"preamble\">").expect("preamble wrapper");
+    assert!(preamble < toc_pos, "TOC must come after the preamble open");
+    let between = &html[preamble..toc_pos];
+    let opens = between.matches("<div").count();
+    let closes = between.matches("</div>").count();
+    assert!(
+        opens > closes,
+        "preamble div must still be open at the TOC (TOC nested inside preamble), \
+         opens={opens} closes={closes}. Got:\n{html}"
+    );
 }
 
 #[test]
