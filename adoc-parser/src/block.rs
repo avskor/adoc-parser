@@ -72,6 +72,16 @@ fn is_discrete_style(style: &str) -> bool {
     matches!(style, "discrete" | "float")
 }
 
+/// A line shaped like a block attribute list / anchor (`[...]`). Asciidoctor
+/// consumes these as block metadata before any section-title check, so such a
+/// line can never be the title line of a setext (underlined) heading — even
+/// when the bracket content is non-ASCII (e.g. `[注意]`), which the ASCII-only
+/// [`scanner::is_block_attribute`] does not recognise as an attribute list.
+fn is_bracketed_attr_line(line: &str) -> bool {
+    let t = line.trim_end();
+    t.len() >= 2 && t.starts_with('[') && t.ends_with(']')
+}
+
 /// Reindent verbatim block content per the `indent` attribute, mirroring
 /// Asciidoctor's `adjust_indentation!`: with `indent == 0` the common leading
 /// indentation is stripped; with `indent > 0` it is replaced by `indent`
@@ -828,13 +838,31 @@ impl<'a> BlockScanner<'a> {
 
         // Document header detection: `= Title` or `# Title` before any body content
         // Skip if [discrete] attribute is pending — treat as discrete heading instead
+        let pending_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
+            a.positional.first().is_some_and(|s| is_discrete_style(s))
+        });
         if !self.header_emitted && !self.body_started
             && let Some((1, title)) = scanner::strip_any_section_marker(line)
-            && !self.pending_block_attrs.as_ref().is_some_and(|a| {
-                a.positional.first().is_some_and(|s| is_discrete_style(s))
-            })
+            && !pending_discrete
         {
-                return Some(self.scan_document_header(title));
+                return Some(self.scan_document_header(title, false));
+        }
+
+        // Two-line (setext) document title: a level-0 underline (`Title` over a
+        // uniform line of `=`). Asciidoctor consumes block metadata (block
+        // attribute lines `[…]`, attribute entries `:x:`, block titles `.t`)
+        // BEFORE checking for a section/document title, so a metadata line is
+        // never the underlined title — exclude those shapes here (`.t` is
+        // already rejected inside `strip_setext_title`).
+        if !self.header_emitted && !self.body_started
+            && !pending_discrete
+            && !is_bracketed_attr_line(line)
+            && scanner::is_attribute_entry(line).is_none()
+            && let Some(next) = self.lines.get(self.pos + 1).copied()
+            && !self.line_closes_open_delimited_block(next)
+            && let Some((1, title)) = scanner::strip_setext_title(line, next)
+        {
+            return Some(self.scan_document_header(title, true));
         }
 
         // Attribute-only document header: starts with attribute entries but no `= Title` yet
@@ -985,7 +1013,28 @@ impl<'a> BlockScanner<'a> {
 
         // Section heading `== Title` or `## Title`
         if let Some((level, title)) = scanner::strip_any_section_marker(line) {
-            return Some(self.scan_section(level, title));
+            return Some(self.scan_section(level, title, false));
+        }
+
+        // Two-line (setext) section heading `Title` over a uniform underline.
+        // Asciidoctor only detects regular section titles at section level
+        // (`is_next_line_section?` ahead of `next_block`), never inside a
+        // delimited block — there `next_block` runs and recognises an
+        // underlined title only when `[discrete]`/`[float]` is pending (its
+        // floating-title branch). Mirror that: fire outside delimited blocks,
+        // or inside one only with a pending discrete/float style. Also skip
+        // when the underline candidate actually closes the enclosing block
+        // (its content reader would never expose that terminator line).
+        let pending_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
+            a.positional.first().is_some_and(|s| is_discrete_style(s))
+        });
+        if (!self.is_inside_delimited_block() || pending_discrete)
+            && !is_bracketed_attr_line(line)
+            && let Some(next) = self.lines.get(self.pos + 1).copied()
+            && !self.line_closes_open_delimited_block(next)
+            && let Some((level, title)) = scanner::strip_setext_title(line, next)
+        {
+            return Some(self.scan_section(level, title, true));
         }
 
         // TOC macro `toc::[]` — distinct from the `:toc:`-attribute auto TOC so
@@ -1418,7 +1467,7 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
-    fn scan_document_header(&mut self, title: &'a str) -> Option<Event<'a>> {
+    fn scan_document_header(&mut self, title: &'a str, setext: bool) -> Option<Event<'a>> {
         self.header_emitted = true;
         self.advance();
 
@@ -1426,6 +1475,22 @@ impl<'a> BlockScanner<'a> {
 
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
+
+        // A setext (underlined) doctitle: consume the underline line and turn on
+        // compat-mode for the whole document, mirroring Asciidoctor's parser.rb
+        // ("default to compat-mode if document has setext doctitle"). The
+        // attribute is emitted ahead of the body so the inline parser switches
+        // QUOTE_SUBS before any body text is substituted.
+        if setext {
+            self.advance();
+            if !self.doc_attrs.contains_key("compat-mode") {
+                self.doc_attrs.insert("compat-mode".to_string(), String::new());
+                header_events.push(Event::Attribute {
+                    name: Cow::Borrowed("compat-mode"),
+                    value: Cow::Borrowed(""),
+                });
+            }
+        }
 
         // Author line: the non-blank, non-attribute-entry line DIRECTLY after
         // the title — ANY line, even one shaped like a section marker (`== Sec`
@@ -1664,14 +1729,32 @@ impl<'a> BlockScanner<'a> {
         self.context_stack.iter().any(|ctx| matches!(ctx, BlockContext::DelimitedBlock { .. }))
     }
 
-    fn scan_section(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
+    /// Whether `line` would close an open delimited block (matches an enclosing
+    /// `DelimitedBlock` context by kind and delimiter length). Used to stop a
+    /// setext underline probe from mistaking a block's closing delimiter for a
+    /// title underline: in Asciidoctor a compound block's content reader is
+    /// bounded by its terminator, so the line after the last content line is
+    /// never visible as a setext underline (`Title` inside `====`…`====` before
+    /// the closing `====` stays a paragraph, not an `<h1>`).
+    fn line_closes_open_delimited_block(&self, line: &str) -> bool {
+        if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
+            self.context_stack.iter().any(|ctx| {
+                matches!(ctx, BlockContext::DelimitedBlock { kind, delimiter_len, .. }
+                    if *kind == delim_type && *delimiter_len == delim_len)
+            })
+        } else {
+            false
+        }
+    }
+
+    fn scan_section(&mut self, level: u8, title: &'a str, setext: bool) -> Option<Event<'a>> {
         let is_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
             a.positional.first().is_some_and(|s| is_discrete_style(s))
         });
         let inside_delimited = self.is_inside_delimited_block();
 
         if is_discrete || inside_delimited {
-            return self.scan_discrete_heading(level, title);
+            return self.scan_discrete_heading(level, title, setext);
         }
 
         // Apply leveloffset to section level
@@ -1706,6 +1789,10 @@ impl<'a> BlockScanner<'a> {
         }
 
         self.advance();
+        if setext {
+            // Consume the underline line as well.
+            self.advance();
+        }
         let list_close_events = self.close_list_contexts();
         // Any section heading ends an open part intro before section closing.
         let mut close_events = Vec::new();
@@ -1762,8 +1849,12 @@ impl<'a> BlockScanner<'a> {
         self.event_buffer.pop()
     }
 
-    fn scan_discrete_heading(&mut self, level: u8, title: &'a str) -> Option<Event<'a>> {
+    fn scan_discrete_heading(&mut self, level: u8, title: &'a str, setext: bool) -> Option<Event<'a>> {
         self.advance();
+        if setext {
+            // Consume the underline line as well.
+            self.advance();
+        }
         let mut block_attrs = self.pending_block_attrs.take();
         let title_events = self.take_pending_block_title();
 
@@ -4670,6 +4761,84 @@ mod tests {
             Event::Text(Cow::Borrowed("Content.")),
             Event::End(TagEnd::Paragraph),
         ]);
+    }
+
+    #[test]
+    fn test_setext_document_header() {
+        // A two-line (underlined) doctitle is recognized and turns on
+        // compat-mode for the whole document (Asciidoctor parser.rb).
+        let input = "Document Title\n==============\n\nContent.";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Header),
+            Event::Start(Tag::SectionTitle { level: 0, id: Cow::Owned("_document_title".into()) }),
+            Event::Start(Tag::DocumentTitle),
+            Event::Text(Cow::Borrowed("Document Title")),
+            Event::End(TagEnd::DocumentTitle),
+            Event::End(TagEnd::SectionTitle),
+            Event::Attribute { name: Cow::Borrowed("compat-mode"), value: Cow::Borrowed("") },
+            Event::End(TagEnd::Header),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("Content.")),
+            Event::End(TagEnd::Paragraph),
+        ]);
+    }
+
+    #[test]
+    fn test_setext_section() {
+        // A two-line section title under an (atx) doctitle: `-` underline → level 2.
+        let input = "= Doc\n\nSection\n-------\n\nbody";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::Header),
+            Event::Start(Tag::SectionTitle { level: 0, id: Cow::Owned("_doc".into()) }),
+            Event::Start(Tag::DocumentTitle),
+            Event::Text(Cow::Borrowed("Doc")),
+            Event::End(TagEnd::DocumentTitle),
+            Event::End(TagEnd::SectionTitle),
+            Event::End(TagEnd::Header),
+            Event::Start(Tag::Section { level: 2 }),
+            Event::Start(Tag::SectionTitle { level: 2, id: Cow::Owned("_section".into()) }),
+            Event::Text(Cow::Borrowed("Section")),
+            Event::End(TagEnd::SectionTitle),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("body")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::Section { level: 2 }),
+        ]);
+    }
+
+    #[test]
+    fn test_setext_underline_not_confused_with_block_terminator() {
+        // `2.3` sits before the closing `====` of an example block; the closing
+        // delimiter must not be read as a setext underline (stays a paragraph).
+        let input = "====\n2.3\n====";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Example }),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("2.3")),
+            Event::End(TagEnd::Paragraph),
+            Event::End(TagEnd::DelimitedBlock),
+        ]);
+    }
+
+    #[test]
+    fn test_setext_does_not_eat_bracketed_attr_line() {
+        // A block-attribute-shaped line above a `====` example delimiter is
+        // metadata, not a setext title — even when the bracket content is
+        // non-ASCII (`[注意]`), which `is_block_attribute` does not parse.
+        // It must open an example block, not a heading.
+        let input = "[注意]\n====\nbody\n====";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert!(
+            events.iter().any(|e| matches!(e, Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Example }))),
+            "should open an example block, got: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Start(Tag::SectionTitle { .. }) | Event::Start(Tag::Heading { .. }))),
+            "bracketed line must not become a heading, got: {events:?}"
+        );
     }
 
     #[test]
