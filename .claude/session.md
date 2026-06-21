@@ -41,13 +41,34 @@ Seed-набор на macros-время = только {Passthrough, Literal, Cha
 - **10/10 CLI-проб == asciidoctor 2.0.23** (link/xref/`<<>>`/mailto/autolink label с passthrough/escape/char-ref).
 - Снято: 2 `span_has_sentinel`-punt (xref/mailto) + 2 label `flag_punt` (try_link/try_autolink).
 
+### ФАЗА 2 (СДЕЛАНО) — verbatim-реконструкция: image/icon/stem/kbd/btn/menu/quoted-menu/anchor/index-term
+- Новый `restore_verbatim(work, s: Cow) -> Option<Cow>`: вклеивает passthrough-контент + `Literal`; char-ref/структурный →
+  None (punt). НЕ `desentinelize` целиком — char-ref пантим (его escape-семантика семейство-зависима: stem экранирует
+  `&`→`&amp;#233;`, image-alt сохраняет `&#233;`).
+- **КЛЮЧ (split-order):** делимитер-split (`,` anchor/index, `>` меню) по ИСХОДНИКУ (sentinel без делимитеров) → ПОТОМ
+  реконструировать каждую часть. Иначе `++a,b++` ошибочно разбился бы. quoted-menu сегменты → `reparse_seeded` (MACROS ON,
+  обобщил `reparse_label`→`reparse_seeded`).
+- Все matcher'ы получили `work: &Work`. `span_has_sentinel`-punt снят с 9 семейств; ОСТАЛСЯ ТОЛЬКО footnote.
+- Исправлены реальные баги синтетики: `kbd:[++Ctrl++]` (база→мусор `<kbd></kbd>+...`), `image:[++a b++]`→`alt="a b"`,
+  `stem:[++x++]`, `btn:[++OK__x++]`, menu-item.
+- **Остаточные дивергенции (НЕ регрессии, ПРЕДСУЩЕСТВУЮТ, не связаны с passthrough):** (1) escape `\*` в image-alt не
+  снимается (new==base==`\*x*`, adoc `*x*`); (2) URL-кодирование пробела в image-src (`a%20b` vs adoc `a b`; но new>base
+  `++a%20b++`); (3) bibliography-anchor рендерит `[label]` инлайн vs adoc `[<a>]` (base==new для plain). Все = отдельные
+  рендерер-issues, new ≥ base.
+- +1 parser (`verbatim_macro_passthrough_reconstructed_natively`) +1 html (`test_verbatim_macro_passthrough_reconstruction_html`).
+
+### Верификация Фазы 2 (AIRTIGHT)
+clippy 0; test --workspace **1241** зелёных; doc (broken_intra_doc_links) чист (только предсущ. `double`-warning из escape.rs);
+**гейт 344/344** + **frontier 0-diff (250)** — в корпусе 0 verbatim-with-sentinel конструктов (только в `.rb`, не парсится);
+CLI-пробы == asciidoctor 2.0.23 для passthrough/escape во всех 9 семействах.
+
 ### NEXT
-- **ФАЗА 2 (verbatim-семейства):** image-alt/icon/footnote/stem/anchor/index/UI всё ещё пантят на ЛЮБОМ span-sentinel через
-  `span_has_sentinel`. Конверсия: реконструировать verbatim-строку контента через `desentinelize(work.tags, span_content)`
-  вместо punt. КАЖДОЕ семейство верифицировать пробами vs asciidoctor (семантика passthrough в alt/footnote нюансна).
-- **ФАЗА 3:** footnote parser↔renderer (registry/numbering в рендере).
-- Коммит Фазы 1 на ветке (чекпойнт). **Merge в master --no-ff + push — ПО ЗАПРОСУ** (НЕ делать без спроса). base `/tmp/adoc_base`
-  = чистый master `cf79b7c`.
+- **ФАЗА 3 (footnote, ОТЛОЖЕНА — нужен parser↔renderer редизайн):** footnote пантит, т.к. рендерер `render_footnote_text`
+  (lib.rs:611) РЕ-ПАРСИТ текст полным inline-проходом → нужен СЫРОЙ `++raw++` (restore дал бы контент `raw`, рендерер
+  ре-substitute'нул бы `__`→emphasis = БАГ). Сырьё невосстановимо. Решение: Footnote-событие несёт pre-parsed события (крупно,
+  трогает оба движка + рендерер + footnote_registry).
+- Коммит Фаз 1+2 на ветке (чекпойнты `fc3ddd4` + след.). **Merge в master --no-ff + push — ПО ЗАПРОСУ** (НЕ без спроса).
+  base `/tmp/adoc_base` = чистый master `cf79b7c`.
 
 ---
 

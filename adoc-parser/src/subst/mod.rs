@@ -1658,6 +1658,50 @@ mod tests {
         }
     }
 
+    /// A passthrough inside a verbatim leaf macro's content (image alt/target,
+    /// stem, kbd/btn label, index term) is no longer punted: [`macros`] restores
+    /// the passthrough's protected content into the verbatim attribute, so the
+    /// engine forms the macro natively. Asserted on the engine's own events here
+    /// (legacy diverges — it kept the raw `++…++` markers); the rendered HTML
+    /// matches Asciidoctor, covered in `adoc-html`.
+    #[test]
+    fn verbatim_macro_passthrough_reconstructed_natively() {
+        // image alt: the protected `a b` (space intact) reaches the alt field.
+        let img = pipeline("image:i.png[++a b++]");
+        assert!(
+            matches!(
+                img.as_slice(),
+                [Event::Start(Tag::InlineImage { alt, .. }), Event::End(TagEnd::InlineImage)]
+                    if alt.as_ref() == "a b"
+            ),
+            "{img:?}"
+        );
+        // stem content restored verbatim (no `++` markers).
+        assert_eq!(
+            pipeline("stem:[++x++]"),
+            vec![
+                Event::Start(Tag::Stem { variant: std::borrow::Cow::Borrowed("stem") }),
+                Event::Text(std::borrow::Cow::Borrowed("x")),
+                Event::End(TagEnd::Stem),
+            ]
+        );
+        // kbd content `Ctrl` is one verbatim key (legacy mangled `++Ctrl++` on `+`).
+        assert_eq!(
+            pipeline_exp("kbd:[++Ctrl++]"),
+            vec![
+                Event::Start(Tag::Keyboard),
+                Event::Text(std::borrow::Cow::Borrowed("Ctrl")),
+                Event::End(TagEnd::Keyboard),
+            ]
+        );
+        // A char-ref inside a verbatim macro still punts (family-specific) — the
+        // engine declines so the paragraph falls back to legacy.
+        assert!(
+            try_parse("stem:[caf&#233;]", SubstitutionSet::NORMAL, InlineOptions::default())
+                .is_none()
+        );
+    }
+
     /// With the leaf macros ported (`icon:name[attrs]` and the STEM family
     /// `stem:[…]` / `latexmath:[…]` / `asciimath:[…]`), the pipeline must reproduce
     /// legacy on every form: the bare and attrlist-bearing icon, the three STEM
