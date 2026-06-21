@@ -1122,6 +1122,50 @@ pub fn strip_any_section_marker(line: &str) -> Option<(u8, &str)> {
     strip_section_marker(line).or_else(|| strip_markdown_heading(line))
 }
 
+/// Two-line (setext / underlined) section title. `line1` is the candidate
+/// title, `line2` the candidate underline. Mirrors Asciidoctor's
+/// `setext_section_title?` (parser.rb): `line2` must be a uniform run whose
+/// first char selects the level (`=`→0, `-`→1, `~`→2, `^`→3, `+`→4), `line1`
+/// must match `SetextSectionTitleRx` (`/^((?!\.)…[[:alnum:]]…)$/` — not starting
+/// with `.`, containing at least one alphanumeric), and the (rstripped)
+/// character-lengths of the two lines must differ by less than 2.
+///
+/// Returns the PARSER level (1-based, matching [`strip_section_marker`]: a
+/// level-0 Asciidoctor underline maps to parser level 1 = the document title,
+/// `-`→2, `~`→3, `^`→4, `+`→5) and the full rstripped `line1` as the title.
+/// Both lines are read rstripped, matching Asciidoctor's `Reader`.
+pub fn strip_setext_title<'a>(line1: &'a str, line2: &str) -> Option<(u8, &'a str)> {
+    let underline = line2.trim_end();
+    let &first = underline.as_bytes().first()?;
+    let level = match first {
+        b'=' => 1u8,
+        b'-' => 2,
+        b'~' => 3,
+        b'^' => 4,
+        b'+' => 5,
+        _ => return None,
+    };
+    // Underline must be uniform: every byte equals the first.
+    if !underline.bytes().all(|b| b == first) {
+        return None;
+    }
+    let title = line1.trim_end();
+    // `(?!\.)`: a title line beginning with `.` is a block title, not a section.
+    if title.starts_with('.') {
+        return None;
+    }
+    // Must contain at least one alphanumeric (Unicode-aware, mirroring CG_ALNUM).
+    if !title.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    // Length tolerance: `|len(line1) - len(line2)| < 2` over CHARACTER counts
+    // (Ruby `String#length`); the underline is ASCII so its byte/char counts match.
+    if title.chars().count().abs_diff(underline.chars().count()) >= 2 {
+        return None;
+    }
+    Some((level, title))
+}
+
 /// Asciidoctor default alt for an inline icon in text mode:
 /// `File.basename(name, File.extname(name)).tr('_-', ' ')` — drop the directory
 /// (everything up to the last `/`), drop the trailing `.ext`, then replace `_`/`-`
@@ -2707,5 +2751,36 @@ mod tests {
         // Indented markers fall through to a literal paragraph (column 0 only).
         assert_eq!(strip_any_section_marker(" == Indented"), None);
         assert_eq!(strip_any_section_marker("  ## Indented"), None);
+    }
+
+    #[test]
+    fn test_strip_setext_title() {
+        // Each underline char selects a level (parser 1-based: `=`→1 doctitle … `+`→5).
+        assert_eq!(strip_setext_title("Document Title", "=============="), Some((1, "Document Title")));
+        assert_eq!(strip_setext_title("Section", "-------"), Some((2, "Section")));
+        assert_eq!(strip_setext_title("Sub", "~~~"), Some((3, "Sub")));
+        assert_eq!(strip_setext_title("Subsub", "^^^^^^"), Some((4, "Subsub")));
+        assert_eq!(strip_setext_title("Deep", "++++"), Some((5, "Deep")));
+        // Length tolerance: difference of exactly 1 is allowed (both directions).
+        assert_eq!(strip_setext_title("two", "----"), Some((2, "two")));
+        assert_eq!(strip_setext_title("four", "---"), Some((2, "four")));
+        // Difference of 2 is rejected.
+        assert_eq!(strip_setext_title("hello", "==="), None);
+        assert_eq!(strip_setext_title("ab", "===="), None);
+        // Underline must be uniform.
+        assert_eq!(strip_setext_title("Title", "==-=="), None);
+        // Underline char must be one of the setext markers.
+        assert_eq!(strip_setext_title("Title", "#####"), None);
+        // Title beginning with `.` is a block title, not a section.
+        assert_eq!(strip_setext_title(".Caption", "========"), None);
+        // Title must contain at least one alphanumeric.
+        assert_eq!(strip_setext_title("---", "==="), None);
+        assert_eq!(strip_setext_title("!!!", "==="), None);
+        // Trailing whitespace on either line is ignored (rstripped).
+        assert_eq!(strip_setext_title("Section  ", "-------  "), Some((2, "Section")));
+        // Empty underline / empty title.
+        assert_eq!(strip_setext_title("Title", ""), None);
+        // Unicode title: length counts characters, not bytes.
+        assert_eq!(strip_setext_title("Café", "===="), Some((1, "Café")));
     }
 }

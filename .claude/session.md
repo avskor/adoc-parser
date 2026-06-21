@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-21, 147-я) — F-AM двухстрочный (setext) заголовок документа/секций + авто-compat-mode (ветка `feat/setext-section-titles`)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`549ed6c`). Единственная `- [ ]` = опциональная → frontier-триаж.
+Топ clean-div `sample.adoc` [152] через showdiff: структура полностью смещена с верха — `Document Title` подчёркнутый `===`
+не распознавался как doctitle (→ `<p>`), каскад на весь документ.
+
+### Корень (ПАРСЕР: scanner + block; setext-форма легаси AsciiDoc, default-ON в asciidoctor)
+- Setext: строка-подчёркивание однородна, первый символ ∈ `= - ~ ^ +` → уровень (asciidoctor 0-4 = parser 1-5: `=`→1
+  doctitle, `-`→2 … `+`→5); заголовок не с `.`, ≥1 alnum (Unicode); `|len₁−len₂|<2` по символам (rstripped). Зеркало
+  `parser.rb::setext_section_title?` + `SETEXT_SECTION_LEVELS` + `uniform?` + `SetextSectionTitleRx`.
+- setext-doctitle АВТО-включает `compat-mode` (parser.rb:161) → `'subsection'`→`<em>` в body.
+
+### Реализация (5 точек)
+1. `scanner::strip_setext_title(l1,l2)->Option<(u8,&str)>` + unit-тест.
+2. `block::scan_header_constructs` — детекция setext-doctitle (level 1): эмит `Attribute{compat-mode}` в header_events
+   (до body, до inline-субституции) + `doc_attrs.insert("compat-mode")`.
+3. `block::scan_leaf_blocks` — детекция setext-секций (peek `self.lines.get(self.pos+1)`).
+4. `setext: bool` проброшен в `scan_document_header`/`scan_section`/`scan_discrete_heading` — extra `advance()` для строки-подчёркивания.
+5. Порядок: section-title (atx+setext) в asciidoctor ловится `is_next_line_section?` ДО `next_block` (списки/делимитеры) →
+   совпало с текущим размещением atx в scan_leaf_blocks (перед scan_block_containers/scan_list_constructs).
+
+### Три гарда (КАЖДЫЙ выведен реальной регрессией гейта/теста — НЕ удалять без проверки)
+- (a) **setext НЕ внутри delimited-блока** (`!is_inside_delimited_block() ||` pending `[discrete]`/float): asciidoctor
+  обычные секции в блоках не парсит (`next_block` ловит лишь float/discrete-ветку 710). Без гарда `Outer\n====` во
+  вложенном example → `<h1>Outer</h1>` (сломал `test_nested_example_blocks_different_lengths`).
+- (b) **`line_closes_open_delimited_block(next)`**: закрывающий делимитер блока ≠ подчёркивание (контент-ридер блока
+  ограничен терминатором). Без гарда `2.3` в `====`…`====` → `<h1>2.3</h1>` (сломал 2 ГЕЙТ-файла: xref-text-and-style,
+  syntax-quick-reference).
+- (c) **`is_bracketed_attr_line(line)`** (helper: trim_end, starts `[` ends `]`, len≥2): `[…]` = block-attr/anchor =
+  метаданные (asciidoctor потребляет ДО section-проверки, в т.ч. non-ASCII `[注意]` через Unicode CG_WORD, что наш
+  ASCII-only `is_block_attribute` НЕ ловит). Без гарда `[TIP]\n====` → setext-doctitle «[TIP]», КОНТЕНТ ИСЧЕЗАЛ (сломал
+  `test_admonition_block_vs_paragraph_forms`); `[注意]\n====` в README-zh_CN → `<h1>` (пойман frontier sweep'ом, vs-ascii 1627→1641).
+
+### Верификация
+- clippy 0; test --workspace зелёное (parser 625→630, html 485, html_output 44→47, parsing_lab 233/1, compat).
+- **Гейт 344/344 байт-в-байт** vs master `549ed6c` (base-бинарь через worktree `/tmp/adoc-base-wt` → `/tmp/adoc_base`).
+  0 setext-doctitle в гейте (grep) → авто-compat-mode не затрагивает; 26 setext-кандидатов все внутри listing/example,
+  гарды (a)/(b) отсекают.
+- **Frontier identical 225→226 (+1):** new-vs-base difflib-sweep по всем 250 = РОВНО 1 файл изменён (sample.adoc
+  IMPROVED 152→0, флип в identical), **0 регрессий**.
+- 13+ CLI-проб vs asciidoctor 2.0.23 MATCH (уровни =-~^+, author/revision, discrete, inline-разметка, длина-tolerance,
+  atx-doctitle-без-compat, все три гарда — нормализованное body-сравнение).
+
+### NEXT
+Закоммитить ветку + merge в master (по запросу пользователя). Остаток frontier clean-div: manpage [146], multi-special-ex
+[87], CHANGELOG [75], debuter [16] — отдельные классы (atx, не setext). Снять worktree `/tmp/adoc-base-wt`.
+**Вне scope F-AM:** Unicode-block-attr `[注意]`→admonition-стиль (asciidoctor парсит attr-list, наш ASCII-only → paragraph,
+pre-existing); atx/setext внутри example → asciidoctor literal `<p>`, наш → discrete heading (pre-existing, не в гейте).
+
+---
+
 ## Сессия (2026-06-21, 146-я) — F-AL текст сноски получает inline-замены + многострочная склейка (ветка `fix/footnote-inline-subs`, смержена `383b521`)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`83caf44`). Все F-* закрыты, единственная `- [ ]` = опциональная →

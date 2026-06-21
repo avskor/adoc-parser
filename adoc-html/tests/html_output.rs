@@ -85,6 +85,37 @@ H~2~O and E=mc^2^.";
 }
 
 #[test]
+fn test_setext_doctitle_enables_compat_mode_html() {
+    // A two-line (underlined) doctitle renders as <h1> and turns on
+    // compat-mode, so single-quoted text becomes emphasis in the body.
+    let input = "Document Title\n==============\n\nText with 'quoted' word.";
+    let html = to_html_with_options(input, adoc_html::HtmlOptions { standalone: true, ..Default::default() });
+    assert!(html.contains("<h1>Document Title</h1>"), "doctitle h1 missing: {html}");
+    assert!(html.contains("<em>quoted</em>"), "compat-mode emphasis missing: {html}");
+}
+
+#[test]
+fn test_setext_section_renders_as_heading_html() {
+    // `-` underline → level 1 section (sect1, <h2>).
+    let input = "Section Title\n-------------\n\nbody";
+    let html = to_html(input);
+    assert!(html.contains("class=\"sect1\""), "sect1 wrapper missing: {html}");
+    assert!(html.contains("id=\"_section_title\""), "section id missing: {html}");
+    assert!(html.contains("Section Title</h2>"), "h2 heading missing: {html}");
+}
+
+#[test]
+fn test_setext_underline_not_confused_with_example_terminator_html() {
+    // The closing `====` of an example block must not be read as a setext
+    // underline for the line above it — `2.3` stays a paragraph.
+    let input = "====\n2.3\n====";
+    let html = to_html(input);
+    assert!(html.contains("class=\"exampleblock\""), "example block missing: {html}");
+    assert!(html.contains("<p>2.3</p>"), "content paragraph missing: {html}");
+    assert!(!html.contains("<h1>2.3</h1>"), "2.3 wrongly became a heading: {html}");
+}
+
+#[test]
 fn test_html_escaping_in_source_block() {
     let input = "[source,html]\n----\n<div class=\"test\">&amp;</div>\n----";
     let html = to_html(input);
