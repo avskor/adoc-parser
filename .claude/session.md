@@ -1,5 +1,52 @@
 # Session context
 
+## Сессия (2026-06-21, 150-я) — F-AP экранированный `\...`-эллипсис в TARGET ссылки (ветка `fix/url-target-replacements`, НЕ закоммичено)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`b5a31c0`, F-AO смержен). Все F-* закрыты, единственная `- [ ]` =
+опциональная → frontier-триаж. frontier_parity: identical 227, clean-div 6. Топ-кандидаты niche/non-bug (manpage [146] —
+`:doctype: manpage`; multi-special-ex [87] — asciidoctor ДРОПАЕТ `[partintro]` вне book-doctype, парити = удаление контента;
+3×diff=1 = env/version/greedy-`+` non-bug). Взят **CHANGELOG [17]** — единственный clean-класс с реальным конструктом.
+
+### Триаж CHANGELOG (17 строк, 3 класса)
+- **A. Replacements-in-URL-target (14 строк, ВЗЯТО):** `…/compare/v1.5.6\...v1.5.6.1[full diff]` → href с сырым `\...`,
+  asciidoctor → `v1.5.6...v1.5.6.1` (backslash снят, литерал, без эллипсиса). + 1 неэскейпленный [6137] `...`→`…​`.
+- **B. Escaped-macro-префикс (2 строки, вне scope):** `\file:///`/`\anchor:` в plain-тексте — backslash не снят.
+- **C. xref ext (1 строка, вне scope):** `target.asciidoc#`→`target.html`.
+
+### Корень (ПАРСЕР, subst/macros.rs) — subst-порядок
+asciidoctor: `replacements` по ВСЕЙ строке ДО `macros` → TARGET наследует снятие `\` (`/\\?\.\.\./`) и `...`→`…`. Наш движок:
+macros ПЕРВЫМ (до replacements); `escape::run` запечатывает `\...`→`Literal("...")` ЕЩЁ раньше → autolink видит sentinel в
+URL-span → `span_has_sentinel` PUNT на legacy → legacy сохраняет сырой `\...`.
+
+### Реализация (option B — verbatim plain, resolve Literal)
+`reconstruct_link_target(work, span)`: plain-куски ВЕРБАТИМ (НЕ кёрлит), контент `Literal`-leaf вклеивает (backslash уже снят
+escape'ом), не-`Literal` sentinel → `None` (punt как было). Вызван в 3 арм'ах `try_autolink` + `try_link` (после
+`passthrough_url`); в try_autolink URL[text] добавлен sentinel-гард на LABEL. **Почему НЕ кёрлить plain:** URL из attr-ref
+(`{url-repo}/…`) ре-парсится renderer'ом (events.rs:262 `render_inline_value` на `value+trailing`) ПОСЛЕ первого прохода —
+первый проход уже снял `\` (escape→Literal→plain `...` в text events), повторный кёрл = двойная субституция (сломало бы 9
+attr-ref `\...`-строк v2.0.x, были identical). Доказано инструментом try_parse (2 вызова: raw `{u}/…\...`, потом resolved
+`https://…/…...` БЕЗ backslash). Цена: [6137] неэскейпленный топ-левел `...` не кёрлится (1 строка, вне scope).
+
+### Верификация (AIRTIGHT)
+- clippy 0; test --workspace зелёное (parser 632→633, html 488→489, compat 233). +1 parser
+  (`escaped_ellipsis_in_url_target_keeps_literal_dots`) +1 html (`test_escaped_ellipsis_in_link_target_html`, вкл. attr-ref).
+- **Гейт 344/344 байт-в-байт** vs master `b5a31c0` (base `/tmp/adoc_base` = свежий master через worktree, СНЯТ; `gate_check.py`
+  0 diff). Нейтральность ПО КОНСТРУКЦИИ: 0 гейт-файлов с trigger-в-URL (`...`/`--`/`(C)`/… escaped или нет — измерено regex'ом);
+  меняется лишь URL с `Literal`-sentinel = escaped typographic, которых в гейте 0.
+- **Frontier identical 227 (стабильно):** new-vs-base sweep по всем 250 = РОВНО 1 файл (CHANGELOG IMPROVED 17→4), 0 регрессий.
+  CHANGELOG не флипает (остаток [4] = классы B+C + [6137]).
+- 10/10 CLI-проб vs asciidoctor 2.0.23 MATCH (full-literal/bare/link:/angle/attr-ref `\...`, `\--`/`\->`/`\(C)`, норм. URL).
+
+### NEXT
+Закоммитить ветку + merge в master --no-ff (ПО ЗАПРОСУ — НЕ запушено, спросить про push). Diff: macros.rs (+helper, 4 арма),
+mod.rs (+1 test), tests.rs (+1 test). **Остаток frontier clean-div:** manpage [146] (`:doctype: manpage` backend),
+multi-special-ex [87] (asciidoctor дропает partintro вне book — парити = удаление), CHANGELOG [4] (xref ext / escaped-macro /
+[6137]); 3×diff=1 non-bug (doctime/TZ, greedy `+++`, `{asciidoctor-version}`). Корпус близок к исчерпанию — рассмотреть
+расширение frontier новыми репозиториями ИЛИ escaped-macro-префикс класс (B: `\file:`/`\anchor:` → снять `\` для произвольного
+macro-кандидата, не только известных имён).
+
+---
+
 ## Сессия (2026-06-21, 149-я) — F-AO font-иконка: роль на `<i>` вместо `<span>` (ветка `fix/icon-font-role-placement`)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`4a35fc0`). Все F-* закрыты, единственная `- [ ]` = опциональная

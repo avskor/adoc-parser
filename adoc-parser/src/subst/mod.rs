@@ -1491,6 +1491,51 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn escaped_ellipsis_in_url_target_keeps_literal_dots() {
+        // The `escape` pass seals `\...` as a `Literal("...")` before the link is
+        // detected; `reconstruct_link_target` splices that backslash-stripped
+        // literal back into the target, so the URL keeps literal dots (no
+        // ellipsis) exactly as Asciidoctor's `replacements` pass leaves it. Before
+        // this, the sentinel forced a punt to legacy, which kept the raw `\...`.
+        // URL[text] form.
+        assert_eq!(pipeline("https://ex.com/a\\...b[t]"), vec![
+            Event::Start(Tag::Link {
+                url: "https://ex.com/a...b".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text("t".into()),
+            Event::End(TagEnd::Link),
+        ]);
+        // Bare form — both the href and the visible text are the literal target.
+        assert_eq!(pipeline("https://ex.com/a\\...b"), vec![
+            Event::Start(Tag::Link {
+                url: "https://ex.com/a...b".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+            }),
+            Event::Text("https://ex.com/a...b".into()),
+            Event::End(TagEnd::Link),
+        ]);
+        // `link:` macro form.
+        assert_eq!(pipeline("link:https://ex.com/a\\...b[t]"), vec![
+            Event::Start(Tag::Link {
+                url: "https://ex.com/a...b".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: false,
+                role: None,
+            }),
+            Event::Text("t".into()),
+            Event::End(TagEnd::Link),
+        ]);
+    }
+
     /// With the inline-image macro ported, the pipeline must reproduce legacy on
     /// the `image:target[attrs]` forms: bare (filename-derived alt), explicit alt,
     /// positional width/height, named attrs (width/height/align/float/link/role/
