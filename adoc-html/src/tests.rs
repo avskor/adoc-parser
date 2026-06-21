@@ -486,6 +486,40 @@ fn test_angle_bracket_url_autolink() {
 }
 
 #[test]
+fn test_escaped_ellipsis_in_link_target_html() {
+    // Asciidoctor runs `replacements` over the line before the macro is detected,
+    // so an escaped `\...` in a URL target loses its backslash and stays literal
+    // dots (no ellipsis) in the href — `compare/v1.5.6\...v1.5.6.1` → literal.
+    let html = to_html("https://github.com/x/compare/v1.5.6\\...v1.5.6.1[full diff]");
+    assert!(
+        html.contains("<a href=\"https://github.com/x/compare/v1.5.6...v1.5.6.1\">full diff</a>"),
+        "{html}"
+    );
+    assert!(!html.contains("\\..."), "backslash must be dropped: {html}");
+    assert!(!html.contains('\u{2026}'), "must not curl to an ellipsis: {html}");
+
+    // Bare form: both href and visible text carry the literal dots.
+    let bare = to_html("https://ex.com/a\\...b");
+    assert!(
+        bare.contains("<a href=\"https://ex.com/a...b\" class=\"bare\">https://ex.com/a...b</a>"),
+        "{bare}"
+    );
+
+    // `link:` macro form behaves identically.
+    let mac = to_html("link:https://ex.com/a\\...b[t]");
+    assert!(mac.contains("<a href=\"https://ex.com/a...b\">t</a>"), "{mac}");
+
+    // Resolved-attribute URL is re-parsed after its surrounding text already went
+    // through `replacements`; the escaped `\...` must NOT be curled a second time.
+    let attr = to_html(":u: https://github.com/x\n\n{u}/compare/v2.0.25\\...v2.0.26[full diff]");
+    assert!(
+        attr.contains("<a href=\"https://github.com/x/compare/v2.0.25...v2.0.26\">full diff</a>"),
+        "{attr}"
+    );
+    assert!(!attr.contains('\u{2026}'), "attribute-resolved URL must not double-curl: {attr}");
+}
+
+#[test]
 fn test_hide_uri_scheme() {
     // :hide-uri-scheme: strips the scheme from the VISIBLE text only; href keeps
     // the full target (matches Asciidoctor's UriSniffRx behaviour).

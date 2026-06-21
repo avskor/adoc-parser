@@ -654,16 +654,19 @@ fn try_link(
         flag_punt();
         return None;
     }
-    // The URL is normally plain text; the one sentinel form supported is a
-    // passthrough-protected target (`link:++url++[…]`), reconstructed verbatim. Any
-    // other sentinel shape in the URL part is a punt to legacy.
+    // The URL is normally plain text; two sentinel forms are supported: a
+    // passthrough-protected target (`link:++url++[…]`, reconstructed verbatim) and
+    // an escaped typographic pattern sealed as a `Literal` (`link:a\...b[…]`,
+    // reconstructed via [`reconstruct_link_target`]). Any other sentinel shape in
+    // the URL part punts.
     let url: Cow<str> = if url_part.as_bytes().contains(&TAG_LEAD) {
-        match passthrough_url(work, url_part) {
-            Some(u) => Cow::Owned(u),
-            None => {
-                flag_punt();
-                return None;
-            }
+        if let Some(u) = passthrough_url(work, url_part) {
+            Cow::Owned(u)
+        } else if let Some(u) = reconstruct_link_target(work, url_part) {
+            Cow::Owned(u)
+        } else {
+            flag_punt();
+            return None;
         }
     } else {
         Cow::Borrowed(url_part)
@@ -1459,11 +1462,12 @@ fn try_autolink(
     if preceded_by_angle && !bracket_follows {
         if rest.as_bytes().get(url_end) == Some(&b'>') {
             let end = start + url_end + 1; // consume the closing `>`
-            if span_has_sentinel(src, start, end) {
+            let Some(target) = reconstruct_link_target(work, url) else {
+                flag_punt();
                 return None;
-            }
+            };
             let events =
-                build_link(url.to_string(), None, false, None, true, None, url, subs, options);
+                build_link(target.clone(), None, false, None, true, None, &target, subs, options);
             return Some((events, end, true));
         }
         return None;
@@ -1487,21 +1491,30 @@ fn try_autolink(
         && let Some(close) = find_macro_close_bracket(after_url, 0)
     {
         let end = start + url_len + close + 1;
-        if span_has_sentinel(src, start, end) {
+        let content = unescape_close_bracket(&after_url[1..close]);
+        // The label is re-parsed by the engine, which cannot run over sentinel
+        // bytes, so a sentinel in the label punts to legacy (mirrors `try_link`).
+        if content.as_bytes().contains(&TAG_LEAD) {
+            flag_punt();
             return None;
         }
-        let content = unescape_close_bracket(&after_url[1..close]);
+        // The URL part may carry an escaped-typographic `Literal` sentinel
+        // (`a\...b`) or a plain `...` Asciidoctor would have curled; reconstruct it.
+        let Some(target) = reconstruct_link_target(work, url) else {
+            flag_punt();
+            return None;
+        };
         let attrs = parse_link_attrs(&content, LinkKind::Link);
         let is_bare = attrs.text.is_empty();
         let label = (!is_bare).then_some(attrs.text);
         let events = build_link(
-            url.to_string(),
+            target.clone(),
             attrs.window,
             attrs.nofollow,
             attrs.role,
             is_bare,
             label,
-            url,
+            &target,
             subs,
             options,
         );
@@ -1510,10 +1523,12 @@ fn try_autolink(
 
     // Bare form.
     let end = start + url_len;
-    if span_has_sentinel(src, start, end) {
+    let Some(target) = reconstruct_link_target(work, url) else {
+        flag_punt();
         return None;
-    }
-    let events = build_link(url.to_string(), None, false, None, true, None, url, subs, options);
+    };
+    let events =
+        build_link(target.clone(), None, false, None, true, None, &target, subs, options);
     Some((events, end, false))
 }
 
@@ -1649,6 +1664,70 @@ fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
         flag_punt();
     }
     has
+}
+
+/// Reconstruct an inline-link target that carries an escaped-typographic
+/// `Literal` sentinel, restoring the backslash-stripped literal Asciidoctor's
+/// `replacements` pass leaves for `\...` / `\--` / `\(C)` / … inside a URL.
+///
+/// The earlier `escape` pass seals an escaped typographic pattern as a
+/// [`TagToken::Literal`] whose content is the pattern WITHOUT the backslash
+/// (`\...` → `Literal("...")`) — exactly what Asciidoctor's `/\\?\.\.\./`-style
+/// rules produce (strip the leading `\`, keep the literal). Because this pipeline
+/// extracts macros before that sentinel would otherwise force a punt, the link
+/// previously fell back to legacy and kept the raw `\...`; here we splice the
+/// `Literal` content back into the target so `compare/v1.5.6\...v1.5.6.1` links
+/// with the byte-for-byte `compare/v1.5.6...v1.5.6.1` Asciidoctor emits.
+///
+/// Plain runs are copied VERBATIM. An unescaped `...` is deliberately NOT curled
+/// to an ellipsis here: a URL synthesised from a resolved attribute reference is
+/// re-parsed after its surrounding text has already been through `replacements`
+/// once, so curling again would double-substitute (`v2.0.25\...` →
+/// `v2.0.25…​`). Leaving plain runs untouched keeps those (already-substituted)
+/// targets correct; the only cost is that a top-level literal URL with an
+/// unescaped `...` is not curled (rare, and Asciidoctor-faithful curling would
+/// regress the far more common resolved-attribute form).
+///
+/// Returns `None` — signalling the caller to punt to legacy, preserving the
+/// previous [`span_has_sentinel`] decline — when the span carries any sentinel
+/// that is NOT a `Literal`: passthrough / attribute-reference / char-ref / macro
+/// targets are out of scope and still fall back.
+fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
+    let bytes = span.as_bytes();
+    if !bytes.contains(&TAG_LEAD) {
+        // Fast path: no sentinel — the raw target is already final.
+        return Some(span.to_string());
+    }
+    let mut out = String::with_capacity(span.len());
+    let mut seg_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            if seg_start < i {
+                out.push_str(&span[seg_start..i]);
+            }
+            // Parse the decimal token index between TAG_LEAD and TAG_TAIL.
+            let mut idx = 0usize;
+            let mut j = i + 1;
+            while j < end && bytes[j].is_ascii_digit() {
+                idx = idx * 10 + (bytes[j] - b'0') as usize;
+                j += 1;
+            }
+            match work.tags.get(idx)? {
+                TagToken::Literal(s) => out.push_str(s),
+                _ => return None,
+            }
+            seg_start = end;
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    if seg_start < bytes.len() {
+        out.push_str(&span[seg_start..]);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
