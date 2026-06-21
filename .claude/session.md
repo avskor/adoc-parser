@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-21, 144-я) — F-AJ `:toc: preamble` размещает TOC ВНУТРИ preamble-div (ветка `fix/toc-preamble-placement`, СМЕРЖЕНА в master `9433b92`, ЗАПУШЕНО, ветка удалена)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`8cb4325`). Frontier-проход (release `-p adoc-cli`): identical 222,
+clean-div 11 — как запись 143-й. Реализовано без AskUserQuestion/plan-mode (вынужденно-чистый рендерер-фикс, гейт-риск нулевой
+по конструкции). **Закоммичено + смержено --no-ff + запушено.**
+
+### Диагностика (триаж топ clean-div через showdiff — урок памяти снова подтвердился)
+- debuter (118) и github-0.1.4 (50) — ОБА `:toc: preamble`, каскадили от ОДНОГО сдвига: первое расхождение [40]/[69] —
+  ADOC `<div class="toc" id="toc">`, OUR `</div>`. OUR закрывал preamble целиком (`</div></div>`) и эмитил TOC как соседний
+  блок; asciidoctor ставит TOC ВНУТРИ preamble (после sectionbody, перед закрытием preamble).
+- **Правило asciidoctor** (`convert_preamble`, html5.rb): `result = ['<div id="preamble">','<div class="sectionbody">',
+  content,'</div>',toc,'</div>']` → TOC между закрытием sectionbody и закрытием preamble-div.
+
+### Корень (ЧИСТО РЕНДЕРЕР, `adoc-html/src/events.rs`, 2 точки)
+- (1) section-start wrap (стр. ~53): `</div>\n</div>\n` расщеплён на два push; `toc_insert_position` (хелпер
+  `want_preamble_toc`) пишется МЕЖДУ закрытием sectionbody и preamble. empty-preamble ветка (`else if`) сохранена.
+- (2) embedded header-путь `header_suppress_start` (стр. ~945): `preamble` теперь отложен на wrap-путь как и `macro`
+  (был `!= "macro"`, исключал только macro — асимметрия со standalone-гардом стр. 913, который исключает оба). Это активный
+  путь для `to_html` (embedded, `standalone:false`); standalone CLI идёт через ветку 907 (не тронута → гейт неизменен).
+- Парсер не тронут. `:toc: preamble` для значения, не для атрибута `:toc-placement:` (тот не читается — pre-existing).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (html unit 479→**480**, parser 623, compat 233). Усилен
+  `test_toc_preamble`: баланс div-тегов (opens>closes между preamble-open и TOC → preamble ещё открыт = TOC вложен).
+- **Гейт 344/344 байт-в-байт** vs master `8cb4325` (base пересобран из master через worktree `/tmp/adoc-master-wt`,
+  `gate_check.py` 0 diff). `:toc: preamble` в гейте отсутствует → нулевой риск.
+- **Frontier identical 222 (стабильно), clean-div 11:** debuter **118→18**, github-0.1.4 **50→1**. Оба IMPROVED, НЕ флипнули
+  в identical из-за ОСТАТОЧНОГО несвязанного класса (см. ниже). new-vs-base по всем 250 = РОВНО 2 файла, оба IMPROVED, **0 регрессий**.
+- CLI-пробы vs asciidoctor 2.0.23: preamble basic/nested/custom-title MATCH; no-preamble (TOC НЕ рендерится без preamble,
+  `convert_preamble` не вызывается) MATCH; регресс-гарды auto/macro/left MATCH. nested_levels raw-sed diff = только пустые
+  строки (под нормой 0). placement_attr 21→21 (base==new, pre-existing).
+
+### Дальше (триажить топ clean-div через showdiff — не доверять метке!)
+- **СИЛЬНЫЙ кандидат: Unicode word-char в apostrophe-replacement** — `d'éditer`→`d’éditer`, `I'm`→`I’m`. asciidoctor курлит
+  апостроф между word-char через `\p{Word}` (включает `é`), мы гейтим `is_ascii_alphanumeric` (как и `\'`-escape F-AH в
+  `subst/escape.rs` + typographic-replacement `inline.rs::apply_typographic_replacements`). **Починка флипнет github-0.1.4
+  в identical** (остаток =1) и улучшит debuter (18). Риск гейта: средний (`'` повсеместен, но расширение word-class только
+  ДОБАВЛЯет матчи на не-ASCII буквах — гейт ASCII-only, проверить).
+- Топ clean-div: sample 152 (setext-заголовок — широкий), manpage 146 (doctype manpage — широкий), multi-special-ex 87,
+  CHANGELOG 75, debuter 18 (apostrophe), asciidoclet 12 (multiline footnote), asciidoc-returns 12 (footnote attr-ref-link, F-AG).
+- diff=1 intrinsic (не actionable): doctime-localtime (`{localtime}`), migration (`{asciidoctor-version}`).
+- **Вне scope F-AJ:** атрибут `:toc-placement:` не читается; пустая trailing-секция whitespace (предсуществующее).
+
+---
+
 ## Сессия (2026-06-21, 143-я) — F-AI indented continuation-строка в `a|`/`l|`-ячейке = literal paragraph (ветка `fix/asciidoc-cell-indented-literal`, СМЕРЖЕНА в master `c62a348`)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`d1319dc`). Frontier-проход (release `-p adoc-cli`): identical 221,
