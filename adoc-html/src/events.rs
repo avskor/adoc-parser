@@ -54,12 +54,21 @@ impl HtmlRenderer {
             && let Some(start) = self.preamble_start.take()
         {
             let preamble_content = output.split_off(start);
+            let want_preamble_toc =
+                self.toc_position == "preamble" && self.toc_insert_position.is_none();
             if !preamble_content.is_empty() {
                 output.push_str("<div id=\"preamble\">\n<div class=\"sectionbody\">\n");
                 output.push_str(&preamble_content);
-                output.push_str("</div>\n</div>\n");
-            }
-            if self.toc_position == "preamble" && self.toc_insert_position.is_none() {
+                // Close the sectionbody, then record the TOC insert offset before
+                // closing the preamble wrapper: with `:toc: preamble` the TOC sits
+                // between the two (mirrors Asciidoctor's `convert_preamble`, which
+                // emits sectionbody, then the toc, then closes the preamble div).
+                output.push_str("</div>\n");
+                if want_preamble_toc {
+                    self.toc_insert_position = Some(output.len());
+                }
+                output.push_str("</div>\n");
+            } else if want_preamble_toc {
                 self.toc_insert_position = Some(output.len());
             }
         }
@@ -929,11 +938,14 @@ impl HtmlRenderer {
                     } else {
                         output.truncate(pos);
                     }
-                    // Reset TOC insert position to after truncation point. The
-                    // `macro` placement is owned by the `toc::[]` macro (a spliced
-                    // placeholder), so the auto TOC must not also claim a position
-                    // here — mirrors the standalone guard above.
-                    if self.toc_auto_seen && self.toc_position != "macro" {
+                    // Reset TOC insert position to after truncation point. Both
+                    // `macro` (owned by the `toc::[]` placeholder) and `preamble`
+                    // (placed inside the preamble wrap by the section-start path)
+                    // defer their position elsewhere, so the auto TOC must not also
+                    // claim one here — mirrors the standalone guard above.
+                    if self.toc_auto_seen
+                        && !matches!(self.toc_position.as_str(), "preamble" | "macro")
+                    {
                         self.toc_insert_position = Some(output.len());
                     }
                     if self.has_document_title {
