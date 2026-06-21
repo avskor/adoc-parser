@@ -1,5 +1,49 @@
 # Session context
 
+## Сессия (2026-06-21, 149-я) — F-AO font-иконка: роль на `<i>` вместо `<span>` (ветка `fix/icon-font-role-placement`)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`4a35fc0`). Все F-* закрыты, единственная `- [ ]` = опциональная
+(0 корпусного выигрыша) → frontier-триаж. frontier_parity: identical 227, clean-div 6. Топ `CHANGELOG.adoc` [75] через
+showdiff: 58/75 строк = `:star: icon:star[role=red]` под `:icons: font` рендерился `<span class="icon"><i class="fa fa-star red">`,
+asciidoctor — `<span class="icon red"><i class="fa fa-star">`.
+
+### Корень (ЧИСТО РЕНДЕРЕР, `adoc-html/src/inline.rs::render_icon`, font-путь 275-311)
+Сверено с asciidoctor `convert_inline_image` (html5.rb:1185-1231). Четыре расхождения font-пути:
+1. `role` шёл в class-list внутреннего `<i>`; asciidoctor — на внешний `<span class="icon …">` (1224-1230).
+2. link рендерился как внешний `<a class="icon" href>` без span; asciidoctor — внешний `<span class="icon">` + внутренний
+   `<a class="image" href>` (1223, вне type-ветки → класс `image`, не `icon`).
+3. `role="red big"` не разкавычивался → `&quot;red big&quot;`.
+4. flip+rotate оба эмитились; asciidoctor — flip elsif rotate (1191-1194, flip wins).
+НАШ НЕ-font путь (литеральный `[name]`, 243-272) УЖЕ делал role-на-span + `<a class="image">` правильно — асимметрия,
+чинился только font-путь.
+
+### Реализация (1 файл, font-путь)
+`<i class="fa fa-NAME [fa-size] [fa-flip|fa-rotate]" [title]>` (без role); обёртка `<span class="icon[ role]">`
+(role через `r.trim_matches('"')`, паттерн media.rs:55); link → внутренний `<a class="image" href[ target][ rel]>`
+(window/_blank как в не-font пути). +2 html-теста (quoted-multi-role; link+role+window) + правка 3 существующих
+(role/link/combined кодировали баг).
+
+### Верификация (AIRTIGHT)
+- clippy 0; test --workspace зелёное (html 486→488, parser 632, compat 233).
+- **Гейт 344/344 байт-в-байт** vs master `4a35fc0` (base через worktree `/tmp/adoc-base-wt`→`/tmp/adoc_base`, `gate_check.py`
+  0 diff). Гейт-нейтральность ПО КОНСТРУКЦИИ: 4 гейт-файла с `:icons: font` (admonitions/icons-font/icons/callout) — 0
+  рендерящихся inline `icon:`-макросов; `icon-macro.adoc` без `:icons:` → литеральный путь (не тронут).
+- **Frontier identical 227 (стабильно):** new-vs-base sweep 250 = РОВНО 4 файла, ВСЕ icon-related. CHANGELOG 75→17 IMPROVED,
+  syntax 448→444 IMPROVED, asciidoctor-0-1-4 (поз.differ 4752→5596 = АРТЕФАКТ переалайнинга — ВСЕ 6 icon-строк MATCH
+  asciidoctor построчно), asciidoctor-1-5-0 (1 icon-строка фикс, MATCH). **0 контентных регрессий.** Урок памяти подтверждён:
+  REGRESSED у позиционного differ'а ≠ регрессия — верифицировать построчно.
+- 9 CLI-проб vs asciidoctor 2.0.23 MATCH (role/size/link/window/flip-vs-rotate/multi-role-quoted/link+role).
+
+### NEXT
+Закоммитить ветку + merge в master --no-ff (по запросу). НЕ запушено — спросить про push. base-бинарь `/tmp/adoc_base` =
+чистый master `4a35fc0` (worktree уже снят). **Остаток CHANGELOG [17] (отдельные классы):** escaped `\...`-эллипсис в URL
+(backslash не снимается рендером ссылки), `\file:///` (escaped macro-префикс), `target.asciidoc#` xref, non-escaped `...`→`…`
+в URL-target. **Остаток frontier clean-div:** manpage [146] (`:doctype: manpage`), multi-special-ex [87] (partintro/book),
+три diff=1 (doctime/TZ, greedy `+++`, `{asciidoctor-version}`). **Вне scope F-AO:** `:icons:` без значения = image-режим
+(`<img src>`), наш код трактует любой `icons` как font (предсуществующий, не в корпусе).
+
+---
+
 ## Сессия (2026-06-21, 148-я) — F-AN leaf-блок после list-item не отсоединялся (ветка `fix/dlist-block-detach`, НЕ закоммичено)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`8e7424e`). Все F-* закрыты, единственная `- [ ]` = опциональная →
