@@ -614,8 +614,11 @@ impl<'a> InlineState<'a> {
                 true
             }
 
-            // Autolink: ftp:// (MACROS)
-            b'f' if has_macros && self.remaining().starts_with("ftp://") => {
+            // Autolink: ftp:// or file:// (MACROS)
+            b'f' if has_macros
+                && (self.remaining().starts_with("ftp://")
+                    || self.remaining().starts_with("file://")) =>
+            {
                 if self.try_autolink(events, text_start) {
                     return true;
                 }
@@ -1208,6 +1211,7 @@ impl<'a> InlineState<'a> {
         if bytes.get(name_len) == Some(&b':') {
             return 0;
         }
+        let is_anchor = rest.starts_with("anchor:");
         // Target: a run of non-whitespace characters up to the opening bracket.
         let mut i = name_len;
         while let Some(&c) = bytes.get(i) {
@@ -1218,6 +1222,11 @@ impl<'a> InlineState<'a> {
         }
         // Require an opening bracket immediately, then a closing bracket somewhere after it.
         if bytes.get(i) != Some(&b'[') {
+            return 0;
+        }
+        // The `anchor:` macro requires a valid id; an invalid target
+        // (`\anchor:<id>[…]`) is not a macro, so the backslash stays literal.
+        if is_anchor && !crate::scanner::is_valid_anchor_id(&rest[name_len..i]) {
             return 0;
         }
         i += 1; // past '['
@@ -2482,12 +2491,14 @@ impl<'a> InlineState<'a> {
         }
     }
 
-    /// True when an autolink scheme (`http://`, `https://`, `ftp://`, `irc://`)
-    /// starts at byte offset `p`.
+    /// True when an autolink scheme (`http://`, `https://`, `file://`, `ftp://`,
+    /// `irc://`) starts at byte offset `p`. Mirrors Asciidoctor's `InlineLinkRx`
+    /// scheme group `(?:https?|file|ftp|irc)://`.
     fn autolink_scheme_at(&self, p: usize) -> bool {
         self.input.get(p..).is_some_and(|rest| {
             rest.starts_with("http://")
                 || rest.starts_with("https://")
+                || rest.starts_with("file://")
                 || rest.starts_with("ftp://")
                 || rest.starts_with("irc://")
         })
@@ -2774,8 +2785,10 @@ impl<'a> InlineState<'a> {
             None => return false,
         };
         let id = &rest[..bracket];
-        // Target is a run of non-whitespace characters (Asciidoctor: \S+).
-        if id.is_empty() || id.contains(char::is_whitespace) {
+        // Asciidoctor's `InlineAnchorRx` requires the id to match
+        // `[CC_ALPHA_:][CC_WORD\-:.]*` immediately before `[`; an invalid run
+        // (`anchor:<id>[…]`) is not an anchor and stays literal text.
+        if !crate::scanner::is_valid_anchor_id(id) {
             return false;
         }
         let close = match rest[bracket + 1..].find(']') {

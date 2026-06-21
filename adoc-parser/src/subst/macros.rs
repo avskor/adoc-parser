@@ -1194,14 +1194,18 @@ fn try_bibliography_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static
 
 /// At an `anchor:` (caller guarantees the prefix), try to match the inline-anchor
 /// macro `anchor:id[]` / `anchor:id[xreflabel]` — equivalent to `[[id]]`. Mirror of
-/// [`crate::inline::InlineState::try_anchor_macro`]. The target is a run of
-/// non-whitespace characters (Asciidoctor `\S+`); the bracket content is the
-/// xreflabel (reference text, never rendered in place), stored verbatim. A *leaf*.
+/// [`crate::inline::InlineState::try_anchor_macro`]. The id must be a valid
+/// Asciidoctor anchor id ([`crate::scanner::is_valid_anchor_id`]); the bracket
+/// content is the xreflabel (reference text, never rendered in place), stored
+/// verbatim. A *leaf*.
 fn try_anchor_macro(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "anchor:"
     let bracket = rest.find('[')?;
     let id = &rest[..bracket];
-    if id.is_empty() || id.contains(char::is_whitespace) {
+    // Asciidoctor's `InlineAnchorRx` requires the id to match
+    // `[CC_ALPHA_:][CC_WORD\-:.]*` immediately before `[`; an invalid run
+    // (`anchor:<id>[…]`, `anchor:1abc[…]`) is not an anchor and stays literal.
+    if !crate::scanner::is_valid_anchor_id(id) {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, bracket)?;
@@ -1338,12 +1342,15 @@ fn concealed_index_term(inner: &str) -> Vec<Event<'static>> {
     }]
 }
 
-/// Whether an autolink scheme (`http://`/`https://`/`ftp://`/`irc://`) begins at
-/// byte `i`.
+/// Whether an autolink scheme (`http://`/`https://`/`file://`/`ftp://`/`irc://`)
+/// begins at byte `i`. Mirrors Asciidoctor's `InlineLinkRx` scheme group
+/// `(?:https?|file|ftp|irc)://` — each requires the `://` (so `file:relative` is
+/// not a scheme).
 fn scheme_at(src: &str, i: usize) -> bool {
     let rest = &src[i..];
     rest.starts_with("http://")
         || rest.starts_with("https://")
+        || rest.starts_with("file://")
         || rest.starts_with("ftp://")
         || rest.starts_with("irc://")
 }

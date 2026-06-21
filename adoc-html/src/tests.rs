@@ -520,6 +520,34 @@ fn test_escaped_ellipsis_in_link_target_html() {
 }
 
 #[test]
+fn test_escaped_macro_prefix_file_scheme_and_anchor_id() {
+    // `file://` is an autolink scheme (Asciidoctor `(?:https?|file|ftp|irc)://`):
+    // a bare `file://` URL links as `class="bare"`.
+    let link = to_html("file:///root");
+    assert!(
+        link.contains("<a href=\"file:///root\" class=\"bare\">file:///root</a>"),
+        "{link}"
+    );
+    // Escaped `\file://…` drops the backslash to plain text (no link).
+    let esc_file = to_html("\\file:///root");
+    assert!(esc_file.contains("<p>file:///root</p>"), "{esc_file}");
+    assert!(!esc_file.contains("<a "), "escaped file URL must not link: {esc_file}");
+
+    // An invalid anchor id (`<id>`) is no macro — the form stays literal text…
+    let bad = to_html("anchor:<id>[t]");
+    assert!(bad.contains("<p>anchor:&lt;id&gt;[t]</p>"), "{bad}");
+    // …and an escaped `\anchor:<id>` keeps its backslash (the construct never matches).
+    let esc_bad = to_html("\\anchor:<id>[t]");
+    assert!(esc_bad.contains("<p>\\anchor:&lt;id&gt;[t]</p>"), "{esc_bad}");
+    // An escaped `\anchor:` with a VALID id drops the backslash (escaped macro).
+    let esc_ok = to_html("\\anchor:myid[t]");
+    assert!(esc_ok.contains("<p>anchor:myid[t]</p>"), "{esc_ok}");
+    // A valid id is still a real anchor.
+    let good = to_html("anchor:my-id[t]");
+    assert!(good.contains("<a id=\"my-id\"></a>"), "{good}");
+}
+
+#[test]
 fn test_hide_uri_scheme() {
     // :hide-uri-scheme: strips the scheme from the VISIBLE text only; href keeps
     // the full target (matches Asciidoctor's UriSniffRx behaviour).

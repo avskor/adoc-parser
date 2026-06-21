@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-21, 151-я) — F-AQ escaped-macro-префикс: `file://` autolink + anchor-id валидация (ветка `fix/escaped-macro-prefix`, НЕ закоммичено)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`6b831fd`, F-AP смержен). Все F-* закрыты, Фаза 4/D7 сделаны,
+единственная `- [ ]` опциональная. frontier_parity: identical 227, clean-div 6 — все нишевые (manpage [146] `:doctype:
+manpage`, multi-special-ex [87] book-деградация вне book-doctype, CHANGELOG [4], 3×diff=1 не-баги: doctime/TZ, greedy
+`+++`, `{asciidoctor-version}`). **Развилка** (корпус исчерпан на чистых фиксах) → спросил пользователя
+(AskUserQuestion); выбор **«escaped-macro-префикс»**.
+
+### Триаж CHANGELOG [4] (showdiff) — 2 независимых escaped-класса
+- **[8085] `\file:/// → file:///`:** asciidoctor `InlineLinkRx` (rx.rb:524) схема `(?:https?|file|ftp|irc)://` включает
+  `file` (требует `://`). `\file://…`+валидный хвост = escaped autolink (снимает `\`, plain); unescaped `file://…` =
+  bare-link `class="bare"`. Наш движок: `http/https/ftp/irc`, НЕ `file`.
+- **[10276] `\anchor:<id>[<reftext>]` сохраняет `\`:** asciidoctor `InlineAnchorRx` (rx.rb:443) id =
+  `[CC_ALPHA_:][CC_WORD\-:.]*`; `<id>` (первый `<`) невалиден → не макрос → `\\?` не срабатывает → `\` сохраняется. Наш
+  `macro_escape_len`/`try_anchor_macro` брали любой non-whitespace target → снимали `\` (+ unescaped `anchor:<id>` →
+  `<a id="&lt;id&gt;">` тоже баг).
+- **Остаток [2] вне scope:** [4975] xref-ext `target.asciidoc#`→`.html`; [6137] non-escaped `...`→`…​` в URL.
+
+### Реализация
+- **(A) file://:** `scheme_at` (subst/macros.rs:1343) + `autolink_scheme_at` (inline.rs:2487) + legacy `b'f'`-arm
+  (`ftp://`||`file://`, inline.rs:617). Dispatch-байты `b'h'|b'f'|b'i'` уже покрывали `f`; escaped-autolink-arm (macros.rs:415)
+  уже ловит `\f`.
+- **(B) anchor-id:** новый `scanner::is_valid_anchor_id(id)` (first `is_alphabetic()`/`_`/`:`, rest `is_alphanumeric()`/`-`/`:`/`.`),
+  применён в 4 точках: `escape::macro_escape_len` (subst/escape.rs, гард `is_anchor` после target-скана → decline → keep `\`),
+  `inline::inline_macro_escape_len` (зеркало), `subst::try_anchor_macro` + `inline::try_anchor_macro` (invalid → not anchor →
+  literal).
+- **ВАЖНО:** бинарь `adoc` даёт крейт **adoc-cli**, НЕ adoc-html — пересобирать `cargo build --release -p adoc-cli`
+  (иначе тестируешь устаревший бинарь!).
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); 3 `--all-targets` warning'а (concat!/reftext в тест-коде) ПРЕДСУЩЕСТВУЮТ на base (проверено
+  в worktree). test --workspace зелёное (parser 633→635, html 489→490, compat 233). +3 теста.
+- **Гейт 344/344 байт-в-байт** vs master `6b831fd` (base `/tmp/adoc_base` через worktree `/tmp/adoc-base-wt`; `gate_check.py`
+  0 diff). Нейтральность: `file://` в гейте только в `link:file:///…[…]` = link-макрос (диспатчится ДО autolink); 2 anchor-id
+  (`bookmark-c`/`tiger-image`) валидны; 0 escaped-форм.
+- **Frontier identical 227 (стабильно):** new-vs-base sweep по всем 250 (`fsweep.py` в scratchpad) = РОВНО 1 файл (CHANGELOG
+  IMPROVED 4→2, обе escaped-строки MATCH), **0 регрессий**.
+- 16/16 базовых + 9/10 расширенных CLI-проб MATCH. 1 «fail» = `\file://` БЕЗ хвоста (предсуществующая дивергенция ВСЕХ схем,
+  не регрессия — см. вне scope).
+
+### NEXT
+Закоммитить ветку + merge в master --no-ff (ПО ЗАПРОСУ — НЕ запушено, спросить про push). base `/tmp/adoc_base` = чистый
+master `6b831fd` (worktree `/tmp/adoc-base-wt` снять). **Вне scope F-AQ:** (1) `\file://` без URL-хвоста — escaped-autolink-arm
+снимает `\` без проверки хвоста, ПРЕДСУЩЕСТВУЕТ для http/ftp/irc (фикс = верифицировать валидный URL в arm, отдельный класс);
+(2) [4975] xref-расширение, [6137] non-escaped эллипсис в URL. **Frontier clean-div остаток:** manpage [146], multi-special-ex
+[87] — обе нишевые/квирк; 3×diff=1 не-баги. **Корпус ИСЧЕРПАН на чистых фиксах** — следующий раз рассмотреть РАСШИРЕНИЕ
+frontier новыми репозиториями (наибольший выход) ИЛИ manpage doctype (крупная нишевая фича).
+
+---
+
 ## Сессия (2026-06-21, 150-я) — F-AP экранированный `\...`-эллипсис в TARGET ссылки (ветка `fix/url-target-replacements`, НЕ закоммичено)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`b5a31c0`, F-AO смержен). Все F-* закрыты, единственная `- [ ]` =
