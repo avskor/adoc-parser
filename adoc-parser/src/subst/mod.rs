@@ -148,7 +148,37 @@ pub(crate) fn try_parse<'a>(
 /// cross-reference label, passthrough spec content), mirroring the legacy
 /// parser's `self.options` propagation into nested `InlineState`s.
 fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -> Vec<Event<'a>> {
-    let mut work = Work::new(text);
+    run_pipeline_with(Work::new(text), text, subs, options)
+}
+
+/// Re-parse a macro label whose raw text already carries an earlier-extracted
+/// sentinel, seeding the working tag table with a clone of the outer pipeline's
+/// tokens (`seed`) so those sentinels resolve against the same passthrough /
+/// escaped-`Literal` / char-ref leaves. The inner passes step over the seeded
+/// sentinels verbatim (every pass already skips a `TAG_LEAD` run) and append
+/// fresh tokens after them, so the inner [`tokenize`](tokenize::tokenize) restores
+/// the seeded leaves exactly as the top-level tokenizer would — the engine's
+/// native replacement for the old "sentinel in the label → punt to legacy" guard.
+/// Mirrors Asciidoctor, where a passthrough placeholder survives the label's
+/// `subs.without(:macros)` re-substitution and is restored globally at the end.
+fn run_pipeline_seeded<'a>(
+    text: &str,
+    seed: &[tokenize::TagToken],
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'a>> {
+    run_pipeline_with(Work::with_tags(text, seed.to_vec()), text, subs, options)
+}
+
+/// Shared body of [`run_pipeline`] / [`run_pipeline_seeded`]: run the gated
+/// substitution passes over `work` (already carrying `buf == text` plus any seed
+/// tokens) and tokenize. `text` is kept for the empty-result guard only.
+fn run_pipeline_with<'a>(
+    mut work: Work,
+    text: &str,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'a>> {
     // Passthroughs are extracted FIRST so their content is verbatim — opaque to
     // every later pass INCLUDING `escape` (mirrors Asciidoctor's
     // `extract_passthroughs`, which runs before all substitutions). A backslash
@@ -190,8 +220,10 @@ fn run_pipeline<'a>(text: &str, subs: SubstitutionSet, options: InlineOptions) -
     // the leaf macros `icon:` and the STEM family (`stem:`/`latexmath:`/
     // `asciimath:`), the anchor (`[[id]]`/`[[[id]]]`/`anchor:`) and index-term
     // (`((…))`/`indexterm:`/`indexterm2:`) families, footnotes, and the
-    // experimental UI macros. A macro whose span swallowed an earlier-extracted
-    // sentinel still punts to legacy (see `flag_decline`).
+    // experimental UI macros. A sentinel in a re-parsed label is now handled
+    // natively (seeded re-parse, see `macros::reparse_label`); one in a verbatim
+    // target / non-label attribute, or in a still-verbatim leaf family, punts to
+    // legacy (see `flag_decline`).
     if subs.has(SubstitutionSet::MACROS) {
         macros::extract(&mut work, subs, options);
     }
@@ -2020,10 +2052,11 @@ mod tests {
     /// passthrough leaf first, then the link macro reconstructs it. Covers the
     /// corpus cases (special chars `[a b]` in the URL, repeating `__`), bare and
     /// explicit-label forms, a plain-link regression guard, and surrounding text.
-    /// A passthrough in the *label* (not the URL) is a punt — the engine cannot
-    /// yet re-parse a label that already holds a sentinel, so the macro pass flags
-    /// the punt and `try_parse` falls back to legacy; that is asserted separately
-    /// below.
+    /// A passthrough/escape/char-ref sentinel in the *label* is no longer a punt:
+    /// the label is re-parsed by a *seeded* sub-pipeline ([`run_pipeline_seeded`])
+    /// so the sentinel resolves against the outer table, and the result matches
+    /// legacy's `push_macro_label` byte-for-byte — the equality loop below covers
+    /// those formerly-punted forms directly (gate-neutral by construction).
     #[test]
     fn reproduces_legacy_on_link_passthrough_url_inputs() {
         let cases = [
@@ -2040,6 +2073,17 @@ mod tests {
             "see link:http://x.com[here] now",
             // surrounded by a span
             "*link:++http://x.com/a b++[a]*",
+            // NATIVE seeded label re-parse (formerly punted): a passthrough in the
+            // LABEL of the link/mailto/autolink families now matches legacy's event
+            // stream exactly (these tags carry no raw-text field, only label events).
+            "link:http://x.com[++raw__text++]",
+            "link:http://x.com[a ++raw__b++ c]",
+            "link:http://x.com[*bold* ++raw++]",
+            "mailto:a@b.com[++raw__text++]",
+            "https://example.org/page[++raw__text++]",
+            // escape + char-ref sentinels in the label re-parse natively too
+            "link:http://x.com[\\*not bold* x]",
+            "link:http://x.com[caf&#233; ++r++]",
         ];
         for c in cases {
             assert_eq!(
@@ -2048,17 +2092,48 @@ mod tests {
                 "new engine diverged from legacy for {c:?}"
             );
         }
-        // A passthrough sentinel in the LABEL punts (the engine can't yet re-parse a
-        // label that already holds a sentinel): the macro pass flags the punt and
-        // `try_parse` falls back to legacy, which renders it correctly.
-        assert!(
-            try_parse(
-                "link:http://x.com[++raw__text++]",
-                SubstitutionSet::NORMAL,
-                InlineOptions::default()
-            )
-            .is_none()
-        );
+    }
+
+    /// Replace every `CrossReference` label field with `Some("")` (presence
+    /// preserved) so two event streams can be compared modulo that field. The
+    /// renderer reads only `label.is_none()`, never the field's content, so a
+    /// difference there is render-dead — see [`reproduces_legacy_on_xref_label_seeded`].
+    fn strip_xref_label(mut events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+        for e in &mut events {
+            if let Event::Start(Tag::CrossReference { label: Some(l), .. }) = e {
+                *l = std::borrow::Cow::Borrowed("");
+            }
+        }
+        events
+    }
+
+    /// A passthrough / escape / char-ref sentinel in a cross-reference label is
+    /// re-parsed natively (seeded), like the link family. Unlike a link, the
+    /// `CrossReference` tag also stores the label *text* in a field — legacy keeps
+    /// the raw pre-substitution source (`++raw__text++`) there, while the engine,
+    /// having already substituted, can only restore the passthrough *content*
+    /// (`raw__text`; the `+` marker count is lost at extraction). That field is
+    /// render-dead (the renderer reads only `label.is_none()`), so the streams are
+    /// asserted equal modulo it — the label *events* (what actually renders) match
+    /// legacy exactly, which the gate/frontier HTML comparison confirms end to end.
+    #[test]
+    fn reproduces_legacy_on_xref_label_seeded() {
+        let cases = [
+            "xref:tgt[++raw__text++]",
+            "xref:tgt[lead ++raw++ tail]",
+            "xref:tgt[*bold* ++raw++]",
+            "<<tgt,++raw__text++>>",
+            "<<tgt,lead ++raw++ tail>>",
+            "xref:tgt[\\*not bold* x]",
+            "xref:tgt[caf&#233; ++r++]",
+        ];
+        for c in cases {
+            assert_eq!(
+                strip_xref_label(pipeline(c)),
+                strip_xref_label(legacy(c)),
+                "new engine diverged from legacy (modulo render-dead label field) for {c:?}"
+            );
+        }
     }
 
     /// The `\((…))` index-term-shorthand escape and the `\\MM…MM` doubled-marker

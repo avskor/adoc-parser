@@ -1135,6 +1135,26 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (seed-tags re-parse label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) —
     снимает punt'ы, делает new==asciidoctor на синтетических edge. Затем удаление legacy-quotes (требует ещё
     редизайн sentinel-байт-fallback). [Doc-свип «gate»-терминологии — СДЕЛАНО в 103-й, см. выше.]
+  - [x] **ФАЗА 1: seed-tags re-parse label (link/mailto/autolink/xref/`<<>>`)** (ветка
+    `refactor/macro-native-sentinel`, 2026-06-21, 152-я). Sentinel в РЕ-ПАРСИМОМ лейбле макроса больше не пантит:
+    `reparse_label` гоняет лейбл через `run_pipeline_seeded` (внутренний `Work.tags` = клон внешней таблицы → seeded
+    sentinel'ы разрешаются против тех же passthrough/`Literal`/char-ref листьев, пассы их пропускают, внутренний
+    tokenize восстанавливает — зеркало asciidoctor: placeholder выживает `subs.without(:macros)` и восстанавливается
+    глобально). Реализация: `TagToken`/`PassPiece` derive `Clone`; `Work::with_tags`; `run_pipeline_seeded` +
+    общий `run_pipeline_with`; `build_cross_reference`/`build_link`/`push_label` берут `seed: &[TagToken]`; matcher'ы
+    `try_xref`/`try_cross_ref`/`try_mailto` получили `work: &Work`. Whole-span `span_has_sentinel`-punt в этих
+    matcher'ах заменён на ТОЧЕЧНЫЙ punt: `target_has_sentinel` (id/url/email verbatim) + `attr_has_sentinel`
+    (role/window/subject/body verbatim) — лейбл идёт в seeded-репарс. Поле `label` тега `CrossReference`
+    десентинелизируется (рендер читает только `is_none()`, но убираем управляющие байты `\x01..\x02` из Cow-поля;
+    no-sentinel байт-в-байт через fast-path). +1 parser (`reproduces_legacy_on_xref_label_seeded` — сравнение по
+    модулю render-мёртвого поля) + расширен `reproduces_legacy_on_link_passthrough_url_inputs` (формы link/mailto/
+    autolink label-passthrough == legacy ТОЧНО) +1 html (`test_macro_label_passthrough_seeded_reparse_html`). clippy
+    0, test --workspace 1239 зелёных. **Гейт 344/344 байт-в-байт** + **frontier new-vs-base 0 diff (250)** =
+    HTML-нейтрально по ПОСТРОЕНИЮ (native==legacy на этих формах; в корпусе их и нет). **10/10 CLI-проб == asciidoctor
+    2.0.23** (link/xref/`<<>>`/mailto/autolink label с passthrough/escape/char-ref). Снято: 2 `span_has_sentinel`-punt
+    (xref/mailto) + 2 label `flag_punt` (try_link/try_autolink). **NEXT:** ФАЗА 2 verbatim-семейства
+    (image-alt/icon/footnote/stem/anchor/index/UI) — `span_has_sentinel`-punt → реконструкция verbatim-строки через
+    `desentinelize`; ФАЗА 3 footnote. Коммит на ветке (чекпойнт), merge в master — ПО ЗАПРОСУ.
 
 ---
 

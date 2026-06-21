@@ -520,6 +520,48 @@ fn test_escaped_ellipsis_in_link_target_html() {
 }
 
 #[test]
+fn test_macro_label_passthrough_seeded_reparse_html() {
+    // A passthrough in a macro LABEL was formerly punted to the legacy parser
+    // because the engine could not re-parse a label already holding a sentinel.
+    // The label is now re-parsed by a seeded sub-pipeline, so the passthrough's
+    // protected content (`raw__text`, double underscores NOT emphasised) renders
+    // natively — byte-for-byte with Asciidoctor 2.0.23.
+    assert!(
+        to_html("link:http://x.com[++raw__text++]")
+            .contains("<a href=\"http://x.com\">raw__text</a>"),
+        "{}",
+        to_html("link:http://x.com[++raw__text++]")
+    );
+    // A quote span beside the passthrough still substitutes inside the label.
+    assert!(
+        to_html("link:http://x.com[*bold* ++raw++]")
+            .contains("<a href=\"http://x.com\"><strong>bold</strong> raw</a>"),
+        "{}",
+        to_html("link:http://x.com[*bold* ++raw++]")
+    );
+    // mailto and the cross-reference families take the same seeded path.
+    assert!(
+        to_html("mailto:a@b.com[++raw__text++]")
+            .contains("<a href=\"mailto:a@b.com\">raw__text</a>"),
+        "{}",
+        to_html("mailto:a@b.com[++raw__text++]")
+    );
+    assert!(
+        to_html("xref:tgt[++raw__text++]").contains("<a href=\"#tgt\">raw__text</a>"),
+        "{}",
+        to_html("xref:tgt[++raw__text++]")
+    );
+    // An escaped marker in the label is honoured natively too (`\*` keeps the
+    // literal `*`, no emphasis).
+    assert!(
+        to_html("link:http://x.com[\\*not bold* x]")
+            .contains("<a href=\"http://x.com\">*not bold* x</a>"),
+        "{}",
+        to_html("link:http://x.com[\\*not bold* x]")
+    );
+}
+
+#[test]
 fn test_escaped_macro_prefix_file_scheme_and_anchor_id() {
     // `file://` is an autolink scheme (Asciidoctor `(?:https?|file|ftp|irc)://`):
     // a bare `file://` URL links as `class="bare"`.

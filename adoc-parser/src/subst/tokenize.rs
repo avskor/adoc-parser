@@ -73,14 +73,22 @@ impl SpanKind {
 /// `InlinePassthrough` event (the renderer emits it verbatim); non-`raw`
 /// content becomes a `Text` event (the renderer html-escapes it — the
 /// `specialcharacters`-only semantics of `+…+`/`++…++`).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct PassPiece {
     pub text: String,
     pub raw: bool,
 }
 
 /// A deferred tag, referenced by a sentinel's index.
-#[derive(Debug)]
+///
+/// `Clone` is derived so a macro label whose raw text already carries an
+/// earlier-pass sentinel can be re-parsed by a *seeded* sub-pipeline
+/// ([`super::run_pipeline_seeded`]): the inner [`Work`] starts with a clone of
+/// the outer tag table, so the seeded sentinels resolve against the same tokens
+/// while the inner passes append fresh ones. Only the leaf tokens an early pass
+/// can produce (passthrough / escaped `Literal` / char-ref) are ever cloned this
+/// way, so the cost is confined to the rare sentinel-in-label path.
+#[derive(Debug, Clone)]
 pub(super) enum TagToken {
     Open {
         kind: SpanKind,
@@ -167,6 +175,18 @@ impl Work {
         Work {
             buf: text.to_string(),
             tags: Vec::new(),
+        }
+    }
+
+    /// Build a working state whose tag table is pre-seeded with `tags` (a clone
+    /// of an outer pipeline's table). Sentinels already present in `text` then
+    /// index the seeded tokens; the passes append new tokens after them. Used by
+    /// [`super::run_pipeline_seeded`] to re-parse a macro label that carries an
+    /// earlier-extracted passthrough/escape/char-ref sentinel.
+    pub(super) fn with_tags(text: &str, tags: Vec<TagToken>) -> Self {
+        Work {
+            buf: text.to_string(),
+            tags,
         }
     }
 

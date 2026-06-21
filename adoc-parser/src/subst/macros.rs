@@ -71,21 +71,34 @@
 //! the single `Text` event the renderer needs to swap in the auto-generated xref
 //! text.
 //!
-//! ## Sentinel-free span guard
+//! ## Sentinel handling in a macro span
 //!
 //! Because earlier passes already lifted passthroughs/escapes/char-refs into
 //! sentinels, a macro whose source span now contains one (`xref:x[+raw+]`, a
 //! passthrough inside the label) no longer has the raw text the legacy parser
-//! would re-parse. The engine cannot yet faithfully form such a macro (the
-//! verbatim source is gone), so the pass declines the span (leaving it literal)
-//! AND records the punt via [`super::flag_decline`]: [`super::try_parse`] then falls back
-//! to the legacy recursive parser for the whole paragraph, which still has the
-//! raw text and renders these correctly. This is the explicit replacement for
-//! the old differential-equality gate, which used to absorb the same divergence.
-//! Converting each macro family to native sentinel handling (re-parsing labels
-//! against the shared tag table, reconstructing verbatim target strings) will
-//! retire the corresponding punt. The common case — plain targets and text/quote
-//! labels — carries no sentinels and is extracted normally.
+//! would re-parse. There are two cases:
+//!
+//! - **Sentinel in a re-parsed LABEL** (`link:`/`mailto:`/`xref:`/`<<>>`/
+//!   URL`[…]`): handled natively. [`reparse_label`] re-parses the label with a
+//!   *seeded* sub-pipeline ([`super::run_pipeline_seeded`]) whose tag table is a
+//!   clone of the outer one, so the sentinel resolves against its leaf and the
+//!   label events match what the top-level tokenizer would emit — mirroring
+//!   Asciidoctor, where a passthrough placeholder survives the label's
+//!   `subs.without(:macros)` re-substitution and is restored globally at the end.
+//! - **Sentinel in a verbatim TARGET / non-label attribute** (an id, URL, email,
+//!   role, window, subject, body the tag stores without re-parsing): the verbatim
+//!   source is gone, so the pass still declines the span (leaving it literal) AND
+//!   records the punt via [`super::flag_decline`]/[`target_has_sentinel`]/
+//!   [`attr_has_sentinel`]: [`super::try_parse`] falls back to the legacy recursive
+//!   parser for the whole paragraph, which still has the raw text and renders it
+//!   correctly. The link family's targets accept the richer
+//!   [`reconstruct_link_target`]/[`passthrough_url`] reconstruction instead.
+//!
+//! The remaining verbatim-leaf families (image alt / icon / footnote / stem /
+//! anchor / index-term / UI) still punt on any span sentinel via
+//! [`span_has_sentinel`] — converting those to native verbatim-string
+//! reconstruction is the next step. The common case — plain targets and
+//! text/quote labels — carries no sentinels and is extracted normally.
 
 use std::borrow::Cow;
 
@@ -94,7 +107,7 @@ use crate::event::{Event, MenuPart, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
 use super::flag_decline;
-use super::tokenize::{sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
+use super::tokenize::{desentinelize, sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
 
 /// Record that a macro was declined because its span contained a sentinel — the
 /// shared [`super::flag_decline`] makes [`super::try_parse`] fall back to legacy.
@@ -123,7 +136,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // xref:target[label]
         if bytes[i] == b'x' && src[i..].starts_with("xref:") {
-            if let Some((events, end)) = try_xref(&src, i, subs, options) {
+            if let Some((events, end)) = try_xref(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -149,7 +162,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // mailto:email[attrs]
         if bytes[i] == b'm' && src[i..].starts_with("mailto:") {
-            if let Some((events, end)) = try_mailto(&src, i, subs, options) {
+            if let Some((events, end)) = try_mailto(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -350,7 +363,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // <<target>> / <<target,label>>
         if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'<') {
-            if let Some((events, end)) = try_cross_ref(&src, i, subs, options) {
+            if let Some((events, end)) = try_cross_ref(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -508,6 +521,7 @@ fn try_xref(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "xref:"
@@ -519,13 +533,17 @@ fn try_xref(
         return None;
     }
     let end = start + 5 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
+    // A sentinel in the TARGET still punts: the verbatim id/path the
+    // `CrossReference` tag carries is no longer present. A sentinel in the LABEL is
+    // re-parsed natively by [`build_cross_reference`] (seeded with the outer table),
+    // so it no longer forces the whole span to legacy.
+    if target_has_sentinel(target) {
         return None;
     }
     // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
     // explicit one.
     let label = (!label_text.is_empty()).then_some(label_text.as_ref());
-    Some((build_cross_reference(target, label, subs, options), end))
+    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
 }
 
 /// Whether `content` begins with a character Asciidoctor accepts as the first
@@ -546,6 +564,7 @@ fn try_cross_ref(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let after_open = start + 2;
@@ -568,9 +587,6 @@ fn try_cross_ref(
         return None;
     }
     let end = after_open + close + 2;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     // With a comma: trim both target and label. Without: the whole content is the
     // target (untrimmed), no explicit label.
     let (target, label) = if let Some((t, l)) = content.split_once(',') {
@@ -580,7 +596,12 @@ fn try_cross_ref(
     };
     // A leading '#' is an explicit-anchor marker, not part of the id.
     let target = target.strip_prefix('#').unwrap_or(target);
-    Some((build_cross_reference(target, label, subs, options), end))
+    // A sentinel in the target id still punts (its verbatim source is gone); a
+    // sentinel in the label is re-parsed natively (seeded) by `build_cross_reference`.
+    if target_has_sentinel(target) {
+        return None;
+    }
+    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
 }
 
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
@@ -594,22 +615,26 @@ fn try_cross_ref(
 fn build_cross_reference(
     target: &str,
     label: Option<&str>,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Vec<Event<'static>> {
     let mut events: Vec<Event<'static>> = Vec::new();
     events.push(Event::Start(Tag::CrossReference {
         target: Cow::Owned(target.to_string()),
-        label: label.map(|l| Cow::Owned(l.to_string())),
+        // Only the field's presence drives the renderer (the label *events* below
+        // carry the visible text), but desentinelize it so a label that swallowed a
+        // passthrough/escape/char-ref leaf carries the restored source rather than a
+        // raw `TAG_LEAD … TAG_TAIL` control sequence. No-sentinel labels are
+        // byte-unchanged (the helper fast-paths them).
+        label: label.map(|l| Cow::Owned(desentinelize(seed, l))),
     }));
     match label {
         None => events.push(Event::Text(Cow::Owned(target.to_string()))),
         Some(l) if !l.is_empty() => {
             // Re-parse the label exactly as `push_macro_label` does: full subs
             // minus MACROS (so a nested macro stays literal and recursion ends).
-            let inner: Vec<Event<'static>> =
-                super::run_pipeline(l, subs.without(SubstitutionSet::MACROS), options);
-            for e in inner {
+            for e in reparse_label(l, seed, subs, options) {
                 events.push(e);
             }
         }
@@ -648,12 +673,6 @@ fn try_link(
         return None;
     }
     let end = start + 5 + bracket_end + 1;
-    // The label is re-parsed by the engine, which cannot run over sentinel bytes,
-    // so a sentinel in the label punts to legacy (mirrors the old whole-span guard).
-    if content.as_bytes().contains(&TAG_LEAD) {
-        flag_punt();
-        return None;
-    }
     // The URL is normally plain text; two sentinel forms are supported: a
     // passthrough-protected target (`link:++url++[…]`, reconstructed verbatim) and
     // an escaped typographic pattern sealed as a `Literal` (`link:a\...b[…]`,
@@ -675,6 +694,12 @@ fn try_link(
         return None;
     }
     let attrs = parse_link_attrs(&content, LinkKind::Link);
+    // A sentinel in a non-label attribute (role/window) is stored verbatim on the
+    // tag with no native reconstruction, so it still punts; one confined to the
+    // label text is re-parsed natively (seeded) by `build_link`.
+    if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+        return None;
+    }
     // An empty attrlist text marks a "bare" link (visible text = the target).
     let is_bare = attrs.text.is_empty();
     let label = (!is_bare).then_some(attrs.text);
@@ -686,6 +711,7 @@ fn try_link(
         is_bare,
         label,
         &url,
+        &work.tags,
         subs,
         options,
     );
@@ -731,6 +757,7 @@ fn try_mailto(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "mailto:"
@@ -742,11 +769,22 @@ fn try_mailto(
         return None;
     }
     let end = start + 7 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
+    // The email goes verbatim into the URL, so a sentinel there still punts.
+    if target_has_sentinel(email) {
         return None;
     }
     let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
     let attrs = parse_link_attrs(&content, LinkKind::Mailto);
+    // `subject`/`body` are URL-encoded verbatim and `role`/`window` stored verbatim,
+    // none with native reconstruction — a sentinel in any of them still punts. Only
+    // the label text (`attrs.text`) gains the seeded native re-parse.
+    if attr_has_sentinel(attrs.subject)
+        || attr_has_sentinel(attrs.body)
+        || attr_has_sentinel(attrs.window)
+        || attr_has_sentinel(attrs.role)
+    {
+        return None;
+    }
     let url = match (attrs.subject, attrs.body) {
         (None, None) => base.to_string(),
         (subject, body) => {
@@ -775,6 +813,7 @@ fn try_mailto(
         false,
         label,
         email,
+        &work.tags,
         subs,
         options,
     );
@@ -1473,8 +1512,18 @@ fn try_autolink(
                 flag_punt();
                 return None;
             };
-            let events =
-                build_link(target.clone(), None, false, None, true, None, &target, subs, options);
+            let events = build_link(
+                target.clone(),
+                None,
+                false,
+                None,
+                true,
+                None,
+                &target,
+                &work.tags,
+                subs,
+                options,
+            );
             return Some((events, end, true));
         }
         return None;
@@ -1499,12 +1548,6 @@ fn try_autolink(
     {
         let end = start + url_len + close + 1;
         let content = unescape_close_bracket(&after_url[1..close]);
-        // The label is re-parsed by the engine, which cannot run over sentinel
-        // bytes, so a sentinel in the label punts to legacy (mirrors `try_link`).
-        if content.as_bytes().contains(&TAG_LEAD) {
-            flag_punt();
-            return None;
-        }
         // The URL part may carry an escaped-typographic `Literal` sentinel
         // (`a\...b`) or a plain `...` Asciidoctor would have curled; reconstruct it.
         let Some(target) = reconstruct_link_target(work, url) else {
@@ -1512,6 +1555,11 @@ fn try_autolink(
             return None;
         };
         let attrs = parse_link_attrs(&content, LinkKind::Link);
+        // A sentinel in a non-label attribute (role/window) still punts; one in the
+        // label text is re-parsed natively (seeded), mirroring `try_link`.
+        if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+            return None;
+        }
         let is_bare = attrs.text.is_empty();
         let label = (!is_bare).then_some(attrs.text);
         let events = build_link(
@@ -1522,6 +1570,7 @@ fn try_autolink(
             is_bare,
             label,
             &target,
+            &work.tags,
             subs,
             options,
         );
@@ -1534,8 +1583,18 @@ fn try_autolink(
         flag_punt();
         return None;
     };
-    let events =
-        build_link(target.clone(), None, false, None, true, None, &target, subs, options);
+    let events = build_link(
+        target.clone(),
+        None,
+        false,
+        None,
+        true,
+        None,
+        &target,
+        &work.tags,
+        subs,
+        options,
+    );
     Some((events, end, false))
 }
 
@@ -1593,7 +1652,8 @@ fn try_email(
     }
 
     let email = &src[local_start..domain_end];
-    // Asciidoctor does not mark email autolinks as bare.
+    // Asciidoctor does not mark email autolinks as bare. An email autolink has no
+    // explicit label (visible text is the email), so the seed table is unused.
     let events = build_link(
         format!("mailto:{email}"),
         None,
@@ -1602,6 +1662,7 @@ fn try_email(
         false,
         None,
         email,
+        &[],
         subs,
         options,
     );
@@ -1622,6 +1683,7 @@ fn build_link(
     is_bare: bool,
     label: Option<&str>,
     bare_text: &str,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Vec<Event<'static>> {
@@ -1633,7 +1695,7 @@ fn build_link(
         role: role.map(|r| Cow::Owned(r.to_string())),
     })];
     match label {
-        Some(l) => push_label(l, subs, options, &mut events),
+        Some(l) => push_label(l, seed, subs, options, &mut events),
         None => events.push(Event::Text(Cow::Owned(bare_text.to_string()))),
     }
     events.push(Event::End(TagEnd::Link));
@@ -1648,6 +1710,7 @@ fn build_link(
 /// the mirror exact.
 fn push_label(
     text: &str,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
     events: &mut Vec<Event<'static>>,
@@ -1655,9 +1718,28 @@ fn push_label(
     if text.is_empty() {
         return;
     }
-    let inner: Vec<Event<'static>> =
-        super::run_pipeline(text, subs.without(SubstitutionSet::MACROS), options);
-    events.extend(inner);
+    events.extend(reparse_label(text, seed, subs, options));
+}
+
+/// Re-parse a macro label's raw text with `MACROS` cleared (mirroring
+/// `push_macro_label`). When the text already carries an earlier-extracted
+/// sentinel (a passthrough / escaped `Literal` / char-ref the link or
+/// cross-reference label swallowed), the re-parse is *seeded* with the outer tag
+/// table so the sentinel resolves against its leaf rather than being mis-read by
+/// a fresh inner table — the native replacement for the old "sentinel in the
+/// label → punt" guard. The common sentinel-free label takes the plain pipeline.
+fn reparse_label(
+    text: &str,
+    seed: &[TagToken],
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'static>> {
+    let subs = subs.without(SubstitutionSet::MACROS);
+    if text.as_bytes().contains(&TAG_LEAD) {
+        super::run_pipeline_seeded(text, seed, subs, options)
+    } else {
+        super::run_pipeline(text, subs, options)
+    }
 }
 
 /// Whether `src[start..end]` (a candidate macro span) contains a tag sentinel —
@@ -1667,6 +1749,33 @@ fn push_label(
 /// signalling [`super::try_parse`] to fall back to legacy for the paragraph.
 fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
     let has = src.as_bytes()[start..end].contains(&TAG_LEAD);
+    if has {
+        flag_punt();
+    }
+    has
+}
+
+/// Whether a macro *target* substring (a verbatim id / URL / email the tag stores
+/// without re-parsing) carries a sentinel. Unlike a label — which the engine can
+/// now re-parse natively against the seeded tag table — a target's lost verbatim
+/// source still forces a punt, so a `true` records it ([`flag_punt`]) for
+/// [`super::try_parse`] to fall back to legacy. (The link family's targets accept
+/// the richer [`reconstruct_link_target`] / [`passthrough_url`] reconstruction
+/// instead of this blanket decline.)
+fn target_has_sentinel(target: &str) -> bool {
+    let has = target.as_bytes().contains(&TAG_LEAD);
+    if has {
+        flag_punt();
+    }
+    has
+}
+
+/// Whether an optional verbatim link attribute (role / window — stored on the tag
+/// without re-parsing) carries a sentinel. Records the punt on `true`, since only
+/// the *label* text gains native seeded re-parsing; a sentinel that landed in a
+/// non-label attribute has no reconstruction here and falls back to legacy.
+fn attr_has_sentinel(attr: Option<&str>) -> bool {
+    let has = attr.is_some_and(|s| s.as_bytes().contains(&TAG_LEAD));
     if has {
         flag_punt();
     }
