@@ -357,6 +357,7 @@ fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
     if rest.get(name_len) == Some(&b':') {
         return 0;
     }
+    let is_anchor = rest.starts_with(b"anchor:");
     // Target: a run of non-whitespace characters up to the opening bracket. A
     // sentinel byte here means an earlier pass lifted part of the target into a
     // leaf — decline (the legacy parser saw verbatim source).
@@ -372,6 +373,15 @@ fn macro_escape_len(bytes: &[u8], p: usize) -> usize {
     }
     // Require an opening bracket immediately, then a closing bracket after it.
     if rest.get(i) != Some(&b'[') {
+        return 0;
+    }
+    // The `anchor:` macro requires a valid id (`InlineAnchorRx`); an invalid
+    // target (`\anchor:<id>[…]`) is not a macro, so the `\\?` capture never
+    // engages and the backslash stays literal — decline here.
+    if is_anchor
+        && !std::str::from_utf8(&rest[name_len..i])
+            .is_ok_and(crate::scanner::is_valid_anchor_id)
+    {
         return 0;
     }
     i += 1; // past '['

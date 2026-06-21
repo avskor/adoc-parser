@@ -1619,6 +1619,23 @@ pub fn single_plus_span_len(s: &str, i: usize) -> Option<usize> {
     None
 }
 
+/// Whether `id` is a valid inline-anchor id per Asciidoctor's `InlineAnchorRx`
+/// (`anchor:([CC_ALPHA_:][CC_WORD\-:.]*)\[…\]`): the first character is a letter,
+/// `_`, or `:`, and every following character is a word char (letter/digit/`_`),
+/// `-`, `:`, or `.`. A target that fails this (e.g. `<id>`, `1abc`, `a#b`) makes
+/// `anchor:<id>[…]` no macro at all — it stays literal text, and an escaped
+/// `\anchor:<id>[…]` keeps its backslash (the `\\?` capture never engages because
+/// the construct does not match). `is_alphabetic`/`is_alphanumeric` mirror the
+/// Unicode `\p{Alpha}`/`\p{Word}` classes.
+pub fn is_valid_anchor_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' || c == ':' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2782,5 +2799,23 @@ mod tests {
         assert_eq!(strip_setext_title("Title", ""), None);
         // Unicode title: length counts characters, not bytes.
         assert_eq!(strip_setext_title("Café", "===="), Some((1, "Café")));
+    }
+
+    #[test]
+    fn test_is_valid_anchor_id() {
+        // Valid: first char letter/`_`/`:`, rest word/`-`/`:`/`.`.
+        assert!(is_valid_anchor_id("myid"));
+        assert!(is_valid_anchor_id("my-id"));
+        assert!(is_valid_anchor_id("_us:.0"));
+        assert!(is_valid_anchor_id(":sec"));
+        assert!(is_valid_anchor_id("sect.1-a:b"));
+        assert!(is_valid_anchor_id("café")); // Unicode \p{Alpha}
+        // Invalid: empty, leading digit, leading/embedded non-id char.
+        assert!(!is_valid_anchor_id(""));
+        assert!(!is_valid_anchor_id("1abc"));
+        assert!(!is_valid_anchor_id("<id>"));
+        assert!(!is_valid_anchor_id("i<d>"));
+        assert!(!is_valid_anchor_id("a#b"));
+        assert!(!is_valid_anchor_id("a b"));
     }
 }

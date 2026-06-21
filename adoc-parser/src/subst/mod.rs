@@ -1536,6 +1536,51 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn escaped_macro_prefix_file_scheme_and_anchor_id() {
+        // `file://` is an autolink scheme (Asciidoctor `(?:https?|file|ftp|irc)://`):
+        // a bare `file://` URL links as `class="bare"`, exactly like `ftp`/`irc`.
+        assert_eq!(pipeline("file:///root"), vec![
+            Event::Start(Tag::Link {
+                url: "file:///root".to_string().into(),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+            }),
+            Event::Text("file:///root".into()),
+            Event::End(TagEnd::Link),
+        ]);
+        // Escaped `\file://…` drops the backslash to plain text (no link), where an
+        // unescaped autolink could open. `\file:relative` has no `://`, so it is no
+        // scheme at all and the backslash stays literal.
+        assert_eq!(pipeline("\\file:///root"), vec![Event::Text("file:///root".into())]);
+        assert_eq!(pipeline("\\file:relative"), vec![Event::Text("\\file:relative".into())]);
+
+        // `anchor:` requires a valid id (`InlineAnchorRx`): a valid id is an anchor…
+        assert_eq!(pipeline("anchor:my-id[t]"), vec![
+            Event::Start(Tag::Anchor { id: "my-id".to_string().into(), label: Some("t".into()) }),
+            Event::End(TagEnd::Anchor),
+        ]);
+        // …while an invalid id (`<id>`, a leading digit, or `#`) is no macro at all,
+        // so the whole form stays literal text.
+        assert_eq!(pipeline("anchor:<id>[t]"), vec![Event::Text("anchor:<id>[t]".into())]);
+        assert_eq!(pipeline("anchor:1abc[t]"), vec![Event::Text("anchor:1abc[t]".into())]);
+        // An escaped `\anchor:` with a VALID id drops the backslash (escaped macro)…
+        assert_eq!(pipeline("\\anchor:myid[t]"), vec![Event::Text("anchor:myid[t]".into())]);
+        // …but with an INVALID id the construct never matches, so the `\\?` capture
+        // never engages and the backslash stays literal (Asciidoctor parity).
+        assert_eq!(pipeline("\\anchor:<id>[t]"), vec![Event::Text("\\anchor:<id>[t]".into())]);
+
+        // The default engine and the legacy fallback agree on every form above.
+        for c in [
+            "file:///root", "\\file:///root", "\\file:relative", "anchor:my-id[t]",
+            "anchor:<id>[t]", "anchor:1abc[t]", "\\anchor:myid[t]", "\\anchor:<id>[t]",
+        ] {
+            assert_eq!(pipeline(c), legacy(c), "engine mismatch on {c:?}");
+        }
+    }
+
     /// With the inline-image macro ported, the pipeline must reproduce legacy on
     /// the `image:target[attrs]` forms: bare (filename-derived alt), explicit alt,
     /// positional width/height, named attrs (width/height/align/float/link/role/
