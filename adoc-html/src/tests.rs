@@ -881,6 +881,25 @@ fn test_colon_prefixed_dlist_term_html() {
 }
 
 #[test]
+fn test_block_image_after_dlist_detaches_html() {
+    // A block image after a blank line (no `+` continuation) ends the
+    // description list and renders as a sibling imageblock OUTSIDE the `<dd>`,
+    // byte-identical to Asciidoctor (regression for the block-detach guard).
+    let html = to_html("term:: desc\n\nimage::foo.png[]");
+    assert_eq!(
+        html,
+        "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">term</dt>\n<dd>\n<p>desc</p>\n</dd>\n</dl>\n</div>\n<div class=\"imageblock\">\n<div class=\"content\">\n<img src=\"foo.png\" alt=\"foo\">\n</div>\n</div>\n"
+    );
+
+    // Without the blank line the image attaches inside the `<dd>` (Asciidoctor).
+    let html = to_html("term:: desc\nimage::foo.png[]");
+    assert_eq!(
+        html,
+        "<div class=\"dlist\">\n<dl>\n<dt class=\"hdlist1\">term</dt>\n<dd>\n<p>desc</p>\n<div class=\"imageblock\">\n<div class=\"content\">\n<img src=\"foo.png\" alt=\"foo\">\n</div>\n</div>\n</dd>\n</dl>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_nested_description_list_html() {
     let html = to_html("CPU:: The brain\nSpeed::: Fast");
     assert_eq!(

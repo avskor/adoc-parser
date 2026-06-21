@@ -1,5 +1,45 @@
 # Session context
 
+## Сессия (2026-06-21, 148-я) — F-AN leaf-блок после list-item не отсоединялся (ветка `fix/dlist-block-detach`, НЕ закоммичено)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`8e7424e`). Все F-* закрыты, единственная `- [ ]` = опциональная →
+frontier-триаж по методологии. frontier_parity: identical 226, clean-div 7. Триаж debuter [16] через showdiff (НЕ метка):
+`image::…[…,align=center]` после dlist-описания рендерился ВНУТРИ `<dd>`, asciidoctor — сиблингом после `</dl>`.
+
+### Корень (ПАРСЕР, `block.rs`)
+Leaf-блоки `image::`/`video::`/`audio::` (`scan_block_macros`) и thematic/page break (`scan_leaf_blocks`) НЕ имели гарда
+закрытия списка, в отличие от admonition/table/comment (`is_directly_in_list_context() && !in_continuation && had_blank_line
+→ close_list_contexts()`). Минимальные пробы расширили класс: все 4 + `'''` цеплялись к предыдущему dd (склеивались прямо в
+`<p>`); делимитед-блоки/admonition/table/markdown-fence/параграф — корректно отсоединялись.
+
+### Поведение asciidoctor (выведено пробами 2.0.23)
+- leaf-блок после ПУСТОЙ строки (без `+`) → завершает список (сиблинг).
+- БЕЗ пустой строки (`term:: desc` ⏎ `image::…`) ИЛИ после `+`-continuation → прикрепляется к dd.
+
+### Реализация (1 хелпер + 5 арм'ов)
+1. `BlockScanner::close_list_if_blank_separated() -> Option<Option<Event>>` (зеркало inline-гарда admonition/table/comment;
+   `Some(popped)` = сработал, `None` = блок остаётся прикреплён).
+2. Вызван до `advance()` в: thematic break, page break, block image, block video, block audio.
+   Срабатывает и на обычных `ListItem` (ordered/unordered).
+
+### Верификация
+- clippy 0; test --workspace зелёное (parser 630→632, html 485→486). +2 parser (`test_block_macro_after_blank_detaches_from_dlist`,
+  `test_thematic_break_after_blank_detaches_from_list`) +1 html (`test_block_image_after_dlist_detaches_html`).
+- **Гейт 344/344 байт-в-байт** (`gate_check.py` new-vs-base 0 diff). Риск нулевой ПО КОНСТРУКЦИИ: гард меняет вывод лишь
+  при `(список)+(пустая строка)+(leaf-блок)`, где мы УЖЕ расходились — будь это в гейте, был бы diff (гейт чист).
+- **Frontier identical 226→227 (+1):** new-vs-base sweep по всем 250 = РОВНО 2 файла, ОБА IMPROVED (debuter 16→0 флип;
+  asciidoctor-1-5-0 10→3, остаток = section-id с инлайн-разметкой в `<h2 id>`, несвязанный класс), **0 регрессий**.
+- 6 CLI-проб vs asciidoctor MATCH (detach image/video/audio/hr, no-blank attach, `+`-attach, ordered/unordered).
+
+### NEXT
+Закоммитить ветку + merge в master (по запросу пользователя). base-бинарь `/tmp/adoc_base` = чистый master `8e7424e`.
+Остаток frontier clean-div: manpage [146] (`:doctype: manpage` — нишевый бэкенд, каскад с заголовка), multi-special-ex [87]
+(partintro/book-doctype: наш `<div openblock partintro>` vs asciidoctor `<div sect1>`), CHANGELOG [75]; три по 1 — известные
+не-баги (doctime/TZ, greedy `+++`/`+-+`, `{asciidoctor-version}`). **Вне scope F-AN:** `toc::[]`-макрос после списка тем же
+путём не отсоединяется (гард тривиально добавить, не в корпусе).
+
+---
+
 ## Сессия (2026-06-21, 147-я) — F-AM двухстрочный (setext) заголовок документа/секций + авто-compat-mode (ветка `feat/setext-section-titles`)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`549ed6c`). Единственная `- [ ]` = опциональная → frontier-триаж.
