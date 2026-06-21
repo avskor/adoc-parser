@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-21, 145-я) — F-AK Unicode word-char в apostrophe-replacement (ветка `fix/apostrophe-unicode-word-char`)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`917e86e`). Единственная `- [ ]` в TODO = опциональная (0 корпусного
+выигрыша) → frontier-триаж по методологии. Сессия 144 указывала «СИЛЬНЫЙ кандидат: Unicode apostrophe, флипнет github-0.1.4».
+**Урок памяти подтвердился:** github-0.1.4 НЕ содержит не-ASCII апострофов (метка прошлой сессии неточна, differ врёт) —
+реальные расхождения только в 3 французских файлах. Реализовано без AskUserQuestion/plan-mode (вынужденно-чистый, гейт-риск
+нулевой по конструкции).
+
+### Диагностика (showdiff топ clean-div — триаж, не метка)
+- `grep` не-ASCII-фланк апострофов во frontier → РОВНО 3: README-fr `d'écrire`, debuter `d'éditer`+`l'éditeur` (`é` справа/слева).
+- `d'autres`/`it's` (ASCII-фланг) УЖЕ курлились норм. Проблема только в многобайтных буквах.
+- **Правило asciidoctor** (`asciidoctor.rb:506`, gem 2.0.23): REPLACEMENTS `(#{CG_ALNUM})\\?'(?=#{CG_ALPHA})`, где
+  `CG_ALNUM='\p{Alnum}'`, `CG_ALPHA='\p{Alpha}'` — Unicode-aware И АСИММЕТРИЧЕН (левый alnum, правый alpha БЕЗ цифр).
+- Попутно обнаружены 2 ОТДЕЛЬНЫХ класса (вне scope): (1) replacements не идут в image `alt`-текст; (2) structural
+  README-fr [1271]/debuter imageblock-ordering.
+
+### Корень (ЧИСТО ПАРСЕР, 1 арм `adoc-parser/src/inline.rs::apply_typographic_replacements`)
+- Apostrophe-арм гейтил `bytes[i-1].is_ascii_alphanumeric() && bytes[i+1].is_ascii_alphanumeric()` — байтовый ASCII-only,
+  и правый класс включал цифры (расхождение с `\p{Alpha}`). Многобайтный `é` → байт `i±1` не ASCII alnum → не курлили.
+- Единственная реализация: модный движок (дефолт по Фазе 3) через `subst/replacements.rs::run` переиспользует ту же функцию.
+- **Фикс:** декод флангующих СИМВОЛОВ — `text[..i].chars().next_back().is_some_and(char::is_alphanumeric)` (лево) +
+  `text[i+1..].chars().next().is_some_and(char::is_alphabetic)` (право). Срезы всегда на char-boundary (`'`=1 ASCII-байт).
+  `i>0`/`i+1<len` гарды поглощены `is_some_and` (пустой срез → None → false).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 623→**625**, html unit 480→**481**, compat 233).
+  +2 parser (`test_apostrophe_unicode_word_char`: право/лево/обе не-ASCII; `test_apostrophe_digit_on_right_stays_literal`:
+  `5'6` литерал, `1'a` курлит) +1 html (`test_apostrophe_unicode_word_char_html`).
+- **Гейт 344/344 байт-в-байт** vs master `917e86e` (base пересобран через worktree `/tmp/adoc-master-wt`, `gate_check.py` 0 diff).
+  **Гейт-нейтральность ДОКАЗУЕМА:** grep гейта → 0 не-ASCII-фланк апострофов И 0 `<alnum>'<digit>`.
+- **Frontier identical 222 (стабильно), clean-div 11:** new-vs-base по всем 250 = РОВНО 2 файла, оба IMPROVED
+  (README-fr 499→498, debuter 18→16), **0 регрессий**, 0 флипов (residual структурные/alt диффы).
+- 10 CLI-проб vs asciidoctor 2.0.23: семантически MATCH (различие лишь `’` U+2019 vs `&#8217;`-сущность — pre-existing,
+  схлоп под `normalize_html`, есть и для ASCII `it's`). Cyrillic `что'то` курлит; `5'6`/`'twas`/`cats'` — гарды держат.
+
+### Дальше (триажить топ clean-div через showdiff!)
+- Топ clean-div: sample 152 (setext — широкий), manpage 146 (doctype manpage — широкий), multi-special-ex 87, CHANGELOG 75,
+  README-fr/debuter (residual structural+alt после F-AK), asciidoclet 12 (multiline footnote), asciidoc-returns 12 (F-AG остаток).
+- **Кандидат-класс (обнаружен при F-AK): replacements не применяются к image `alt`-тексту** — `d'une` в alt README-fr [162]
+  прямой, asciidoctor `d&#8217;une`. Проверить путь рендера alt (`adoc-html`); может затронуть много файлов (любой alt с `'`/`--`/`...`).
+- diff=1 intrinsic (не actionable): doctime-localtime, migration (`{asciidoctor-version}`).
+- **Вне scope F-AK:** escaped Unicode-апостроф `d\'éditer` (escape.rs гейт ASCII-only, pre-existing); `:toc-placement:` атрибут.
+
+---
+
 ## Сессия (2026-06-21, 144-я) — F-AJ `:toc: preamble` размещает TOC ВНУТРИ preamble-div (ветка `fix/toc-preamble-placement`, СМЕРЖЕНА в master `9433b92`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`8cb4325`). Frontier-проход (release `-p adoc-cli`): identical 222,

@@ -93,10 +93,16 @@ pub(crate) fn apply_typographic_replacements<'a>(
             {
                 Some(("\u{2122}", 4)) // trademark
             }
-            b'\'' if i > 0
-                && bytes[i - 1].is_ascii_alphanumeric()
-                && i + 1 < len
-                && bytes[i + 1].is_ascii_alphanumeric() =>
+            // Apostrophe inside a word (Asciidoctor REPLACEMENTS
+            // `(\p{Alnum})\'(?=\p{Alpha})`): the character BEFORE must be
+            // Unicode alphanumeric and the character AFTER Unicode alphabetic
+            // (a digit on the right does NOT qualify — `5'6` stays literal,
+            // `1'a` curls). We decode the flanking *chars* rather than the raw
+            // bytes so multi-byte letters qualify too (`d'éditer` → `d’éditer`).
+            // `char::is_alphanumeric`/`is_alphabetic` are the stdlib mirror of
+            // `\p{Alnum}`/`\p{Alpha}` (close enough for word-internal text).
+            b'\'' if text[..i].chars().next_back().is_some_and(char::is_alphanumeric)
+                && text[i + 1..].chars().next().is_some_and(char::is_alphabetic) =>
             {
                 Some(("\u{2019}", 1))
             }
@@ -5353,6 +5359,39 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("it")),
             Event::Text(Cow::Borrowed("'s fine")),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_unicode_word_char() {
+        // Asciidoctor `(\p{Alnum})'(?=\p{Alpha})` is Unicode-aware: a multi-byte
+        // letter on either side of the apostrophe still curls it. Our byte-level
+        // `is_ascii_alphanumeric` gate used to leave these literal.
+        // Right side non-ASCII (`é`):
+        let events = parse("d'éditer");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("d\u{2019}éditer".to_string())),
+        ]);
+        // Left side non-ASCII (`café` ends in `é`):
+        let events = parse("café's");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("café\u{2019}s".to_string())),
+        ]);
+        // Both sides non-ASCII:
+        let events = parse("é'è");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("é\u{2019}è".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn test_apostrophe_digit_on_right_stays_literal() {
+        // Asciidoctor's lookahead is `\p{Alpha}` (letters only), so a digit on
+        // the right does NOT curl the apostrophe (`5'6` → literal). A digit on
+        // the LEFT is fine (`\p{Alnum}`), so `1'a` still curls.
+        let events = parse("5'6 and 1'a");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("5'6 and 1\u{2019}a".to_string())),
         ]);
     }
 

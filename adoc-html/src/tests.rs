@@ -4678,6 +4678,18 @@ fn test_monospace_replacements_and_char_refs_html() {
 }
 
 #[test]
+fn test_apostrophe_unicode_word_char_html() {
+    // Asciidoctor's apostrophe replacement `(\p{Alnum})'(?=\p{Alpha})` is
+    // Unicode-aware, so a multi-byte letter beside the apostrophe still curls
+    // it. `d'éditer` (right side `é`) and `café's` (left side `é`) both fold to
+    // the right single quote U+2019, while a digit on the right stays literal.
+    let html = to_html("d'éditer et café's, mais 5'6");
+    assert!(html.contains("d\u{2019}éditer"), "Unicode right flank curls. Got: {html}");
+    assert!(html.contains("café\u{2019}s"), "Unicode left flank curls. Got: {html}");
+    assert!(html.contains("5'6"), "digit on the right stays literal. Got: {html}");
+}
+
+#[test]
 fn test_escaped_marker_no_span_keeps_backslash_html() {
     // A backslash before a constrained marker with no closing marker ahead keeps the
     // backslash literal, because the span never forms (Asciidoctor strips `\` only on a
