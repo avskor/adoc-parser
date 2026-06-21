@@ -1,5 +1,43 @@
 # Session context
 
+## Сессия (2026-06-21, 146-я) — F-AL текст сноски получает inline-замены + многострочная склейка (ветка `fix/footnote-inline-subs`, смержена `383b521`)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`83caf44`). Все F-* закрыты, единственная `- [ ]` = опциональная →
+frontier-триаж по методологии. Триаж четырёх diff=1 файлов через showdiff (НЕ метка): github-0.1.4 [747] `I'm` курлится в
+параграфе, в сноске НЕТ. 145-я уже подсказывала «asciidoclet 12 = multiline footnote, asciidoc-returns 12» — фикс закрыл оба.
+
+### Корень (ЧИСТО РЕНДЕРЕР, 3 файла + render-core doc; парсер не тронут)
+- Текст сноски эмитился СЫРЫМ: `finish.rs::render_footnotes` делал только `html_escape_text(&note.text)`. Ни апостроф
+  (`I'm`/`it's`), ни `*bold*`/`_em_`/`` `mono` `` не применялись. Asciidoctor субституирует текст footnote-макроса в рамках
+  inline-прохода (NORMAL subs) в ТОЧКЕ макроса, хранит результат, рендерит в `#footnotes` as-is.
+- **Фикс:** (1) `HtmlRenderer::render_footnote_text` (lib.rs) — InlineParser с `current_subs()` + `push_event`; fast-path
+  без разметки = `html_escape_text` (text-content, `"` литерал — НЕ `&quot;`, в отличие от `render_inline_value`/attr-value)
+  → плоские сноски байт-в-байт как раньше; (2) `events.rs::Event::Footnote` рендерит в локальный String в define-time,
+  хранит ГОТОВЫЙ HTML; (3) `finish.rs:194` `push_str` вместо `html_escape_text`.
+- **Под-класс (тот же путь):** многострочная сноска → rstrip каждой строки + join одним пробелом. Правило выведено пробами
+  asciidoctor: `a\nb`→`a b`, `a \nb`→`a b`, `a\n b`→`a  b`, `a  \n  b`→`a   b`. Scoped к сноскам (обычный параграф `\n` хранит).
+
+### Ключевая проверка гейта (почему 344/344 держится)
+- Единственный гейт-файл с разметочной сноской — `macros/examples/footnote.adoc` (`pass:c,q[footnote:disclaimer[…_mine_…]]`).
+  В ПОЛНОМ файле id `disclaimer` УЖЕ определён ранее как `Opinions are my own.` (plain) → pass:c,q-вариант становится ССЫЛКОЙ
+  (lookup), текст игнорируется → output НЕ меняется. Вот почему define-time рендер не трогает гейт.
+- xref/`<<` в сносках корпуса = 0 (grep); sentinel-резолв идёт ПЕРЕД render_footnotes в ОБОИХ путях (finish:153→160,
+  run:520→540) — но define-time рендер без xref sentinel'ов не плодит → 0 NUL-утечек (tr -cd проверил весь frontier = 0).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (html unit 481→**485**: +4 теста subs/monospace+specialchars/
+  multiline/plain-unchanged; parser 625, compat 233).
+- **Гейт 344/344 байт-в-байт** vs master `83caf44` (base пересобран через worktree, `gate_check.py` 0 diff).
+- **Frontier identical 222→225 (+3):** github-0.1.4 (1→0), asciidoc-returns-to-github (12→0), asciidoclet-1.5.0 (12→0)
+  флипнули. new-vs-base sweep по всем 250 = РОВНО 4 файла, ВСЕ IMPROVED (+writers-guide 3735→3733), **0 регрессий**.
+- CLI-пробы vs asciidoctor 2.0.23 MATCH (`&#8217;` vs литеральный U+2019 — нормализуемое NCR).
+
+### Дальше (триажить топ clean-div через showdiff!)
+- Остаток diff=1 (вне scope F-AL): `mdbasics` [169] жадный passthrough `+++,/+-+` (non-greedy + `(?!\w)`), `migration` [678]
+  intrinsic `{asciidoctor-version}` (окружение-спец.), `doctime-localtime` [6] clock/TZ (не баг).
+- Топ clean-div: sample 152 (setext — широкий, не поддерживаем), manpage 146 (doctype manpage — широкий), multi-special-ex 87,
+  CHANGELOG 75, debuter 16 (residual structural+alt после F-AK).
+
 ## Сессия (2026-06-21, 145-я) — F-AK Unicode word-char в apostrophe-replacement (ветка `fix/apostrophe-unicode-word-char`)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`917e86e`). Единственная `- [ ]` в TODO = опциональная (0 корпусного
