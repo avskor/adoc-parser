@@ -2475,8 +2475,10 @@ fn test_icon_size_html() {
 
 #[test]
 fn test_icon_role_html() {
+    // `role` lands on the wrapping `<span class="icon …">`, not the `<i>`
+    // (Asciidoctor convert_inline_image).
     let html = to_html(":icons: font\n\nicon:tags[role=blue]");
-    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-tags blue\"></i></span></p>\n</div>\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon blue\"><i class=\"fa fa-tags\"></i></span></p>\n</div>\n");
 }
 
 #[test]
@@ -2499,8 +2501,10 @@ fn test_icon_flip_html() {
 
 #[test]
 fn test_icon_link_html() {
+    // A `link` wraps the `<i>` in an inner `<a class="image">`; the outer
+    // wrapper stays `<span class="icon">` (Asciidoctor convert_inline_image).
     let html = to_html(":icons: font\n\nicon:download[link=https://example.com]");
-    assert_eq!(html, "<div class=\"paragraph\">\n<p><a class=\"icon\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></p>\n</div>\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><a class=\"image\" href=\"https://example.com\"><i class=\"fa fa-download\"></i></a></span></p>\n</div>\n");
 }
 
 #[test]
@@ -2564,8 +2568,25 @@ fn test_icon_text_fallback_ignores_title_html() {
 
 #[test]
 fn test_icon_combined_html() {
+    // size stays on the `<i>` (`fa-2x`); `role` moves to the span.
     let html = to_html(":icons: font\n\nicon:heart[2x,role=red]");
-    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x red\"></i></span></p>\n</div>\n");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon red\"><i class=\"fa fa-heart fa-2x\"></i></span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_quoted_multi_role_html() {
+    // A quoted `role="red big"` is unquoted and all roles land on the span
+    // (Asciidoctor convert_inline_image / attribute list).
+    let html = to_html(":icons: font\n\nicon:flag[role=\"red big\"]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon red big\"><i class=\"fa fa-flag\"></i></span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_link_role_window_html() {
+    // `link` + `role` + `window`: role on the outer span, link wrapping the
+    // `<i>` as `<a class="image">` carrying `target`/`rel` (Asciidoctor).
+    let html = to_html(":icons: font\n\nicon:download[link=https://example.com,window=_blank,role=big]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon big\"><a class=\"image\" href=\"https://example.com\" target=\"_blank\" rel=\"noopener\"><i class=\"fa fa-download\"></i></a></span></p>\n</div>\n");
 }
 
 #[test]

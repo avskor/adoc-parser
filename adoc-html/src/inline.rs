@@ -272,28 +272,39 @@ impl HtmlRenderer {
             return;
         }
 
-        // Build class list
+        // `:icons: font` glyph mode. Mirror of Asciidoctor `convert_inline_image`
+        // (html5.rb): the `<i>` class carries only `fa fa-NAME` + size + flip/rotate
+        // (flip wins over rotate when both are set); `role` lands on the wrapping
+        // `<span class="icon …">`, NOT on the `<i>`; a `link` wraps the `<i>` in an
+        // inner `<a class="image">` while the outer wrapper stays the icon span.
         let mut classes = format!("fa fa-{name}");
         if let Some(ref s) = size {
             classes.push_str(&format!(" fa-{s}"));
         }
-        if let Some(ref r) = rotate {
-            classes.push_str(&format!(" fa-rotate-{r}"));
-        }
         if let Some(ref f) = flip {
             classes.push_str(&format!(" fa-flip-{f}"));
-        }
-        if let Some(ref r) = role {
-            classes.push(' ');
-            classes.push_str(r);
+        } else if let Some(ref r) = rotate {
+            classes.push_str(&format!(" fa-rotate-{r}"));
         }
 
+        output.push_str("<span class=\"icon");
+        if let Some(ref r) = role {
+            output.push(' ');
+            html_escape(output, r.trim_matches('"'));
+        }
+        output.push_str("\">");
+
         if let Some(href) = &link {
-            output.push_str("<a class=\"icon\" href=\"");
+            output.push_str("<a class=\"image\" href=\"");
             html_escape(output, href);
-            output.push_str("\">");
-        } else {
-            output.push_str("<span class=\"icon\">");
+            output.push('"');
+            if let Some(ref w) = window {
+                write_attr(output, "target", w);
+                if w == "_blank" {
+                    output.push_str(" rel=\"noopener\"");
+                }
+            }
+            output.push('>');
         }
 
         output.push_str("<i class=\"");
@@ -306,9 +317,8 @@ impl HtmlRenderer {
 
         if link.is_some() {
             output.push_str("</a>");
-        } else {
-            output.push_str("</span>");
         }
+        output.push_str("</span>");
     }
 
     pub(crate) fn render_inline_stem(&mut self, output: &mut String) {
