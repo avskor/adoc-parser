@@ -1168,6 +1168,41 @@ mod tests {
         );
     }
 
+    /// `\'` is an escape ONLY where the apostrophe replacement (`(\w)\\?'(?=\w)`)
+    /// would fire — i.e. between two word characters. There the backslash drops for
+    /// a literal apostrophe (`it\'s` → `it's`, NOT the curly `it&#8217;s`). Anywhere
+    /// else the `\` has no replacement to escape, so Asciidoctor keeps `\'` literal
+    /// (`\'.text'`, `\'word'`, `\'>'`). The legacy parser wrongly dropped the
+    /// backslash in EVERY position, so the engine diverges from legacy here and is
+    /// verified against the Asciidoctor 2.0.23 reference instead.
+    #[test]
+    fn escaped_apostrophe_matches_asciidoctor() {
+        // NOT word-flanked → keep `\'` literal (the legacy-bug fix).
+        for (input, expected) in [
+            ("\\'.text'", "\\'.text'"),
+            ("the \\'word' quote", "the \\'word' quote"),
+            ("\\'word'", "\\'word'"),
+            ("\\'>'", "\\'>'"),
+        ] {
+            assert_eq!(
+                pipeline(input),
+                vec![Event::Text(expected.into())],
+                "expected {expected:?} for {input:?}"
+            );
+        }
+        // Word-flanked → drop the backslash for a LITERAL apostrophe (no curly).
+        // Matches legacy at the event level (also covered by
+        // `reproduces_legacy_on_escape_inputs`); pinned here for the boundary contrast.
+        assert_eq!(
+            pipeline("it\\'s"),
+            vec![Event::Text("it".into()), Event::Text("'s".into())]
+        );
+        assert_eq!(
+            pipeline("a\\'b"),
+            vec![Event::Text("a".into()), Event::Text("'b".into())]
+        );
+    }
+
     /// With the character-reference survival pass (and the `\&#…;` escape) ported,
     /// the pipeline must reproduce legacy on valid references (kept as raw
     /// `InlinePassthrough`), invalid `&`s (left as escaped `Text`), references
