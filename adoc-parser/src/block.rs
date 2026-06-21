@@ -2020,13 +2020,17 @@ impl<'a> BlockScanner<'a> {
         };
 
         // Cell text by resolved style: AsciiDoc/literal cells keep inner blank
-        // lines and indentation (only the edges of the whole text stripped);
-        // all other styles collapse to trimmed, non-empty lines joined by \n.
+        // lines and indentation (mirror asciidoctor Table::Cell — rstrip, then
+        // drop only leading newlines: the indentation of the first content line
+        // is significant, an indented continuation line is a literal paragraph).
+        // The separator-line remainder was already lstripped by the scanner, so
+        // leading spaces here only ever come from continuation lines.
+        // All other styles collapse to trimmed, non-empty lines joined by \n.
         fn cell_text<'b>(cell: &scanner::CellSpec<'b>, style: CellStyle) -> Cow<'b, str> {
             if matches!(style, CellStyle::AsciiDoc | CellStyle::Literal) {
                 match &cell.content {
-                    Cow::Borrowed(s) => Cow::Borrowed(s.trim()),
-                    Cow::Owned(s) => Cow::Owned(s.trim().to_string()),
+                    Cow::Borrowed(s) => Cow::Borrowed(s.trim_end().trim_start_matches('\n')),
+                    Cow::Owned(s) => Cow::Owned(s.trim_end().trim_start_matches('\n').to_string()),
                 }
             } else if cell.content.contains('\n') {
                 Cow::Owned(
@@ -4791,6 +4795,36 @@ mod tests {
             Event::End(TagEnd::TableBody),
             Event::End(TagEnd::Table),
         ]);
+    }
+
+    #[test]
+    fn asciidoc_cell_preserves_leading_indentation() {
+        // An indented continuation line in an `a|`/`l|` cell is a literal
+        // paragraph in asciidoctor: the leading space of the first content line
+        // is significant and must reach the cell's raw text. `cell_text` mirrors
+        // asciidoctor Table::Cell — rstrip, then drop only leading newlines (no
+        // lstrip). The separator-line remainder is still lstripped by the scanner.
+        fn cell_text_of(input: &str) -> String {
+            let events: Vec<_> = BlockScanner::new(input).collect();
+            let mut it = events.iter();
+            while let Some(ev) = it.next() {
+                if matches!(ev, Event::Start(Tag::TableCell { .. }))
+                    && let Some(Event::Text(t)) = it.next()
+                {
+                    return t.to_string();
+                }
+            }
+            panic!("no table cell text in:\n{input}");
+        }
+
+        // Continuation line keeps its leading space → indented literal downstream.
+        assert_eq!(cell_text_of("|===\na|\n $ cmd\n|==="), " $ cmd");
+        // Same-line content after the separator is lstripped (→ paragraph).
+        assert_eq!(cell_text_of("|===\na| $ cmd\n|==="), "$ cmd");
+        // Two indented continuation lines keep their indentation.
+        assert_eq!(cell_text_of("|===\na|\n  one\n  two\n|==="), "  one\n  two");
+        // Literal cell, continuation indentation preserved likewise.
+        assert_eq!(cell_text_of("|===\nl|\n  indented\n|==="), "  indented");
     }
 
     #[test]
