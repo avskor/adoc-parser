@@ -1108,6 +1108,44 @@ fn test_footnote_multiple_html() {
 }
 
 #[test]
+fn test_footnote_inline_substitutions_html() {
+    // Asciidoctor substitutes the footnote macro's text as part of the inline
+    // pass: emphasis/strong, the apostrophe replacement, and a literal `"`
+    // (body text, never escaped to &quot;) all behave like ordinary text.
+    let html = to_html("X footnote:[I'm a *bold* _little_ note, say \"hi\"].");
+    assert!(html.contains(
+        ". I\u{2019}m a <strong>bold</strong> <em>little</em> note, say \"hi\""
+    ));
+    // The straight apostrophe must be curled away.
+    assert!(!html.contains("I'm a"));
+    // `"` is body content, not an attribute value — never &quot;.
+    assert!(!html.contains("&quot;"));
+}
+
+#[test]
+fn test_footnote_monospace_and_specialchars_html() {
+    let html = to_html("X footnote:[use `git` and a < b > c].");
+    assert!(html.contains(". use <code>git</code> and a &lt; b &gt; c"));
+}
+
+#[test]
+fn test_footnote_multiline_collapsed_html() {
+    // A footnote spanning multiple source lines collapses onto one line: each
+    // line is right-trimmed and joined with a single space, while leading
+    // indentation on a continuation line is preserved.
+    let html = to_html("X footnote:[line one  \n   line two\nline three].");
+    assert!(html.contains(". line one    line two line three\n"));
+    assert!(!html.contains("line one\n"));
+}
+
+#[test]
+fn test_footnote_plain_text_unchanged_html() {
+    // No inline markup: byte-for-byte the same as the previous raw-escape path.
+    let html = to_html("X footnote:[Just a plain footnote.].");
+    assert!(html.contains(">1</a>. Just a plain footnote.\n</div>"));
+}
+
+#[test]
 fn test_footnotes_outside_content_div_standalone() {
     let html = to_html_with_options(
         "= Doc\n\nText.footnote:[Note here.]\n",
