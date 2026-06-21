@@ -1979,6 +1979,31 @@ fn test_table_cell_literal_preserves_blank_and_indent() {
 }
 
 #[test]
+fn test_asciidoc_cell_indented_literal_html() {
+    // An indented line on a continuation of an `a|` cell is a literal paragraph
+    // (asciidoctor Table::Cell rstrips and drops leading newlines but keeps the
+    // indentation of the first content line, which signals an indented literal
+    // in the embedded document). Byte-for-byte with asciidoctor 2.0.23.
+    let html = to_html("|===\na|\n $ asciidoctor document.adoc\n|===");
+    assert!(
+        html.contains("<div class=\"literalblock\">\n<div class=\"content\">\n<pre>$ asciidoctor document.adoc</pre>"),
+        "indented continuation line in an a| cell must become a literal block. Got:\n{html}"
+    );
+
+    // Regression guard: content on the separator line is lstripped → a normal
+    // paragraph, never a literal block.
+    let html = to_html("|===\na| $ asciidoctor document.adoc\n|===");
+    assert!(
+        html.contains("<p>$ asciidoctor document.adoc</p>"),
+        "same-line a| content stays a paragraph. Got:\n{html}"
+    );
+    assert!(
+        !html.contains("literalblock"),
+        "same-line a| content must not become a literal block. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_table_cell_multi_paragraph_html() {
     // A default/styled body cell whose text has a blank line becomes several
     // <p class="tableblock"> paragraphs, each carrying the style wrapper; inline
