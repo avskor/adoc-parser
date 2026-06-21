@@ -700,6 +700,26 @@ impl<'a> BlockScanner<'a> {
         events
     }
 
+    /// When the current block sits directly inside a list item, is separated
+    /// from it by a blank line, and is NOT a `+` continuation, close the open
+    /// list so the block renders as a sibling. Returns the first close event to
+    /// emit (wrapped so the caller can `return` it), or `None` when the block
+    /// stays attached (no preceding blank line, or inside a continuation).
+    ///
+    /// Mirrors Asciidoctor: a leaf block (image/video/audio macro, thematic or
+    /// page break) after a blank line ends the list; without the blank line, or
+    /// after `+`, it attaches to the last item (probe-verified).
+    fn close_list_if_blank_separated(&mut self) -> Option<Option<Event<'a>>> {
+        if self.is_directly_in_list_context() && !self.in_continuation && self.had_blank_line {
+            let close_events = self.close_list_contexts();
+            for ev in close_events.into_iter().rev() {
+                self.push_event(ev);
+            }
+            return Some(self.event_buffer.pop());
+        }
+        None
+    }
+
     /// Close nested list items/lists above the outermost ListItem.
     /// Used when `+` appears after blank lines to attach continuation to ancestor.
     fn close_nested_list_items(&mut self) -> Vec<Event<'a>> {
@@ -1001,12 +1021,18 @@ impl<'a> BlockScanner<'a> {
 
         // Thematic break `'''`
         if scanner::is_thematic_break(line) {
+            if let Some(r) = self.close_list_if_blank_separated() {
+                return Some(r);
+            }
             self.advance();
             return Some(Some(Event::ThematicBreak));
         }
 
         // Page break `<<<`
         if scanner::is_page_break(line) {
+            if let Some(r) = self.close_list_if_blank_separated() {
+                return Some(r);
+            }
             self.advance();
             return Some(Some(Event::PageBreak));
         }
@@ -1063,6 +1089,9 @@ impl<'a> BlockScanner<'a> {
     fn scan_block_macros(&mut self, line: &'a str) -> Option<Option<Event<'a>>> {
         // Block image `image::path[alt]`
         if let Some((target, alt)) = scanner::is_block_image(line) {
+            if let Some(r) = self.close_list_if_blank_separated() {
+                return Some(r);
+            }
             self.advance();
             let title_events = self.take_pending_block_title();
             let mut block_attrs = self.pending_block_attrs.take().unwrap_or_default();
@@ -1126,6 +1155,9 @@ impl<'a> BlockScanner<'a> {
 
         // Block video `video::path[attrs]`
         if let Some((target, attrs)) = scanner::is_block_video(line) {
+            if let Some(r) = self.close_list_if_blank_separated() {
+                return Some(r);
+            }
             self.advance();
             let title_events = self.take_pending_block_title();
             let block_attrs = self.pending_block_attrs.take();
@@ -1143,6 +1175,9 @@ impl<'a> BlockScanner<'a> {
 
         // Block audio `audio::path[attrs]`
         if let Some((target, attrs)) = scanner::is_block_audio(line) {
+            if let Some(r) = self.close_list_if_blank_separated() {
+                return Some(r);
+            }
             self.advance();
             let title_events = self.take_pending_block_title();
             let block_attrs = self.pending_block_attrs.take();
@@ -4211,6 +4246,64 @@ mod tests {
             .filter(|e| matches!(e, Event::Start(Tag::DescriptionList)))
             .count();
         assert_eq!(list_starts, 2, "expected two dlists, got: {events:#?}");
+    }
+
+    #[test]
+    fn test_block_macro_after_blank_detaches_from_dlist() {
+        // A block image after a blank line (no `+` continuation) ends the
+        // description list and renders as a sibling (Asciidoctor): the
+        // BlockImage must come AFTER the dlist closes.
+        let input = "term:: desc\n\nimage::foo.png[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let dlist_end = events
+            .iter()
+            .position(|e| matches!(e, Event::End(TagEnd::DescriptionList)))
+            .expect("dlist end");
+        let img_start = events
+            .iter()
+            .position(|e| matches!(e, Event::Start(Tag::BlockImage { .. })))
+            .expect("image start");
+        assert!(
+            dlist_end < img_start,
+            "image should be a sibling after the dlist, got: {events:#?}"
+        );
+
+        // Without the blank line the image attaches to the description: the
+        // BlockImage stays INSIDE, before the dlist closes.
+        let input = "term:: desc\nimage::foo.png[]";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let dlist_end = events
+            .iter()
+            .position(|e| matches!(e, Event::End(TagEnd::DescriptionList)))
+            .expect("dlist end");
+        let img_start = events
+            .iter()
+            .position(|e| matches!(e, Event::Start(Tag::BlockImage { .. })))
+            .expect("image start");
+        assert!(
+            img_start < dlist_end,
+            "image should attach inside the dd, got: {events:#?}"
+        );
+    }
+
+    #[test]
+    fn test_thematic_break_after_blank_detaches_from_list() {
+        // A thematic break after a blank line ends the list and is emitted
+        // as a sibling, not attached to the last item.
+        let input = "* a\n\n'''";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        let list_end = events
+            .iter()
+            .position(|e| matches!(e, Event::End(TagEnd::UnorderedList)))
+            .expect("list end");
+        let tb = events
+            .iter()
+            .position(|e| matches!(e, Event::ThematicBreak))
+            .expect("thematic break");
+        assert!(
+            list_end < tb,
+            "thematic break should follow the closed list, got: {events:#?}"
+        );
     }
 
     #[test]
