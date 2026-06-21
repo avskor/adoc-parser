@@ -616,7 +616,9 @@ pub struct Footnote {
     pub number: usize,
     /// Anchor id of a named footnote (`footnote:id[text]`).
     pub id: Option<String>,
-    /// Footnote text as plain text (the consumer escapes when rendering).
+    /// Footnote body as the consumer chooses to store it: the HTML renderer
+    /// applies inline substitutions at definition time and stores rendered
+    /// HTML (emitted verbatim), so the consumer must not re-escape it.
     pub text: String,
 }
 

@@ -598,4 +598,43 @@ impl HtmlRenderer {
             self.push_event(output, event);
         }
     }
+
+    /// Render footnote text through inline parsing with the surrounding block's
+    /// substitutions, mirroring Asciidoctor, which substitutes the footnote
+    /// macro's text as part of the inline pass (quotes, replacements, macros …).
+    /// The result is stored as rendered HTML and emitted verbatim in the
+    /// footnotes section. Unlike [`Self::render_inline_value`] this uses
+    /// text-content escaping (`html_escape_text`, leaving `"` literal) for the
+    /// no-markup fast path, since footnote text is body content, not an
+    /// attribute value — byte-for-byte the same as the previous `html_escape_text`
+    /// of raw footnote text when there is no inline markup.
+    pub(crate) fn render_footnote_text(&mut self, output: &mut String, text: &str) {
+        // A footnote spanning multiple source lines is collapsed onto one line:
+        // Asciidoctor right-trims each line and joins them with a single space
+        // (the newline becomes the separator; leading indentation on a
+        // continuation line is kept). A normal paragraph preserves its newlines,
+        // so this is scoped to footnotes only. Single-line text is untouched,
+        // preserving the no-markup fast path's byte-for-byte parity.
+        let joined;
+        let text = if text.contains('\n') {
+            joined = text.split('\n').map(str::trim_end).collect::<Vec<_>>().join(" ");
+            joined.as_str()
+        } else {
+            text
+        };
+        let options =
+            adoc_parser::InlineOptions::from_attr_lookup(|name| self.document_attrs.contains_key(name));
+        let events =
+            adoc_parser::InlineParser::parse_str_with_subs_options(text, self.current_subs(), options);
+        if events.len() == 1
+            && let Event::Text(ref t) = events[0]
+            && t.as_ref() == text
+        {
+            html_escape_text(output, text);
+            return;
+        }
+        for event in events {
+            self.push_event(output, event);
+        }
+    }
 }

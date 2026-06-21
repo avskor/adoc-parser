@@ -315,7 +315,13 @@ impl HtmlRenderer {
                 if let Some(num) = id.as_deref().and_then(|i| self.footnote_registry.lookup(i)) {
                     push_footnote_ref(output, num);
                 } else {
-                    let num = self.footnote_registry.define(id.as_deref(), &text);
+                    // Asciidoctor substitutes the footnote macro's text as part
+                    // of the inline pass, so render it through the surrounding
+                    // block's substitutions now and store the resulting HTML;
+                    // render_footnotes emits it verbatim.
+                    let mut rendered = String::new();
+                    self.render_footnote_text(&mut rendered, &text);
+                    let num = self.footnote_registry.define(id.as_deref(), &rendered);
                     output.push_str("<sup class=\"footnote\"");
                     if let Some(ref id) = id {
                         output.push_str(" id=\"_footnote_");

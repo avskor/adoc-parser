@@ -191,7 +191,9 @@ impl HtmlRenderer {
             output.push_str("\">");
             output.push_str(&num);
             output.push_str("</a>. ");
-            html_escape_text(output, &note.text);
+            // `note.text` already holds rendered HTML (inline substitutions
+            // applied at definition time, mirroring Asciidoctor); emit verbatim.
+            output.push_str(&note.text);
             output.push_str("\n</div>\n");
         }
         output.push_str("</div>\n");
