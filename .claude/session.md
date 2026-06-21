@@ -1,6 +1,6 @@
 # Session context
 
-## Сессия (2026-06-21, 142-я) — F-AH `\'` escape снимается только в word-flanked контексте (ветка `fix/escaped-apostrophe-non-word-flanked`, ЗАКОММИЧЕНО, ожидает мержа/пуша)
+## Сессия (2026-06-21, 142-я) — F-AH `\'` escape снимается только в word-flanked контексте (ветка `fix/escaped-apostrophe-non-word-flanked`, СМЕРЖЕНА в master `d57324a`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`db28ca6`). Frontier-проход (release из master, **NB: пересобирать
 `-p adoc-cli`, не `-p adoc-html` — бинарь `adoc` из крейта adoc-cli!**): identical 221, clean-div 12 — точно как запись 141-й.
