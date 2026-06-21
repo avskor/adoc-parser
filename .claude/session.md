@@ -1,5 +1,50 @@
 # Session context
 
+## Сессия (2026-06-21, 143-я) — F-AI indented continuation-строка в `a|`/`l|`-ячейке = literal paragraph (ветка `fix/asciidoc-cell-indented-literal`, СМЕРЖЕНА в master `c62a348`)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`d1319dc`). Frontier-проход (release `-p adoc-cli`): identical 221,
+clean-div 12 — как в записи 142-й. Единственная `- [ ]` в TODO = опциональная задача с 0 корпусного выигрыша → реальная
+работа по методологии (frontier-триаж). **Урок памяти подтвердился снова:** 142-я писала «чистых одно-классовых кандидатов
+не осталось», но триаж топ clean-div через showdiff вскрыл чистый класс. Реализовано без AskUserQuestion/plan-mode
+(вынужденно-чистый, гейт-риск нулевой по конструкции). **Закоммичено + смержено --no-ff; ожидает пуша.**
+
+### Диагностика (триаж топ-3 clean-div через showdiff)
+- sample (152) = setext-заголовок (`Title\n====`) — не поддерживаем, широкий. manpage (146) = doctype manpage — широкий.
+- **index (136)** = чистый класс: расхождение [129..266] непрерывный регион (каскад одного сдвига). Первое [129]:
+  ADOC `<div class="literalblock">`, OUR `<div class="paragraph">`. Источник (стр. 35-36): внутри AsciiDoc-ячейки `a|`
+  строка с ведущим пробелом ` $ asciidoctor document.adoc`. На top-level indented literal распознаётся, в ячейке — нет.
+
+### Корень (ЧИСТО ПАРСЕР, 1 функция `adoc-parser/src/block.rs::cell_text`)
+- `cell_text` для AsciiDoc/Literal делал `s.trim()` → срезал ведущий пробел ПЕРВОЙ контентной строки (отступ, который
+  в asciidoctor сигнализирует indented literal paragraph) → всегда `<p>`.
+- **Правило asciidoctor** (исходник `table.rb:266-278`, gem 2.0.23): `:asciidoc` — `rstrip`; if start_with LF → снять
+  ведущие LF (пробелы СОХРАНЯЮТСЯ); else `lstrip` (контент на строке сепаратора). `:literal` — `rstrip` + снять ведущие
+  LF (пробелы всегда сохраняются). В НАШЕМ представлении remainder сепаратор-строки уже lstripped scanner'ом
+  (scanner.rs:1062 `content.trim()`), а continuation-строки сохраняют ведущий пробел (block.rs:1903 `trim_end()` +
+  empty-cell-merge без `\n`). → ведущий пробел в `cell.content` приходит ТОЛЬКО с continuation-строк.
+- **Фикс:** `s.trim()` → `s.trim_end().trim_start_matches('\n')` (rstrip + снятие ведущих `\n`, БЕЗ lstrip). Покрывает
+  оба стиля одной общей функцией. `a|\n $ cmd`→literalblock, `a| $ cmd`→paragraph (same-line, без изм.).
+
+### Верификация (AIRTIGHT)
+- clippy `--workspace` **0**; test --workspace зелёное (parser lib 622→**623**, html unit 479→**480**, compat 233).
+  +1 parser (`asciidoc_cell_preserves_leading_indentation` — 4 exact-vector: continuation/same-line/2-indented/literal)
+  +1 html (`test_asciidoc_cell_indented_literal_html` — literalblock + 2 регресс-гарда same-line→paragraph).
+- **Гейт 344/344 байт-в-байт** vs master (base пересобран из master `d1319dc` через worktree; `gate_check.py` 0 diff).
+- **Frontier identical 221→222** (`index.adoc` 136→0 — весь каскад из 136 был ОДНИМ классом), clean-div 12→11.
+  new-vs-base по всем 250 = ровно 1 файл IMPROVED (index.adoc), 0 регрессий.
+- **7 CLI-проб vs asciidoctor 2.0.23 MATCH:** a|-continuation/same-line/2-indented, l|-continuation, blank-then-indented,
+  para+indented-literal, source-block-continuation.
+
+### Дальше (чистых одно-классовых кандидатов снова «не осталось» — но триажить топ через showdiff!)
+- Топ clean-div теперь: sample 152 (setext-заголовок — широкий, риск гейта), manpage 146 (doctype manpage — широкий),
+  debuter 118, multi-special-ex 87, CHANGELOG 75, github-0.1.4 50 (TOC-позиция), asciidoclet 12 (multiline footnote),
+  asciidoc-returns 12 (footnote attr-ref-link, остаток F-AG), mdbasics 1 (single-plus `+++`→`+` — риск гейта).
+- diff=1 intrinsic (не actionable): doctime-localtime (`{localtime}`), migration (`{asciidoctor-version}`).
+- **Вне scope F-AI:** literal `l| $ cmd` same-line — asciidoctor сохраняет ведущий пробел в `<pre>`, наш scanner.rs:1062
+  его режет (общий trim для всех стилей на scan-тайме, стиль ещё не резолвнут). Edge, не во frontier.
+
+---
+
 ## Сессия (2026-06-21, 142-я) — F-AH `\'` escape снимается только в word-flanked контексте (ветка `fix/escaped-apostrophe-non-word-flanked`, СМЕРЖЕНА в master `d57324a`, ЗАПУШЕНО, ветка удалена)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`db28ca6`). Frontier-проход (release из master, **NB: пересобирать
