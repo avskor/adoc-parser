@@ -91,6 +91,32 @@ fn strip_enclosing_quotes(s: &str) -> &str {
     }
 }
 
+/// Extract the link text (first positional) and the `xrefstyle` named attribute
+/// from a formal `xref:id[…]` bracket body. Mirrors Asciidoctor's
+/// `extract_attributes_from_text`, which the inline xref handler runs only when
+/// the body contains `=` (`substitutors.rb`); without `=` the whole body is the
+/// literal link text, so the caller must gate on that. Returns borrowed slices
+/// of `text` (each trimmed, enclosing quotes dropped). Named attributes other
+/// than `xrefstyle` are ignored — this slice only consumes the style.
+pub fn extract_xref_attrs(text: &str) -> (Option<&str>, Option<&str>) {
+    let mut label = None;
+    let mut xrefstyle = None;
+    for part in split_respecting_quotes(text) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = part.split_once('=') {
+            if key.trim() == "xrefstyle" {
+                xrefstyle = Some(strip_enclosing_quotes(value.trim()));
+            }
+        } else if label.is_none() {
+            label = Some(strip_enclosing_quotes(part));
+        }
+    }
+    (label, xrefstyle)
+}
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct AttributeStore {

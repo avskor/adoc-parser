@@ -5,7 +5,7 @@ use crate::*;
 use std::borrow::Cow;
 
 impl HtmlRenderer {
-    pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>, is_macro: bool) {
+    pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>, is_macro: bool, xrefstyle: &Option<CowStr<'_>>) {
         // Resolve attribute references in the target before any xref processing.
         // Asciidoctor runs the global `attributes` pass before `macros`, so an
         // `{name}` written in an xref target (`xref:{rel}.adoc[]`,
@@ -36,7 +36,7 @@ impl HtmlRenderer {
                     let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
                     // The rewritten path is final (no section lookup); the
                     // placeholder resolves to it verbatim in `finish()`.
-                    self.xref_placeholders.push((placeholder, text, false));
+                    self.xref_placeholders.push((placeholder, text, false, None));
                 }
             }
             adoc_render_core::XrefResolution::Internal { id } => {
@@ -55,8 +55,15 @@ impl HtmlRenderer {
                     self.xref_placeholder_counter += 1;
                     let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
                     // The stored value is the target id — the lookup key (resolved
-                    // to a section/block title in `finish`) and the bracketed fallback.
-                    self.xref_placeholders.push((placeholder, id, true));
+                    // to a section/block title in `finish`) and the bracketed
+                    // fallback. The per-xref `xrefstyle` (or, in `finish`, the
+                    // document `:xrefstyle:`) shapes the text for a section target.
+                    self.xref_placeholders.push((
+                        placeholder,
+                        id,
+                        true,
+                        xrefstyle.as_ref().map(|s| s.to_string()),
+                    ));
                 }
             }
         }

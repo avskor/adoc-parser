@@ -129,25 +129,48 @@ impl HtmlRenderer {
             let mut replacements: HashMap<&str, String> = HashMap::with_capacity(
                 self.xref_placeholders.len() + self.xref_href_placeholders.len(),
             );
-            for (placeholder, fallback, is_internal) in &self.xref_placeholders {
-                let replacement = match ctx.link_text(fallback) {
-                    Some(RefText::Markup(html)) => html.to_string(),
-                    Some(RefText::Plain(text)) => {
-                        let mut escaped = String::new();
-                        html_escape(&mut escaped, text);
-                        escaped
-                    }
-                    None => {
-                        // Unresolved internal anchor reference: Asciidoctor's
-                        // default xreflabel wraps the target id in brackets.
-                        let plain = if *is_internal {
-                            adoc_render_core::unresolved_xref_label(fallback)
-                        } else {
-                            fallback.clone()
-                        };
-                        let mut escaped = String::new();
-                        html_escape(&mut escaped, &plain);
-                        escaped
+            // Section targets generate their link text from `Section#xreftext`
+            // (style-dependent); everything else keeps the fixed reference text
+            // collected above.
+            let section_map: HashMap<&str, &SectionRefMeta> =
+                self.section_refs.iter().map(|(id, m)| (id.as_str(), m)).collect();
+            let doc_xrefstyle = self.document_attrs.get("xrefstyle").map(String::as_str);
+            for (placeholder, fallback, is_internal, per_xref_style) in &self.xref_placeholders {
+                // Resolve the target to an id (a natural title maps to its
+                // section's id); a section uses xrefstyle reference text.
+                let resolved_id = ctx.href_id(fallback);
+                let replacement = if let Some(meta) = section_map.get(resolved_id) {
+                    let style = per_xref_style.as_deref().or(doc_xrefstyle);
+                    let refsig_key = match meta.sectname {
+                        SectName::Section => "section-refsig",
+                        SectName::Chapter => "chapter-refsig",
+                        SectName::Appendix => "appendix-refsig",
+                        SectName::Part => "part-refsig",
+                    };
+                    // A seeded default returns `Some`; an explicit unset
+                    // (`:section-refsig!:`) removes the key → `None`.
+                    let signifier = self.document_attrs.get(refsig_key).map(String::as_str);
+                    section_xreftext(meta, style, signifier)
+                } else {
+                    match ctx.link_text(fallback) {
+                        Some(RefText::Markup(html)) => html.to_string(),
+                        Some(RefText::Plain(text)) => {
+                            let mut escaped = String::new();
+                            html_escape(&mut escaped, text);
+                            escaped
+                        }
+                        None => {
+                            // Unresolved internal anchor reference: Asciidoctor's
+                            // default xreflabel wraps the target id in brackets.
+                            let plain = if *is_internal {
+                                adoc_render_core::unresolved_xref_label(fallback)
+                            } else {
+                                fallback.clone()
+                            };
+                            let mut escaped = String::new();
+                            html_escape(&mut escaped, &plain);
+                            escaped
+                        }
                     }
                 };
                 replacements.insert(placeholder.as_str(), replacement);
