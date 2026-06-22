@@ -1164,6 +1164,37 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     сильного checked-in differential-теста (engine==legacy). **НАХОДКА (вне scope, см. ниже):** legacy (и движок)
     под non-QUOTES снимают `\*`/`\--`/`\link:`/`\{` там, где asciidoctor СОХРАНЯЕТ (нет соотв. subst-пасса) —
     предсуществующий legacy-баг, base имел его до шага A (0 регрессий). Коммит/merge --no-ff/push — ПО ЗАПРОСУ.
+  - [x] **decline №3 (char-ref в URL link/autolink) — native + entity-preserving href в рендерере** (ветка
+    `fix/char-ref-in-url`, 2026-06-22, off master `039105d`, НЕ закоммичена). Запрос «начни следующую задачу из TODO.md»
+    + выбор пользователя: направление «удаление legacy → decline №3 (char-ref/`\++` native)» (шаг B/decline №2
+    отвергнут — корректное снятие требует правки ГОРЯЧЕГО passthrough-пути ради 0x01/0x02, которых в реальных `.adoc`
+    нет; 0 файлов гейта/frontier). **Находка (пробы asciidoctor 2.0.23 + текущий движок):** при char-ref в URL/alt движок
+    (= legacy fallback, т.к. `flag_decline`) расходился с asciidoctor — `link:a&#167;b[text]` давал `href="a&amp;#167;b"`
+    вместо `href="a&#167;b"`; корень — РЕНДЕРЕР двойно экранировал валидный entity (общий для engine и legacy баг).
+    Документированный паттерн (`asciidoc-lang/.../link-macro.adoc:82` `link:My&#32;Documents/...` — но в listing-блоке,
+    0 гейт-выигрыша). **Правило asciidoctor для href/alt:** экранировать `&`→`&amp;`, КРОМЕ начала валидного char-ref
+    (`&#N;`/`&#xH;`/`&name;`/`&amp;`) → сохранить дословно. **Изменения (4 файла):** (1) `adoc-parser/src/lib.rs`
+    публичный `char_ref_len(&[u8],usize)` (обёртка `subst::char_ref_len`, поднят `pub(super)`→`pub(crate)` + ре-экспорт
+    в `subst/mod.rs`) — переиспользование валидатора рендерером. (2) `adoc-html/src/escape.rs` новый `html_escape_href`
+    (entity-preserving) + `write_attr_href`; применены в `events.rs` (link href), `media.rs` (inline image src/alt/link-href).
+    (3) `adoc-parser/src/subst/macros.rs` `reconstruct_link_target` — арм `CharRef{raw:true}`→splice (снимает punt'ы
+    `try_link`:698 + autolink:1628/1657 на char-ref-в-URL; escaped `raw:false` остаётся punt); `build_link` bare-ветка →
+    `push_bare_link_text` сегментирует видимый текст на `Text`/`InlinePassthrough` по границам char_ref_len (entity в
+    видимом тексте bare-форм; no-char-ref → один `Text`, байт-в-байт). **Движок намеренно ≠ legacy на bare-форме**
+    (сегментация vs один escaped `Text`) — стандартный паттерн parity; explicit-text форма == legacy по событиям
+    (расхождение лишь в общем рендерере). **Тесты:** +1 parser (`native_char_ref_in_link_url` — no-punt + explicit==legacy
+    + bare-сегментация + голый `&` как legacy) +4 html (`test_char_ref_in_link_url_href`/`_autolink_char_ref_href_and_text`/
+    `_image_alt_and_src_char_ref`/`_bare_ampersand_in_url_still_escaped`). **Верификация (AIRTIGHT):** clippy 0
+    (`--workspace`); test --workspace зелёное (parser 639→640, html 493→497); **гейт 344/344 байт-в-байт** vs `/tmp/adoc_base`
+    (=master `039105d`; `gate_check.py` 0 diff — 0 корпусных исполняемых char-ref-в-URL/alt, голый `&`→`&amp;` неизменно);
+    **frontier 250 new-vs-base 0 diff**; **13/13 CLI-проб == asciidoctor 2.0.23** (char-ref href/alt, документированный
+    `My&#32;`, bare autolink href+текст, `&copy;`/`&#x2026;`, голый `&`→`&amp;`, `&amp;` сохранён, плюс регресс-гарды
+    plain link/image). Коммит/merge --no-ff/push — ПО ЗАПРОСУ.
+    - [ ] **DEFERRED (follow-up, отдельные задачи):** (a) char-ref в VERBATIM-target (`restore_verbatim`:1961 —
+      image-alt parser-punt всё ещё пантит, хотя РЕНДЕРИНГ alt уже корректен через общий рендерер; icon/anchor/index/UI —
+      preserve-семейства) + stem char-ref (ОБРАТНОЕ направление: asciidoctor ЭКРАНИРУЕТ `&` в stem, движок недо-экранирует —
+      отдельный корень: char_refs survival внутри stem); (b) escaped `\&#…;` (raw:false) в URL — остаётся punt (escape-семантика
+      отлична); (c) `\++`/`\+++` (passthrough.rs:102) — asciidoctor сам непоследователен (ASG≠HTML), reproduce-legacy либо ждать.
   - [ ] **(asciidoctor-parity, отдельная связная задача, 0 корпусного выигрыша):** под non-QUOTES subs движок снимает
     `\`-escape БЕЗУСЛОВНО (через legacy-зеркальные арм'ы escape.rs: `\{`/`\[`/`\<`/typographic + новый `\*`-арм), тогда
     как asciidoctor снимает `\` ТОЛЬКО если соответствующий subst-пасс активен (`\{name}`→`{name}` лишь при

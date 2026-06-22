@@ -1770,10 +1770,47 @@ fn build_link(
     })];
     match label {
         Some(l) => push_label(l, seed, subs, options, &mut events),
-        None => events.push(Event::Text(Cow::Owned(bare_text.to_string()))),
+        None => push_bare_link_text(&mut events, bare_text),
     }
     events.push(Event::End(TagEnd::Link));
     events
+}
+
+/// Emit a bare link's visible text (which repeats its target). A survived
+/// character reference in the target (`http://a&#167;b.com`) is emitted as its own
+/// [`Event::InlinePassthrough`] so the renderer keeps it verbatim — mirroring the
+/// reconstructed `href`, where the renderer's entity-preserving escape does the
+/// same. Text with no character reference becomes a single `Text` event,
+/// byte-for-byte as before (the overwhelming common case). The renderer's
+/// `bare_link_pending` resolution (attribute references, `:hide-uri-scheme:`) runs
+/// on the first emitted event; a reference never precedes a URL scheme, so the
+/// leading `Text` segment still carries the scheme to strip.
+fn push_bare_link_text(events: &mut Vec<Event<'static>>, text: &str) {
+    let bytes = text.as_bytes();
+    if !bytes.contains(&b'&') {
+        events.push(Event::Text(Cow::Owned(text.to_string())));
+        return;
+    }
+    let mut seg_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            let len = super::char_ref_len(bytes, i);
+            if len > 0 {
+                if seg_start < i {
+                    events.push(Event::Text(Cow::Owned(text[seg_start..i].to_string())));
+                }
+                events.push(Event::InlinePassthrough(Cow::Owned(text[i..i + len].to_string())));
+                i += len;
+                seg_start = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if seg_start < bytes.len() {
+        events.push(Event::Text(Cow::Owned(text[seg_start..].to_string())));
+    }
 }
 
 /// Re-parse a macro label's raw text exactly as `push_macro_label` does — the
@@ -1878,9 +1915,13 @@ fn attr_has_sentinel(attr: Option<&str>) -> bool {
 /// unescaped `...` is not curled (rare, and Asciidoctor-faithful curling would
 /// regress the far more common resolved-attribute form).
 ///
+/// A survived character reference (`&#167;`, a `raw: true` leaf) is likewise
+/// spliced back verbatim — the URL keeps the already-formed entity, which the
+/// renderer's href escape preserves — so `link:a&#167;b[t]` no longer punts.
+///
 /// Returns `None` — signalling the caller to punt to legacy, preserving the
-/// previous whole-span sentinel decline — when the span carries any sentinel
-/// that is NOT a `Literal`: passthrough / attribute-reference / char-ref / macro
+/// previous whole-span sentinel decline — when the span carries any OTHER sentinel:
+/// passthrough / attribute-reference / an escaped (`raw: false`) char-ref / macro
 /// targets are out of scope and still fall back.
 fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
     let bytes = span.as_bytes();
@@ -1906,6 +1947,14 @@ fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
             }
             match work.tags.get(idx)? {
                 TagToken::Literal(s) => out.push_str(s),
+                // A survived character reference (`&#167;`, `&copy;`) is spliced
+                // back verbatim: Asciidoctor keeps it as an already-formed entity in
+                // the URL, and the renderer's href escape preserves it rather than
+                // re-escaping the `&` (`link:a&#167;b[t]` → `href="a&#167;b"`). The
+                // ESCAPED form (`\&#…;`, a `raw: false` leaf the renderer would emit
+                // with `&` re-escaped) keeps punting — its href treatment differs and
+                // it is left to the legacy fallback.
+                TagToken::CharRef { text, raw: true } => out.push_str(text),
                 _ => return None,
             }
             seg_start = end;

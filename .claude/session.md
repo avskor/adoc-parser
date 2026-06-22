@@ -1,5 +1,62 @@
 # Session context
 
+## Сессия (2026-06-22) — decline №3: native char-ref в URL link/autolink + entity-preserving href в рендерере (ветка `fix/char-ref-in-url`, off master `039105d`, НЕ закоммичена)
+
+Запрос «начни следующую задачу из TODO.md». Master `039105d` чист (ШАГ A СМЕРЖЕН — прошлая session-запись «не закоммичена» устарела).
+Открытых чекбоксов 2 (зонтичный 1134 + parity 1167), все F-* и под-фазы A/1/2/3 закрыты, корпус исчерпан. **Развилка №1**
+(AskUserQuestion): «удаление legacy: шаг B/C». **Развилка №2** (шаг B/decline №2 sentinel-байт оказался запутан —
+требует правки ГОРЯЧЕГО passthrough-пути: `PassPiece.text` хранится дословно, sealed-sentinel внутри `+...+` выдал бы мусор;
+0 реальной ценности, 0 файлов с 0x01/0x02): выбор **«decline №3: char-ref/`\++` native»**. План:
+`~/.claude/plans/sunny-leaping-manatee.md`.
+
+### Задача
+char-ref в URL семейства link (link explicit/bare + autolink) обрабатывать нативно (снять flag_decline-punt'ы =
+прогресс к удалению legacy) И починить документированный баг рендерера (asciidoctor-parity).
+
+### Находка (пробы asciidoctor 2.0.23 + текущий движок = legacy fallback)
+char-ref в URL/alt: движок давал `link:a&#167;b[text]`→`href="a&amp;#167;b"`, asciidoctor `href="a&#167;b"`. **Корень — РЕНДЕРЕР**
+(`html_escape` двойно экранирует валидный entity в href/alt; общий баг engine+legacy). Документированный паттерн
+(`link:My&#32;Documents/...` кодирование пробела), но в корпусе только в listing-блоке → 0 гейт-выигрыша. **Правило asciidoctor
+href/alt:** `&`→`&amp;` КРОМЕ начала валидного char-ref (`&#N;`/`&#xH;`/`&name;`/`&amp;`) → сохранить дословно.
+
+### Реализация (4 файла)
+- **`adoc-parser/src/lib.rs`:** публичный `char_ref_len(&[u8],usize)` (обёртка `subst::char_ref_len`; поднят `pub(super)`→
+  `pub(crate)` в `char_refs.rs` + ре-экспорт `pub(crate) use char_refs::char_ref_len` в `subst/mod.rs`) — рендерер
+  переиспользует валидатор без дублирования.
+- **`adoc-html/src/escape.rs`:** новый `html_escape_href` (entity-preserving, escapes `"`) + `write_attr_href`. Применены:
+  `events.rs:795` (Tag::Link href → write_attr_href), `media.rs` (inline image: link-href→html_escape_href, src/alt→write_attr_href).
+  interdoc/xref href, role/id, stem, listing — НЕ тронуты.
+- **`adoc-parser/src/subst/macros.rs`:** (1) `reconstruct_link_target` — арм `TagToken::CharRef{text,raw:true}=>out.push_str(text)`
+  (splice survival-entity; escaped `raw:false` остаётся `None`→punt). Снимает punt'ы char-ref-в-URL у try_link:698 + autolink:1628/1657.
+  (2) `build_link` bare-ветка `None=>` → новый `push_bare_link_text(events,text)`: сегментирует видимый текст на `Text`/
+  `InlinePassthrough` по границам char_ref_len (entity→passthrough=raw, рендерер не экранирует; matches asciidoctor видимый текст).
+  no-char-ref → один `Text` (байт-в-байт). bare_link_pending сбрасывается на End(Link) → безопасно если первый сегмент не Text.
+- **КЛЮЧ:** explicit-text форма даёт события == legacy (url-строка с entity, как у legacy; расхождение лишь в общем рендерере) →
+  parser-differential зелёный. Bare-форма движок НАМЕРЕННО ≠ legacy (сегментация vs один escaped Text) — стандартный parity-паттерн.
+
+### Тесты
++1 parser `native_char_ref_in_link_url` (`subst/mod.rs`: no-punt try_parse.is_some на 5 формах; explicit==legacy; bare≠legacy +
+содержит InlinePassthrough("&#167;"); голый `&` == legacy). +4 html (`tests.rs`): `test_char_ref_in_link_url_href`,
+`test_autolink_char_ref_href_and_text`, `test_image_alt_and_src_char_ref`, `test_bare_ampersand_in_url_still_escaped`.
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace зелёное (**parser 639→640, html 493→497**, compat неизменны).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (=master `039105d`, собран в начале; `gate_check.py` 0 diff).
+- **Frontier 250 new-vs-base 0 diff** (одноразовый sweep python3).
+- **13/13 CLI-проб == asciidoctor 2.0.23:** char-ref href (`a&#167;b`/`&copy;`/`&#x2026;`), документированный `My&#32;Documents`,
+  bare autolink (href+видимый текст), image alt, голый `&`→`&amp;`, `&amp;` сохранён, + регресс-гарды plain link/image.
+- Нейтральность по построению: 0 корпусных/frontier ИСПОЛНЯЕМЫХ char-ref-в-URL/alt (единственный гейт-хит — listing-пример;
+  единственный frontier-хит — `rx.rb`, не парсится); голый `&`→`&amp;` неизменно.
+
+### NEXT
+- Коммит/merge --no-ff в master + push — **ПО ЗАПРОСУ** (НЕ без спроса). base `/tmp/adoc_base` = master `039105d`.
+- DEFERRED (занесены в TODO как `[ ]`): (a) char-ref в verbatim-target (`restore_verbatim`:1961 — image-alt parser-punt всё ещё
+  пантит, хотя рендеринг alt уже корректен; icon/anchor/index/UI preserve-семейства) + stem char-ref (ОБРАТНОЕ направление,
+  отдельный корень: survival внутри stem); (b) escaped `\&#…;` raw:false в URL; (c) `\++`/`\+++` (asciidoctor сам непоследователен).
+- Прочие шаги удаления legacy: decline №2 (sentinel-байт — нужен редизайн либо десентинелизация passthrough-кусков); parity-задача 1167.
+
+---
+
 ## Сессия (2026-06-22) — ШАГ A: движок покрывает не-QUOTES subs, снят QUOTES-гейт (ветка `refactor/engine-non-quotes-subs`, НЕ закоммичена)
 
 Запрос «начни следующую задачу из TODO.md». Master `fe6c0d1` (все 3 native-фазы СМЕРЖЕНЫ, footnote Phase 3 тоже).
