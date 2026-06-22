@@ -222,13 +222,21 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 }
 
 /// At a `+`, try `+++` then `++` (triple falls back to double like Asciidoctor's
-/// `(\+\+\+?)…\1`), else a constrained single `+`.
+/// `(\+\+\+?)…\1`), then the constrained single `+`.
+///
+/// The single-plus fall-through mirrors Asciidoctor's two-phase extraction
+/// order: `InlinePassMacroRx` lifts the `+++…+++`/`++…++` forms first, but a
+/// `++`/`+++` run that fails to close as one of those is NOT a passthrough — the
+/// `InlinePassRx` single-`+` form then gets to claim it (`+++` → `<pass:+>`,
+/// `+x++` → `<pass:x>+`). Reproducing this means retrying [`try_single_plus`]
+/// from the SAME `+` once the multi-plus forms decline.
 ///
 /// In `compat` mode the single (`+`) and double (`++`) forms are surrendered to
 /// the [`super::quotes`] pass (constrained/unconstrained monospace): they return
-/// `None` so the caller leaves the markers in the buffer. The raw triple
-/// `+++…+++` is still a passthrough; when it fails to close in compat mode it
-/// does NOT retry as `++` (that form belongs to quotes now), so it also declines.
+/// `None` so the caller leaves the markers in the buffer (no single-plus
+/// fall-through either). The raw triple `+++…+++` is still a passthrough; when
+/// it fails to close in compat mode it does NOT retry as `++` (that form belongs
+/// to quotes now), so it also declines.
 fn try_plus(
     src: &str,
     bytes: &[u8],
@@ -239,23 +247,44 @@ fn try_plus(
     let next = bytes.get(i + 1).copied();
     let next2 = bytes.get(i + 2).copied();
     if next == Some(b'+') && next2 == Some(b'+') {
-        // +++ (raw); retry as ++ on failure only outside compat mode.
+        // +++ (raw); retry as ++ then single + on failure (outside compat mode).
         let triple = try_triple_plus(src, i);
         if compat {
             return triple;
         }
-        return triple.or_else(|| try_double_plus(src, i));
+        return triple
+            .or_else(|| try_double_plus(src, i))
+            .or_else(|| try_single_plus(src, bytes, i, guard_hard_break));
     }
     if next == Some(b'+') {
         if compat {
             return None;
         }
-        return try_double_plus(src, i);
+        return try_double_plus(src, i)
+            .or_else(|| try_single_plus(src, bytes, i, guard_hard_break));
     }
     if compat {
         return None;
     }
     try_single_plus(src, bytes, i, guard_hard_break)
+}
+
+/// If a `++…++` or `+++…+++` passthrough opens at byte `k` of `s` (caller
+/// guarantees `s[k] == '+'` and `s[k + 1] == '+'`), return its span length so a
+/// single-plus close search can skip over it. Mirrors Asciidoctor's two-phase
+/// order: `InlinePassMacroRx` lifts every closing `++…++`/`+++…+++` out *before*
+/// `InlinePassRx` runs the single `+…+` form, so a single-plus span must never
+/// claim a `+` belonging to a real double/triple passthrough (`+x ++y++` keeps
+/// the leading `+x` literal). A `++`/`+++` run that does NOT close here is not a
+/// passthrough — returns `None`, leaving the `+` eligible as a single-plus close.
+/// The triple-then-double order matches [`try_plus`].
+fn multi_plus_span_len(s: &str, k: usize) -> Option<usize> {
+    if s.as_bytes().get(k + 2).copied() == Some(b'+')
+        && let Some((_, end)) = try_triple_plus(s, k)
+    {
+        return Some(end - k);
+    }
+    try_double_plus(s, k).map(|(_, end)| end - k)
 }
 
 /// `+++text+++` — raw passthrough (no subs). Mirror `try_triple_plus_passthrough`.
@@ -290,13 +319,19 @@ fn try_double_plus(src: &str, i: usize) -> Option<(Vec<PassPiece>, usize)> {
     Some((pieces, after_open + close + 2))
 }
 
-/// `+text+` — constrained single-plus passthrough. Mirror
-/// `try_single_plus_passthrough`: the opening `+` must not follow a word char,
-/// the content's first char must not be a space, and the closing `+` obeys the
-/// constrained-close rule (not preceded by `+`/space, not followed by `+`/word).
-/// A `pass:[…]` macro inside the span is extracted first, so a `+` in its
-/// brackets cannot close. Caller guarantees `bytes[i] == b'+'` and
-/// `bytes[i + 1] != b'+'`.
+/// `+text+` — constrained single-plus passthrough. Mirror Asciidoctor's
+/// `InlinePassRx` single-`+` form `(?:^|[^CC_WORD;:\\])\+(\S|\S.*?\S)\+(?!CG_WORD)`:
+/// the opening `+` must not follow a word char, the content's first char must
+/// not be a space, and the closing `+` obeys the constrained-close rule — its
+/// preceding byte is a non-space (the content does not end in a space) and it is
+/// not followed by a word char. Adjacent `+` around the close IS allowed
+/// (`+x++` → `<pass:x>+`, `+++` → `<pass:+>`), but a real `++…++`/`+++…+++`
+/// passthrough region is skipped during the close search (via
+/// [`multi_plus_span_len`]), mirroring Asciidoctor's two-phase order in which the
+/// multi-plus forms are lifted out first. A `pass:[…]` macro inside the span is
+/// likewise skipped, so a `+` in its brackets cannot close. Unlike the caller
+/// [`try_plus`], the opening byte may be followed by another `+` (the single-plus
+/// fall-through is reached for an unclosed `++`/`+++` run).
 fn try_single_plus(
     src: &str,
     bytes: &[u8],
@@ -328,7 +363,9 @@ fn try_single_plus(
         return None;
     }
 
-    // Find the constrained closing '+', skipping `pass:[…]` regions.
+    // Find the constrained closing '+', skipping `pass:[…]` and `++…++`/
+    // `+++…+++` passthrough regions (both are lifted out before the single-plus
+    // form runs in Asciidoctor).
     let s = &src[after_open..];
     let sb = s.as_bytes();
     let mut close = None;
@@ -341,15 +378,28 @@ fn try_single_plus(
             k += skip;
             continue;
         }
-        if c == b'+' && k > 0 {
-            let preceded_by_plus = sb[k - 1] == b'+';
-            let preceded_by_space = sb[k - 1] == b' ';
-            let next = sb.get(k + 1).copied();
-            let followed_by_plus = next == Some(b'+');
-            let followed_by_word = next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
-            if !preceded_by_plus && !preceded_by_space && !followed_by_plus && !followed_by_word {
-                close = Some(k);
-                break;
+        if c == b'+' {
+            // A real `++…++`/`+++…+++` passthrough region: jump over it so this
+            // single-plus span never closes on (or absorbs) a `+` that belongs
+            // to one. An unclosed `++`/`+++` run returns `None` here and falls
+            // through to the close test below — the `+` stays eligible.
+            if sb.get(k + 1).copied() == Some(b'+')
+                && let Some(span) = multi_plus_span_len(s, k)
+            {
+                k += span;
+                continue;
+            }
+            // Constrained close: content does not end in a space, and the close
+            // is not followed by a word char. Adjacent `+` is allowed.
+            if k > 0 {
+                let preceded_by_space = sb[k - 1] == b' ';
+                let next = sb.get(k + 1).copied();
+                let followed_by_word =
+                    next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_');
+                if !preceded_by_space && !followed_by_word {
+                    close = Some(k);
+                    break;
+                }
             }
         }
         k += 1;

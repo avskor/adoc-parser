@@ -1163,6 +1163,24 @@ fn test_inline_passthrough_html() {
 }
 
 #[test]
+fn test_unclosed_plus_run_reparses_as_single_plus_html() {
+    // A `++`/`+++` run that does not close as a multi-plus passthrough is claimed
+    // by the single-plus form (`+++` → `+`), byte-for-byte with Asciidoctor 2.0.23.
+    // The frontier mdbasics line: literal list markers wrapped in single-plus.
+    let html = to_html("(+*+, +++, and +-+)");
+    assert!(html.contains("<p>(*, +, and -)</p>"), "got:\n{html}");
+
+    // Standalone and trailing-`+` forms.
+    assert!(to_html("+++").contains("<p>+</p>"));
+    assert!(to_html("+x++").contains("<p>x+</p>"));
+    assert!(to_html("note +++ here").contains("<p>note + here</p>"));
+
+    // Regression guard: a real `++…++` passthrough is not absorbed by an adjacent
+    // single-plus span — `+x` stays literal, `++y++` renders its content.
+    assert!(to_html("+x ++y++").contains("<p>+x y</p>"));
+}
+
+#[test]
 fn test_table_html() {
     let html = to_html("|===\n| A | B\n| C | D\n|===");
     assert!(html.contains("<table class=\"tableblock frame-all grid-all stretch\">"), "expected table classes. Got:\n{html}");
