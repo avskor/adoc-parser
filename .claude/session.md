@@ -1,47 +1,52 @@
 # Session context
 
-## Сессия (2026-06-22) — F-AW: font-иконка `size=X` + title-субституция (ветка `fix/icon-named-size-and-title-subs`, off master `419f1af`, НЕ закоммичена)
+## Сессия (2026-06-22) — F-AX: UI-макросы btn/menu inline-субституция (ветка `fix/ui-macro-btn-menu-inline-subst`, off master `1aed67a`, НЕ закоммичена)
 
-Запрос «начни следующую задачу из TODO.md». Master `419f1af` чист (F-AV `e811a76`/`419f1af` уже смержен —
-session.md прошлой сессии был устаревшим, обычная картина). Открытые `[ ]` все синтетические «0 корпусного выигрыша».
+Запрос «начни следующую задачу из TODO.md». Master `1aed67a` чист (F-AW `0d1cc1f`/`1aed67a` смержен+запушен).
+Открытые `[ ]` синтетические «0 корпусного выигрыша».
 
-### Задача (триаж adoc2docx — наименьший системный clean-div)
-`frontier_parity.py /mnt/c/tmp/adoc2docx`: 39 identical / 10 clean-div. `icons.adoc` (10 diff) — наименьший системный.
-`showdiff` выявил ДВА бага рендерера на каждой из 10 строк:
-1. `title="~Title~"` (сырой) vs asciidoctor `title="<sub>Title</sub>"` — title не проходит inline-субституцию.
-2. Класс размера (`fa-2x`/`fa-fw`/…) отсутствует — именованный `size=X` терялся.
+### Задача (триаж adoc2docx)
+`frontier_parity.py /mnt/c/tmp/adoc2docx`: 40 identical / 9 clean-div. `menu.adoc` (80 diff, позиционный десинк = single-root).
+`btn:[~_Ok_~]` → мы `<b class="button">~_Ok_~</b>`, asciidoctor `<b class="button"><sub><em>Ok</em></sub></b>`;
+`menu:View[_Zoom_ > Reset]` → submenu `_Zoom_` сырой, asciidoctor `<em>Zoom</em>`.
 
-### Корни (verified исходником asciidoctor 2.0.23 + 7 проб)
-- (a) `substitutors.rb:419` icon `posattrs=['size']` → size = и позиционный, и именованный. Наш `render_icon`
-  (`adoc-html/inline.rs`) имел size ТОЛЬКО для позиционного (`i==0 && нет '='`); в `match key` ветки `"size"` НЕ БЫЛО.
-- (b) `sub_macros` в цепочке `normal` ПОСЛЕ specialchars+quotes → `~Title~` в `[title=…]` становится `<sub>` ДО извлечения
-  макроса. Наш движок отдаёт атрибуты icon сырым `Text` (`subst/macros.rs::try_icon`, leaf by design); рендерер
-  html-эскейпил title без субституции (`<`→`&lt;` срабатывал лишь как attr-escape в `write_attr`).
+### Корень (verified asciidoctor 2.0.23 substitutors.rb + 5 проб — тот же класс, что F-AW)
+`sub_macros` в цепочке `normal` ПОСЛЕ specialchars+quotes+replacements → markup в `[…]` UI-макроса субституируется ДО
+извлечения макроса. Оба наших движка (subst `macros.rs::try_btn`/`try_menu`, legacy `inline.rs::try_btn_macro`/`try_menu_macro`)
+отдают контент СЫРЫМ `Text` → рендерер эскейпил без субституции. Квотированный menu `"a > b"` (`build_menuseq`) УЖЕ
+переразбирал сегменты — асимметрия с формальным `menu:t[…]`.
 
-### Реализация (1 файл, `adoc-html/src/inline.rs::render_icon`, чисто рендерер — как F-AO)
-1. Ветка `"size" => size = Some(val.trim().to_string())` в `match key` (аддитивно; позиционный путь не тронут;
-   size+rotate/flip уже эмитились независимо — size перед flip/rotate, flip>rotate elsif).
-2. title: вместо `write_attr(output,"title",t)` → `render_inline_value(&mut rendered, t.trim_matches('"'))` + ручная
-   обёртка ` title="{rendered}"`. De-quote + current_subs (NORMAL в параграфе → quotes/replacements). No-markup fast-path
-   сохраняет байт-точность простых title (`title=Info`→`Info`).
+### Реализация (3 файла, ЧИСТО РЕНДЕРЕР — оба движка эмитят одинаковый raw-Text, рендерер = единая точка)
+1. `lib.rs` — хелпер `render_ui_macro_inline(output, value, escape_quotes)`: парсит `parse_str_with_subs_options(value,
+   current_subs(), opts)`; no-markup fast-path (len==1 && Text==value) → `html_escape_preserving_refs` (escape_quotes=true,
+   menu — эскейпит `"`) / `html_escape_text_preserving_refs` (false, btn — `"` литерал); иначе `push_event` каждое.
+2. `events.rs` button-ветка Text: `button_mode=false` → `render_ui_macro_inline(output,&text,false)` → `button_mode=true`
+   (чистка чтобы вложенные Text шли нормальным path).
+3. `inline.rs::render_menu`: target (menuref + menuseq) и каждая submenu/item часть через хелпер (escape_quotes=true).
+   Split на `>` ОСТАЁТСЯ на сырых items (разделители литеральные до субституции), субституция ПОСЛЕ split.
+kbd НЕ тронут (своя `kbd_mode`-ветка, split на `+`/`,`).
 
-### Тесты (+3 html, после test_icon_link_role_window_html)
-`test_icon_named_size_html` (`size=2x`→`fa-2x`), `test_icon_size_with_rotate_html` (`size=fw,rotate=270`→`fa-fw fa-rotate-270`;
-`size=fw,flip=vertical`→`fa-fw fa-flip-vertical`), `test_icon_title_inline_subst_html` (`~Title~`→sub, `*Bold*`→strong,
-quoted `"quoted ~sub~ val"`→de-quote+sub).
+### Тесты (+2 html, после test_menu_no_items_html)
+`test_btn_inline_subst_html` (`~_Ok_~`→sub/em, `*Bold*`→strong, char-ref `a&#167;b` сохранён, литерал `"q"`),
+`test_menu_segment_inline_subst_html` (`_Zoom_`→em; `Save As...`→`…\u{200b}` ellipsis-replacements).
 
 ### Верификация
-- clippy 0; **test --workspace 1268 зелёных** (html 510→513).
-- **Гейт 344/344 байт-в-байт** vs master `419f1af` (`gate_check.py` 0 diff — корпусные `:icons: font` без inline-`icon:`
-  с `size=`/markup-`title`). Базовый бинарь `/tmp/adoc_base` собран из `419f1af` (stash → build → cp → pop → rebuild).
-- **Frontier 250 + adoc2docx 52 new-vs-base sweep = РОВНО 1 файл** (icons.adoc, clean-div 10→0, байт-в-байт), 0 регрессий.
-- **adoc2docx 39→40 identical (+1).** icons.adoc showdiff пустой.
-- 7 CLI-проб == asciidoctor 2.0.23.
+- clippy 0; **test --workspace 1270 зелёных** (html 513→515).
+- **Гейт 344/344 байт-в-байт** vs master `1aed67a` (`gate_check.py` 0 diff). Базовый `/tmp/adoc_base` собран из `1aed67a`
+  (stash→build→cp→pop→rebuild).
+- **Frontier 250 + adoc2docx 52 new-vs-base sweep = РОВНО 1 файл** (menu.adoc, 80→0 diff, байт-в-байт), 0 регрессий.
+- **adoc2docx 40→41 identical (+1).** menu.adoc showdiff пустой.
+- 5 CLI-проб == asciidoctor 2.0.23.
+
+### Побочно (улучшение, не регрессия)
+menu-item `...`/`--` теперь кёрлятся replacements (semantically == asciidoctor; raw UTF-8 `…​` vs его NCR
+`&#8230;&#8203;` — фоновая typographic-NCR разница, не флипает в одиночку).
 
 ### Состояние
-Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ. TODO.md обновлён (F-AW в начало FRONTIER-секции).
+Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ. TODO.md обновлён (F-AX в начало FRONTIER-секции).
+ВАЖНО: ветка создана ПОСЛЕ правок (правки делались на master, перенесены через `git checkout -b`) — рабочее дерево чистое на ветке.
 
-### Остаток adoc2docx clean-div (9, для будущего триажа)
+### Остаток adoc2docx clean-div (8, для будущего триажа)
 xref(1495 — xrefstyle:full реф-лейблы фигур, архитектурный), test(1105), source(682), xml(291), callouts(196),
-links(89), menu(80), sections(55), images(1 — xrefstyle:full реф-текст фигуры, архитектурный). images=1 и xref —
-нумерация фигур + caption-prefix в тексте ссылки (`xrefstyle: full`).
+links(89 — `https://…[]` пустой-bracket autolink в кавычках + `[.overline]#`/role/id-title формы, возможно мульти-root),
+sections(55 — нумерация спец-секций abstract/preface при sectnums), images(1 — xrefstyle:full, архитектурный).

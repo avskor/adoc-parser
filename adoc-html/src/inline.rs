@@ -171,26 +171,33 @@ impl HtmlRenderer {
         };
         let items = self.menu_items.take();
 
+        // The caption and each segment carry the line's inline substitutions
+        // (Asciidoctor runs quotes/replacements before the macros pass extracts the
+        // menu), so `menu:View[_Zoom_ > Reset]` renders `<em>Zoom</em>` inside its
+        // `<b class="submenu">`. The `>` split happens on the RAW items (the spaced
+        // separators are literal before substitution), then each part is rendered
+        // through the current subs. A plain caption/part takes the no-markup fast
+        // path, byte-for-byte identical to the previous output.
         let items_str = items.unwrap_or_default();
         if items_str.is_empty() {
             // menu:File[] — single menu reference (Asciidoctor: <b class="menuref">…)
             output.push_str("<b class=\"menuref\">");
-            html_escape_preserving_refs(output, &target);
+            self.render_ui_macro_inline(output, &target, true);
             output.push_str("</b>");
         } else {
             let parts: Vec<&str> = items_str.split('>').map(|s| s.trim()).collect();
             output.push_str("<span class=\"menuseq\"><b class=\"menu\">");
-            html_escape_preserving_refs(output, &target);
+            self.render_ui_macro_inline(output, &target, true);
             output.push_str("</b>");
             for (i, part) in parts.iter().enumerate() {
                 output.push_str("&#160;<b class=\"caret\">&#8250;</b> ");
                 if i < parts.len() - 1 {
                     output.push_str("<b class=\"submenu\">");
-                    html_escape_preserving_refs(output, part);
+                    self.render_ui_macro_inline(output, part, true);
                     output.push_str("</b>");
                 } else {
                     output.push_str("<b class=\"menuitem\">");
-                    html_escape_preserving_refs(output, part);
+                    self.render_ui_macro_inline(output, part, true);
                     output.push_str("</b>");
                 }
             }
