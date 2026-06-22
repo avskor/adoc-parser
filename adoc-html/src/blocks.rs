@@ -184,9 +184,11 @@ impl HtmlRenderer {
         if let Some(title) = title_html {
             output.push_str("<caption class=\"title\">");
             let label = self.document_attrs.get("table-caption").cloned();
-            self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Table);
+            let prefix = self.render_caption_prefix(meta, label.as_deref(), CaptionKind::Table);
+            output.push_str(&prefix);
             output.push_str(&title);
             output.push_str("</caption>\n");
+            self.register_block_ref(meta, prefix, title);
         }
 
         // Emit <colgroup> based on cols spec
@@ -634,7 +636,7 @@ impl HtmlRenderer {
                 output.push_str("<div");
                 Self::write_meta_attrs(output, &Self::strip_block_style(meta), "listingblock");
                 output.push_str(">\n");
-                self.emit_pending_block_title(output);
+                self.emit_listing_title(output, meta);
                 output.push_str("<div class=\"content\">\n");
                 output.push_str(pre_open);
             }
@@ -675,9 +677,11 @@ impl HtmlRenderer {
                     if let Some(title) = self.block_title_inner_html.take() {
                         output.push_str("<div class=\"title\">");
                         let label = self.document_attrs.get("example-caption").cloned();
-                        self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Example);
+                        let prefix = self.render_caption_prefix(meta, label.as_deref(), CaptionKind::Example);
+                        output.push_str(&prefix);
                         output.push_str(&title);
                         output.push_str("</div>\n");
+                        self.register_block_ref(meta, prefix, title);
                     }
                     output.push_str("<div class=\"content\">\n");
                 }
@@ -757,7 +761,7 @@ impl HtmlRenderer {
         output.push_str("<div");
         Self::write_meta_attrs(output, meta, "listingblock");
         output.push_str(">\n");
-        self.emit_pending_block_title(output);
+        self.emit_listing_title(output, meta);
         output.push_str("<div class=\"content\">\n<pre");
 
         let highlighter = self.document_attrs.get("source-highlighter").cloned();
@@ -849,6 +853,23 @@ impl HtmlRenderer {
         }
     }
 
+    /// Emit a listing/source block's `.title` caption. `listing-caption` is unset
+    /// by default, so this normally renders the bare title (matching the plain
+    /// `.title` path); when the attribute is set it prefixes "Listing N. " and
+    /// shares one counter across listing and source blocks. Always registers the
+    /// block for `full`/`short` cross references.
+    pub(crate) fn emit_listing_title(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        if let Some(title) = self.block_title_inner_html.take() {
+            output.push_str("<div class=\"title\">");
+            let label = self.document_attrs.get("listing-caption").cloned();
+            let prefix = self.render_caption_prefix(meta, label.as_deref(), CaptionKind::Listing);
+            output.push_str(&prefix);
+            output.push_str(&title);
+            output.push_str("</div>\n");
+            self.register_block_ref(meta, prefix, title);
+        }
+    }
+
     /// Open the principal `<p>` of a list item, tracking it so a continuation
     /// block can close it before being emitted (see the guard in `start_tag`).
     pub(crate) fn open_li_paragraph(&mut self) {
@@ -906,25 +927,40 @@ impl HtmlRenderer {
     /// (empty value → no prefix); otherwise a set `*-caption` document
     /// attribute gives "{label} {n}. " and bumps the counter, while an unset
     /// one (`:table-caption!:` / `:figure-caption!:`) gives no prefix.
-    pub(crate) fn push_caption_prefix(
+    /// Build the rendered caption prefix string for a titled block, bumping the
+    /// per-kind counter exactly once. The result is the escaped prefix as it
+    /// appears on the block (`"Figure 1. "`, a custom `caption=` value, or empty
+    /// when suppressed/unset) — used both for the block's own `.title` markup and
+    /// as the `caption` input to `block_xreftext`.
+    pub(crate) fn render_caption_prefix(
         &mut self,
-        output: &mut String,
         meta: &Option<BlockMeta>,
         doc_label: Option<&str>,
         kind: CaptionKind,
-    ) {
+    ) -> String {
         let caption_attr = meta
             .as_ref()
             .and_then(|m| m.named.iter().find(|(k, _)| k == "caption").map(|(_, v)| v.clone()));
+        let mut prefix = String::new();
         match self.caption_counters.caption_prefix(kind, caption_attr.as_deref(), doc_label) {
             CaptionPrefix::None => {}
-            CaptionPrefix::Custom(prefix) => html_escape(output, prefix),
+            CaptionPrefix::Custom(custom) => html_escape(&mut prefix, custom),
             CaptionPrefix::Numbered { label, number } => {
-                html_escape(output, label);
-                output.push(' ');
-                output.push_str(&number.to_string());
-                output.push_str(". ");
+                html_escape(&mut prefix, label);
+                prefix.push(' ');
+                prefix.push_str(&number.to_string());
+                prefix.push_str(". ");
             }
+        }
+        prefix
+    }
+
+    /// Record a titled block's caption + title under its id so a `full`/`short`
+    /// cross reference to it can build `AbstractBlock#xreftext`. No-op without an
+    /// id (an unreferenceable block needs no entry).
+    pub(crate) fn register_block_ref(&mut self, meta: &Option<BlockMeta>, caption: String, title_html: String) {
+        if let Some(id) = meta.as_ref().and_then(|m| m.id.clone()) {
+            self.block_refs.push((id, BlockRefMeta { caption, title_html }));
         }
     }
 

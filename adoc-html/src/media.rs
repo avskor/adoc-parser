@@ -356,9 +356,11 @@ impl HtmlRenderer {
         if let Some(title) = self.block_title_inner_html.take() {
             output.push_str("<div class=\"title\">");
             let label = self.document_attrs.get("figure-caption").cloned();
-            self.push_caption_prefix(output, meta, label.as_deref(), CaptionKind::Figure);
+            let prefix = self.render_caption_prefix(meta, label.as_deref(), CaptionKind::Figure);
+            output.push_str(&prefix);
             output.push_str(&title);
             output.push_str("</div>\n");
+            self.register_block_ref(meta, prefix, title);
         }
     }
 

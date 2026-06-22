@@ -10,7 +10,7 @@ use adoc_parser::{CellStyle, CowStr, Event, HAlign, MenuPart, Tag, TagEnd, Admon
 use adoc_render_core::{
     Author, AuthorRegistry, CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry,
     RefText, Revision, SectName, SectionNumberer, SectionRefMeta, TocBuilder, TocEntry, TocStep,
-    XrefResolver, DEFAULT_TOC_TITLE, section_xreftext,
+    XrefResolver, DEFAULT_TOC_TITLE, block_xreftext, section_xreftext,
 };
 
 mod blocks;
@@ -128,6 +128,15 @@ struct BlockMeta {
     options: Vec<String>,
     named: Vec<(String, String)>,
     subs: Option<SubstitutionSet>,
+}
+
+/// Reference-text inputs for a captioned block, consumed by
+/// `adoc_render_core::block_xreftext` in `finish()`. Both fields are rendered
+/// markup: `caption` is the caption prefix as emitted on the block (e.g.
+/// `"Figure 1. "`, a custom `caption=` value), `title_html` the rendered title.
+struct BlockRefMeta {
+    caption: String,
+    title_html: String,
 }
 
 fn parse_highlight_spec(spec: &str) -> HashSet<usize> {
@@ -279,6 +288,11 @@ struct HtmlRenderer {
     /// Populated at `TagEnd::SectionTitle`; consumed in `finish()` to format an
     /// unlabeled section xref per the effective style.
     section_refs: Vec<(String, SectionRefMeta)>,
+    /// Captioned-block id -> metadata for `xrefstyle` reference text
+    /// (`AbstractBlock#xreftext`): the rendered caption prefix and title HTML.
+    /// Populated when a titled figure/table/listing/example with an id renders
+    /// its caption; consumed in `finish()` to format a `full`/`short` block xref.
+    block_refs: Vec<(String, BlockRefMeta)>,
     /// Section kind of the section currently being opened (`start_section_div`),
     /// carried to `TagEnd::SectionTitle` where the `SectionRefMeta` is assembled.
     pending_section_sectname: SectName,
@@ -428,6 +442,7 @@ impl HtmlRenderer {
             bibliography_reftexts: Vec::new(),
             anchor_reftexts: Vec::new(),
             section_refs: Vec::new(),
+            block_refs: Vec::new(),
             pending_section_sectname: SectName::Section,
             pending_section_reftext: None,
             pending_section_number: None,
