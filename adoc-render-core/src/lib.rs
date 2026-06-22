@@ -322,6 +322,30 @@ pub fn section_xreftext(meta: &SectionRefMeta, style: Option<&str>, signifier: O
     }
 }
 
+/// Auto-generated cross-reference link text for a captioned block (figure,
+/// table, listing, example), replicating Asciidoctor's `AbstractBlock#xreftext`
+/// (`abstract_block.rb:345-370`).
+///
+/// `caption` is the rendered caption prefix exactly as it appears on the block
+/// (`"Figure 1. "`, `"Super table 1. "`, a custom `caption=` value); `title_html`
+/// is the rendered title. `style` is the effective `xrefstyle` (per-xref
+/// overriding the document attribute; `None` when neither is set).
+///
+/// The caller applies the gate: this only contributes for blocks that have both
+/// a title and a non-empty caption and carry no explicit reftext. `full` drops
+/// the caption's trailing `". "` (`String#chomp '. '`) and appends the title in
+/// curly double quotes; `short` is that trimmed caption alone; every other style
+/// (basic, nil) returns the bare title.
+pub fn block_xreftext(caption: &str, title_html: &str, style: Option<&str>) -> String {
+    let trimmed = || caption.strip_suffix(". ").unwrap_or(caption);
+    match style {
+        Some("full") => format!("{}, &#8220;{}&#8221;", trimmed(), title_html),
+        Some("short") => trimmed().to_string(),
+        // "basic", any unrecognized style, or no style: the bare title.
+        _ => title_html.to_string(),
+    }
+}
+
 /// Known AsciiDoc source file extensions (Asciidoctor's `ASCIIDOC_EXTENSIONS`).
 /// A shorthand inter-document xref rewrites any of these to the output suffix;
 /// the formal `xref:` macro only rewrites `.adoc` (see [`resolve_xref`]).
@@ -728,6 +752,7 @@ pub enum CaptionKind {
     Figure,
     Table,
     Example,
+    Listing,
 }
 
 /// How a titled block's caption prefix renders, as decided by
@@ -756,6 +781,7 @@ pub struct CaptionCounters {
     figure: usize,
     table: usize,
     example: usize,
+    listing: usize,
 }
 
 impl CaptionCounters {
@@ -784,6 +810,10 @@ impl CaptionCounters {
             CaptionKind::Figure => &mut self.figure,
             CaptionKind::Table => &mut self.table,
             CaptionKind::Example => &mut self.example,
+            // Listings share figure/table counter semantics (bump only when a
+            // `Numbered` prefix is produced); `listing-caption` is unset by
+            // default, so listings carry no caption unless the attribute is set.
+            CaptionKind::Listing => &mut self.listing,
         };
         if kind == CaptionKind::Example {
             *counter += 1;
@@ -1599,6 +1629,25 @@ mod tests {
         // Parts are emitted unnumbered by the renderer → always the bare title.
         let part = meta("Part One", None, SectName::Part, None);
         assert_eq!(section_xreftext(&part, Some("full"), Some("Part")), "Part One");
+    }
+
+    #[test]
+    fn block_xreftext_full_short_basic() {
+        // Numbered figure caption: full drops the trailing ". " and quotes the
+        // title; short is the caption alone; basic/nil is the bare title.
+        assert_eq!(
+            block_xreftext("Figure 1. ", "My <strong>Sanset</strong> title", Some("full")),
+            "Figure 1, &#8220;My <strong>Sanset</strong> title&#8221;"
+        );
+        assert_eq!(block_xreftext("Figure 1. ", "Big Cats", Some("short")), "Figure 1");
+        assert_eq!(block_xreftext("Figure 1. ", "Big Cats", Some("basic")), "Big Cats");
+        assert_eq!(block_xreftext("Figure 1. ", "Big Cats", None), "Big Cats");
+        // Custom caption not ending in ". " is used verbatim before the comma.
+        assert_eq!(
+            block_xreftext("Test caption: ", "Tux title", Some("full")),
+            "Test caption: , &#8220;Tux title&#8221;"
+        );
+        assert_eq!(block_xreftext("Test caption: ", "Tux title", Some("short")), "Test caption: ");
     }
 
     #[test]

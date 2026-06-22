@@ -134,13 +134,24 @@ impl HtmlRenderer {
             // collected above.
             let section_map: HashMap<&str, &SectionRefMeta> =
                 self.section_refs.iter().map(|(id, m)| (id.as_str(), m)).collect();
+            let block_map: HashMap<&str, &BlockRefMeta> =
+                self.block_refs.iter().map(|(id, m)| (id.as_str(), m)).collect();
+            // Ids carrying an explicit reference text (anchor `[reftext=…]` or a
+            // bibliography label): `AbstractBlock#xreftext` returns reftext before
+            // consulting xrefstyle, so these never take the caption-based path.
+            let reftext_ids: std::collections::HashSet<&str> = self
+                .anchor_reftexts
+                .iter()
+                .chain(self.bibliography_reftexts.iter())
+                .map(|(id, _)| id.as_str())
+                .collect();
             let doc_xrefstyle = self.document_attrs.get("xrefstyle").map(String::as_str);
             for (placeholder, fallback, is_internal, per_xref_style) in &self.xref_placeholders {
                 // Resolve the target to an id (a natural title maps to its
                 // section's id); a section uses xrefstyle reference text.
                 let resolved_id = ctx.href_id(fallback);
+                let style = per_xref_style.as_deref().or(doc_xrefstyle);
                 let replacement = if let Some(meta) = section_map.get(resolved_id) {
-                    let style = per_xref_style.as_deref().or(doc_xrefstyle);
                     let refsig_key = match meta.sectname {
                         SectName::Section => "section-refsig",
                         SectName::Chapter => "chapter-refsig",
@@ -151,6 +162,15 @@ impl HtmlRenderer {
                     // (`:section-refsig!:`) removes the key → `None`.
                     let signifier = self.document_attrs.get(refsig_key).map(String::as_str);
                     section_xreftext(meta, style, signifier)
+                } else if let Some(bmeta) = block_map.get(resolved_id)
+                    && !bmeta.caption.is_empty()
+                    && !reftext_ids.contains(resolved_id)
+                    && matches!(style, Some("full") | Some("short"))
+                {
+                    // A captioned block (title + caption, no reftext) under a
+                    // full/short style: build `AbstractBlock#xreftext`. Other
+                    // styles (basic/nil) fall through to the title path below.
+                    block_xreftext(&bmeta.caption, &bmeta.title_html, style)
                 } else {
                     match ctx.link_text(fallback) {
                         Some(RefText::Markup(html)) => html.to_string(),

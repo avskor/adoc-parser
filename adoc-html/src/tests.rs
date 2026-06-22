@@ -6773,3 +6773,60 @@ fn test_per_xref_xrefstyle_overrides_document_html() {
     // The document default (basic) yields the bare title for a plain section.
     assert!(html.contains("doc: <a href=\"#s1\">First</a>"), "doc default: {html}");
 }
+
+#[test]
+fn test_block_xref_caption_modes_html() {
+    // A captioned block (figure here) honours the xrefstyle like a section:
+    // full = "{caption} , {quoted title}", short = caption only, basic/default =
+    // bare title (Asciidoctor's `AbstractBlock#xreftext`). The title's inline
+    // formatting is preserved inside the curly quotes.
+    let html = to_html(
+        "[#f1]\n.My *Cat* pic\nimage::cat.png[]\n\n\
+         full: xref:f1[xrefstyle=full]\n\nshort: xref:f1[xrefstyle=short]\n\n\
+         basic: xref:f1[xrefstyle=basic]\n\ndefault: <<f1>>",
+    );
+    assert!(
+        html.contains("full: <a href=\"#f1\">Figure 1, &#8220;My <strong>Cat</strong> pic&#8221;</a>"),
+        "full: {html}"
+    );
+    assert!(html.contains("short: <a href=\"#f1\">Figure 1</a>"), "short: {html}");
+    assert!(html.contains("basic: <a href=\"#f1\">My <strong>Cat</strong> pic</a>"), "basic: {html}");
+    // No xrefstyle set anywhere → bare title (the `else title` branch).
+    assert!(html.contains("default: <a href=\"#f1\">My <strong>Cat</strong> pic</a>"), "default: {html}");
+}
+
+#[test]
+fn test_listing_caption_and_xref_html() {
+    // `:listing-caption:` numbers listing (and source) blocks "Label N. " on the
+    // block title and feeds the same caption into a full/short xref.
+    let html = to_html(
+        ":listing-caption: Listing\n:xrefstyle: full\n\n\
+         [#l1]\n.Hello\n----\ncode\n----\n\nSee <<l1>> and xref:l1[xrefstyle=short].",
+    );
+    assert!(html.contains("<div class=\"title\">Listing 1. Hello</div>"), "block caption: {html}");
+    assert!(html.contains("<a href=\"#l1\">Listing 1, &#8220;Hello&#8221;</a>"), "full xref: {html}");
+    assert!(html.contains("<a href=\"#l1\">Listing 1</a>"), "short xref: {html}");
+
+    // Without the attribute a titled listing is unnumbered: bare title on the
+    // block and (since there is no caption) on a full xref too.
+    let plain = to_html(":xrefstyle: full\n\n[#l2]\n.Hi\n----\nx\n----\n\nSee <<l2>>.");
+    assert!(plain.contains("<div class=\"title\">Hi</div>"), "plain block: {plain}");
+    assert!(plain.contains("<a href=\"#l2\">Hi</a>"), "plain xref (no caption → title): {plain}");
+}
+
+#[test]
+fn test_block_xref_reftext_and_suppressed_caption_html() {
+    // An explicit reftext outranks the caption form even under full style.
+    let rt = to_html(
+        ":xrefstyle: full\n\n[#t1,reftext=My Table]\n.Titled\n\
+         |===\n|a\n|===\n\nSee <<t1>>.",
+    );
+    assert!(rt.contains("<a href=\"#t1\">My Table</a>"), "reftext wins: {rt}");
+
+    // A suppressed caption (`caption=`) leaves no caption, so full falls back to
+    // the bare title.
+    let sup = to_html(
+        ":xrefstyle: full\n\n[#f2,caption=]\n.Plain\nimage::a.png[]\n\nSee <<f2>>.",
+    );
+    assert!(sup.contains("<a href=\"#f2\">Plain</a>"), "suppressed caption → title: {sup}");
+}
