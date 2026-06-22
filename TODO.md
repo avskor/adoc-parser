@@ -1190,10 +1190,40 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     **frontier 250 new-vs-base 0 diff**; **13/13 CLI-проб == asciidoctor 2.0.23** (char-ref href/alt, документированный
     `My&#32;`, bare autolink href+текст, `&copy;`/`&#x2026;`, голый `&`→`&amp;`, `&amp;` сохранён, плюс регресс-гарды
     plain link/image). Коммит/merge --no-ff/push — ПО ЗАПРОСУ.
-    - [ ] **DEFERRED (follow-up, отдельные задачи):** (a) char-ref в VERBATIM-target (`restore_verbatim`:1961 —
-      image-alt parser-punt всё ещё пантит, хотя РЕНДЕРИНГ alt уже корректен через общий рендерер; icon/anchor/index/UI —
-      preserve-семейства) + stem char-ref (ОБРАТНОЕ направление: asciidoctor ЭКРАНИРУЕТ `&` в stem, движок недо-экранирует —
-      отдельный корень: char_refs survival внутри stem); (b) escaped `\&#…;` (raw:false) в URL — остаётся punt (escape-семантика
+    - [x] **DEFERRED (a) — char-ref в VERBATIM-target + stem** (ветка `fix/char-ref-verbatim-target-stem`, 2026-06-22,
+      off master `e493ba1`, НЕ закоммичена). Запрос «начни следующую задачу из TODO.md» + выбор пользователя «char-ref в
+      verbatim-target + stem». **Находка (пробы asciidoctor 2.0.23 + текущий движок = legacy fallback, т.к. restore_verbatim
+      пантил на char-ref):** char-ref в verbatim-контенте макроса расходился семейно-зависимо. **(1) Preserve-семейства**
+      (image alt/target — уже корректны через `write_attr_href`; icon class, kbd/btn/menu, indexterm2) — движок ПЕРЕэкранировал
+      (`a&amp;#167;b` vs asciidoctor `a&#167;b`); корень — РЕНДЕРЕР гнал verbatim-контент через `html_escape`/`html_escape_text`,
+      двойно экранируя валидный entity (как до decline №3 для href/alt). **(2) stem (ОБРАТНОЕ направление)** — движок
+      НЕДОэкранировал: `render_inline_stem`/`render_stem_block` пушили контент СЫРЫМ (вообще без escape) → `stem:[a < b & c]`
+      давал `\$a < b & c\$` вместо asciidoctor `\$a &lt; b &amp; c\$` (предсуществующий баг ШИРЕ char-ref — никакие
+      specialchars не экранировались). **Правило asciidoctor:** preserve-семейства держат survived char-ref дословно
+      (already-formed entity); stem применяет `specialcharacters` (экранирует `<>&`, char-ref тоже → `&amp;#167;`).
+      **Изменения (6 файлов):** (A) `adoc-html/escape.rs` — `html_escape_href`→`html_escape_preserving_refs` (rename, attr-flavor,
+      escapes `"`) + новый `html_escape_text_preserving_refs` (text-flavor, без `"`); общее ядро `escape_preserving_refs(quotes)`.
+      (B) `adoc-html/inline.rs` — stem inline+block: `html_escape_text` (specialchars); kbd/menu/icon-class/icon-literal-alt:
+      `html_escape`→`html_escape_preserving_refs` (`"` байт-идентично). (C) `adoc-html/events.rs` + `lib.rs` — новый флаг
+      `button_mode` (btn-контент через `html_escape_text_preserving_refs`); IndexTerm event → `html_escape_text_preserving_refs`.
+      (D) `adoc-parser/subst/macros.rs` `restore_verbatim` — арм `CharRef{raw:true}`→splice (снят punt для ВСЕХ verbatim-
+      семейств); escaped `raw:false` + structural по-прежнему пантят. **Движок==legacy на raw:true** (оба держат литеральный
+      char-ref в verbatim-строке; рендерер решает preserve/re-escape). **Тесты:** +1 parser
+      (`native_char_ref_in_verbatim_macros_reproduces_legacy` — 10 форм image/icon/indexterm2/stem/(((…)))/kbd/btn/menu ==legacy;
+      + переписан `verbatim_macro_passthrough_reconstructed_natively`: char-ref splice+==legacy, escaped пантит) +2 html
+      (`test_char_ref_in_verbatim_macros_html`, `test_stem_block_specialchars_escaped_html`; + переписан старый
+      `test_stem_no_escape_html`→`test_stem_specialchars_escaped_html`, кодировал БАГ). clippy 0, **test --workspace зелёное**
+      (parser 640→641, html 497→499, compat 233). **Гейт 344/344 байт-в-байт** vs master `e493ba1` (`gate_check.py` 0 diff;
+      0 корпусных char-ref в verbatim-макросах). **Frontier 250 new-vs-base 0 diff** (`fsweep.py`; реальные menu char-ref-кейсы
+      `menu:File[Save As&#8230;]`/`menu:Tools[…&gt;…]` сидят в `substitutions_test.rb` = не парсится как `.adoc`, но дали
+      эталонный вывод). **18/18 CLI-проб == asciidoctor 2.0.23** (image alt/target, icon font/literal, kbd single/seq, btn, menu
+      item/target, indexterm2, stem asciimath/latexmath/block/specialchars, + регресс-гарды plain/lone-`&`). **Вне scope
+      (предсуществующее, документировано):** escaped `\&#…;` (raw:false) в string-capture семействах (kbd/btn/menu/icon) —
+      asciidoctor снимает `\` и экранирует `&`, движок (legacy fallback + entity-preserving рендерер) держит `\` и сохраняет
+      entity; синтетический edge, gate/frontier-нейтрально, неустраним без escape-pass-aware рендеринга (= DEFERRED (b)/(c));
+      menu split-делимитер (`,`/`&gt;`) + font-caret под `:icons: font` — отдельные menu-баги (НЕ char-ref); anchor reftext
+      (xref label) УЖЕ корректен. Коммит/merge --no-ff/push — ПО ЗАПРОСУ.
+    - [ ] **DEFERRED (follow-up, отдельные задачи):** (b) escaped `\&#…;` (raw:false) в URL — остаётся punt (escape-семантика
       отлична); (c) `\++`/`\+++` (passthrough.rs:102) — asciidoctor сам непоследователен (ASG≠HTML), reproduce-legacy либо ждать.
   - [ ] **(asciidoctor-parity, отдельная связная задача, 0 корпусного выигрыша):** под non-QUOTES subs движок снимает
     `\`-escape БЕЗУСЛОВНО (через legacy-зеркальные арм'ы escape.rs: `\{`/`\[`/`\<`/typographic + новый `\*`-арм), тогда

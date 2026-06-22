@@ -381,7 +381,7 @@ impl HtmlRenderer {
         let has_link = link.is_some();
         if let Some(href) = link {
             output.push_str("<a class=\"image\" href=\"");
-            html_escape_href(output, self.resolve_inline_attr_value(href).as_ref());
+            html_escape_preserving_refs(output, self.resolve_inline_attr_value(href).as_ref());
             output.push_str("\">");
         }
         output.push_str("<img");

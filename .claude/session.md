@@ -1,5 +1,63 @@
 # Session context
 
+## Сессия (2026-06-22) — DEFERRED (a): char-ref в VERBATIM-target + stem (ветка `fix/char-ref-verbatim-target-stem`, off master `e493ba1`, НЕ закоммичена)
+
+Запрос «начни следующую задачу из TODO.md». Master `e493ba1` чист (decline №3 СМЕРЖЕН). Открытых `[ ]`: DEFERRED-блок
+(a/b/c, TODO:1193) + parity-задача (1198). **Развилка** (AskUserQuestion): выбор **«char-ref в verbatim-target + stem»** (DEFERRED a).
+
+### Задача
+char-ref в verbatim-контенте макросов: preserve-семейства (image alt/target, icon class, kbd/btn/menu, indexterm2) держат
+survived char-ref дословно; stem (ОБРАТНОЕ) — `specialcharacters`-экранирует. Снять restore_verbatim-punt на raw:true.
+
+### Находка (пробы asciidoctor 2.0.23 + движок=legacy fallback, т.к. restore_verbatim пантил char-ref)
+- **Preserve-семейства**: движок ПЕРЕэкранировал (`a&amp;#167;b` vs ad `a&#167;b`). Корень — РЕНДЕРЕР (`html_escape`/`html_escape_text`
+  двойно экранировал entity). image alt/target УЖЕ корректны (`write_attr_href` из decline №3).
+- **stem**: НЕДОэкранировал — `render_inline_stem`/`render_stem_block` пушили контент СЫРЫМ (вообще без escape!).
+  `stem:[a < b & c]` → `\$a < b & c\$` вместо ad `\$a &lt; b &amp; c\$`. Баг ШИРЕ char-ref (никакие specialchars не экранировались).
+- **Эталон из frontier**: `substitutions_test.rb:1820-1860` (asciidoctor тесты, .rb не парсится) — `menu:File[Save As&#8230;]`
+  → `<b class="menuitem">Save As&#8230;</b>` (preserved). Также показал menu split по `,`/`&gt;` + font-caret = ОТДЕЛЬНЫЕ menu-баги.
+
+### Реализация (6 файлов)
+- **`adoc-html/escape.rs`**: `html_escape_href`→`html_escape_preserving_refs` (rename, attr-flavor, escapes `"`) + новый
+  `html_escape_text_preserving_refs` (text-flavor, без `"`); общее ядро `escape_preserving_refs(output,text,quotes)`.
+  `write_attr_href` + media.rs:384 обновлены на новое имя.
+- **`adoc-html/inline.rs`**: stem inline+block → `html_escape_text` (specialchars: `<>&` не `"`); `render_kbd_keys`(2×),
+  `render_menu`(4×: target+menuref+submenu+menuitem), `render_icon` class(311)+literal-alt(264,265): `html_escape`→
+  `html_escape_preserving_refs` (`"` БАЙТ-ИДЕНТИЧНО — pre-existing kbd/menu `"`-баг оставлен).
+- **`adoc-html/events.rs`+`lib.rs`**: новый флаг `button_mode` (Tag::Button set / TagEnd::Button clear); Text-ветка
+  `else if self.button_mode { html_escape_text_preserving_refs }`. `Event::IndexTerm` → `html_escape_text_preserving_refs`.
+- **`adoc-parser/subst/macros.rs`**: `restore_verbatim` — арм `CharRef{raw:true}=>out.push_str(text)` (splice); escaped
+  `raw:false` + structural → `flag_punt`+None (DEFERRED). +docstring-свип (модуль + 6 try_*-функций «char-ref punts»→«survived
+  splice, escaped punts»). **Движок==legacy на raw:true** (оба держат литеральный char-ref в verbatim-строке).
+
+### КЛЮЧ
+Семейная специфика ЦЕЛИКОМ в рендерере: restore_verbatim splice'ит uniform `&#167;`-строку, рендерер preserve (preserve-сем.)
+или re-escape (stem). string-capture семейства (kbd/menu/icon/stem) НЕ могут эмитить события → escape в рендерере (не сегментация).
+
+### Тесты
++1 parser `native_char_ref_in_verbatim_macros_reproduces_legacy` (mod.rs: 10 форм ==legacy: image alt/target, icon, indexterm2,
+stem, `(((…)))`, kbd/btn/menu) + переписан `verbatim_macro_passthrough_reconstructed_natively` (char-ref splice+==legacy,
+escaped пантит). +2 html `test_char_ref_in_verbatim_macros_html` (6 семейств байт-в-байт vs ad + lone-`&`), 
+`test_stem_block_specialchars_escaped_html`; + переписан `test_stem_no_escape_html`→`test_stem_specialchars_escaped_html`
+(старый КОДИРОВАЛ БАГ «stem should not be escaped»).
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace зелёное (**parser 640→641, html 497→499**, compat 233).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (=master `e493ba1`, собран stash'ем; `gate_check.py` 0 diff).
+- **Frontier 250 new-vs-base 0 diff** (`fsweep.py` в scratchpad).
+- **18/18 CLI-проб == asciidoctor 2.0.23**: image alt/target, icon font/literal, kbd single/seq, btn, menu item/target,
+  indexterm2, stem asciimath/latexmath/block/specialchars; регресс-гарды (plain kbd/menu/icon/stem, lone-`&`).
+- Нейтральность по построению: 0 корпусных char-ref в verbatim-макросах; реальные menu-кейсы — в `.rb` (не парсится).
+
+### NEXT
+- Коммит/merge --no-ff в master + push — **ПО ЗАПРОСУ** (НЕ без спроса). base `/tmp/adoc_base` = master `e493ba1`.
+- Вне scope (документировано в TODO): escaped `\&#…;` (raw:false) в string-capture семействах (kbd/btn/menu/icon) сдвинулся
+  (`a\&#167;b` вместо ad `a&amp;#167;b` — `\` не снят, entity сохранён); синтетический edge, gate/frontier-нейтрально,
+  неустраним без escape-pass-aware рендеринга = DEFERRED (b). esc-stem (raw:false) ТЕПЕРЬ совпадает с ad (stem всё экранирует).
+- Остаток `[ ]`: DEFERRED (b) escaped `\&#…;` в URL/verbatim; (c) `\++`/`\+++`; parity-задача (per-subst escape-гейтинг, TODO:1218).
+
+---
+
 ## Сессия (2026-06-22) — decline №3: native char-ref в URL link/autolink + entity-preserving href в рендерере (ветка `fix/char-ref-in-url`, off master `039105d`, НЕ закоммичена)
 
 Запрос «начни следующую задачу из TODO.md». Master `039105d` чист (ШАГ A СМЕРЖЕН — прошлая session-запись «не закоммичена» устарела).

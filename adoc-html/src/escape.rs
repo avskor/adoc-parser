@@ -32,19 +32,12 @@ pub(crate) fn html_escape_text(output: &mut String, text: &str) {
     }
 }
 
-/// Attribute-value escape (escapes `"`, like [`html_escape`]) that preserves an
-/// already-formed character reference: a `&` that begins a syntactically valid
-/// reference (`&#NNN;` / `&#xHHH;` / `&name;`) is copied VERBATIM rather than
-/// re-escaped to `&amp;`. For a link/image `href` and an image `alt`/`src`.
-///
-/// Asciidoctor treats a character reference written inside a URL or an `alt`
-/// attribute as an already-formed entity (its `replacements`/passthrough pass ran
-/// over the value first), so it must not be escaped a second time:
-/// `link:a&#167;b[t]` → `href="a&#167;b"`, while a bare `&` (`?a=1&b=2`) still
-/// becomes `&amp;`. (A bare link's *visible-text* entity is preserved upstream
-/// instead — the parser emits the reference as its own `InlinePassthrough`
-/// segment — so no text-content variant is needed here.)
-pub(crate) fn html_escape_href(output: &mut String, text: &str) {
+/// Character-reference-preserving escape, shared core of the two public variants
+/// below. Escapes `<`/`>`/`&` (and, when `quotes` is set, `"`) like
+/// [`html_escape`], EXCEPT a `&` that begins a syntactically valid reference
+/// (`&#NNN;` / `&#xHHH;` / `&name;`) is copied VERBATIM rather than re-escaped to
+/// `&amp;`. A bare `&` (`?a=1&b=2`) still becomes `&amp;`.
+fn escape_preserving_refs(output: &mut String, text: &str, quotes: bool) {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -68,7 +61,7 @@ pub(crate) fn html_escape_href(output: &mut String, text: &str) {
                 output.push_str("&gt;");
                 i += 1;
             }
-            b'"' => {
+            b'"' if quotes => {
                 output.push_str("&quot;");
                 i += 1;
             }
@@ -92,6 +85,28 @@ pub(crate) fn html_escape_href(output: &mut String, text: &str) {
             }
         }
     }
+}
+
+/// Attribute-value escape (escapes `"`, like [`html_escape`]) that preserves an
+/// already-formed character reference. For a link/image `href`/`alt`/`src`, an
+/// icon's `fa-…` class list, and any other verbatim attribute/`"`-bearing context
+/// whose value may carry an entity Asciidoctor keeps verbatim.
+///
+/// Asciidoctor treats a character reference written inside a URL, an `alt`
+/// attribute, or a `kbd:`/`menu:`/`icon:` macro's verbatim content as an
+/// already-formed entity (its `replacements`/passthrough pass ran over the value
+/// first), so it must not be escaped a second time: `link:a&#167;b[t]` →
+/// `href="a&#167;b"`, `menu:File[Save As&#8230;]` → `<b class="menuitem">Save
+/// As&#8230;</b>`, while a bare `&` (`?a=1&b=2`) still becomes `&amp;`.
+pub(crate) fn html_escape_preserving_refs(output: &mut String, text: &str) {
+    escape_preserving_refs(output, text, true);
+}
+
+/// Like [`html_escape_preserving_refs`] but does NOT escape `"` — for text
+/// content (not attributes), e.g. a `btn:[…]` label or an `indexterm2:[…]` flow
+/// term, mirroring the `specialcharacters` set that leaves `"` untouched.
+pub(crate) fn html_escape_text_preserving_refs(output: &mut String, text: &str) {
+    escape_preserving_refs(output, text, false);
 }
 
 /// Emit `text` with every embedded newline turned into a hard break
@@ -154,11 +169,11 @@ pub(crate) fn write_attr(output: &mut String, name: &str, value: &str) {
 /// Like [`write_attr`] but preserves already-formed character references in the
 /// value — for a link/image `href` whose target may carry an entity Asciidoctor
 /// keeps verbatim (`link:a&#167;b[t]` → `href="a&#167;b"`). See
-/// [`html_escape_href`].
+/// [`html_escape_preserving_refs`].
 pub(crate) fn write_attr_href(output: &mut String, name: &str, value: &str) {
     output.push(' ');
     output.push_str(name);
     output.push_str("=\"");
-    html_escape_href(output, value);
+    html_escape_preserving_refs(output, value);
     output.push('"');
 }

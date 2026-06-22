@@ -128,6 +128,11 @@ impl HtmlRenderer {
                     self.in_unlabeled_xref = false;
                 } else if self.kbd_mode {
                     self.render_kbd_keys(output, &text);
+                } else if self.button_mode {
+                    // A `btn:[…]` label is verbatim content; preserve an
+                    // already-formed character reference (`btn:[a&#167;b]` →
+                    // `a&#167;b`) while a bare `&` still escapes.
+                    html_escape_text_preserving_refs(output, &text);
                 } else if self.menu_target.is_some() {
                     self.menu_items = Some(text.to_string());
                 } else if self.icon_name.is_some() {
@@ -353,7 +358,10 @@ impl HtmlRenderer {
                 }
             }
             Event::IndexTerm { text } => {
-                html_escape_text(output, &text);
+                // The flow term `indexterm2:[…]` renders in place; a character
+                // reference in it is kept verbatim (`indexterm2:[a&#167;b]` →
+                // `a&#167;b`), mirroring Asciidoctor's already-formed-entity rule.
+                html_escape_text_preserving_refs(output, &text);
             }
             Event::ConcealedIndexTerm { .. } => {
                 // Concealed index terms produce no visible output
@@ -841,6 +849,7 @@ impl HtmlRenderer {
             }
             Tag::Button => {
                 output.push_str("<b class=\"button\">");
+                self.button_mode = true;
             }
             Tag::Menu { target } => {
                 self.menu_target = Some(target.to_string());
@@ -1387,6 +1396,7 @@ impl HtmlRenderer {
                 self.kbd_mode = false;
             }
             TagEnd::Button => {
+                self.button_mode = false;
                 output.push_str("</b>");
             }
             TagEnd::Menu => {
