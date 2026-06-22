@@ -2513,7 +2513,15 @@ impl<'a> InlineState<'a> {
     ) -> bool {
         let start_pos = self.pos;
 
-        if !self.at_autolink_boundary(start_pos) {
+        // `"`/`'` are valid left boundaries for the macro form only (mirror of
+        // `subst::macros::try_autolink`): a quoted bare URL stays literal, a quoted
+        // `url[…]` links. `at_autolink_boundary` omits the quotes, so admit them
+        // here and gate on the trailing attrlist below.
+        let quote_boundary = matches!(
+            self.input[..start_pos].chars().next_back(),
+            Some('"') | Some('\'')
+        );
+        if !self.at_autolink_boundary(start_pos) && !quote_boundary {
             return false;
         }
 
@@ -2532,6 +2540,13 @@ impl<'a> InlineState<'a> {
         // the `URL[text]` macro form keeps it (separate InlineLinkRx alternate),
         // so check for an attrlist on the unstripped url first.
         let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+
+        // A `"`/`'` left boundary opens the macro form only; a quoted bare URL is
+        // not a link in Asciidoctor (`"https://x"` stays literal). Decline when no
+        // `[…]` attrlist follows so the bare branch never fires on the quote.
+        if quote_boundary && !bracket_follows {
+            return false;
+        }
 
         // Angle-bracketed bare URL (`<https://…>`): mirror of the sequential engine
         // (`subst::macros::try_autolink`). When the scheme is immediately preceded

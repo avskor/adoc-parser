@@ -486,6 +486,30 @@ fn test_angle_bracket_url_autolink() {
 }
 
 #[test]
+fn test_macro_autolink_after_quote_boundary_html() {
+    // Corpus (links.adoc): a `url[]` macro after `"` links bare; the surrounding
+    // quotes stay as literal text. Byte-identical to Asciidoctor 2.0.23.
+    let html = to_html("Type \"https://asciidoctor.org[]\" into the bar.");
+    assert!(
+        html.contains(
+            "Type \"<a href=\"https://asciidoctor.org\" class=\"bare\">https://asciidoctor.org</a>\" into the bar."
+        ),
+        "{html}"
+    );
+    // Single-quote boundary + a labelled bracket links too.
+    let html2 = to_html("Type 'https://asciidoctor.org[Home]' now.");
+    assert!(
+        html2.contains("Type '<a href=\"https://asciidoctor.org\">Home</a>' now."),
+        "{html2}"
+    );
+    // Regression guard: a BARE URL inside quotes stays literal (the quote opens
+    // the macro form only — matches Asciidoctor, which does not link it).
+    let html3 = to_html("X \"https://asciidoctor.org\" Y");
+    assert!(!html3.contains("<a "), "bare URL in quotes must not link: {html3}");
+    assert!(html3.contains("X \"https://asciidoctor.org\" Y"), "{html3}");
+}
+
+#[test]
 fn test_escaped_ellipsis_in_link_target_html() {
     // Asciidoctor runs `replacements` over the line before the macro is detected,
     // so an escaped `\...` in a URL target loses its backslash and stays literal

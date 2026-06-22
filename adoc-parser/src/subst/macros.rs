@@ -1561,7 +1561,21 @@ fn try_autolink(
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize, bool)> {
-    let limit = autolink_url_limit(work, src.as_bytes(), start)?;
+    // Asciidoctor's `InlineLinkRx` left-boundary class is
+    // `(^|link:|#{CG_BLANK}|&lt;|[>\(\)\[\];"'])` — it admits `"` and `'`, but
+    // those two open ONLY the macro form (`url[…]`). A quoted BARE URL
+    // (`"https://x"`) is left literal (the closing quote is no URL terminator and
+    // the bare branch is not taken); a quoted MACRO URL (`"https://x[]"`) links.
+    // `autolink_url_limit` (shared with the bare/constrained-span path)
+    // deliberately omits the quotes, so detect them here and gate the match on a
+    // following `[…]` attrlist (see the `quote_boundary` decline below).
+    let bytes = src.as_bytes();
+    let quote_boundary = start > 0 && matches!(bytes[start - 1], b'"' | b'\'');
+    let limit = match autolink_url_limit(work, bytes, start) {
+        Some(l) => l,
+        None if quote_boundary => bytes.len(),
+        None => return None,
+    };
     let rest = &src[start..];
     // When `start` opens a constrained span, cap the scan at the span's closing
     // marker (`limit`): `macros` runs before `quotes`, so that marker is still a
@@ -1578,6 +1592,13 @@ fn try_autolink(
     // Trailing punctuation is stripped only from BARE urls — the `URL[text]` macro
     // form keeps it. Check for the attrlist on the UNSTRIPPED url first.
     let bracket_follows = rest[url_end..].starts_with('[') && rest[url_end..].contains(']');
+
+    // A `"`/`'` left boundary opens the macro form only; a quoted bare URL is not
+    // a link in Asciidoctor (`"https://x"` stays literal). Decline when no `[…]`
+    // attrlist follows so the bare branch never fires on the quote boundary.
+    if quote_boundary && !bracket_follows {
+        return None;
+    }
 
     // Angle-bracketed bare URL (`<https://…>`): when the scheme is immediately
     // preceded by `<` and the URL is closed by `>` (no `[label]`), Asciidoctor
