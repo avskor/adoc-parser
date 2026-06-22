@@ -1,51 +1,47 @@
 # Session context
 
-## Сессия (2026-06-22) — F-AV: стиль `[abstract]` → quoteblock (ветка `fix/abstract-block-quoteblock`, off master `86dfa6f`, НЕ закоммичена)
+## Сессия (2026-06-22) — F-AW: font-иконка `size=X` + title-субституция (ветка `fix/icon-named-size-and-title-subs`, off master `419f1af`, НЕ закоммичена)
 
-Запрос «начни следующую задачу из TODO.md». Master `86dfa6f` чист (F-AU уже смержен — session.md прошлой сессии был
-устаревшим: говорил «не закоммичена», но в git история `86dfa6f`/`d7e4bf9` уже есть). Открытые `[ ]` все синтетические.
+Запрос «начни следующую задачу из TODO.md». Master `419f1af` чист (F-AV `e811a76`/`419f1af` уже смержен —
+session.md прошлой сессии был устаревшим, обычная картина). Открытые `[ ]` все синтетические «0 корпусного выигрыша».
 
 ### Задача (триаж adoc2docx — наименьший системный clean-div)
-`frontier_parity.py /mnt/c/tmp/adoc2docx`: 37 identical / 11 clean-div. `abstract.adoc` (6 diff) — `[abstract]` стиль:
-параграф мы рендерили `<div class="paragraph abstract"><p>`, open-блок `<div class="openblock abstract"><div class="content">`;
-asciidoctor оба → `<div class="quoteblock abstract"><blockquote>`.
+`frontier_parity.py /mnt/c/tmp/adoc2docx`: 39 identical / 10 clean-div. `icons.adoc` (10 diff) — наименьший системный.
+`showdiff` выявил ДВА бага рендерера на каждой из 10 строк:
+1. `title="~Title~"` (сырой) vs asciidoctor `title="<sub>Title</sub>"` — title не проходит inline-субституцию.
+2. Класс размера (`fa-2x`/`fa-fw`/…) отсутствует — именованный `size=X` терялся.
 
-### Корень (verified исходником asciidoctor 2.0.23)
-`parser.rb`: `PARAGRAPH_STYLES` ⊇ `abstract`; `[abstract]`-параграф → `build_block(:open,:compound)`, но `terminator.nil?`
-понижает `content_model` до `:simple` → текст в blockquote БЕЗ `<p>`; open-блок `--` остаётся `:compound` → дети-параграфы.
-`html5.rb convert_open` для `style=='abstract'` эмитит ЕДИНУЮ структуру
-`<div{id} class="quoteblock abstract{role}"><blockquote>{content}</blockquote></div>` (+ `<div class="title">` если есть).
+### Корни (verified исходником asciidoctor 2.0.23 + 7 проб)
+- (a) `substitutors.rb:419` icon `posattrs=['size']` → size = и позиционный, и именованный. Наш `render_icon`
+  (`adoc-html/inline.rs`) имел size ТОЛЬКО для позиционного (`i==0 && нет '='`); в `match key` ветки `"size"` НЕ БЫЛО.
+- (b) `sub_macros` в цепочке `normal` ПОСЛЕ specialchars+quotes → `~Title~` в `[title=…]` становится `<sub>` ДО извлечения
+  макроса. Наш движок отдаёт атрибуты icon сырым `Text` (`subst/macros.rs::try_icon`, leaf by design); рендерер
+  html-эскейпил title без субституции (`<`→`&lt;` срабатывал лишь как attr-escape в `write_attr`).
 
-### Реализация (3 файла, всё в рендерере adoc-html)
-- `blocks.rs`: хелперы `start_abstract_block` (`write_meta_attrs(meta,"quoteblock")` — style="abstract" уже в meta →
-  `quoteblock abstract {roles}`; + title + `<blockquote>`) и `close_abstract_block` (newline-guard + `</blockquote></div>`).
-  `start_paragraph` ветка `style=="abstract"` (флаг `abstract_para`, без `<p>`); Open в `start_delimited_block` ветка
-  (`delimited_block_stack` tuple `(Open, is_abstract)`).
-- `events.rs`: `TagEnd::Paragraph` при `abstract_para` → `close_abstract_block`+return; `TagEnd::DelimitedBlock` ветка `(Open,true)`.
-- `lib.rs`: поле `abstract_para: bool`.
+### Реализация (1 файл, `adoc-html/src/inline.rs::render_icon`, чисто рендерер — как F-AO)
+1. Ветка `"size" => size = Some(val.trim().to_string())` в `match key` (аддитивно; позиционный путь не тронут;
+   size+rotate/flip уже эмитились независимо — size перед flip/rotate, flip>rotate elsif).
+2. title: вместо `write_attr(output,"title",t)` → `render_inline_value(&mut rendered, t.trim_matches('"'))` + ручная
+   обёртка ` title="{rendered}"`. De-quote + current_subs (NORMAL в параграфе → quotes/replacements). No-markup fast-path
+   сохраняет байт-точность простых title (`title=Info`→`Info`).
 
-### Тесты (+4 html, после test_abstract_section_html)
-`test_abstract_paragraph_quoteblock_html` (байт с title), `_no_title_html`, `_open_block_quoteblock_html` (дети-параграфы),
-`_block_id_role_html` (id+роль обе формы).
+### Тесты (+3 html, после test_icon_link_role_window_html)
+`test_icon_named_size_html` (`size=2x`→`fa-2x`), `test_icon_size_with_rotate_html` (`size=fw,rotate=270`→`fa-fw fa-rotate-270`;
+`size=fw,flip=vertical`→`fa-fw fa-flip-vertical`), `test_icon_title_inline_subst_html` (`~Title~`→sub, `*Bold*`→strong,
+quoted `"quoted ~sub~ val"`→de-quote+sub).
 
 ### Верификация
-- clippy 0; **test --workspace зелёное** (html 506→510, parser 643, compat-lab 1).
-- **Гейт 344/344 байт-в-байт** vs master `86dfa6f` (gate_check.py 0 diff — корпусные `[abstract]` все в `[source]----` или
-  секционный стиль → не рендерятся как abstract-блок).
-- **adoc2docx 37→39 identical (+2):** abstract.adoc + software-development-cookbook.adoc оба байт-в-байт с asciidoctor;
-  test.adoc abstract-регион MATCH (прочие diff остались).
-- **new-vs-base sweep frontier+adoc2docx = ровно 3 файла** (abstract/cookbook/test), все abstract-регионы построчно ==
-  asciidoctor, 0 регрессий (frontier без `[abstract]`).
-- 5 CLI-проб == asciidoctor 2.0.23.
-
-### Вне scope (ниша)
-book БЕЗ doctitle + первый блок `[abstract]`: asciidoctor НЕ создаёт преамбулу и ИСКЛЮЧАЕТ контент (guard
-`parent==document && book`); мы создаём преамбулу и рендерим. Предсуществующее, не регрессия, завязано на F-AU.
+- clippy 0; **test --workspace 1268 зелёных** (html 510→513).
+- **Гейт 344/344 байт-в-байт** vs master `419f1af` (`gate_check.py` 0 diff — корпусные `:icons: font` без inline-`icon:`
+  с `size=`/markup-`title`). Базовый бинарь `/tmp/adoc_base` собран из `419f1af` (stash → build → cp → pop → rebuild).
+- **Frontier 250 + adoc2docx 52 new-vs-base sweep = РОВНО 1 файл** (icons.adoc, clean-div 10→0, байт-в-байт), 0 регрессий.
+- **adoc2docx 39→40 identical (+1).** icons.adoc showdiff пустой.
+- 7 CLI-проб == asciidoctor 2.0.23.
 
 ### Состояние
-Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ. TODO.md обновлён (F-AV в начало FRONTIER-секции).
+Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ. TODO.md обновлён (F-AW в начало FRONTIER-секции).
 
-### Остаток adoc2docx clean-div (10, для будущего триажа)
-xref(1495 — xrefstyle:full реф-лейблы фигур), test(1111), source(682), xml(291), callouts(196), links(89), menu(80),
-sections(55), icons(10 — title с inline-форматированием), images(1 — xrefstyle:full реф-текст фигуры). images=1 и xref —
-архитектурный `xrefstyle: full` (нумерация фигур + caption-prefix в тексте ссылки).
+### Остаток adoc2docx clean-div (9, для будущего триажа)
+xref(1495 — xrefstyle:full реф-лейблы фигур, архитектурный), test(1105), source(682), xml(291), callouts(196),
+links(89), menu(80), sections(55), images(1 — xrefstyle:full реф-текст фигуры, архитектурный). images=1 и xref —
+нумерация фигур + caption-prefix в тексте ссылки (`xrefstyle: full`).

@@ -2840,6 +2840,39 @@ fn test_icon_link_role_window_html() {
 }
 
 #[test]
+fn test_icon_named_size_html() {
+    // `size` is also the first positional attribute (Asciidoctor `posattrs =
+    // ['size']`), so the named `size=2x` works identically to positional `[2x]`.
+    let html = to_html(":icons: font\n\nicon:heart[size=2x]");
+    assert_eq!(html, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-heart fa-2x\"></i></span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_size_with_rotate_html() {
+    // size and rotate/flip are independent: the size class is kept AND the
+    // rotate class is appended (Asciidoctor builds `fa-#{size}` then `fa-rotate-#{r}`).
+    let rot = to_html(":icons: font\n\nicon:home[size=fw,rotate=270]");
+    assert_eq!(rot, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-home fa-fw fa-rotate-270\"></i></span></p>\n</div>\n");
+    // flip wins over rotate, but the size class still precedes it.
+    let flip = to_html(":icons: font\n\nicon:home[size=fw,flip=vertical]");
+    assert_eq!(flip, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-home fa-fw fa-flip-vertical\"></i></span></p>\n</div>\n");
+}
+
+#[test]
+fn test_icon_title_inline_subst_html() {
+    // The `title` value carries the line's inline substitutions (Asciidoctor runs
+    // quotes/specialchars over the whole line before the macros pass extracts the
+    // icon): `~Title~` → `<sub>Title</sub>`, `*Bold*` → `<strong>Bold</strong>`.
+    let sub = to_html(":icons: font\n\nicon:info[title=~Title~]");
+    assert_eq!(sub, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-info\" title=\"<sub>Title</sub>\"></i></span></p>\n</div>\n");
+    let bold = to_html(":icons: font\n\nicon:info[title=*Bold*]");
+    assert_eq!(bold, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-info\" title=\"<strong>Bold</strong>\"></i></span></p>\n</div>\n");
+    // A quoted value is de-quoted, then its inner markup is substituted.
+    let quoted = to_html(":icons: font\n\nicon:info[title=\"quoted ~sub~ val\"]");
+    assert_eq!(quoted, "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-info\" title=\"quoted <sub>sub</sub> val\"></i></span></p>\n</div>\n");
+}
+
+#[test]
 fn test_menu_submenus_html() {
     let html = to_html(":experimental:\n\nmenu:File[New > Doc]");
     assert_eq!(

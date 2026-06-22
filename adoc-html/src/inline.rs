@@ -222,6 +222,10 @@ impl HtmlRenderer {
                         "role" => role = Some(val.trim().to_string()),
                         "link" => link = Some(val.trim().to_string()),
                         "title" => title = Some(val.trim().to_string()),
+                        // `size` is also the first positional attribute (Asciidoctor
+                        // `posattrs = ['size']`), so both `icon:x[2x]` and the named
+                        // `icon:x[size=2x]` set it.
+                        "size" => size = Some(val.trim().to_string()),
                         "rotate" => rotate = Some(val.trim().to_string()),
                         "flip" => flip = Some(val.trim().to_string()),
                         "alt" => alt = Some(val.trim().to_string()),
@@ -312,7 +316,17 @@ impl HtmlRenderer {
         html_escape_preserving_refs(output, &classes);
         output.push('"');
         if let Some(ref t) = title {
-            write_attr(output, "title", t);
+            // The `title` value carries the line's inline substitutions: in
+            // Asciidoctor the whole paragraph runs specialchars+quotes+replacements
+            // BEFORE the macros pass extracts the icon, so `title=~Title~` arrives as
+            // `<sub>Title</sub>`. Mirror that by rendering the (de-quoted) value
+            // through the current block's subs; a plain title takes the no-markup
+            // fast path and stays byte-for-byte identical to the previous output.
+            let mut rendered = String::new();
+            self.render_inline_value(&mut rendered, t.trim_matches('"'));
+            output.push_str(" title=\"");
+            output.push_str(&rendered);
+            output.push('"');
         }
         output.push_str("></i>");
 
