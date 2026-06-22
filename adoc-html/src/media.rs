@@ -381,7 +381,7 @@ impl HtmlRenderer {
         let has_link = link.is_some();
         if let Some(href) = link {
             output.push_str("<a class=\"image\" href=\"");
-            html_escape(output, self.resolve_inline_attr_value(href).as_ref());
+            html_escape_href(output, self.resolve_inline_attr_value(href).as_ref());
             output.push_str("\">");
         }
         output.push_str("<img");
@@ -391,13 +391,16 @@ impl HtmlRenderer {
         // from the basename), matching asciidoctor's attributes-before-macros
         // order.
         let resolved_target = self.resolve_inline_attr_value(target);
-        write_attr(output, "src", &self.image_uri(resolved_target.as_ref()));
+        // `write_attr_href` keeps an already-formed character reference verbatim in
+        // the URL/alt (`image:p.png[a&#167;b]` → `alt="a&#167;b"`), matching
+        // Asciidoctor; a bare `&` is still escaped to `&amp;`.
+        write_attr_href(output, "src", &self.image_uri(resolved_target.as_ref()));
         let effective_alt = if alt.as_ref().is_empty() {
             auto_alt_from_target(resolved_target.as_ref())
         } else {
             self.resolve_inline_attr_value(alt).into_owned()
         };
-        write_attr(output, "alt", &effective_alt);
+        write_attr_href(output, "alt", &effective_alt);
         if let Some(w) = width {
             write_attr(output, "width", w);
         }

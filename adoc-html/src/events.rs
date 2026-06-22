@@ -792,7 +792,10 @@ impl HtmlRenderer {
                 // reference in the target (`link:{u}[…]`) survives unresolved into
                 // `url`; resolve it here to match asciidoctor (which substitutes
                 // attributes first). Undefined → kept literal; no `{` → borrowed.
-                write_attr(output, "href", self.resolve_inline_attr_value(url).as_ref());
+                // `write_attr_href` keeps an already-formed character reference in
+                // the URL verbatim (`link:a&#167;b[t]` → `href="a&#167;b"`); a bare
+                // `&` is still escaped.
+                write_attr_href(output, "href", self.resolve_inline_attr_value(url).as_ref());
                 // A bare link's visible text repeats the (literal) target, so flag
                 // the upcoming text event to resolve the same references the href did.
                 if *is_bare {

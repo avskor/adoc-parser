@@ -519,6 +519,68 @@ fn test_escaped_ellipsis_in_link_target_html() {
     assert!(!attr.contains('\u{2026}'), "attribute-resolved URL must not double-curl: {attr}");
 }
 
+// A character reference in a link/image URL (a survived `&#NNN;`/`&name;`) is an
+// already-formed entity Asciidoctor keeps verbatim in the `href`/`alt`/`src`; the
+// engine reconstructs it natively (no legacy punt) and the renderer's href escape
+// preserves it instead of re-escaping the `&` to `&amp;`. A bare `&` still escapes.
+// All assertions verified byte-for-byte against Asciidoctor 2.0.23.
+#[test]
+fn test_char_ref_in_link_url_href() {
+    // Explicit-text link: entity preserved in href, label unaffected.
+    assert!(
+        to_html("link:a&#167;b[text]").contains("<a href=\"a&#167;b\">text</a>"),
+        "{}",
+        to_html("link:a&#167;b[text]")
+    );
+    // The documented "encode a space in a URL" pattern (asciidoc-lang link-macro.adoc).
+    assert!(
+        to_html("link:My&#32;Documents/report.pdf[Get Report]")
+            .contains("<a href=\"My&#32;Documents/report.pdf\">Get Report</a>")
+    );
+    // Named reference likewise preserved.
+    assert!(to_html("link:a&copy;b[t]").contains("<a href=\"a&copy;b\">t</a>"));
+}
+
+#[test]
+fn test_autolink_char_ref_href_and_text() {
+    // Bare autolink: entity preserved in BOTH the href AND the visible text (the
+    // text is segmented so the reference rides through as a passthrough).
+    let html = to_html("http://a&#167;b.com");
+    assert!(
+        html.contains("<a href=\"http://a&#167;b.com\" class=\"bare\">http://a&#167;b.com</a>"),
+        "{html}"
+    );
+    // Bare `link:` form (empty brackets) — same dual preservation.
+    let bare = to_html("link:a&#167;b[]");
+    assert!(
+        bare.contains("<a href=\"a&#167;b\" class=\"bare\">a&#167;b</a>"),
+        "{bare}"
+    );
+}
+
+#[test]
+fn test_image_alt_and_src_char_ref() {
+    // Character reference preserved verbatim in an inline image `alt`.
+    assert!(
+        to_html("image:p.png[a&#167;b]").contains("<img src=\"p.png\" alt=\"a&#167;b\">"),
+        "{}",
+        to_html("image:p.png[a&#167;b]")
+    );
+}
+
+#[test]
+fn test_bare_ampersand_in_url_still_escaped() {
+    // Back-check: a bare `&` (NOT a valid character reference) is still escaped to
+    // `&amp;` in the href — entity preservation must not leak to ordinary ampersands.
+    assert!(
+        to_html("link:a?x=1&y=2[t]").contains("<a href=\"a?x=1&amp;y=2\">t</a>"),
+        "{}",
+        to_html("link:a?x=1&y=2[t]")
+    );
+    // An already-escaped `&amp;` is itself a valid reference → preserved, not doubled.
+    assert!(to_html("link:a&amp;b[t]").contains("<a href=\"a&amp;b\">t</a>"));
+}
+
 #[test]
 fn test_macro_label_passthrough_seeded_reparse_html() {
     // A passthrough in a macro LABEL was formerly punted to the legacy parser

@@ -52,6 +52,11 @@ use crate::event::{Event, SubstitutionSet};
 use crate::inline::InlineOptions;
 use tokenize::{Work, TAG_LEAD, TAG_TAIL};
 
+/// Re-exported for the public `adoc_parser::char_ref_len` wrapper (see
+/// [`crate::char_ref_len`]): renderers reuse this syntactic char-reference
+/// validator to avoid re-escaping an already-formed entity in a URL/attribute.
+pub(crate) use char_refs::char_ref_len;
+
 thread_local! {
     /// Set by a pass that recognises a construct it cannot yet form faithfully and
     /// must defer to the legacy recursive parser: a macro whose span swallowed an
@@ -2200,6 +2205,49 @@ mod tests {
                 "new engine diverged from legacy (modulo render-dead label field) for {c:?}"
             );
         }
+    }
+
+    /// A survived character reference in a link/autolink URL (`link:a&#167;b[t]`,
+    /// `http://a&#167;b.com`) is now reconstructed natively — the engine no longer
+    /// punts to legacy. Asciidoctor keeps the reference as an already-formed entity
+    /// in the `href`; the renderer's href escape (adoc-html) preserves it. The
+    /// end-to-end `href`/`alt` parity is asserted in the html crate's
+    /// `test_char_ref_in_link_url_href` &c.; this pins the parser behaviour.
+    #[test]
+    fn native_char_ref_in_link_url() {
+        // No longer declines: every form is handled by the engine itself.
+        for inp in [
+            "link:a&#167;b[text]",
+            "link:a&#167;b[]",
+            "http://a&#167;b.com",
+            "link:My&#32;Documents/r.pdf[Get]",
+            "link:a&copy;b[t]",
+        ] {
+            assert!(
+                try_parse(inp, SubstitutionSet::NORMAL, InlineOptions::default()).is_some(),
+                "engine must handle a char-ref in the URL natively (no legacy punt): {inp:?}"
+            );
+        }
+
+        // Explicit-text form: the URL string carries the entity exactly as legacy
+        // produces it, so the event streams are identical — the visible divergence
+        // is purely in the (shared) renderer's href escape.
+        assert_eq!(pipeline("link:a&#167;b[text]"), legacy("link:a&#167;b[text]"));
+
+        // Bare form: the engine INTENTIONALLY diverges from legacy, segmenting the
+        // visible text so the reference rides through as its own `InlinePassthrough`
+        // (renderer-verbatim, matching Asciidoctor); legacy emits one escaped `Text`.
+        let bare = pipeline("link:a&#167;b[]");
+        assert_ne!(bare, legacy("link:a&#167;b[]"));
+        assert!(
+            bare.iter()
+                .any(|e| matches!(e, Event::InlinePassthrough(s) if s == "&#167;")),
+            "bare-link visible text must carry the reference as a passthrough segment: {bare:?}"
+        );
+
+        // A bare `&` (not a valid reference) is NOT segmented — single `Text`, so the
+        // renderer still escapes it to `&amp;`. The engine matches legacy here.
+        assert_eq!(pipeline("link:a?x=1&y=2[]"), legacy("link:a?x=1&y=2[]"));
     }
 
     /// The `\((…))` index-term-shorthand escape and the `\\MM…MM` doubled-marker

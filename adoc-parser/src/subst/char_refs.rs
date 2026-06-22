@@ -69,8 +69,11 @@ pub(super) fn run(work: &mut Work) {
 /// [`crate::inline::InlineState::char_ref_len_at`] / Asciidoctor's `CharRefRx`:
 /// named `[A-Za-z][A-Za-z]+\d{0,2}`, decimal `#\d{2,6}`, or hex
 /// `#x[0-9A-Fa-f]{2,}`, each terminated by `;`. ASCII-only, so byte indexing is
-/// safe. Shared with [`super::escape`] for the `\&#…;` escape.
-pub(super) fn char_ref_len(bytes: &[u8], start: usize) -> usize {
+/// safe. Shared with [`super::escape`] for the `\&#…;` escape, re-exported as
+/// `crate::subst::char_ref_len` and surfaced publicly (`adoc_parser::char_ref_len`)
+/// so renderers can tell an already-formed entity from a bare `&` when escaping
+/// URLs/attributes.
+pub(crate) fn char_ref_len(bytes: &[u8], start: usize) -> usize {
     if bytes.get(start) != Some(&b'&') {
         return 0;
     }

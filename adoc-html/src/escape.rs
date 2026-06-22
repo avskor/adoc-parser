@@ -32,6 +32,68 @@ pub(crate) fn html_escape_text(output: &mut String, text: &str) {
     }
 }
 
+/// Attribute-value escape (escapes `"`, like [`html_escape`]) that preserves an
+/// already-formed character reference: a `&` that begins a syntactically valid
+/// reference (`&#NNN;` / `&#xHHH;` / `&name;`) is copied VERBATIM rather than
+/// re-escaped to `&amp;`. For a link/image `href` and an image `alt`/`src`.
+///
+/// Asciidoctor treats a character reference written inside a URL or an `alt`
+/// attribute as an already-formed entity (its `replacements`/passthrough pass ran
+/// over the value first), so it must not be escaped a second time:
+/// `link:a&#167;b[t]` → `href="a&#167;b"`, while a bare `&` (`?a=1&b=2`) still
+/// becomes `&amp;`. (A bare link's *visible-text* entity is preserved upstream
+/// instead — the parser emits the reference as its own `InlinePassthrough`
+/// segment — so no text-content variant is needed here.)
+pub(crate) fn html_escape_href(output: &mut String, text: &str) {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'&' => {
+                let len = adoc_parser::char_ref_len(bytes, i);
+                if len > 0 {
+                    // ASCII-only reference, so `i..i + len` is a char boundary.
+                    output.push_str(&text[i..i + len]);
+                    i += len;
+                } else {
+                    output.push_str("&amp;");
+                    i += 1;
+                }
+            }
+            b'<' => {
+                output.push_str("&lt;");
+                i += 1;
+            }
+            b'>' => {
+                output.push_str("&gt;");
+                i += 1;
+            }
+            b'"' => {
+                output.push_str("&quot;");
+                i += 1;
+            }
+            // Drop NUL — see `html_escape` (guards the xref sentinel, D5).
+            b'\0' => i += 1,
+            // Any other byte: copy the whole UTF-8 char. Every byte handled above
+            // is ASCII, so it never occurs inside a multi-byte sequence and `i`
+            // always sits on a char boundary here.
+            b => {
+                let l = if b < 0x80 {
+                    1
+                } else if b >> 5 == 0b110 {
+                    2
+                } else if b >> 4 == 0b1110 {
+                    3
+                } else {
+                    4
+                };
+                output.push_str(&text[i..i + l]);
+                i += l;
+            }
+        }
+    }
+}
+
 /// Emit `text` with every embedded newline turned into a hard break
 /// (`<br>\n`), used for paragraphs carrying the `hardbreaks` option. The final
 /// line gets no trailing `<br>`. When `escape` is set, each line is HTML-escaped
@@ -86,5 +148,17 @@ pub(crate) fn write_attr(output: &mut String, name: &str, value: &str) {
     output.push_str(name);
     output.push_str("=\"");
     html_escape(output, value);
+    output.push('"');
+}
+
+/// Like [`write_attr`] but preserves already-formed character references in the
+/// value — for a link/image `href` whose target may carry an entity Asciidoctor
+/// keeps verbatim (`link:a&#167;b[t]` → `href="a&#167;b"`). See
+/// [`html_escape_href`].
+pub(crate) fn write_attr_href(output: &mut String, name: &str, value: &str) {
+    output.push(' ');
+    output.push_str(name);
+    output.push_str("=\"");
+    html_escape_href(output, value);
     output.push('"');
 }
