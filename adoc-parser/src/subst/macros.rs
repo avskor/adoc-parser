@@ -71,21 +71,45 @@
 //! the single `Text` event the renderer needs to swap in the auto-generated xref
 //! text.
 //!
-//! ## Sentinel-free span guard
+//! ## Sentinel handling in a macro span
 //!
 //! Because earlier passes already lifted passthroughs/escapes/char-refs into
 //! sentinels, a macro whose source span now contains one (`xref:x[+raw+]`, a
 //! passthrough inside the label) no longer has the raw text the legacy parser
-//! would re-parse. The engine cannot yet faithfully form such a macro (the
-//! verbatim source is gone), so the pass declines the span (leaving it literal)
-//! AND records the punt via [`super::flag_decline`]: [`super::try_parse`] then falls back
-//! to the legacy recursive parser for the whole paragraph, which still has the
-//! raw text and renders these correctly. This is the explicit replacement for
-//! the old differential-equality gate, which used to absorb the same divergence.
-//! Converting each macro family to native sentinel handling (re-parsing labels
-//! against the shared tag table, reconstructing verbatim target strings) will
-//! retire the corresponding punt. The common case — plain targets and text/quote
-//! labels — carries no sentinels and is extracted normally.
+//! would re-parse. There are two cases:
+//!
+//! - **Sentinel in a re-parsed LABEL** (`link:`/`mailto:`/`xref:`/`<<>>`/
+//!   URL`[…]`): handled natively. [`reparse_label`] re-parses the label with a
+//!   *seeded* sub-pipeline ([`super::run_pipeline_seeded`]) whose tag table is a
+//!   clone of the outer one, so the sentinel resolves against its leaf and the
+//!   label events match what the top-level tokenizer would emit — mirroring
+//!   Asciidoctor, where a passthrough placeholder survives the label's
+//!   `subs.without(:macros)` re-substitution and is restored globally at the end.
+//! - **Sentinel in a VERBATIM leaf** (image alt & target, icon name & attrs, stem
+//!   content, anchor id & label, index-term text, UI key/label/menu item): handled
+//!   natively. [`restore_verbatim`] splices a passthrough's protected content and
+//!   an escaped `Literal` back into the verbatim string — exactly what
+//!   Asciidoctor's global restore leaves in the attribute — so `image:i.png[++a
+//!   b++]` → `alt="a b"` and `kbd:[++Ctrl++]` → a single `<kbd>Ctrl</kbd>`. Any
+//!   delimiter split (`,` for anchor/index parts, `>` for menus) happens on the
+//!   SOURCE first, so a passthrough's protected delimiter stays inside one part. A
+//!   char-ref still punts (its verbatim-vs-escaped treatment is family-specific).
+//! - **Sentinel in a verbatim link/cross-ref TARGET or non-label attribute** (the
+//!   id/URL/email and role/window/subject/body those tags store without
+//!   re-parsing): the verbatim source is gone, so the pass declines the span AND
+//!   records the punt via [`target_has_sentinel`]/[`attr_has_sentinel`] (the link
+//!   family's targets accept the richer [`reconstruct_link_target`]/
+//!   [`passthrough_url`] reconstruction instead); [`super::try_parse`] falls back
+//!   to legacy for the whole paragraph.
+//!
+//! The one family still punting on any span sentinel via [`span_has_sentinel`] is
+//! **footnote**: the renderer (`render_footnote_text`) RE-PARSES the footnote text
+//! through the full inline pass, so it needs the *raw* source (`++raw++`), not the
+//! restored content — which the sentinel cannot reproduce (the passthrough marker
+//! count is lost). Legacy keeps the raw text, so the punt renders correctly;
+//! converting it needs the parser↔renderer redesign that carries pre-parsed
+//! footnote events. The common case — plain targets and text/quote labels — carries
+//! no sentinels and is extracted normally.
 
 use std::borrow::Cow;
 
@@ -94,7 +118,7 @@ use crate::event::{Event, MenuPart, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
 use super::flag_decline;
-use super::tokenize::{sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
+use super::tokenize::{desentinelize, sentinel_end, utf8_char_len, TagToken, Work, TAG_LEAD};
 
 /// Record that a macro was declined because its span contained a sentinel — the
 /// shared [`super::flag_decline`] makes [`super::try_parse`] fall back to legacy.
@@ -123,7 +147,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // xref:target[label]
         if bytes[i] == b'x' && src[i..].starts_with("xref:") {
-            if let Some((events, end)) = try_xref(&src, i, subs, options) {
+            if let Some((events, end)) = try_xref(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -149,7 +173,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // mailto:email[attrs]
         if bytes[i] == b'm' && src[i..].starts_with("mailto:") {
-            if let Some((events, end)) = try_mailto(&src, i, subs, options) {
+            if let Some((events, end)) = try_mailto(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -162,7 +186,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // image:target[attrs] (but not the `image::` block form, which the block
         // scanner owns — the inline pass leaves it literal).
         if bytes[i] == b'i' && src[i..].starts_with("image:") && !src[i..].starts_with("image::") {
-            if let Some((events, end)) = try_image(&src, i) {
+            if let Some((events, end)) = try_image(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -174,7 +198,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // icon:name[attrs]
         if bytes[i] == b'i' && src[i..].starts_with("icon:") {
-            if let Some((events, end)) = try_icon(&src, i) {
+            if let Some((events, end)) = try_icon(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -189,7 +213,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // `2`, so the order is immaterial; mirroring the legacy dispatch keeps it
         // obvious.
         if bytes[i] == b'i' && src[i..].starts_with("indexterm2:") {
-            if let Some((events, end)) = try_indexterm2(&src, i) {
+            if let Some((events, end)) = try_indexterm2(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -201,7 +225,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // indexterm:[primary, secondary, tertiary] (the concealed macro form).
         if bytes[i] == b'i' && src[i..].starts_with("indexterm:") {
-            if let Some((events, end)) = try_indexterm(&src, i) {
+            if let Some((events, end)) = try_indexterm(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -215,7 +239,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // STEM-macro spellings; each requires the `[` directly after the colon, so
         // there is no target part).
         if bytes[i] == b's' && src[i..].starts_with("stem:[") {
-            if let Some((events, end)) = try_stem(&src, i, 5, "stem") {
+            if let Some((events, end)) = try_stem(&src, i, 5, "stem", work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -225,7 +249,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
             continue;
         }
         if bytes[i] == b'l' && src[i..].starts_with("latexmath:[") {
-            if let Some((events, end)) = try_stem(&src, i, 10, "latexmath") {
+            if let Some((events, end)) = try_stem(&src, i, 10, "latexmath", work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -236,7 +260,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         }
         // anchor:id[xreflabel] (the inline-anchor macro form of `[[id]]`).
         if bytes[i] == b'a' && src[i..].starts_with("anchor:") {
-            if let Some((events, end)) = try_anchor_macro(&src, i) {
+            if let Some((events, end)) = try_anchor_macro(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -247,7 +271,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         }
 
         if bytes[i] == b'a' && src[i..].starts_with("asciimath:[") {
-            if let Some((events, end)) = try_stem(&src, i, 10, "asciimath") {
+            if let Some((events, end)) = try_stem(&src, i, 10, "asciimath", work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -286,7 +310,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // items) — never re-parsed, mirroring `try_kbd_macro`/`try_btn_macro`/
         // `try_menu_macro`. A failed match advances one byte (legacy `pos += 1`).
         if options.experimental && bytes[i] == b'k' && src[i..].starts_with("kbd:") {
-            if let Some((events, end)) = try_kbd(&src, i) {
+            if let Some((events, end)) = try_kbd(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -296,7 +320,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
             continue;
         }
         if options.experimental && bytes[i] == b'b' && src[i..].starts_with("btn:") {
-            if let Some((events, end)) = try_btn(&src, i) {
+            if let Some((events, end)) = try_btn(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -306,7 +330,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
             continue;
         }
         if options.experimental && bytes[i] == b'm' && src[i..].starts_with("menu:") {
-            if let Some((events, end)) = try_menu(&src, i) {
+            if let Some((events, end)) = try_menu(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -338,7 +362,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // the later smart-quote pass. We match a literal `>` (the renderer escapes
         // to `&gt;`), the pre-specialchars stand-in for Asciidoctor's `&gt;`.
         if options.experimental && bytes[i] == b'"' {
-            if let Some((events, end)) = try_quoted_menu(&src, i, subs, options) {
+            if let Some((events, end)) = try_quoted_menu(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -350,7 +374,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
 
         // <<target>> / <<target,label>>
         if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'<') {
-            if let Some((events, end)) = try_cross_ref(&src, i, subs, options) {
+            if let Some((events, end)) = try_cross_ref(&src, i, subs, work, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -368,12 +392,12 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // triple-bracket bibliography form is checked first (it is a superset).
         if bytes[i] == b'[' && bytes.get(i + 1) == Some(&b'[') {
             if bytes.get(i + 2) == Some(&b'[') {
-                if let Some((events, end)) = try_bibliography_anchor(&src, i) {
+                if let Some((events, end)) = try_bibliography_anchor(&src, i, work) {
                     out.push_str(&work.macro_sentinel(events));
                     i = end;
                     continue;
                 }
-            } else if let Some((events, end)) = try_anchor(&src, i) {
+            } else if let Some((events, end)) = try_anchor(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -389,7 +413,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // pattern (Asciidoctor `\(\((.+?)\)\)(?!\))`); the matched content's own
         // enclosing parens decide the form.
         if bytes[i] == b'(' && bytes.get(i + 1) == Some(&b'(') {
-            if let Some((events, end)) = try_index_term(&src, i) {
+            if let Some((events, end)) = try_index_term(&src, i, work) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -508,6 +532,7 @@ fn try_xref(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "xref:"
@@ -519,13 +544,17 @@ fn try_xref(
         return None;
     }
     let end = start + 5 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
+    // A sentinel in the TARGET still punts: the verbatim id/path the
+    // `CrossReference` tag carries is no longer present. A sentinel in the LABEL is
+    // re-parsed natively by [`build_cross_reference`] (seeded with the outer table),
+    // so it no longer forces the whole span to legacy.
+    if target_has_sentinel(target) {
         return None;
     }
     // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
     // explicit one.
     let label = (!label_text.is_empty()).then_some(label_text.as_ref());
-    Some((build_cross_reference(target, label, subs, options), end))
+    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
 }
 
 /// Whether `content` begins with a character Asciidoctor accepts as the first
@@ -546,6 +575,7 @@ fn try_cross_ref(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let after_open = start + 2;
@@ -568,9 +598,6 @@ fn try_cross_ref(
         return None;
     }
     let end = after_open + close + 2;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     // With a comma: trim both target and label. Without: the whole content is the
     // target (untrimmed), no explicit label.
     let (target, label) = if let Some((t, l)) = content.split_once(',') {
@@ -580,7 +607,12 @@ fn try_cross_ref(
     };
     // A leading '#' is an explicit-anchor marker, not part of the id.
     let target = target.strip_prefix('#').unwrap_or(target);
-    Some((build_cross_reference(target, label, subs, options), end))
+    // A sentinel in the target id still punts (its verbatim source is gone); a
+    // sentinel in the label is re-parsed natively (seeded) by `build_cross_reference`.
+    if target_has_sentinel(target) {
+        return None;
+    }
+    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
 }
 
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
@@ -594,22 +626,26 @@ fn try_cross_ref(
 fn build_cross_reference(
     target: &str,
     label: Option<&str>,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Vec<Event<'static>> {
     let mut events: Vec<Event<'static>> = Vec::new();
     events.push(Event::Start(Tag::CrossReference {
         target: Cow::Owned(target.to_string()),
-        label: label.map(|l| Cow::Owned(l.to_string())),
+        // Only the field's presence drives the renderer (the label *events* below
+        // carry the visible text), but desentinelize it so a label that swallowed a
+        // passthrough/escape/char-ref leaf carries the restored source rather than a
+        // raw `TAG_LEAD … TAG_TAIL` control sequence. No-sentinel labels are
+        // byte-unchanged (the helper fast-paths them).
+        label: label.map(|l| Cow::Owned(desentinelize(seed, l))),
     }));
     match label {
         None => events.push(Event::Text(Cow::Owned(target.to_string()))),
         Some(l) if !l.is_empty() => {
             // Re-parse the label exactly as `push_macro_label` does: full subs
             // minus MACROS (so a nested macro stays literal and recursion ends).
-            let inner: Vec<Event<'static>> =
-                super::run_pipeline(l, subs.without(SubstitutionSet::MACROS), options);
-            for e in inner {
+            for e in reparse_label(l, seed, subs, options) {
                 events.push(e);
             }
         }
@@ -648,12 +684,6 @@ fn try_link(
         return None;
     }
     let end = start + 5 + bracket_end + 1;
-    // The label is re-parsed by the engine, which cannot run over sentinel bytes,
-    // so a sentinel in the label punts to legacy (mirrors the old whole-span guard).
-    if content.as_bytes().contains(&TAG_LEAD) {
-        flag_punt();
-        return None;
-    }
     // The URL is normally plain text; two sentinel forms are supported: a
     // passthrough-protected target (`link:++url++[…]`, reconstructed verbatim) and
     // an escaped typographic pattern sealed as a `Literal` (`link:a\...b[…]`,
@@ -675,6 +705,12 @@ fn try_link(
         return None;
     }
     let attrs = parse_link_attrs(&content, LinkKind::Link);
+    // A sentinel in a non-label attribute (role/window) is stored verbatim on the
+    // tag with no native reconstruction, so it still punts; one confined to the
+    // label text is re-parsed natively (seeded) by `build_link`.
+    if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+        return None;
+    }
     // An empty attrlist text marks a "bare" link (visible text = the target).
     let is_bare = attrs.text.is_empty();
     let label = (!is_bare).then_some(attrs.text);
@@ -686,6 +722,7 @@ fn try_link(
         is_bare,
         label,
         &url,
+        &work.tags,
         subs,
         options,
     );
@@ -731,6 +768,7 @@ fn try_mailto(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "mailto:"
@@ -742,11 +780,22 @@ fn try_mailto(
         return None;
     }
     let end = start + 7 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
+    // The email goes verbatim into the URL, so a sentinel there still punts.
+    if target_has_sentinel(email) {
         return None;
     }
     let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
     let attrs = parse_link_attrs(&content, LinkKind::Mailto);
+    // `subject`/`body` are URL-encoded verbatim and `role`/`window` stored verbatim,
+    // none with native reconstruction — a sentinel in any of them still punts. Only
+    // the label text (`attrs.text`) gains the seeded native re-parse.
+    if attr_has_sentinel(attrs.subject)
+        || attr_has_sentinel(attrs.body)
+        || attr_has_sentinel(attrs.window)
+        || attr_has_sentinel(attrs.role)
+    {
+        return None;
+    }
     let url = match (attrs.subject, attrs.body) {
         (None, None) => base.to_string(),
         (subject, body) => {
@@ -775,6 +824,7 @@ fn try_mailto(
         false,
         label,
         email,
+        &work.tags,
         subs,
         options,
     );
@@ -789,17 +839,16 @@ fn try_mailto(
 /// directly (no `MACROS`-cleared sub-pipeline). An empty target is accepted — the
 /// donor has no such guard, so `image:[alt]` still matches (the renderer makes the
 /// `<img>` from the attrs). The tag fields are owned `Cow`s, semantically equal
-/// to the legacy parser's borrowed ones.
-fn try_image(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+/// to the legacy parser's borrowed ones. A passthrough/escape sentinel in the
+/// target or attrlist is restored verbatim ([`restore_verbatim`]) so
+/// `image:i.png[++a b++]` → `alt="a b"`; a char-ref still punts.
+fn try_image(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 6..]; // after "image:"
     let bracket_start = rest.find('[')?;
     let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
-    let target = &rest[..bracket_start];
-    let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
+    let target = restore_verbatim(work, Cow::Borrowed(&rest[..bracket_start]))?;
+    let content = restore_verbatim(work, unescape_close_bracket(&rest[bracket_start + 1..bracket_end]))?;
     let end = start + 6 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let a = parse_image_attrs(&content);
     let events = vec![
         Event::Start(Tag::InlineImage {
@@ -828,22 +877,20 @@ fn owned(s: &str) -> Cow<'static, str> {
 /// `parse_target_bracket_macro` helper). The inline icon is a *leaf* macro: the
 /// name becomes the tag and the attrlist text (when non-empty) a single raw
 /// `Text` event — neither is re-parsed through the engine. The closing `]` is the
-/// first one after the `[`; an empty name declines.
-fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+/// first one after the `[`; an empty name declines. A passthrough/escape sentinel
+/// in the name or attrs is restored verbatim ([`restore_verbatim`]); a char-ref punts.
+fn try_icon(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "icon:"
     let bracket_start = rest.find('[')?;
-    let name = &rest[..bracket_start];
+    let name = restore_verbatim(work, Cow::Borrowed(&rest[..bracket_start]))?;
     if name.is_empty() {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
-    let attrs = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
+    let attrs = restore_verbatim(work, unescape_close_bracket(&rest[bracket_start + 1..bracket_end]))?;
     let end = start + 5 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Icon {
-        name: Cow::Owned(name.to_string()),
+        name: Cow::Owned(name.into_owned()),
     })];
     if !attrs.is_empty() {
         events.push(Event::Text(Cow::Owned(attrs.into_owned())));
@@ -868,9 +915,18 @@ fn try_icon(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// `InlineFootnoteMacroRx` is also stricter on the id (`[\p{Word}-]+`) and accepts
 /// the deprecated `footnoteref:` spelling; the legacy parser does neither, and this
 /// engine deliberately mirrors the legacy form there, so those rare forms match
-/// legacy (and, like legacy, diverge from Asciidoctor). The sentinel guard
-/// declines a footnote whose span swallowed an earlier passthrough/escape/char-ref
-/// leaf (the verbatim text the legacy event would carry is no longer present).
+/// legacy (and, like legacy, diverge from Asciidoctor).
+///
+/// Unlike the other verbatim leaves, footnote still declines on ANY span sentinel
+/// (the [`span_has_sentinel`] guard) rather than restoring it: the renderer
+/// (`render_footnote_text`) RE-PARSES the stored text through the full inline pass,
+/// so it needs the *raw* source (`footnote:[++raw++]` must reach the renderer as
+/// `++raw++` for the passthrough to survive). [`restore_verbatim`] would hand back
+/// the restored *content* (`raw`), which the renderer would then re-substitute
+/// (`__` → emphasis) — wrong. The raw markers cannot be reconstructed from the
+/// passthrough leaf, so the punt (legacy keeps the raw text) is the correct
+/// behaviour until footnotes carry pre-parsed events across the parser↔renderer
+/// boundary.
 fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
     let after_prefix = start + 9; // after "footnote:"
     let rest = src.get(after_prefix..)?;
@@ -915,31 +971,29 @@ fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)>
 /// content up to the first `]`, and DECLINE on empty content — mirroring the
 /// legacy `parse_bracket_macro` + `try_kbd_macro`/`try_btn_macro`. The content is a
 /// single raw `Text` (the renderer's `kbd_mode` splits keys on `+`/`,`; the button
-/// label renders through the normal text path) and is never re-parsed. The
-/// sentinel guard declines when an earlier pass lifted a passthrough/escape/
-/// char-ref out of the span, so the verbatim text the legacy event carries is no
-/// longer present. Caller (dispatch) guarantees the prefix and that
-/// `:experimental:` is set.
+/// label renders through the normal text path) and is never re-parsed. A
+/// passthrough/escape sentinel in the content is restored verbatim
+/// ([`restore_verbatim`]) — so `kbd:[++Ctrl++]` yields a single `<kbd>Ctrl</kbd>`
+/// instead of the legacy fallback's `+`-split mangling — while a char-ref punts.
+/// Caller (dispatch) guarantees the prefix and that `:experimental:` is set.
 fn try_bracket_ui(
     src: &str,
     start: usize,
     prefix_len: usize,
     open: Tag<'static>,
     close: TagEnd,
+    work: &Work,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + prefix_len..];
     if !rest.starts_with('[') {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, 0)?;
-    let content = unescape_close_bracket(&rest[1..bracket_end]);
+    let content = restore_verbatim(work, unescape_close_bracket(&rest[1..bracket_end]))?;
     if content.is_empty() {
         return None;
     }
     let end = start + prefix_len + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     Some((
         vec![
             Event::Start(open),
@@ -951,13 +1005,13 @@ fn try_bracket_ui(
 }
 
 /// `kbd:[keys]` — the keyboard UI macro (`kbd:` is 4 bytes). See [`try_bracket_ui`].
-fn try_kbd(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
-    try_bracket_ui(src, start, 4, Tag::Keyboard, TagEnd::Keyboard)
+fn try_kbd(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
+    try_bracket_ui(src, start, 4, Tag::Keyboard, TagEnd::Keyboard, work)
 }
 
 /// `btn:[label]` — the button UI macro (`btn:` is 4 bytes). See [`try_bracket_ui`].
-fn try_btn(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
-    try_bracket_ui(src, start, 4, Tag::Button, TagEnd::Button)
+fn try_btn(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
+    try_bracket_ui(src, start, 4, Tag::Button, TagEnd::Button, work)
 }
 
 /// `menu:target[items]` — the menu UI macro. Mirror of
@@ -965,24 +1019,22 @@ fn try_btn(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// `parse_target_bracket_macro` helper): the target is every byte before the first
 /// `[` and must be non-empty; the items run to the first `]` and, when non-empty,
 /// become a single raw `Text` (the renderer splits the menu sequence on `>`).
-/// Declines on an empty target or a `]` at/before the `[`. The sentinel guard
-/// declines a span that swallowed an earlier leaf. Caller (dispatch) guarantees
-/// the `menu:` prefix and that `:experimental:` is set.
-fn try_menu(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+/// Declines on an empty target or a `]` at/before the `[`. A passthrough/escape
+/// sentinel in the target or items is restored verbatim ([`restore_verbatim`]); a
+/// char-ref punts. Caller (dispatch) guarantees the `menu:` prefix and that
+/// `:experimental:` is set.
+fn try_menu(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "menu:"
     let bracket_start = rest.find('[')?;
-    let target = &rest[..bracket_start];
+    let target = restore_verbatim(work, Cow::Borrowed(&rest[..bracket_start]))?;
     if target.is_empty() {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
-    let items = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
+    let items = restore_verbatim(work, unescape_close_bracket(&rest[bracket_start + 1..bracket_end]))?;
     let end = start + 5 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Menu {
-        target: Cow::Owned(target.to_string()),
+        target: Cow::Owned(target.into_owned()),
     })];
     if !items.is_empty() {
         events.push(Event::Text(Cow::Owned(items.into_owned())));
@@ -1045,23 +1097,24 @@ fn try_quoted_menu(
     src: &str,
     start: usize,
     subs: SubstitutionSet,
+    work: &Work,
     options: InlineOptions,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let end = quoted_menu_span_end(src, start)?;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let content = &src[start + 1..end - 1];
     let segments: Vec<&str> = content.split('>').map(str::trim).collect();
-    Some((build_menuseq(&segments, subs, options), end))
+    Some((build_menuseq(&segments, &work.tags, subs, options), end))
 }
 
 /// Emit the structural menuseq events for `segments` (≥2, guaranteed by the
 /// space-flanked `>`): `Start(MenuSeq)`, one `MenuPart{role}` per segment with its
 /// re-parsed inline events nested inside, `End(MenuSeq)`. Roles: index 0 = `Menu`,
-/// last = `Item`, middle = `Submenu`. An empty segment emits an empty part.
+/// last = `Item`, middle = `Submenu`. An empty segment emits an empty part. A
+/// segment that swallowed a passthrough/escape/char-ref sentinel is re-parsed
+/// seeded ([`reparse_seeded`]) so it resolves against the outer leaf.
 fn build_menuseq(
     segments: &[&str],
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Vec<Event<'static>> {
@@ -1078,8 +1131,7 @@ fn build_menuseq(
         events.push(Event::Start(Tag::MenuPart { role }));
         if !seg.is_empty() {
             // Full subs (MACROS ON) so a nested macro/quote renders inside the part.
-            let inner: Vec<Event<'static>> = super::run_pipeline(seg, subs, options);
-            events.extend(inner);
+            events.extend(reparse_seeded(seg, seed, subs, options));
         }
         events.push(Event::End(TagEnd::MenuPart));
     }
@@ -1095,22 +1147,20 @@ fn build_menuseq(
 /// (Asciidoctor's `(.*?[^\\])?\]` rule). A *leaf* macro carrying the variant; the
 /// (unescaped) content becomes a single raw `Text` event, not re-parsed. The
 /// escape pass leaves `\]` untouched (its blanket arm keeps the backslash
-/// literal), so the escaped bracket survives intact to here; any escape/
-/// passthrough/char-ref the earlier passes *did* lift from inside trips the
-/// sentinel guard and declines.
+/// literal), so the escaped bracket survives intact to here; a passthrough or
+/// escaped `Literal` the earlier passes lifted from inside is restored verbatim
+/// ([`restore_verbatim`]) so `stem:[++x++]` → `\$x\$`, while a char-ref still punts.
 fn try_stem(
     src: &str,
     start: usize,
     prefix_len: usize,
     variant: &str,
+    work: &Work,
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + prefix_len..]; // starts with '[' (dispatch guaranteed)
     let bracket_end = find_macro_close_bracket(rest, 0)?;
     let end = start + prefix_len + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
-    let content = unescape_close_bracket(&rest[1..bracket_end]);
+    let content = restore_verbatim(work, unescape_close_bracket(&rest[1..bracket_end]))?;
     let mut events: Vec<Event<'static>> = vec![Event::Start(Tag::Stem {
         variant: Cow::Owned(variant.to_string()),
     })];
@@ -1127,30 +1177,38 @@ fn try_stem(
 /// xreflabel are stored verbatim on the tag (never re-parsed), so the
 /// `Start(Anchor)`/`End` pair is built directly. The comma form trims the id's
 /// trailing whitespace and the label's leading whitespace, dropping an empty label.
-fn try_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+/// The id/label are split on the SOURCE comma (a sentinel never contains one) and
+/// only then restored verbatim ([`restore_verbatim`]) so a passthrough's protected
+/// comma stays inside one part; a char-ref still punts.
+fn try_anchor(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 2..]; // after "[["
     let close = rest.find("]]")?;
     let content = &rest[..close];
     if content.is_empty() {
         return None;
     }
-    let (id, label) = match content.split_once(',') {
+    let (id_raw, label_raw) = match content.split_once(',') {
         Some((i, l)) => {
             let l = l.trim_start();
-            (i.trim_end(), (!l.is_empty()).then(|| l.to_string()))
+            (i.trim_end(), (!l.is_empty()).then_some(l))
         }
         None => (content, None),
     };
-    if id.is_empty() {
+    if id_raw.is_empty() {
         return None;
     }
     let end = start + 2 + close + 2;
-    if span_has_sentinel(src, start, end) {
+    let id = restore_verbatim(work, Cow::Borrowed(id_raw))?;
+    if id.is_empty() {
         return None;
     }
+    let label = match label_raw {
+        Some(l) => Some(restore_verbatim(work, Cow::Borrowed(l))?.into_owned()),
+        None => None,
+    };
     let events = vec![
         Event::Start(Tag::Anchor {
-            id: Cow::Owned(id.to_string()),
+            id: Cow::Owned(id.into_owned()),
             label: label.map(Cow::Owned),
         }),
         Event::End(TagEnd::Anchor),
@@ -1164,7 +1222,7 @@ fn try_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
 /// standalone `BibliographyAnchor` event. With a comma, both id and label are
 /// fully trimmed and an *empty* label is still `Some` (unlike the plain anchor),
 /// matching the donor.
-fn try_bibliography_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_bibliography_anchor(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let after_open = start + 3; // after "[[["
     let rest = &src[after_open..];
     let close = rest.find("]]]")?;
@@ -1172,21 +1230,25 @@ fn try_bibliography_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static
     if content.is_empty() {
         return None;
     }
-    let (id, label) = if let Some((i, l)) = content.split_once(',') {
+    let (id_raw, label_raw) = if let Some((i, l)) = content.split_once(',') {
         let id = i.trim();
         if id.is_empty() {
             return None;
         }
-        (id, Some(l.trim().to_string()))
+        (id, Some(l.trim()))
     } else {
         (content, None)
     };
     let end = after_open + close + 3;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
+    // Split on the source comma, then restore each part verbatim (passthrough /
+    // escape); a char-ref punts.
+    let id = restore_verbatim(work, Cow::Borrowed(id_raw))?;
+    let label = match label_raw {
+        Some(l) => Some(restore_verbatim(work, Cow::Borrowed(l))?.into_owned()),
+        None => None,
+    };
     let events = vec![Event::BibliographyAnchor {
-        id: Cow::Owned(id.to_string()),
+        id: Cow::Owned(id.into_owned()),
         label: label.map(Cow::Owned),
     }];
     Some((events, end))
@@ -1198,22 +1260,21 @@ fn try_bibliography_anchor(src: &str, start: usize) -> Option<(Vec<Event<'static
 /// Asciidoctor anchor id ([`crate::scanner::is_valid_anchor_id`]); the bracket
 /// content is the xreflabel (reference text, never rendered in place), stored
 /// verbatim. A *leaf*.
-fn try_anchor_macro(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_anchor_macro(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "anchor:"
     let bracket = rest.find('[')?;
     let id = &rest[..bracket];
     // Asciidoctor's `InlineAnchorRx` requires the id to match
     // `[CC_ALPHA_:][CC_WORD\-:.]*` immediately before `[`; an invalid run
-    // (`anchor:<id>[…]`, `anchor:1abc[…]`) is not an anchor and stays literal.
+    // (`anchor:<id>[…]`, `anchor:1abc[…]`) is not an anchor and stays literal. A
+    // sentinel byte in the id (a passthrough/escape there) also fails this, so the
+    // id never needs restoring — only the xreflabel can carry one.
     if !crate::scanner::is_valid_anchor_id(id) {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, bracket)?;
-    let label_text = unescape_close_bracket(&rest[bracket + 1..bracket_end]);
+    let label_text = restore_verbatim(work, unescape_close_bracket(&rest[bracket + 1..bracket_end]))?;
     let end = start + 7 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let label = (!label_text.is_empty()).then(|| Cow::Owned(label_text.into_owned()));
     let events = vec![
         Event::Start(Tag::Anchor {
@@ -1245,37 +1306,36 @@ fn index_term_close(rest: &str) -> Option<usize> {
 /// pieces are stored verbatim, and a literal `(`/`)` becomes its own `Text` event
 /// just as the donor pushes it (the tokenizer emits the leaf's events without
 /// coalescing).
-fn try_index_term(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_index_term(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let after_open = start + 2; // after "(("
     let rest = &src[after_open..];
     let close = index_term_close(rest)?;
     let content = &rest[..close];
     let end = after_open + close + 2;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
+    // The enclosing parens are literal source bytes (a sentinel never is one); the
+    // term text inside is restored verbatim (passthrough/escape), char-ref punts.
     let starts = content.starts_with('(');
     let ends = content.ends_with(')');
+    let term = |t: &str| restore_verbatim(work, Cow::Owned(t.to_string())).map(Cow::into_owned);
     let events = if starts && ends {
-        let inner = &content[1..content.len() - 1];
-        concealed_index_term(inner)
+        concealed_index_term(&content[1..content.len() - 1], work)?
     } else if starts {
         vec![
             Event::Text(Cow::Borrowed("(")),
             Event::IndexTerm {
-                text: Cow::Owned(content[1..].to_string()),
+                text: Cow::Owned(term(&content[1..])?),
             },
         ]
     } else if ends {
         vec![
             Event::IndexTerm {
-                text: Cow::Owned(content[..content.len() - 1].to_string()),
+                text: Cow::Owned(term(&content[..content.len() - 1])?),
             },
             Event::Text(Cow::Borrowed(")")),
         ]
     } else {
         vec![Event::IndexTerm {
-            text: Cow::Owned(content.to_string()),
+            text: Cow::Owned(term(content)?),
         }]
     };
     Some((events, end))
@@ -1286,7 +1346,7 @@ fn try_index_term(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize
 /// [`crate::inline::InlineState::try_indexterm_macro`]: requires the `[` directly
 /// after the colon, splits the content into up to three trimmed terms, and emits a
 /// `ConcealedIndexTerm` (invisible in the flow). A *leaf*.
-fn try_indexterm(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_indexterm(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 10..]; // after "indexterm:"
     if !rest.starts_with('[') {
         return None;
@@ -1297,30 +1357,24 @@ fn try_indexterm(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)
         return None;
     }
     let end = start + 10 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
-    Some((concealed_index_term(&content), end))
+    Some((concealed_index_term(&content, work)?, end))
 }
 
 /// At an `indexterm2:` (caller guarantees the prefix), try to match the flow
 /// index-term macro `indexterm2:[term]`. Mirror of
 /// [`crate::inline::InlineState::try_indexterm2_macro`]: the whole bracket content
 /// is the rendered term. A *leaf*.
-fn try_indexterm2(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+fn try_indexterm2(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 11..]; // after "indexterm2:"
     if !rest.starts_with('[') {
         return None;
     }
     let bracket_end = find_macro_close_bracket(rest, 0)?;
-    let content = unescape_close_bracket(&rest[1..bracket_end]);
+    let content = restore_verbatim(work, unescape_close_bracket(&rest[1..bracket_end]))?;
     if content.is_empty() {
         return None;
     }
     let end = start + 11 + bracket_end + 1;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
     let events = vec![Event::IndexTerm {
         text: Cow::Owned(content.into_owned()),
     }];
@@ -1330,16 +1384,25 @@ fn try_indexterm2(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize
 /// Build a `ConcealedIndexTerm` from the raw comma-separated term list (shared by
 /// the `(((…)))` shorthand and the `indexterm:[…]` macro). Up to three trimmed
 /// parts: primary, optional secondary, optional tertiary.
-fn concealed_index_term(inner: &str) -> Vec<Event<'static>> {
+fn concealed_index_term(inner: &str, work: &Work) -> Option<Vec<Event<'static>>> {
+    // Split on the SOURCE commas (a sentinel never holds one), then restore each
+    // part verbatim so a passthrough's protected comma stays within one term.
     let mut parts = inner.splitn(3, ',');
-    let primary = parts.next().unwrap().trim();
-    let secondary = parts.next().map(|s| s.trim());
-    let tertiary = parts.next().map(|s| s.trim());
-    vec![Event::ConcealedIndexTerm {
-        primary: Cow::Owned(primary.to_string()),
-        secondary: secondary.map(|s| Cow::Owned(s.to_string())),
-        tertiary: tertiary.map(|s| Cow::Owned(s.to_string())),
-    }]
+    let restore = |p: &str| restore_verbatim(work, Cow::Owned(p.trim().to_string())).map(Cow::into_owned);
+    let primary = restore(parts.next().unwrap())?;
+    let secondary = match parts.next() {
+        Some(s) => Some(restore(s)?),
+        None => None,
+    };
+    let tertiary = match parts.next() {
+        Some(s) => Some(restore(s)?),
+        None => None,
+    };
+    Some(vec![Event::ConcealedIndexTerm {
+        primary: Cow::Owned(primary),
+        secondary: secondary.map(Cow::Owned),
+        tertiary: tertiary.map(Cow::Owned),
+    }])
 }
 
 /// Whether an autolink scheme (`http://`/`https://`/`file://`/`ftp://`/`irc://`)
@@ -1473,8 +1536,18 @@ fn try_autolink(
                 flag_punt();
                 return None;
             };
-            let events =
-                build_link(target.clone(), None, false, None, true, None, &target, subs, options);
+            let events = build_link(
+                target.clone(),
+                None,
+                false,
+                None,
+                true,
+                None,
+                &target,
+                &work.tags,
+                subs,
+                options,
+            );
             return Some((events, end, true));
         }
         return None;
@@ -1499,12 +1572,6 @@ fn try_autolink(
     {
         let end = start + url_len + close + 1;
         let content = unescape_close_bracket(&after_url[1..close]);
-        // The label is re-parsed by the engine, which cannot run over sentinel
-        // bytes, so a sentinel in the label punts to legacy (mirrors `try_link`).
-        if content.as_bytes().contains(&TAG_LEAD) {
-            flag_punt();
-            return None;
-        }
         // The URL part may carry an escaped-typographic `Literal` sentinel
         // (`a\...b`) or a plain `...` Asciidoctor would have curled; reconstruct it.
         let Some(target) = reconstruct_link_target(work, url) else {
@@ -1512,6 +1579,11 @@ fn try_autolink(
             return None;
         };
         let attrs = parse_link_attrs(&content, LinkKind::Link);
+        // A sentinel in a non-label attribute (role/window) still punts; one in the
+        // label text is re-parsed natively (seeded), mirroring `try_link`.
+        if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+            return None;
+        }
         let is_bare = attrs.text.is_empty();
         let label = (!is_bare).then_some(attrs.text);
         let events = build_link(
@@ -1522,6 +1594,7 @@ fn try_autolink(
             is_bare,
             label,
             &target,
+            &work.tags,
             subs,
             options,
         );
@@ -1534,8 +1607,18 @@ fn try_autolink(
         flag_punt();
         return None;
     };
-    let events =
-        build_link(target.clone(), None, false, None, true, None, &target, subs, options);
+    let events = build_link(
+        target.clone(),
+        None,
+        false,
+        None,
+        true,
+        None,
+        &target,
+        &work.tags,
+        subs,
+        options,
+    );
     Some((events, end, false))
 }
 
@@ -1593,7 +1676,8 @@ fn try_email(
     }
 
     let email = &src[local_start..domain_end];
-    // Asciidoctor does not mark email autolinks as bare.
+    // Asciidoctor does not mark email autolinks as bare. An email autolink has no
+    // explicit label (visible text is the email), so the seed table is unused.
     let events = build_link(
         format!("mailto:{email}"),
         None,
@@ -1602,6 +1686,7 @@ fn try_email(
         false,
         None,
         email,
+        &[],
         subs,
         options,
     );
@@ -1622,6 +1707,7 @@ fn build_link(
     is_bare: bool,
     label: Option<&str>,
     bare_text: &str,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Vec<Event<'static>> {
@@ -1633,7 +1719,7 @@ fn build_link(
         role: role.map(|r| Cow::Owned(r.to_string())),
     })];
     match label {
-        Some(l) => push_label(l, subs, options, &mut events),
+        Some(l) => push_label(l, seed, subs, options, &mut events),
         None => events.push(Event::Text(Cow::Owned(bare_text.to_string()))),
     }
     events.push(Event::End(TagEnd::Link));
@@ -1648,6 +1734,7 @@ fn build_link(
 /// the mirror exact.
 fn push_label(
     text: &str,
+    seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
     events: &mut Vec<Event<'static>>,
@@ -1655,9 +1742,41 @@ fn push_label(
     if text.is_empty() {
         return;
     }
-    let inner: Vec<Event<'static>> =
-        super::run_pipeline(text, subs.without(SubstitutionSet::MACROS), options);
-    events.extend(inner);
+    events.extend(reparse_label(text, seed, subs, options));
+}
+
+/// Re-parse a macro label's raw text with `MACROS` cleared (mirroring
+/// `push_macro_label`). When the text already carries an earlier-extracted
+/// sentinel (a passthrough / escaped `Literal` / char-ref the link or
+/// cross-reference label swallowed), the re-parse is *seeded* with the outer tag
+/// table so the sentinel resolves against its leaf rather than being mis-read by
+/// a fresh inner table — the native replacement for the old "sentinel in the
+/// label → punt" guard. The common sentinel-free label takes the plain pipeline.
+fn reparse_label(
+    text: &str,
+    seed: &[TagToken],
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'static>> {
+    reparse_seeded(text, seed, subs.without(SubstitutionSet::MACROS), options)
+}
+
+/// Re-parse `text` through the engine, seeding the inner tag table with `seed`
+/// (the outer table) when `text` already carries a sentinel so it resolves against
+/// the outer passthrough/escape/char-ref leaf; otherwise the plain pipeline. The
+/// caller chooses `subs` — [`reparse_label`] clears `MACROS`, the quoted-menu parts
+/// keep them on (a nested macro renders inside a menu segment).
+fn reparse_seeded(
+    text: &str,
+    seed: &[TagToken],
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Vec<Event<'static>> {
+    if text.as_bytes().contains(&TAG_LEAD) {
+        super::run_pipeline_seeded(text, seed, subs, options)
+    } else {
+        super::run_pipeline(text, subs, options)
+    }
 }
 
 /// Whether `src[start..end]` (a candidate macro span) contains a tag sentinel —
@@ -1667,6 +1786,33 @@ fn push_label(
 /// signalling [`super::try_parse`] to fall back to legacy for the paragraph.
 fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
     let has = src.as_bytes()[start..end].contains(&TAG_LEAD);
+    if has {
+        flag_punt();
+    }
+    has
+}
+
+/// Whether a macro *target* substring (a verbatim id / URL / email the tag stores
+/// without re-parsing) carries a sentinel. Unlike a label — which the engine can
+/// now re-parse natively against the seeded tag table — a target's lost verbatim
+/// source still forces a punt, so a `true` records it ([`flag_punt`]) for
+/// [`super::try_parse`] to fall back to legacy. (The link family's targets accept
+/// the richer [`reconstruct_link_target`] / [`passthrough_url`] reconstruction
+/// instead of this blanket decline.)
+fn target_has_sentinel(target: &str) -> bool {
+    let has = target.as_bytes().contains(&TAG_LEAD);
+    if has {
+        flag_punt();
+    }
+    has
+}
+
+/// Whether an optional verbatim link attribute (role / window — stored on the tag
+/// without re-parsing) carries a sentinel. Records the punt on `true`, since only
+/// the *label* text gains native seeded re-parsing; a sentinel that landed in a
+/// non-label attribute has no reconstruction here and falls back to legacy.
+fn attr_has_sentinel(attr: Option<&str>) -> bool {
+    let has = attr.is_some_and(|s| s.as_bytes().contains(&TAG_LEAD));
     if has {
         flag_punt();
     }
@@ -1735,6 +1881,60 @@ fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
         out.push_str(&span[seg_start..]);
     }
     Some(out)
+}
+
+/// Restore a verbatim macro content/target (image alt & target, icon name &
+/// attrs, stem content, anchor id & label, index-term text, UI key/label/menu
+/// item) that carries an earlier-pass sentinel back to its source text. A
+/// passthrough's protected content and an escaped `Literal` are spliced in —
+/// exactly what Asciidoctor's global passthrough restore leaves in the macro's
+/// verbatim attribute, so `image:i.png[++a b++]` → `alt="a b"` and
+/// `kbd:[++Ctrl++]` → a single `<kbd>Ctrl</kbd>`.
+///
+/// Returns `None` (caller punts to legacy) on any OTHER sentinel: a char
+/// reference (`&#…;`), whose verbatim-versus-escaped treatment is family-specific
+/// — stem html-escapes it, an `alt` keeps it literal — and which is rare enough
+/// inside a verbatim macro that the legacy fallback is left to handle it; or an
+/// unexpected structural token (which cannot arise at macros-time anyway). The
+/// no-sentinel fast path returns the input unchanged.
+fn restore_verbatim<'a>(work: &Work, s: Cow<'a, str>) -> Option<Cow<'a, str>> {
+    let bytes = s.as_bytes();
+    if !bytes.contains(&TAG_LEAD) {
+        return Some(s); // fast path: no sentinel, already final
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut seg_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == TAG_LEAD {
+            let end = sentinel_end(bytes, i);
+            if seg_start < i {
+                out.push_str(&s[seg_start..i]);
+            }
+            let idx: usize = s[i + 1..end - 1].parse().ok()?;
+            match work.tags.get(idx)? {
+                TagToken::Passthrough(pieces) => {
+                    for p in pieces {
+                        out.push_str(&p.text);
+                    }
+                }
+                TagToken::Literal(t) => out.push_str(t),
+                // char-ref / structural → punt (family-specific or impossible here)
+                _ => {
+                    flag_punt();
+                    return None;
+                }
+            }
+            seg_start = end;
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    if seg_start < bytes.len() {
+        out.push_str(&s[seg_start..]);
+    }
+    Some(Cow::Owned(out))
 }
 
 #[cfg(test)]

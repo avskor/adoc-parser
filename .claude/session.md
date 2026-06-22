@@ -1,5 +1,77 @@
 # Session context
 
+## Сессия (2026-06-21, 152-я) — ФАЗА 1 passthrough-native: seed-tags re-parse label (ветка `refactor/macro-native-sentinel`, закоммичено на ветке)
+
+Запрос «начни следующую задачу из TODO.md». Master чист (`cf79b7c`, F-AQ смержен — session.md 151 устарел, F-AQ давно в master). Все
+F-* закрыты, корпус исчерпан на чистых фиксах. Единственная `- [ ]` = ОПЦИОНАЛЬНЫЙ рефакторинг (TODO line 1134, 0 корпусного
+выигрыша). **Развилка** → спросил пользователя (AskUserQuestion: frontier-расширение / manpage doctype / passthrough native-
+конверсия); выбор **«passthrough native-конверсия»**.
+
+### Задача (TODO 1134, 3 фазы)
+Снять punt'ы (decline→legacy fallback), когда target/label макроса содержит earlier-pass sentinel (passthrough/escape/char-ref),
+обрабатывая нативно. Цель: new==asciidoctor на синтетических edge, путь к удалению legacy-quotes. Doc `macros.rs:74-88` точно
+описывает: «re-parsing labels against the shared tag table, reconstructing verbatim target strings will retire the punt».
+
+### Ключевой инсайт (осуществимость seed)
+ВСЕ пассы (escape/quotes/replacements/attributes/char_refs/passthrough/macros) ПРОПУСКАЮТ существующий sentinel (`TAG_LEAD`-arm).
+Значит: ре-парсить лейбл, засеяв внутренний `Work.tags` КЛОНОМ внешней таблицы → seeded sentinel'ы разрешаются против тех же
+листьев, внутренний tokenize восстанавливает. Зеркало asciidoctor (placeholder выживает `subs.without(:macros)`, restore в конце).
+Seed-набор на macros-время = только {Passthrough, Literal, CharRef} (attributes/quotes/replacements ещё не бежали).
+
+### ФАЗА 1 (СДЕЛАНО) — seed-tags re-parse label: link/mailto/autolink/xref/`<<>>`
+- **tokenize.rs:** `#[derive(Clone)]` на `TagToken`+`PassPiece`; `Work::with_tags(text, tags)`.
+- **mod.rs:** `run_pipeline` → `run_pipeline_with(work, text, ...)` (общее тело) + `run_pipeline_seeded(text, seed, ...)`.
+- **macros.rs:** `reparse_label(text, seed, subs, options)` — если text имеет `TAG_LEAD` → `run_pipeline_seeded`, иначе
+  `run_pipeline` (оба `subs.without(MACROS)`). `build_cross_reference`/`build_link`/`push_label` берут `seed: &[TagToken]`.
+  `try_xref`/`try_cross_ref`/`try_mailto` получили `work: &Work` (try_link/try_autolink уже имели). Whole-span
+  `span_has_sentinel`-punt → ТОЧЕЧНО: `target_has_sentinel` (id/url/email) + `attr_has_sentinel` (role/window/subject/body) для
+  verbatim-частей; лейбл → seeded. Поле `label` тега `CrossReference` десентинелизируется (`desentinelize(seed, l)`; рендер
+  читает только `is_none()` — inline.rs:8 `start_cross_reference`, поле render-мёртвое, но убираем управляющие байты; no-sentinel
+  fast-path → байт-в-байт). try_email → seed `&[]` (label всегда None).
+- **ВАЖНО про поле `label`:** xref/`<<>>` НЕ дают точного event-равенства с legacy (legacy хранит сырой `++raw__text++`, число
+  `+` потеряно при extract) — НО рендер игнорирует контент поля → HTML идентичен. Поэтому parser-тест сравнивает по МОДУЛЮ поля
+  (`strip_xref_label`). Link/mailto/autolink — тег без raw-поля → event-равенство ТОЧНОЕ.
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace **1239 зелёных** (+1 parser `reproduces_legacy_on_xref_label_seeded`, расширен
+  `reproduces_legacy_on_link_passthrough_url_inputs`, +1 html `test_macro_label_passthrough_seeded_reparse_html`).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (= master `cf79b7c`, собран в начале сессии; `gate_check.py` 0 diff).
+- **Frontier new-vs-base 0 diff (250)** (`fsweep.py` в scratchpad) → identical-vs-asciidoctor остаётся 227, 0 регрессий.
+  HTML-нейтрально ПО ПОСТРОЕНИЮ: native==legacy на этих формах, в корпусе их нет.
+- **10/10 CLI-проб == asciidoctor 2.0.23** (link/xref/`<<>>`/mailto/autolink label с passthrough/escape/char-ref).
+- Снято: 2 `span_has_sentinel`-punt (xref/mailto) + 2 label `flag_punt` (try_link/try_autolink).
+
+### ФАЗА 2 (СДЕЛАНО) — verbatim-реконструкция: image/icon/stem/kbd/btn/menu/quoted-menu/anchor/index-term
+- Новый `restore_verbatim(work, s: Cow) -> Option<Cow>`: вклеивает passthrough-контент + `Literal`; char-ref/структурный →
+  None (punt). НЕ `desentinelize` целиком — char-ref пантим (его escape-семантика семейство-зависима: stem экранирует
+  `&`→`&amp;#233;`, image-alt сохраняет `&#233;`).
+- **КЛЮЧ (split-order):** делимитер-split (`,` anchor/index, `>` меню) по ИСХОДНИКУ (sentinel без делимитеров) → ПОТОМ
+  реконструировать каждую часть. Иначе `++a,b++` ошибочно разбился бы. quoted-menu сегменты → `reparse_seeded` (MACROS ON,
+  обобщил `reparse_label`→`reparse_seeded`).
+- Все matcher'ы получили `work: &Work`. `span_has_sentinel`-punt снят с 9 семейств; ОСТАЛСЯ ТОЛЬКО footnote.
+- Исправлены реальные баги синтетики: `kbd:[++Ctrl++]` (база→мусор `<kbd></kbd>+...`), `image:[++a b++]`→`alt="a b"`,
+  `stem:[++x++]`, `btn:[++OK__x++]`, menu-item.
+- **Остаточные дивергенции (НЕ регрессии, ПРЕДСУЩЕСТВУЮТ, не связаны с passthrough):** (1) escape `\*` в image-alt не
+  снимается (new==base==`\*x*`, adoc `*x*`); (2) URL-кодирование пробела в image-src (`a%20b` vs adoc `a b`; но new>base
+  `++a%20b++`); (3) bibliography-anchor рендерит `[label]` инлайн vs adoc `[<a>]` (base==new для plain). Все = отдельные
+  рендерер-issues, new ≥ base.
+- +1 parser (`verbatim_macro_passthrough_reconstructed_natively`) +1 html (`test_verbatim_macro_passthrough_reconstruction_html`).
+
+### Верификация Фазы 2 (AIRTIGHT)
+clippy 0; test --workspace **1241** зелёных; doc (broken_intra_doc_links) чист (только предсущ. `double`-warning из escape.rs);
+**гейт 344/344** + **frontier 0-diff (250)** — в корпусе 0 verbatim-with-sentinel конструктов (только в `.rb`, не парсится);
+CLI-пробы == asciidoctor 2.0.23 для passthrough/escape во всех 9 семействах.
+
+### NEXT
+- **ФАЗА 3 (footnote, ОТЛОЖЕНА — нужен parser↔renderer редизайн):** footnote пантит, т.к. рендерер `render_footnote_text`
+  (lib.rs:611) РЕ-ПАРСИТ текст полным inline-проходом → нужен СЫРОЙ `++raw++` (restore дал бы контент `raw`, рендерер
+  ре-substitute'нул бы `__`→emphasis = БАГ). Сырьё невосстановимо. Решение: Footnote-событие несёт pre-parsed события (крупно,
+  трогает оба движка + рендерер + footnote_registry).
+- Коммит Фаз 1+2 на ветке (чекпойнты `fc3ddd4` + след.). **Merge в master --no-ff + push — ПО ЗАПРОСУ** (НЕ без спроса).
+  base `/tmp/adoc_base` = чистый master `cf79b7c`.
+
+---
+
 ## Сессия (2026-06-21, 151-я) — F-AQ escaped-macro-префикс: `file://` autolink + anchor-id валидация (ветка `fix/escaped-macro-prefix`, НЕ закоммичено)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`6b831fd`, F-AP смержен). Все F-* закрыты, Фаза 4/D7 сделаны,

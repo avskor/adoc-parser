@@ -520,6 +520,81 @@ fn test_escaped_ellipsis_in_link_target_html() {
 }
 
 #[test]
+fn test_macro_label_passthrough_seeded_reparse_html() {
+    // A passthrough in a macro LABEL was formerly punted to the legacy parser
+    // because the engine could not re-parse a label already holding a sentinel.
+    // The label is now re-parsed by a seeded sub-pipeline, so the passthrough's
+    // protected content (`raw__text`, double underscores NOT emphasised) renders
+    // natively — byte-for-byte with Asciidoctor 2.0.23.
+    assert!(
+        to_html("link:http://x.com[++raw__text++]")
+            .contains("<a href=\"http://x.com\">raw__text</a>"),
+        "{}",
+        to_html("link:http://x.com[++raw__text++]")
+    );
+    // A quote span beside the passthrough still substitutes inside the label.
+    assert!(
+        to_html("link:http://x.com[*bold* ++raw++]")
+            .contains("<a href=\"http://x.com\"><strong>bold</strong> raw</a>"),
+        "{}",
+        to_html("link:http://x.com[*bold* ++raw++]")
+    );
+    // mailto and the cross-reference families take the same seeded path.
+    assert!(
+        to_html("mailto:a@b.com[++raw__text++]")
+            .contains("<a href=\"mailto:a@b.com\">raw__text</a>"),
+        "{}",
+        to_html("mailto:a@b.com[++raw__text++]")
+    );
+    assert!(
+        to_html("xref:tgt[++raw__text++]").contains("<a href=\"#tgt\">raw__text</a>"),
+        "{}",
+        to_html("xref:tgt[++raw__text++]")
+    );
+    // An escaped marker in the label is honoured natively too (`\*` keeps the
+    // literal `*`, no emphasis).
+    assert!(
+        to_html("link:http://x.com[\\*not bold* x]")
+            .contains("<a href=\"http://x.com\">*not bold* x</a>"),
+        "{}",
+        to_html("link:http://x.com[\\*not bold* x]")
+    );
+}
+
+#[test]
+fn test_verbatim_macro_passthrough_reconstruction_html() {
+    // A passthrough inside a verbatim leaf macro's content was formerly punted to
+    // the legacy parser; the content is now restored from the passthrough leaf
+    // ([`restore_verbatim`]) so it renders byte-for-byte with Asciidoctor 2.0.23.
+    // image alt: the protected `a b` reaches the alt attribute (no `++` markers).
+    assert!(
+        to_html("image:i.png[++a b++]")
+            .contains("<span class=\"image\"><img src=\"i.png\" alt=\"a b\"></span>"),
+        "{}",
+        to_html("image:i.png[++a b++]")
+    );
+    // stem: the protected content renders inside the latexmath delimiters.
+    assert!(
+        to_html("stem:[++x++]").contains("\\$x\\$"),
+        "{}",
+        to_html("stem:[++x++]")
+    );
+    // kbd: the protected `Ctrl` is a single key — the legacy fallback used to
+    // mangle `++Ctrl++` by splitting on `+` into empty `<kbd>` elements.
+    assert!(
+        to_html(":experimental:\n\nkbd:[++Ctrl++]").contains("<kbd>Ctrl</kbd>"),
+        "{}",
+        to_html(":experimental:\n\nkbd:[++Ctrl++]")
+    );
+    // btn: double underscores are protected (no emphasis) — the verbatim label.
+    assert!(
+        to_html(":experimental:\n\nbtn:[++OK__x++]").contains("<b class=\"button\">OK__x</b>"),
+        "{}",
+        to_html(":experimental:\n\nbtn:[++OK__x++]")
+    );
+}
+
+#[test]
 fn test_escaped_macro_prefix_file_scheme_and_anchor_id() {
     // `file://` is an autolink scheme (Asciidoctor `(?:https?|file|ftp|irc)://`):
     // a bare `file://` URL links as `class="bare"`.

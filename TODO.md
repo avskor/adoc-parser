@@ -1135,6 +1135,43 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (seed-tags re-parse label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) —
     снимает punt'ы, делает new==asciidoctor на синтетических edge. Затем удаление legacy-quotes (требует ещё
     редизайн sentinel-байт-fallback). [Doc-свип «gate»-терминологии — СДЕЛАНО в 103-й, см. выше.]
+  - [x] **ФАЗА 1: seed-tags re-parse label (link/mailto/autolink/xref/`<<>>`)** (ветка
+    `refactor/macro-native-sentinel`, 2026-06-21, 152-я). Sentinel в РЕ-ПАРСИМОМ лейбле макроса больше не пантит:
+    `reparse_label` гоняет лейбл через `run_pipeline_seeded` (внутренний `Work.tags` = клон внешней таблицы → seeded
+    sentinel'ы разрешаются против тех же passthrough/`Literal`/char-ref листьев, пассы их пропускают, внутренний
+    tokenize восстанавливает — зеркало asciidoctor: placeholder выживает `subs.without(:macros)` и восстанавливается
+    глобально). Реализация: `TagToken`/`PassPiece` derive `Clone`; `Work::with_tags`; `run_pipeline_seeded` +
+    общий `run_pipeline_with`; `build_cross_reference`/`build_link`/`push_label` берут `seed: &[TagToken]`; matcher'ы
+    `try_xref`/`try_cross_ref`/`try_mailto` получили `work: &Work`. Whole-span `span_has_sentinel`-punt в этих
+    matcher'ах заменён на ТОЧЕЧНЫЙ punt: `target_has_sentinel` (id/url/email verbatim) + `attr_has_sentinel`
+    (role/window/subject/body verbatim) — лейбл идёт в seeded-репарс. Поле `label` тега `CrossReference`
+    десентинелизируется (рендер читает только `is_none()`, но убираем управляющие байты `\x01..\x02` из Cow-поля;
+    no-sentinel байт-в-байт через fast-path). +1 parser (`reproduces_legacy_on_xref_label_seeded` — сравнение по
+    модулю render-мёртвого поля) + расширен `reproduces_legacy_on_link_passthrough_url_inputs` (формы link/mailto/
+    autolink label-passthrough == legacy ТОЧНО) +1 html (`test_macro_label_passthrough_seeded_reparse_html`). clippy
+    0, test --workspace 1239 зелёных. **Гейт 344/344 байт-в-байт** + **frontier new-vs-base 0 diff (250)** =
+    HTML-нейтрально по ПОСТРОЕНИЮ (native==legacy на этих формах; в корпусе их и нет). **10/10 CLI-проб == asciidoctor
+    2.0.23** (link/xref/`<<>>`/mailto/autolink label с passthrough/escape/char-ref). Снято: 2 `span_has_sentinel`-punt
+    (xref/mailto) + 2 label `flag_punt` (try_link/try_autolink).
+  - [x] **ФАЗА 2: verbatim-реконструкция (image/icon/stem/kbd/btn/menu/quoted-menu/anchor/index-term)** (та же ветка,
+    152-я). Sentinel в VERBATIM-контенте leaf-макроса больше не пантит: новый `restore_verbatim(work, content)` вклеивает
+    защищённый контент passthrough'а и экранированный `Literal` обратно (= что оставляет глобальный restore asciidoctor),
+    char-ref → punt (его verbatim-vs-escaped трактовка семейство-зависима, редок). Любой split по делимитеру (`,` для
+    anchor/index, `>` для меню) идёт по ИСХОДНИКУ (sentinel не содержит делимитеров) → защищённый passthrough'ом делимитер
+    остаётся внутри одной части; quoted-menu сегменты ре-парсятся seeded (`reparse_seeded`, MACROS ON). Все matcher'ы
+    получили `work: &Work`; `span_has_sentinel`-punt снят с 9 семейств (остался ТОЛЬКО footnote). Исправляет реальные баги:
+    `kbd:[++Ctrl++]` (база ломала в `<kbd></kbd>+<kbd></kbd>+...`), `image:i.png[++a b++]`→`alt="a b"` (база `alt="++a b++"`),
+    `stem:[++x++]`, `btn:[++OK__x++]`. +1 parser (`verbatim_macro_passthrough_reconstructed_natively`, вкл. char-ref punt)
+    +1 html (`test_verbatim_macro_passthrough_reconstruction_html`). clippy 0, test --workspace 1241 зелёных. **Гейт 344/344**
+    + **frontier 0-diff (250)** — в корпусе 0 таких конструктов (только в `.rb` файле frontier, не парсится). **CLI-пробы ==
+    asciidoctor 2.0.23** для passthrough/escape во всех семействах; остаточные дивергенции = ПРЕДСУЩЕСТВУЮЩИЕ рендерер-issues
+    (escape `\*` в alt не снимается; URL-кодирование пробела в image-src `a%20b`; bibliography-anchor рендерит `[label]`
+    инлайн vs asciidoctor `[<a>]`) — все НЕ связаны с passthrough, new ≥ base везде, 0 регрессий.
+  - [ ] **ФАЗА 3 (footnote, ОТЛОЖЕНА):** footnote всё ещё пантит на span-sentinel — рендерер `render_footnote_text`
+    РЕ-ПАРСИТ текст футноута полным inline-проходом, значит ему нужен СЫРОЙ `++raw++`, а `restore_verbatim` даёт контент
+    `raw` (рендерер ре-substitute'нул бы `__`→emphasis = БАГ). Сырьё невосстановимо (маркеры потеряны), legacy хранит сырой
+    текст → punt КОРРЕКТЕН. Конверсия требует parser↔renderer редизайна: Footnote несёт pre-parsed события (крупно).
+    Коммит Фаз 1+2 на ветке (чекпойнт), merge в master --no-ff — ПО ЗАПРОСУ.
 
 ---
 
