@@ -147,6 +147,13 @@ impl HtmlRenderer {
         };
         let grid = grid_value.as_deref().unwrap_or("all");
         let mut classes = format!("tableblock frame-{frame} grid-{grid}");
+        // Class order mirrors asciidoctor html5.rb convert_table: `stripes-{stripes}`
+        // is appended right after `grid-{grid}`, BEFORE the width class
+        // (`stretch`/`fit-content`); roles (via write_meta_attrs) come last.
+        if let Some(ref sv) = stripes_value {
+            classes.push_str(" stripes-");
+            classes.push_str(sv);
+        }
         let mut width_style = None;
         if tablepcwidth == 100 {
             // An explicit width suppresses fit-content even with %autowidth.
@@ -157,10 +164,6 @@ impl HtmlRenderer {
             }
         } else {
             width_style = Some(format!("width: {}%;", tablepcwidth));
-        }
-        if let Some(ref sv) = stripes_value {
-            classes.push_str(" stripes-");
-            classes.push_str(sv);
         }
 
         // Extract cols spec for colgroup generation

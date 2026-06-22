@@ -3208,6 +3208,33 @@ fn test_table_autowidth_stripes_html() {
 }
 
 #[test]
+fn test_table_class_order_stripes_before_width_html() {
+    // asciidoctor html5.rb convert_table emits classes in the order
+    // `tableblock frame-X grid-X stripes-X {width-class} {roles}` — `stripes-*`
+    // comes BEFORE the width class (`stretch`/`fit-content`), not after.
+    // Regression guard: previously emitted `... stretch stripes-even`.
+    let html = to_html("[stripes=even]\n|===\n| A | B\n|===");
+    assert!(
+        html.contains("tableblock frame-all grid-all stripes-even stretch"),
+        "expected stripes before stretch. Got:\n{html}"
+    );
+
+    // autowidth → fit-content width class, still after stripes.
+    let html = to_html("[%autowidth,stripes=odd]\n|===\n| A | B\n|===");
+    assert!(
+        html.contains("tableblock frame-all grid-all stripes-odd fit-content"),
+        "expected stripes before fit-content. Got:\n{html}"
+    );
+
+    // Role follows the width class: `... stripes-hover stretch myrole`.
+    let html = to_html("[.myrole,stripes=hover]\n|===\n| A | B\n|===");
+    assert!(
+        html.contains("tableblock frame-all grid-all stripes-hover stretch myrole"),
+        "expected role after width class. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_table_caption_default_html() {
     let html = to_html(".My Table\n|===\n| A | B\n|===");
     assert!(html.contains("<caption class=\"title\">Table 1. My Table</caption>"));
