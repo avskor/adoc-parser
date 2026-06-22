@@ -1,55 +1,51 @@
 # Session context
 
-## Сессия (2026-06-22) — F-AU: преамбула для doctype book без секции (ветка `fix/book-preamble-no-section`, off master `a97f782`, НЕ закоммичена)
+## Сессия (2026-06-22) — F-AV: стиль `[abstract]` → quoteblock (ветка `fix/abstract-block-quoteblock`, off master `86dfa6f`, НЕ закоммичена)
 
-Запрос «начни следующую задачу из TODO.md». Master `a97f782` чист. Открытые `[ ]` (TODO:1213/1305/1307) ВСЕ синтетические
-«0 корпусного выигрыша». Основной frontier ИСЧЕРПАН (228 identical, 5 clean-div нишевые). Продолжил триаж нового корпуса
-`/mnt/c/tmp/adoc2docx/` (52 feature-демо, не в гейте/frontier): был 27 identical / 21 clean-div.
+Запрос «начни следующую задачу из TODO.md». Master `86dfa6f` чист (F-AU уже смержен — session.md прошлой сессии был
+устаревшим: говорил «не закоммичена», но в git история `86dfa6f`/`d7e4bf9` уже есть). Открытые `[ ]` все синтетические.
 
-### Задача (найдена триажем adoc2docx — системный класс, 10 файлов сразу)
-`showdiff.py` по audio/keyboard/video/footnotes/text/example/sidebar/open/checklist/admonitions показал общий паттерн:
-```
-[7] ADOC: <div id="preamble">      [7] OUR : <div class="paragraph">
-[8] ADOC: <div class="sectionbody">
-```
-Все файлы = `= Title` + `:doctype: book` + тело БЕЗ секций. asciidoctor оборачивает тело в
-`<div id="preamble"><div class="sectionbody">`, мы — нет.
+### Задача (триаж adoc2docx — наименьший системный clean-div)
+`frontier_parity.py /mnt/c/tmp/adoc2docx`: 37 identical / 11 clean-div. `abstract.adoc` (6 diff) — `[abstract]` стиль:
+параграф мы рендерили `<div class="paragraph abstract"><p>`, open-блок `<div class="openblock abstract"><div class="content">`;
+asciidoctor оба → `<div class="quoteblock abstract"><blockquote>`.
 
-### Корень (verified пробами asciidoctor 2.0.23 + `parser.rb` next_section)
-asciidoctor СОЗДАЁТ преамбулу при `has_header || doctype==book`; ОБЁРТКА эмитится если у преамбулы есть контент И
-(`book` ИЛИ следует секция). Матрица 10 проб:
-- article+title: обёртка ТОЛЬКО при следующей секции
-- **book: обёртка ВСЕГДА** (с/без заголовка, с/без секции), кроме пустого тела
-- section-only / no-pre-body: нет обёртки
+### Корень (verified исходником asciidoctor 2.0.23)
+`parser.rb`: `PARAGRAPH_STYLES` ⊇ `abstract`; `[abstract]`-параграф → `build_block(:open,:compound)`, но `terminator.nil?`
+понижает `content_model` до `:simple` → текст в blockquote БЕЗ `<p>`; open-блок `--` остаётся `:compound` → дети-параграфы.
+`html5.rb convert_open` для `style=='abstract'` эмитит ЕДИНУЮ структуру
+`<div{id} class="quoteblock abstract{role}"><blockquote>{content}</blockquote></div>` (+ `<div class="title">` если есть).
 
-Наш рендерер реализовывал ровно article-правило: `finish.rs` явно «no section followed — leave content as-is».
+### Реализация (3 файла, всё в рендерере adoc-html)
+- `blocks.rs`: хелперы `start_abstract_block` (`write_meta_attrs(meta,"quoteblock")` — style="abstract" уже в meta →
+  `quoteblock abstract {roles}`; + title + `<blockquote>`) и `close_abstract_block` (newline-guard + `</blockquote></div>`).
+  `start_paragraph` ветка `style=="abstract"` (флаг `abstract_para`, без `<p>`); Open в `start_delimited_block` ветка
+  (`delimited_block_stack` tuple `(Open, is_abstract)`).
+- `events.rs`: `TagEnd::Paragraph` при `abstract_para` → `close_abstract_block`+return; `TagEnd::DelimitedBlock` ветка `(Open,true)`.
+- `lib.rs`: поле `abstract_para: bool`.
 
-### Реализация (2 файла)
-- `adoc-html/src/events.rs`: (1) `preamble_start` ставится при `has_document_title || doctype_book` (обе точки —
-  standalone и embedded в `TagEnd::Header`). (2) Новый хелпер `close_preamble(output, start)` — извлечён дословно из
-  section-start пути (split_off + `:toc: preamble` развилка); section-start теперь зовёт его.
-- `adoc-html/src/finish.rs`: если `preamble_start` всё ещё `Some` (секция не встретилась — section-start путь её `take`-ает)
-  И `doctype_book` → `close_preamble`. article роняет (прежнее поведение). Пустое тело → preamble_content пуст → нет обёртки.
-
-### Тесты (+4 html, src/tests.rs после test_no_preamble_without_section_html)
-`test_book_preamble_without_section_html` (точный байт embedded-вывода), `_without_title_html`,
-`_with_section_unchanged_html` (один preamble, секция снаружи), `test_book_no_preamble_for_section_only_html`.
+### Тесты (+4 html, после test_abstract_section_html)
+`test_abstract_paragraph_quoteblock_html` (байт с title), `_no_title_html`, `_open_block_quoteblock_html` (дети-параграфы),
+`_block_id_role_html` (id+роль обе формы).
 
 ### Верификация
-- clippy 0; **test --workspace зелёное** (html 502→506, parser 643, compat 233, render-core 18).
-- **Гейт 344/344 байт-в-байт** vs master `a97f782` (`gate_check.py` 0 diff — 0 корпусных book-без-секции).
-- **Frontier 250: 228 identical, new-vs-base 0 diff** (article-доминантный).
-- **adoc2docx: 27→37 identical (+10)**; остальные diff сократились (links 115→89, menu 87→80). 10 флипнутых body-diff=0.
-- **10/10 CLI-проб == asciidoctor 2.0.23**.
+- clippy 0; **test --workspace зелёное** (html 506→510, parser 643, compat-lab 1).
+- **Гейт 344/344 байт-в-байт** vs master `86dfa6f` (gate_check.py 0 diff — корпусные `[abstract]` все в `[source]----` или
+  секционный стиль → не рендерятся как abstract-блок).
+- **adoc2docx 37→39 identical (+2):** abstract.adoc + software-development-cookbook.adoc оба байт-в-байт с asciidoctor;
+  test.adoc abstract-регион MATCH (прочие diff остались).
+- **new-vs-base sweep frontier+adoc2docx = ровно 3 файла** (abstract/cookbook/test), все abstract-регионы построчно ==
+  asciidoctor, 0 регрессий (frontier без `[abstract]`).
+- 5 CLI-проб == asciidoctor 2.0.23.
 
-### Вне scope (предсуществующее, НЕ регрессия)
-book+title+пустое-тело — лишняя пустая строка между `<div id="content">` и `</div>` (есть и на master; normalize_html=0 diff).
+### Вне scope (ниша)
+book БЕЗ doctitle + первый блок `[abstract]`: asciidoctor НЕ создаёт преамбулу и ИСКЛЮЧАЕТ контент (guard
+`parent==document && book`); мы создаём преамбулу и рендерим. Предсуществующее, не регрессия, завязано на F-AU.
 
 ### Состояние
-Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ пользователя. TODO.md обновлён (F-AU добавлен в начало
-FRONTIER-секции).
+Закоммичено? НЕТ. Коммит/merge --no-ff/push — ПО ЗАПРОСУ. TODO.md обновлён (F-AV в начало FRONTIER-секции).
 
-### Остаток adoc2docx clean-div (11, для будущего триажа)
+### Остаток adoc2docx clean-div (10, для будущего триажа)
 xref(1495 — xrefstyle:full реф-лейблы фигур), test(1111), source(682), xml(291), callouts(196), links(89), menu(80),
-sections(55), icons(10 — title с inline-форматированием в `<i title=…>`), abstract(6), images(1 — xrefstyle:full
-реф-текст фигуры `Test caption: , "Tux title"`).
+sections(55), icons(10 — title с inline-форматированием), images(1 — xrefstyle:full реф-текст фигуры). images=1 и xref —
+архитектурный `xrefstyle: full` (нумерация фигур + caption-prefix в тексте ссылки).

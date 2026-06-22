@@ -4201,6 +4201,83 @@ fn test_abstract_section_html() {
     assert!(html.contains("class=\"sect1\""));
 }
 
+// The `abstract` block style renders as a quoteblock with a <blockquote>
+// (Asciidoctor's convert_open), for both the paragraph and open-block forms.
+
+#[test]
+fn test_abstract_paragraph_quoteblock_html() {
+    // Paragraph form with a title: simple content model — the text sits bare
+    // inside the blockquote (no <p> wrapper).
+    let html = to_html("= Doc\n\n[abstract]\n.Abstract\nDocumentation is a distillation of many long adventures.");
+    assert!(
+        html.contains(
+            "<div class=\"quoteblock abstract\">\n\
+             <div class=\"title\">Abstract</div>\n\
+             <blockquote>\n\
+             Documentation is a distillation of many long adventures.\n\
+             </blockquote>\n\
+             </div>"
+        ),
+        "abstract paragraph should be a quoteblock:\n{html}"
+    );
+    assert!(!html.contains("paragraph abstract"), "{html}");
+}
+
+#[test]
+fn test_abstract_paragraph_no_title_html() {
+    let html = to_html("= Doc\n\n[abstract]\nLone abstract line.");
+    assert!(
+        html.contains(
+            "<div class=\"quoteblock abstract\">\n\
+             <blockquote>\n\
+             Lone abstract line.\n\
+             </blockquote>\n\
+             </div>"
+        ),
+        "{html}"
+    );
+}
+
+#[test]
+fn test_abstract_open_block_quoteblock_html() {
+    // Open-block form: compound content — child paragraphs keep their wrappers
+    // inside the blockquote.
+    let html = to_html(
+        "= Doc\n\n[abstract]\n--\nThis article will take you on a wonderful adventure of knowledge.\n\nYou'll *start* with the basics.\n--",
+    );
+    assert!(
+        html.contains(
+            "<div class=\"quoteblock abstract\">\n\
+             <blockquote>\n\
+             <div class=\"paragraph\">\n\
+             <p>This article will take you on a wonderful adventure of knowledge.</p>\n\
+             </div>\n\
+             <div class=\"paragraph\">\n\
+             <p>You\u{2019}ll <strong>start</strong> with the basics.</p>\n\
+             </div>\n\
+             </blockquote>\n\
+             </div>"
+        ),
+        "abstract open block should be a quoteblock:\n{html}"
+    );
+    assert!(!html.contains("openblock abstract"), "{html}");
+}
+
+#[test]
+fn test_abstract_block_id_role_html() {
+    // id and role land on the quoteblock div, after the `abstract` style class.
+    let para = to_html("= Doc\n\n[#myid.lead]\n[abstract]\nText.");
+    assert!(
+        para.contains("<div id=\"myid\" class=\"quoteblock abstract lead\">\n<blockquote>\nText.\n</blockquote>\n</div>"),
+        "{para}"
+    );
+    let open = to_html("= Doc\n\n[#oid.role2]\n[abstract]\n--\nFirst para.\n--");
+    assert!(
+        open.contains("<div id=\"oid\" class=\"quoteblock abstract role2\">\n<blockquote>\n<div class=\"paragraph\">\n<p>First para.</p>\n</div>\n</blockquote>\n</div>"),
+        "{open}"
+    );
+}
+
 #[test]
 fn test_special_section_no_sectnums() {
     let html = to_html(":sectnums:\n\n== Numbered\n\n[glossary]\n== Terms\n\n[bibliography]\n== Refs\n\n== Also Numbered");

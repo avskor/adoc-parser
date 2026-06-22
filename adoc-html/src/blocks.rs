@@ -556,6 +556,14 @@ impl HtmlRenderer {
         if let Some(count) = self.li_para_count.last_mut() {
             *count += 1;
         }
+        // An `[abstract]` paragraph renders as a quoteblock (Asciidoctor turns
+        // the abstract paragraph style into an open block with simple content;
+        // our parser keeps it a paragraph, so the renderer reshapes it here).
+        if meta.as_ref().and_then(|m| m.style.as_deref()) == Some("abstract") {
+            self.abstract_para = true;
+            self.start_abstract_block(output, meta);
+            return;
+        }
         let is_continuation_para = self.li_para_count.last().is_some_and(|&c| c > 1);
         if self.is_direct_child_of_admonition() {
             // Inline admonitions: no <p> wrapper
@@ -666,8 +674,18 @@ impl HtmlRenderer {
                 output.push_str("<blockquote>\n");
             }
             DelimitedBlockKind::Open => {
-                self.delimited_block_stack.push((*kind, false));
-                self.open_block_with_title(output, meta, "openblock");
+                // The `abstract` style turns an open block into a quoteblock
+                // (Asciidoctor's `convert_open`). The stack flag records it so
+                // the matching close emits `</blockquote>` instead of the open
+                // block's content div.
+                let is_abstract =
+                    meta.as_ref().and_then(|m| m.style.as_deref()) == Some("abstract");
+                self.delimited_block_stack.push((*kind, is_abstract));
+                if is_abstract {
+                    self.start_abstract_block(output, meta);
+                } else {
+                    self.open_block_with_title(output, meta, "openblock");
+                }
             }
             DelimitedBlockKind::Comment => {
                 self.delimited_block_stack.push((*kind, false));
@@ -822,6 +840,31 @@ impl HtmlRenderer {
         output.push_str(">\n");
         self.emit_pending_block_title(output);
         output.push_str("<div class=\"content\">\n");
+    }
+
+    /// Open an `[abstract]` block. Asciidoctor's `convert_open` renders the
+    /// `abstract` style as a `quoteblock` wrapping a `<blockquote>`, regardless
+    /// of whether the source was a paragraph (simple content model → bare text
+    /// in the blockquote) or an open block (compound → child blocks). Only the
+    /// inner content differs; the event stream supplies it. The class/id/roles
+    /// come from `write_meta_attrs` — style "abstract" is already in `meta`, so
+    /// the default class "quoteblock" yields `class="quoteblock abstract …"`.
+    pub(crate) fn start_abstract_block(&mut self, output: &mut String, meta: &Option<BlockMeta>) {
+        output.push_str("<div");
+        Self::write_meta_attrs(output, meta, "quoteblock");
+        output.push_str(">\n");
+        self.emit_pending_block_title(output);
+        output.push_str("<blockquote>\n");
+    }
+
+    /// Close an `[abstract]` block opened by [`start_abstract_block`]. The
+    /// newline guard handles both forms: a paragraph's bare text leaves no
+    /// trailing newline, an open block's last child already ends in one.
+    pub(crate) fn close_abstract_block(output: &mut String) {
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("</blockquote>\n</div>\n");
     }
 
     /// Emit the numbered caption prefix for a titled block (table/figure).
