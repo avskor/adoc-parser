@@ -465,6 +465,11 @@ impl HtmlRenderer {
         }
         if self.sectnums
             && self.pending_section_caption.is_none()
+            // A descendant of a non-numbered special section (preface, colophon,
+            // …) inherits its unnumbered status and emits no number — and must
+            // not bump the counter, so the test short-circuits before
+            // `number_prefix`.
+            && self.section_unnumbered_stack.last() != Some(&true)
             // `sectnumlevels` caps numbering depth (Asciidoctor level =
             // display level − 1 ≤ sectnumlevels). Deeper sections show no
             // number and don't bump the counter.
@@ -511,7 +516,13 @@ impl HtmlRenderer {
 
     pub(crate) fn start_section_div(&mut self, output: &mut String, level: &u8, meta: &Option<BlockMeta>) {
         let style = meta.as_ref().and_then(|m| m.style.as_deref());
-        let is_special = matches!(style, Some(
+        // `[abstract]` in a book doctype is reclassified by Asciidoctor's parser
+        // as a numbered level-1 chapter (parser.rb `initialize_section`:
+        // `sect_name='chapter', sect_level=1`), shedding its special status: it
+        // renders as an ordinary numbered `sect1` chapter, not an unnumbered
+        // abstract. (In an article it stays special.)
+        let book_abstract = self.doctype_book && style == Some("abstract");
+        let is_special = !book_abstract && matches!(style, Some(
             "appendix" | "glossary" | "bibliography" | "colophon"
             | "abstract" | "preface" | "dedication" | "index"
         ));
@@ -529,6 +540,15 @@ impl HtmlRenderer {
         self.section_style_stack.push(
             if is_special { style.map(|s| s.to_string()) } else { None }
         );
+        // Asciidoctor inherits `special` from the parent section (section.rb:
+        // `@special = parent.special`) and numbers a special section only when
+        // it's an appendix (or under `sectnums=all`, which we don't track). So a
+        // non-appendix special section and its entire descendant subtree are
+        // unnumbered: a `=== Subsection` under `[preface]`/`[colophon]`/etc. gets
+        // no number even though it carries no special style of its own.
+        let parent_unnumbered = self.section_unnumbered_stack.last().copied().unwrap_or(false);
+        let unnumbered_subtree = parent_unnumbered || (is_special && style != Some("appendix"));
+        self.section_unnumbered_stack.push(unnumbered_subtree);
         // Section kind for `xrefstyle` reference text (Asciidoctor `sectname`):
         // `[appendix]` → Appendix; a level-0 body section (book part / article
         // sect0) → Part; a book chapter (level 2, not special) → Chapter; every
@@ -561,7 +581,7 @@ impl HtmlRenderer {
             let mut div_meta = meta.clone();
             if let Some(ref mut m) = div_meta {
                 m.id = None;
-                if is_special {
+                if is_special || book_abstract {
                     m.style = None;
                 }
             }
