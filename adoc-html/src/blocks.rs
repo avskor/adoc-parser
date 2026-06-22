@@ -471,6 +471,25 @@ impl HtmlRenderer {
             && (*level as u16) <= self.sectnumlevels as u16 + 1
             && let Some(prefix) = self.section_numberer.number_prefix(*level)
         {
+            // Book chapters (display level 2 = Asciidoctor level 1) get a
+            // `{chapter-signifier} ` prefix before the section number when
+            // `:chapter-signifier:` is set (unset by default), mirroring
+            // Asciidoctor's html5 convert_section. Escaped — it goes raw into
+            // heading and TOC HTML (like part-signifier/appendix-caption) and
+            // precedes `pending_section_title_html_start`, so it stays out of
+            // the title slice used for xref reference text.
+            if self.doctype_book
+                && *level == 2
+                && let Some(sig) = self.document_attrs.get("chapter-signifier")
+            {
+                let mut esc = String::new();
+                html_escape(&mut esc, sig);
+                esc.push(' ');
+                output.push_str(&esc);
+                if let Some(ref mut entry) = self.current_toc_entry {
+                    entry.title.push_str(&esc);
+                }
+            }
             output.push_str(&prefix);
             // The bare dotted number ("1.1") for this section's xref text.
             self.pending_section_number = self.section_numberer.last_number().map(str::to_string);
@@ -532,9 +551,8 @@ impl HtmlRenderer {
             .and_then(|m| m.named.iter().find(|(k, _)| k == "reftext"))
             .map(|(_, v)| v.clone());
         // Bare section number for xref text. Reset here; set by the appendix
-        // branch below or by `start_section_title`'s `number_prefix` branch.
-        // Parts are left `None` (deferred): their `@numbered` semantics are not
-        // yet modelled, so a part xref always falls back to the bare title.
+        // branch below, the `:partnums:` part branch below, or by
+        // `start_section_title`'s `number_prefix` branch.
         self.pending_section_number = None;
         if !is_sect0 {
             output.push_str("<div");
@@ -577,6 +595,10 @@ impl HtmlRenderer {
             });
             self.pending_section_caption =
                 Some(self.section_numberer.part_prefix(signifier.as_deref()));
+            // A `:partnums:` part is `@numbered`: its bare roman numeral ("I")
+            // feeds `Section#xreftext` so a full/short xref to the part renders
+            // "{part-refsig} I, …" instead of the bare title.
+            self.pending_section_number = self.section_numberer.last_number().map(str::to_string);
         } else if is_special {
             self.pending_section_caption = Some(String::new());
         }
