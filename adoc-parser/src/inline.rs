@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::attributes::{LinkKind, parse_link_attrs};
+use crate::attributes::{LinkKind, extract_xref_attrs, parse_link_attrs};
 use crate::event::{Event, SubstitutionSet, Tag, TagEnd};
 
 pub(crate) fn apply_typographic_replacements<'a>(
@@ -2069,6 +2069,9 @@ impl<'a> InlineState<'a> {
             target: Cow::Borrowed(target),
             label: label.clone(),
             is_macro: false,
+            // Shorthand `<<…>>` never carries a per-xref xrefstyle (Asciidoctor
+            // extracts attributes only from the formal macro form).
+            xrefstyle: None,
         }));
         match label {
             Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
@@ -2277,16 +2280,23 @@ impl<'a> InlineState<'a> {
 
         self.flush_text(*text_start, start_pos, events);
 
-        let label = if label_text.is_empty() {
-            None
+        // A `=` in the bracket body switches Asciidoctor to attribute parsing:
+        // the first positional is the link text, named `xrefstyle` overrides the
+        // document style. Without `=` the whole body is the literal link text.
+        let (label_str, xrefstyle) = if label_text.contains('=') {
+            extract_xref_attrs(label_text)
+        } else if label_text.is_empty() {
+            (None, None)
         } else {
-            Some(Cow::Borrowed(label_text))
+            (Some(label_text), None)
         };
+        let label = label_str.map(Cow::Borrowed);
 
         events.push(Event::Start(Tag::CrossReference {
             target: Cow::Borrowed(target),
             label: label.clone(),
             is_macro: true,
+            xrefstyle: xrefstyle.map(Cow::Borrowed),
         }));
         match label {
             Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
@@ -3334,6 +3344,7 @@ mod tests {
                 target: Cow::Borrowed("my-section"),
                 label: None,
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("my-section")),
             Event::End(TagEnd::CrossReference),
@@ -3349,6 +3360,7 @@ mod tests {
                 target: Cow::Borrowed("my-section"),
                 label: None,
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("my-section")),
             Event::End(TagEnd::CrossReference),
@@ -3364,6 +3376,7 @@ mod tests {
                 target: Cow::Borrowed("my-section"),
                 label: Some(Cow::Borrowed("My Section")),
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("My Section")),
             Event::End(TagEnd::CrossReference),
@@ -3379,6 +3392,7 @@ mod tests {
                 target: Cow::Borrowed("my-section"),
                 label: Some(Cow::Borrowed("My Section")),
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("My Section")),
             Event::End(TagEnd::CrossReference),
@@ -3490,6 +3504,7 @@ mod tests {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("attribute's value")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("attribute\u{2019}s value")),
             Event::End(TagEnd::CrossReference),
@@ -3500,6 +3515,7 @@ mod tests {
                 target: Cow::Borrowed("sec"),
                 label: Some(Cow::Borrowed("group's charter")),
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("group\u{2019}s charter")),
             Event::End(TagEnd::CrossReference),
@@ -3529,6 +3545,7 @@ mod tests {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("see `partnums`")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("see ")),
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
@@ -3560,6 +3577,7 @@ mod tests {
                 target: Cow::Borrowed("sec"),
                 label: Some(Cow::Borrowed("`mono` label")),
                 is_macro: false,
+                xrefstyle: None,
             }),
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("mono")),
@@ -3573,6 +3591,7 @@ mod tests {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("with {myattr} ref")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("with ")),
             Event::AttributeReference {
@@ -3590,6 +3609,7 @@ mod tests {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("see <<other>>")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("see <<other>>")),
             Event::End(TagEnd::CrossReference),
@@ -5738,6 +5758,7 @@ mod tests {
                 target: Cow::Borrowed("chapter1"),
                 label: None,
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("chapter1")),
             Event::End(TagEnd::CrossReference),
@@ -5752,6 +5773,7 @@ mod tests {
                 target: Cow::Borrowed("file.adoc#anchor"),
                 label: Some(Cow::Borrowed("Link Text")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("Link Text")),
             Event::End(TagEnd::CrossReference),
@@ -5767,6 +5789,7 @@ mod tests {
                 target: Cow::Borrowed("intro"),
                 label: Some(Cow::Borrowed("Introduction")),
                 is_macro: true,
+                xrefstyle: None,
             }),
             Event::Text(Cow::Borrowed("Introduction")),
             Event::End(TagEnd::CrossReference),
@@ -5794,12 +5817,49 @@ mod tests {
             target: Cow::Borrowed("file.adoc#sec"),
             label: Some(Cow::Borrowed("t")),
             is_macro: false,
+            xrefstyle: None,
         }));
         let macro_form = parse("xref:file.adoc#sec[t]");
         assert_eq!(macro_form[0], Event::Start(Tag::CrossReference {
             target: Cow::Borrowed("file.adoc#sec"),
             label: Some(Cow::Borrowed("t")),
             is_macro: true,
+            xrefstyle: None,
+        }));
+    }
+
+    #[test]
+    fn xref_macro_extracts_xrefstyle_attribute() {
+        // `=` in the bracket body switches to attribute parsing: a bare
+        // `xrefstyle=…` has no positional, so the label is None (unlabeled xref)
+        // and the style is carried on the event.
+        assert_eq!(parse("xref:s1[xrefstyle=full]")[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("s1"),
+            label: None,
+            is_macro: true,
+            xrefstyle: Some(Cow::Borrowed("full")),
+        }));
+        // Positional label + named xrefstyle: the first positional is the label.
+        assert_eq!(parse("xref:s1[Text,xrefstyle=short]")[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("s1"),
+            label: Some(Cow::Borrowed("Text")),
+            is_macro: true,
+            xrefstyle: Some(Cow::Borrowed("short")),
+        }));
+        // No `=` → the whole body is the literal label, no attribute parsing
+        // (a comma stays part of the label).
+        assert_eq!(parse("xref:s1[Plain, label]")[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("s1"),
+            label: Some(Cow::Borrowed("Plain, label")),
+            is_macro: true,
+            xrefstyle: None,
+        }));
+        // Shorthand never carries a per-xref xrefstyle.
+        assert_eq!(parse("<<s1>>")[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("s1"),
+            label: None,
+            is_macro: false,
+            xrefstyle: None,
         }));
     }
 

@@ -1387,6 +1387,13 @@ mod tests {
             "xref:target[Some Label]",
             "xref:target[*bold* label]",
             "xref:target[a -- b]",
+            // `xrefstyle` named attribute: extracted (no positional → no label),
+            // positional + named, every mode keyword. Both engines must agree.
+            "xref:target[xrefstyle=full]",
+            "xref:target[xrefstyle=short]",
+            "xref:target[xrefstyle=basic]",
+            "xref:target[Some Label,xrefstyle=full]",
+            "xref:target[*bold*,xrefstyle=short]",
             // attribute reference inside the label (re-parsed with attributes on)
             "xref:target[{name}]",
             // attribute reference inside the TARGET stays literal in the target

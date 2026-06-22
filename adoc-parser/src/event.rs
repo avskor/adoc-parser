@@ -388,7 +388,11 @@ pub enum Tag<'a> {
     /// `is_macro` distinguishes the formal `xref:target[]` macro (`true`) from
     /// the `<<target>>` shorthand (`false`); the two forms apply different
     /// inter-document extension rules (see `adoc_render_core::resolve_xref`).
-    CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>>, is_macro: bool },
+    /// `xrefstyle` is the per-xref `xref:id[xrefstyle=…]` override (named
+    /// attribute, only the macro form carries it); `None` falls back to the
+    /// document `:xrefstyle:` at render time. Consulted only for an unlabeled
+    /// xref (an explicit `label` is the link text outright).
+    CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>>, is_macro: bool, xrefstyle: Option<CowStr<'a>> },
 
     // UI macros
     Keyboard,
@@ -570,10 +574,11 @@ impl<'a> Tag<'a> {
                 is_bare,
                 role: role.map(|r| Cow::Owned(r.into_owned())),
             },
-            Tag::CrossReference { target, label, is_macro } => Tag::CrossReference {
+            Tag::CrossReference { target, label, is_macro, xrefstyle } => Tag::CrossReference {
                 target: Cow::Owned(target.into_owned()),
                 label: label.map(|l| Cow::Owned(l.into_owned())),
                 is_macro,
+                xrefstyle: xrefstyle.map(|x| Cow::Owned(x.into_owned())),
             },
             Tag::Keyboard => Tag::Keyboard,
             Tag::Button => Tag::Button,

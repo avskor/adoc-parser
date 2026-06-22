@@ -128,7 +128,7 @@ impl HtmlRenderer {
                     self.manpage_name_buf.push_str(&text);
                 }
                 if self.in_unlabeled_xref {
-                    if let Some((placeholder, _, _)) = self.xref_placeholders.last() {
+                    if let Some((placeholder, _, _, _)) = self.xref_placeholders.last() {
                         output.push_str(placeholder);
                     }
                     self.in_unlabeled_xref = false;
@@ -854,7 +854,7 @@ impl HtmlRenderer {
                 }
                 output.push('>');
             }
-            Tag::CrossReference { target, label, is_macro } => self.start_cross_reference(output, target, label, *is_macro),
+            Tag::CrossReference { target, label, is_macro, xrefstyle } => self.start_cross_reference(output, target, label, *is_macro, xrefstyle),
             Tag::Keyboard => {
                 self.kbd_mode = true;
             }
@@ -1005,6 +1005,30 @@ impl HtmlRenderer {
                         && entry.title.eq_ignore_ascii_case("NAME")
                     {
                         self.manpage_name_capture = true;
+                    }
+                    // Capture section xref metadata before the `</hN>` is
+                    // appended below: `output[start..]` is the rendered inline
+                    // title (markup included, no number/caption prefix), the
+                    // input to `Section#xreftext`.
+                    if !self.in_header
+                        && let Some(id) = self
+                            .current_toc_entry
+                            .as_ref()
+                            .map(|e| e.id.clone())
+                            .filter(|id| !id.is_empty())
+                    {
+                        let raw_title_html = output[self.pending_section_title_html_start..].to_string();
+                        let reftext = self.pending_section_reftext.take().map(|rt| {
+                            let mut buf = String::new();
+                            self.render_inline_value(&mut buf, &rt);
+                            buf
+                        });
+                        let number = self.pending_section_number.take();
+                        let sectname = self.pending_section_sectname;
+                        self.section_refs.push((
+                            id,
+                            SectionRefMeta { raw_title_html, number, sectname, reftext },
+                        ));
                     }
                     if let Some(entry) = self.current_toc_entry.take() {
                         self.toc_builder.push(entry);

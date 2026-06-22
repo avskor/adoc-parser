@@ -115,7 +115,7 @@
 
 use std::borrow::Cow;
 
-use crate::attributes::{LinkKind, parse_image_attrs, parse_link_attrs};
+use crate::attributes::{LinkKind, extract_xref_attrs, parse_image_attrs, parse_link_attrs};
 use crate::event::{Event, MenuPart, SubstitutionSet, Tag, TagEnd};
 use crate::inline::{url_encode_into, InlineOptions};
 
@@ -553,10 +553,18 @@ fn try_xref(
     if target_has_sentinel(target) {
         return None;
     }
-    // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
-    // explicit one.
-    let label = (!label_text.is_empty()).then_some(label_text.as_ref());
-    Some((build_cross_reference(target, label, true, &work.tags, subs, options), end))
+    // A `=` in the bracket body switches Asciidoctor to attribute parsing: the
+    // first positional is the link text, named `xrefstyle` overrides the
+    // document style. Without `=` the whole non-empty body is the literal label.
+    let body = label_text.as_ref();
+    let (label, xrefstyle) = if body.contains('=') {
+        extract_xref_attrs(body)
+    } else if body.is_empty() {
+        (None, None)
+    } else {
+        (Some(body), None)
+    };
+    Some((build_cross_reference(target, label, true, &work.tags, subs, options, xrefstyle), end))
 }
 
 /// Whether `content` begins with a character Asciidoctor accepts as the first
@@ -614,7 +622,9 @@ fn try_cross_ref(
     if target_has_sentinel(target) {
         return None;
     }
-    Some((build_cross_reference(target, label, false, &work.tags, subs, options), end))
+    // Shorthand `<<…>>` never carries a per-xref xrefstyle (Asciidoctor extracts
+    // attributes only from the formal macro form).
+    Some((build_cross_reference(target, label, false, &work.tags, subs, options, None), end))
 }
 
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
@@ -632,6 +642,7 @@ fn build_cross_reference(
     seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
+    xrefstyle: Option<&str>,
 ) -> Vec<Event<'static>> {
     let mut events: Vec<Event<'static>> = Vec::new();
     events.push(Event::Start(Tag::CrossReference {
@@ -643,6 +654,9 @@ fn build_cross_reference(
         // byte-unchanged (the helper fast-paths them).
         label: label.map(|l| Cow::Owned(desentinelize(seed, l))),
         is_macro,
+        // `xrefstyle` is a keyword (`full`/`short`/`basic`), not markup — stored
+        // owned without sentinel processing.
+        xrefstyle: xrefstyle.map(|x| Cow::Owned(x.to_string())),
     }));
     match label {
         None => events.push(Event::Text(Cow::Owned(target.to_string()))),

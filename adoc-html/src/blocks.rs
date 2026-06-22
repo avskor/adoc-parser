@@ -470,6 +470,8 @@ impl HtmlRenderer {
             && let Some(prefix) = self.section_numberer.number_prefix(*level)
         {
             output.push_str(&prefix);
+            // The bare dotted number ("1.1") for this section's xref text.
+            self.pending_section_number = self.section_numberer.last_number().map(str::to_string);
             if let Some(ref mut entry) = self.current_toc_entry {
                 entry.title.push_str(&prefix);
             }
@@ -480,6 +482,10 @@ impl HtmlRenderer {
                 entry.title.push_str(&caption);
             }
         }
+        // The rendered inline title begins here (after the number/caption
+        // prefix); `TagEnd::SectionTitle` slices `output[start..]` as the raw
+        // title HTML for xref reference text.
+        self.pending_section_title_html_start = output.len();
     }
 
     pub(crate) fn start_section_div(&mut self, output: &mut String, level: &u8, meta: &Option<BlockMeta>) {
@@ -502,6 +508,32 @@ impl HtmlRenderer {
         self.section_style_stack.push(
             if is_special { style.map(|s| s.to_string()) } else { None }
         );
+        // Section kind for `xrefstyle` reference text (Asciidoctor `sectname`):
+        // `[appendix]` → Appendix; a level-0 body section (book part / article
+        // sect0) → Part; a book chapter (level 2, not special) → Chapter; every
+        // other section (incl. special prefaces, deeper sections) → Section.
+        self.pending_section_sectname = if style == Some("appendix") {
+            SectName::Appendix
+        } else if is_sect0 {
+            SectName::Part
+        } else if self.doctype_book && *level == 2 && !is_special {
+            SectName::Chapter
+        } else {
+            SectName::Section
+        };
+        // Explicit reference text on the section block (`[reftext=…]` /
+        // `[[id,reftext]]`, stashed by the parser as the `reftext` attribute):
+        // it outranks the title in `Section#xreftext`. Rendered at section-title
+        // close (where `render_inline_value` is reachable).
+        self.pending_section_reftext = meta
+            .as_ref()
+            .and_then(|m| m.named.iter().find(|(k, _)| k == "reftext"))
+            .map(|(_, v)| v.clone());
+        // Bare section number for xref text. Reset here; set by the appendix
+        // branch below or by `start_section_title`'s `number_prefix` branch.
+        // Parts are left `None` (deferred): their `@numbered` semantics are not
+        // yet modelled, so a part xref always falls back to the bare title.
+        self.pending_section_number = None;
         if !is_sect0 {
             output.push_str("<div");
             let sect_class = format!("sect{}", level - 1);
@@ -527,6 +559,8 @@ impl HtmlRenderer {
             });
             self.pending_section_caption =
                 Some(self.section_numberer.appendix_prefix(*level, caption.as_deref()));
+            // The appendix letter ("A") is the bare number for xref text.
+            self.pending_section_number = self.section_numberer.last_number().map(str::to_string);
         } else if is_sect0 && self.doctype_book && self.document_attrs.contains_key("partnums") {
             // Book part under `:partnums:` → "Part I: " / "I: " prefix
             // (roman numeral, document-global). `part-signifier` set (even

@@ -6696,3 +6696,80 @@ fn test_x_marker_literal_monospace() {
     let reg = to_html("[x-y]`c`");
     assert!(reg.contains("<code class=\"x-y\">c</code>"), "non-marker role: {reg}");
 }
+
+// --- xrefstyle reference text for sections (Section#xreftext) ---
+// Each assertion verified byte-for-byte against asciidoctor 2.0.23.
+
+#[test]
+fn test_section_xref_default_is_bare_title_html() {
+    // Regression fix: an unlabeled xref to a NUMBERED section uses the bare
+    // title (Asciidoctor's default `xrefstyle`), NOT the section number. We
+    // previously emitted "1. First" / "1.1. Nested".
+    let html = to_html(":sectnums:\n\n[#s1]\n== First\n\n=== Nested\n\nSee <<s1>> and <<_nested>>.");
+    assert!(html.contains("<a href=\"#s1\">First</a>"), "{html}");
+    assert!(html.contains("<a href=\"#_nested\">Nested</a>"), "{html}");
+}
+
+#[test]
+fn test_section_xref_modes_html() {
+    let html = to_html(
+        ":sectnums:\n\n[#s1]\n== First\n\n=== Nested\n\n\
+         short: xref:s1[xrefstyle=short]\n\nbasic: xref:s1[xrefstyle=basic]\n\n\
+         full: xref:s1[xrefstyle=full]\n\ndefault: <<s1>>",
+    );
+    assert!(html.contains("<a href=\"#s1\">Section 1</a>"), "short: {html}");
+    // basic and default both yield the bare title for a plain section.
+    assert!(html.contains("basic: <a href=\"#s1\">First</a>"), "basic: {html}");
+    assert!(html.contains("default: <a href=\"#s1\">First</a>"), "default: {html}");
+    assert!(html.contains("<a href=\"#s1\">Section 1, &#8220;First&#8221;</a>"), "full: {html}");
+}
+
+#[test]
+fn test_chapter_and_appendix_xref_use_em_html() {
+    // Book chapter: basic em-wraps the title, full prefixes Chapter N.
+    let book = to_html(
+        ":doctype: book\n:sectnums:\n\n[#c1]\n== Chapter One\n\n=== Sub\n\n\
+         basic: xref:c1[xrefstyle=basic]\n\nfull: xref:c1[xrefstyle=full]\n\n\
+         sub: xref:_sub[xrefstyle=full]",
+    );
+    assert!(book.contains("basic: <a href=\"#c1\"><em>Chapter One</em></a>"), "chapter basic: {book}");
+    assert!(book.contains("full: <a href=\"#c1\">Chapter 1, <em>Chapter One</em></a>"), "chapter full: {book}");
+    // A deeper section under a chapter is a plain section (curly quotes).
+    assert!(book.contains("sub: <a href=\"#_sub\">Section 1.1, &#8220;Sub&#8221;</a>"), "sub full: {book}");
+
+    // Appendix: refsig "Appendix", em-wrapped title (was the caption form before).
+    let app = to_html(
+        ":doctype: book\n:sectnums:\n:xrefstyle: full\n\n[appendix#app1]\n== Grammar\n\nSee <<app1>>.",
+    );
+    assert!(app.contains("<a href=\"#app1\">Appendix A, <em>Grammar</em></a>"), "appendix full: {app}");
+}
+
+#[test]
+fn test_section_xref_reftext_and_signifier_html() {
+    // Explicit section reftext outranks xrefstyle entirely.
+    let rt = to_html(
+        ":sectnums:\n:xrefstyle: full\n\n[#sr,reftext=My Ref Text]\n== Titled\n\n\
+         See <<sr>> and xref:sr[xrefstyle=short].",
+    );
+    assert_eq!(rt.matches("<a href=\"#sr\">My Ref Text</a>").count(), 2, "reftext wins: {rt}");
+
+    // Custom section-refsig.
+    let custom = to_html(":sectnums:\n:xrefstyle: full\n:section-refsig: Sec.\n\n[#s1]\n== First\n\nA: <<s1>>");
+    assert!(custom.contains("<a href=\"#s1\">Sec. 1, &#8220;First&#8221;</a>"), "custom sig: {custom}");
+
+    // section-refsig explicitly unset → number only, no signifier.
+    let unset = to_html(":sectnums:\n:xrefstyle: short\n:section-refsig!:\n\n[#s1]\n== First\n\nA: <<s1>>");
+    assert!(unset.contains("<a href=\"#s1\">1</a>"), "unset sig: {unset}");
+}
+
+#[test]
+fn test_per_xref_xrefstyle_overrides_document_html() {
+    // Per-xref `xref:id[xrefstyle=full]` overrides the document `:xrefstyle: basic`.
+    let html = to_html(
+        ":sectnums:\n:xrefstyle: basic\n\n[#s1]\n== First\n\n\
+         over: xref:s1[xrefstyle=full]\n\ndoc: <<s1>>",
+    );
+    assert!(html.contains("over: <a href=\"#s1\">Section 1, &#8220;First&#8221;</a>"), "override: {html}");
+    // The document default (basic) yields the bare title for a plain section.
+    assert!(html.contains("doc: <a href=\"#s1\">First</a>"), "doc default: {html}");
+}

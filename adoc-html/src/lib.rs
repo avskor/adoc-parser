@@ -9,8 +9,8 @@ use std::fmt::Write;
 use adoc_parser::{CellStyle, CowStr, Event, HAlign, MenuPart, Tag, TagEnd, AdmonitionKind, DelimitedBlockKind, SubstitutionSet, VAlign};
 use adoc_render_core::{
     Author, AuthorRegistry, CaptionCounters, CaptionKind, CaptionPrefix, FootnoteRegistry,
-    RefText, Revision, SectionNumberer, TocBuilder, TocEntry, TocStep, XrefResolver,
-    DEFAULT_TOC_TITLE,
+    RefText, Revision, SectName, SectionNumberer, SectionRefMeta, TocBuilder, TocEntry, TocStep,
+    XrefResolver, DEFAULT_TOC_TITLE, section_xreftext,
 };
 
 mod blocks;
@@ -253,10 +253,12 @@ struct HtmlRenderer {
     bare_link_pending: bool,
     xref_placeholder_counter: usize,
     /// Internal/inter-document xref link text, resolved in `finish()`. Each entry
-    /// is `(placeholder, fallback, is_internal)`. `is_internal` selects the
-    /// unresolved-fallback shape: bracketed `[id]` for internal anchor refs
+    /// is `(placeholder, fallback, is_internal, xrefstyle)`. `is_internal` selects
+    /// the unresolved-fallback shape: bracketed `[id]` for internal anchor refs
     /// (Asciidoctor's default xreflabel), raw path for inter-document refs.
-    xref_placeholders: Vec<(String, String, bool)>,
+    /// `xrefstyle` is the per-xref `xref:id[xrefstyle=…]` override (the document
+    /// `:xrefstyle:` applies when `None`), consulted when the target is a section.
+    xref_placeholders: Vec<(String, String, bool, Option<String>)>,
     /// Internal xref href ids, resolved in `finish()`: a placeholder paired with
     /// the raw target. A target matching a section title (natural cross
     /// reference) resolves to that section's id (`<<Substitutions>>` →
@@ -272,6 +274,24 @@ struct HtmlRenderer {
     /// description-list term — the rendered term itself (Asciidoctor catalogs
     /// the term as the anchor's default reference text).
     anchor_reftexts: Vec<(String, String)>,
+    /// Section id -> metadata for `xrefstyle` reference text (`Section#xreftext`):
+    /// rendered raw title, bare number, section kind and explicit reftext.
+    /// Populated at `TagEnd::SectionTitle`; consumed in `finish()` to format an
+    /// unlabeled section xref per the effective style.
+    section_refs: Vec<(String, SectionRefMeta)>,
+    /// Section kind of the section currently being opened (`start_section_div`),
+    /// carried to `TagEnd::SectionTitle` where the `SectionRefMeta` is assembled.
+    pending_section_sectname: SectName,
+    /// Explicit `reftext` of the section currently being opened (from its block
+    /// `[reftext=…]` / `[[id,reftext]]`), rendered to HTML at section-title close.
+    pending_section_reftext: Option<String>,
+    /// Bare section number (`SectionNumberer::last_number`) captured in
+    /// `start_section_title`; `None` when the section emits no number.
+    pending_section_number: Option<String>,
+    /// Output offset where the current section title's rendered inline text
+    /// begins (right after the number/caption prefix), so its HTML can be sliced
+    /// out at `TagEnd::SectionTitle` without the prefix.
+    pending_section_title_html_start: usize,
     /// Output position right after the opening markup of the current
     /// description-list term; used to detect a leading inline anchor.
     dt_term_start: Option<usize>,
@@ -321,6 +341,14 @@ impl HtmlRenderer {
                 ("figure-caption".to_string(), "Figure".to_string()),
                 ("example-caption".to_string(), "Example".to_string()),
                 ("appendix-caption".to_string(), "Appendix".to_string()),
+                // Cross-reference signifiers (`{sectname}-refsig`) used by
+                // `xrefstyle` reference text. Seeded so a `get` returns the
+                // Asciidoctor default; `:section-refsig!:` removes the key,
+                // which `section_xreftext` reads as "no signifier".
+                ("section-refsig".to_string(), "Section".to_string()),
+                ("chapter-refsig".to_string(), "Chapter".to_string()),
+                ("part-refsig".to_string(), "Part".to_string()),
+                ("appendix-refsig".to_string(), "Appendix".to_string()),
                 ("version-label".to_string(), "Version".to_string()),
                 // Asciidoctor default attribute (`asciidoctor.rb: 'prewrap' => ''`):
                 // verbatim blocks wrap by default. `:prewrap!:` removes it, which
@@ -399,6 +427,11 @@ impl HtmlRenderer {
             block_ref_titles: Vec::new(),
             bibliography_reftexts: Vec::new(),
             anchor_reftexts: Vec::new(),
+            section_refs: Vec::new(),
+            pending_section_sectname: SectName::Section,
+            pending_section_reftext: None,
+            pending_section_number: None,
+            pending_section_title_html_start: 0,
             dt_term_start: None,
             pending_term_anchor: None,
             in_header: false,

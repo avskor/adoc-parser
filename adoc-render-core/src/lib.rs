@@ -234,6 +234,94 @@ pub fn unresolved_xref_label(target: &str) -> String {
     format!("[{target}]")
 }
 
+/// The kind of section a cross reference targets, as Asciidoctor's
+/// `Section#sectname` classifies it. Drives the reference signifier
+/// (`{sectname}-refsig`) and the quote style of the title in `xrefstyle`
+/// reference text (chapter/appendix wrap the title in `<em>`, a plain section
+/// in curly double quotes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectName {
+    Section,
+    Chapter,
+    Appendix,
+    Part,
+}
+
+/// Everything `section_xreftext` needs to format the auto-generated link text
+/// of a cross reference to a section. All string fields are already in the
+/// consumer's output markup: `raw_title_html` is the rendered inline title
+/// (markup included, no number/caption prefix) and `reftext` (if any) is the
+/// rendered explicit reference text. `number` is the bare numeral
+/// ([`SectionNumberer::last_number`]) — `None` when the section is unnumbered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionRefMeta {
+    pub raw_title_html: String,
+    pub number: Option<String>,
+    pub sectname: SectName,
+    pub reftext: Option<String>,
+}
+
+/// Auto-generated cross-reference link text for a section, replicating
+/// Asciidoctor's `Section#xreftext` (`section.rb:125-157`).
+///
+/// `style` is the effective `xrefstyle` (per-xref `xref:id[xrefstyle=…]`
+/// overriding the document `:xrefstyle:`; `None` when neither is set).
+/// `signifier` is the already-resolved `{sectname}-refsig` value (`None` means
+/// the attribute was explicitly unset, e.g. `:section-refsig!:`). Both string
+/// inputs in `meta` are pre-rendered HTML, so this is pure formatting.
+///
+/// Precedence: a non-empty `reftext` wins outright. Otherwise `nil` style and
+/// any unnumbered section fall back to "basic" styling (chapter/appendix wrap
+/// the title in `<em>`, a plain section is the bare title). `full` is
+/// `{sig} {num}, {quoted_title}`; `short` is `{sig} {num}` — the signifier and
+/// its space drop when `signifier` is `None`.
+pub fn section_xreftext(meta: &SectionRefMeta, style: Option<&str>, signifier: Option<&str>) -> String {
+    if let Some(reftext) = &meta.reftext
+        && !reftext.is_empty()
+    {
+        return reftext.clone();
+    }
+    let em = matches!(meta.sectname, SectName::Chapter | SectName::Appendix);
+    // "basic" styling and the unnumbered/nil fallbacks: em-wrap for
+    // chapter/appendix, otherwise the bare title.
+    let basic = || {
+        if em {
+            format!("<em>{}</em>", meta.raw_title_html)
+        } else {
+            meta.raw_title_html.clone()
+        }
+    };
+    let style = match style {
+        // xrefstyle nil → bare title (even for chapters: Asciidoctor's final
+        // `else title` branch, distinct from the explicit `basic` styling).
+        None => return meta.raw_title_html.clone(),
+        Some(s) => s,
+    };
+    // An unnumbered section ignores full/short and applies basic styling.
+    let Some(number) = &meta.number else {
+        return basic();
+    };
+    match style {
+        "full" => {
+            let quoted = if em {
+                format!("<em>{}</em>", meta.raw_title_html)
+            } else {
+                format!("&#8220;{}&#8221;", meta.raw_title_html)
+            };
+            match signifier {
+                Some(sig) => format!("{sig} {number}, {quoted}"),
+                None => format!("{number}, {quoted}"),
+            }
+        }
+        "short" => match signifier {
+            Some(sig) => format!("{sig} {number}"),
+            None => number.clone(),
+        },
+        // "basic" or any unrecognized style.
+        _ => basic(),
+    }
+}
+
 /// Known AsciiDoc source file extensions (Asciidoctor's `ASCIIDOC_EXTENSIONS`).
 /// A shorthand inter-document xref rewrites any of these to the output suffix;
 /// the formal `xref:` macro only rewrites `.adoc` (see [`resolve_xref`]).
@@ -504,6 +592,13 @@ pub struct SectionNumberer {
     /// each top-level part (`Part I`, `Part II`, …), sequential across the
     /// whole document. Independent of `sectnums` (chapter/section numbering).
     part_counter: u32,
+    /// Bare numeral of the section most recently numbered by
+    /// `number_prefix`/`appendix_prefix`/`part_prefix` — the dotted sectnum
+    /// (`"1.1"`), appendix letter (`"A"`) or part roman (`"I"`) WITHOUT the
+    /// trailing delimiter/caption/signifier. Used to build xref reference text
+    /// (`Section#xreftext`), where the same numeral is reformatted with a comma
+    /// (full) or bare (short) suffix.
+    last_number: Option<String>,
 }
 
 impl SectionNumberer {
@@ -537,6 +632,9 @@ impl SectionNumberer {
                 None => prefix.push_str(&self.counters[l].to_string()),
             }
         }
+        // The accumulated `prefix` is the bare dotted sectnum (`"1.1"`); the
+        // trailing `". "` is the heading/TOC delimiter, stripped for xref.
+        self.last_number = Some(prefix.clone());
         prefix.push_str(". ");
         Some(prefix)
     }
@@ -550,6 +648,7 @@ impl SectionNumberer {
     pub fn appendix_prefix(&mut self, level: u8, caption: Option<&str>) -> String {
         self.appendix_counter += 1;
         let letter = (b'A' + (self.appendix_counter - 1).min(25)) as char;
+        self.last_number = Some(letter.to_string());
         let lvl = (level as usize).min(5);
         if (2..=5).contains(&lvl) {
             self.appendix_letters[lvl] = Some(letter);
@@ -576,10 +675,19 @@ impl SectionNumberer {
     pub fn part_prefix(&mut self, signifier: Option<&str>) -> String {
         self.part_counter += 1;
         let roman = to_roman(self.part_counter);
+        self.last_number = Some(roman.clone());
         match signifier {
             Some(signifier) => format!("{signifier} {roman}: "),
             None => format!("{roman}: "),
         }
+    }
+
+    /// Bare numeral of the section most recently numbered (set by
+    /// `number_prefix`/`appendix_prefix`/`part_prefix`). Read it immediately
+    /// after the numbering call — it is not cleared between sections, so a
+    /// stale value lingers for sections that emit no number.
+    pub fn last_number(&self) -> Option<&str> {
+        self.last_number.as_deref()
     }
 
     /// Reset all descendant ordinals (and open-appendix letters). Asciidoctor
@@ -1412,5 +1520,98 @@ mod tests {
         assert_eq!(strip_uri_scheme("https://host:8080/p"), "host:8080/p");
         // At most two slashes are consumed.
         assert_eq!(strip_uri_scheme("file:///etc/hosts"), "/etc/hosts");
+    }
+
+    fn meta(title: &str, number: Option<&str>, sectname: SectName, reftext: Option<&str>) -> SectionRefMeta {
+        SectionRefMeta {
+            raw_title_html: title.to_string(),
+            number: number.map(str::to_string),
+            sectname,
+            reftext: reftext.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn section_xreftext_regular_section() {
+        let m = meta("First", Some("1.1"), SectName::Section, None);
+        // nil style → bare title (Asciidoctor default).
+        assert_eq!(section_xreftext(&m, None, Some("Section")), "First");
+        // basic → bare title for a plain section.
+        assert_eq!(section_xreftext(&m, Some("basic"), Some("Section")), "First");
+        // short → signifier + bare number.
+        assert_eq!(section_xreftext(&m, Some("short"), Some("Section")), "Section 1.1");
+        // full → signifier + number, + curly-quoted title.
+        assert_eq!(
+            section_xreftext(&m, Some("full"), Some("Section")),
+            "Section 1.1, &#8220;First&#8221;"
+        );
+    }
+
+    #[test]
+    fn section_xreftext_chapter_and_appendix_use_em() {
+        let ch = meta("Chapter One", Some("1"), SectName::Chapter, None);
+        assert_eq!(section_xreftext(&ch, Some("basic"), Some("Chapter")), "<em>Chapter One</em>");
+        assert_eq!(section_xreftext(&ch, Some("short"), Some("Chapter")), "Chapter 1");
+        assert_eq!(
+            section_xreftext(&ch, Some("full"), Some("Chapter")),
+            "Chapter 1, <em>Chapter One</em>"
+        );
+        // nil style → bare title even for a chapter (final `else title` branch).
+        assert_eq!(section_xreftext(&ch, None, Some("Chapter")), "Chapter One");
+
+        let ap = meta("Grammar", Some("A"), SectName::Appendix, None);
+        assert_eq!(
+            section_xreftext(&ap, Some("full"), Some("Appendix")),
+            "Appendix A, <em>Grammar</em>"
+        );
+    }
+
+    #[test]
+    fn section_xreftext_reftext_wins() {
+        let m = meta("Titled", Some("1"), SectName::Section, Some("My Ref Text"));
+        // reftext outranks every style (Asciidoctor's first branch).
+        assert_eq!(section_xreftext(&m, Some("full"), Some("Section")), "My Ref Text");
+        assert_eq!(section_xreftext(&m, Some("short"), Some("Section")), "My Ref Text");
+        assert_eq!(section_xreftext(&m, None, Some("Section")), "My Ref Text");
+        // An empty reftext does not win — falls through to styling.
+        let empty = meta("Titled", Some("1"), SectName::Section, Some(""));
+        assert_eq!(section_xreftext(&empty, None, Some("Section")), "Titled");
+    }
+
+    #[test]
+    fn section_xreftext_signifier_unset_and_custom() {
+        let m = meta("First", Some("1"), SectName::Section, None);
+        // Custom signifier.
+        assert_eq!(section_xreftext(&m, Some("full"), Some("Sec.")), "Sec. 1, &#8220;First&#8221;");
+        // Signifier explicitly unset (`:section-refsig!:`): number only.
+        assert_eq!(section_xreftext(&m, Some("short"), None), "1");
+        assert_eq!(section_xreftext(&m, Some("full"), None), "1, &#8220;First&#8221;");
+    }
+
+    #[test]
+    fn section_xreftext_unnumbered_uses_basic_styling() {
+        // Unnumbered + any style → basic styling, never refsig/number.
+        let sec = meta("Intro", None, SectName::Section, None);
+        assert_eq!(section_xreftext(&sec, Some("full"), Some("Section")), "Intro");
+        assert_eq!(section_xreftext(&sec, Some("short"), Some("Section")), "Intro");
+        let ch = meta("Preface", None, SectName::Chapter, None);
+        assert_eq!(section_xreftext(&ch, Some("full"), Some("Chapter")), "<em>Preface</em>");
+        // Parts are emitted unnumbered by the renderer → always the bare title.
+        let part = meta("Part One", None, SectName::Part, None);
+        assert_eq!(section_xreftext(&part, Some("full"), Some("Part")), "Part One");
+    }
+
+    #[test]
+    fn numberer_last_number_tracks_bare_numeral() {
+        let mut n = SectionNumberer::new();
+        assert_eq!(n.last_number(), None);
+        n.number_prefix(2); // "1. "
+        assert_eq!(n.last_number(), Some("1"));
+        n.number_prefix(3); // "1.1. "
+        assert_eq!(n.last_number(), Some("1.1"));
+        n.appendix_prefix(2, Some("Appendix"));
+        assert_eq!(n.last_number(), Some("A"));
+        n.part_prefix(Some("Part"));
+        assert_eq!(n.last_number(), Some("I"));
     }
 }
