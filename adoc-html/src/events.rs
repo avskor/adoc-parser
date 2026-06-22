@@ -1052,6 +1052,14 @@ impl HtmlRenderer {
                 let trimmed = output.trim_end_matches([' ', '\t']);
                 output.truncate(trimmed.len());
 
+                // An `[abstract]` paragraph was opened as a quoteblock/blockquote
+                // (see `start_paragraph`); close that structure instead of </p>.
+                if self.abstract_para {
+                    self.abstract_para = false;
+                    Self::close_abstract_block(output);
+                    return;
+                }
+
                 let is_continuation_para = self.li_para_count.last().is_some_and(|&c| c > 1);
                 if self.is_direct_child_of_admonition() {
                     // Inline admonitions: no </p>
@@ -1091,6 +1099,10 @@ impl HtmlRenderer {
                             output.push('\n');
                         }
                         output.push_str("</div>\n</details>\n");
+                    }
+                    Some((DelimitedBlockKind::Open, true)) => {
+                        // `[abstract]` open block opened as a quoteblock.
+                        Self::close_abstract_block(output);
                     }
                     Some((DelimitedBlockKind::Example | DelimitedBlockKind::Sidebar
                          | DelimitedBlockKind::Open, false)) => {

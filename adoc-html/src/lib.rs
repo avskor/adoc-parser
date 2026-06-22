@@ -180,6 +180,11 @@ struct HtmlRenderer {
     current_toc_entry: Option<TocEntry>,
     pending_block_meta: Option<BlockMeta>,
     para_hardbreaks: bool,
+    /// True while rendering a paragraph carrying the `[abstract]` style — its
+    /// `<p>` wrappers are replaced by a `quoteblock`/`<blockquote>` structure
+    /// (matches Asciidoctor's `convert_open` for the abstract style). Set in
+    /// `start_paragraph`, consumed in `TagEnd::Paragraph`.
+    abstract_para: bool,
     kbd_mode: bool,
     button_mode: bool,
     menu_target: Option<String>,
@@ -339,6 +344,7 @@ impl HtmlRenderer {
             current_toc_entry: None,
             pending_block_meta: None,
             para_hardbreaks: false,
+            abstract_para: false,
             kbd_mode: false,
             button_mode: false,
             menu_target: None,
