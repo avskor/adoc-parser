@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-22) — F-AT: порядок CSS-классов таблицы (`stripes-*` ДО width) (ветка `fix/table-class-stripes-order`, off master `2ead05d`, НЕ закоммичена)
+
+Запрос «начни следующую задачу из TODO.md». Master `2ead05d` чист. Открытые `[ ]` (TODO:1191/1283/1285) ВСЕ синтетические
+«0 корпусного выигрыша». Основной frontier (asciidoctor + asciidoctor-org) ИСЧЕРПАН на ценных фиксах: 228 identical,
+остаток 5 clean-div — 2 архитектурных (manpage backend [146]; partintro-в-article на malformed-фикстуре multi-special-ex
+[87] — asciidoctor выдаёт ERROR на level-0 секции в article-doctype и ОТБРАСЫВАЕТ partintro, мы рендерим; ниша) + 3
+non-bug diff=1 (doctime `{localtime}` текущее время; CHANGELOG эллипсис в URL = F-AP trade-off; migration
+`{asciidoctor-version}` intrinsic-атрибут). Базовый partintro+part+chapter у нас УЖЕ идентичен asciidoctor (проверено
+минимальным кейсом).
+
+### Расширение корпуса (новый источник)
+`/mnt/c/tmp/adoc2docx/` — 52 feature-демо .adoc (admonitions/callouts/checklist/collapsible/tables/icons/audio/…),
+НЕ в гейте/frontier. `frontier_parity.py` по нему: 24 identical, 24 clean-div. Триаж diff=1 (`showdiff.py`):
+`tables.adoc`/`tables-fix.adoc` — порядок классов таблицы.
+
+### Задача (найдена триажем нового корпуса)
+asciidoctor: `<table class="tableblock frame-none grid-rows stripes-odd stretch">`; мы: `… stretch stripes-odd`.
+width-класс (`stretch`/`fit-content`) эмитился ПЕРЕД `stripes-*`.
+
+### Корень (`adoc-html/src/blocks.rs:149-164` `start_table`; verified пробами + asciidoctor html5.rb convert_table)
+Каноничный порядок: `tableblock frame-X grid-X stripes-X {width-class} {roles}`. `stripes-*` сразу после `grid-X`, ДО
+width-класса; роли — последними (через `write_meta_attrs`, подтверждено `… fit-content myrole stretch`). Наш код пушил
+width-класс до stripes.
+
+### Реализация (1 файл)
+`start_table`: блок `if let Some(sv) = stripes_value { classes.push_str(" stripes-"); … }` перенесён ВЫШЕ блока
+width-класса (tablepcwidth==100 → fit-content/stretch). +коммент со ссылкой на порядок asciidoctor.
+
+### Тесты
++1 html `test_table_class_order_stripes_before_width_html` (tests.rs: точный порядок — `stripes-even stretch`,
+autowidth `stripes-odd fit-content`, role `stripes-hover stretch myrole`). Старые table-stripes тесты проверяли лишь
+НАЛИЧИЕ классов (`.contains("stripes-even")`), не порядок → баг проскользнул.
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace зелёное (**html 501→502**, parser/compat/render-core неизменны).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (пересобран из master `2ead05d`; `gate_check.py` 0 diff — 0 корпусных
+  таблиц со stripes+width-класс одновременно → фикс нейтрален к гейту).
+- **Frontier 250 без регрессий** (228 identical стабильно).
+- **adoc2docx: 4 файла IMPROVED** (tables/tables-fix/tables-fix-копия → байт-в-байт с asciidoctor; test.adoc table-теги
+  теперь MATCH), 0 регрессий (new-vs-base sweep: изменились ровно 4 table-файла, единственная разница — порядок класса).
+- 5/5 + 3/3 CLI-проб == asciidoctor 2.0.23 (stripes+width%/autowidth/header/мультироли/no-grid+no-frame).
+
+### NEXT
+- Коммит/merge --no-ff в master + push — **ПО ЗАПРОСУ** (НЕ без спроса). base `/tmp/adoc_base` = master `2ead05d`.
+- **Новый корпус adoc2docx — богатый источник** (остались 20+ clean-div: icons title inline-субст `~Title~`→`<sub>`,
+  audio/video preamble-обёртка, images caption, menu, callouts, source, xref, links, checklist, sidebar, abstract…).
+  Следующий триаж — оттуда (diff по возрастанию). Основной frontier исчерпан.
+
+---
+
 ## Сессия (2026-06-22) — F-AR: незакрытый `++`/`+++`-run → одиночный `+…+` (ветка `fix/plus-run-single-plus-fallback`, off master `d053acb`, НЕ закоммичена)
 
 Запрос «начни следующую задачу из TODO.md». Master `d053acb` чист (DEFERRED (a) СМЕРЖЕН — прошлая session-запись «не
