@@ -3915,6 +3915,52 @@ fn test_book_part_numbering_partnums_html() {
 }
 
 #[test]
+fn test_book_chapter_signifier_html() {
+    // A book chapter (display level 2 = Asciidoctor level 1) under :sectnums:
+    // gets a "{chapter-signifier} " prefix BEFORE the section number on the
+    // heading and in the TOC, mirroring Asciidoctor's convert_section. Deeper
+    // sections (level 3+) get only the bare number.
+    let src = "= Doc\n:doctype: book\n:sectnums:\n:chapter-signifier: My Chapter\n:toc:\n\n\
+               == First\n\n=== Sub\n\nx\n\n== Second\n\ny";
+    let html = to_html(src);
+    assert!(html.contains("<h2 id=\"_first\">My Chapter 1. First</h2>"), "{html}");
+    assert!(html.contains("<h2 id=\"_second\">My Chapter 2. Second</h2>"), "{html}");
+    // Sub-section (Asciidoctor level 2) keeps only the dotted number.
+    assert!(html.contains("<h3 id=\"_sub\">1.1. Sub</h3>"), "{html}");
+    // TOC carries the signifier prefix too.
+    assert!(html.contains("<a href=\"#_first\">My Chapter 1. First</a>"), "{html}");
+
+    // Unset by default → no prefix (parity with Asciidoctor / gate corpus).
+    let html = to_html("= Doc\n:doctype: book\n:sectnums:\n\n== First\n\nx");
+    assert!(html.contains("<h2 id=\"_first\">1. First</h2>"), "{html}");
+
+    // An article (non-book) never applies the chapter-signifier even if set.
+    let html = to_html("= Doc\n:sectnums:\n:chapter-signifier: Ch\n\n== First\n\nx");
+    assert!(html.contains("<h2 id=\"_first\">1. First</h2>"), "{html}");
+}
+
+#[test]
+fn test_part_xref_partnums_html() {
+    // A :partnums: part is @numbered: a full/short xref to it uses the part
+    // roman numeral and {part-refsig}, not the bare title. Without :partnums:
+    // the part is unnumbered → basic styling → bare title.
+    let src = "= Doc\n:doctype: book\n:partnums:\n:part-refsig: prt\n:xrefstyle: full\n\n\
+               [#p1]\n= Part One\n\n== Chapter\n\nsee <<p1>>\n\n\
+               short xref:p1[xrefstyle=short]";
+    let html = to_html(src);
+    // full: "{part-refsig} {roman}, &#8220;{title}&#8221;"
+    assert!(html.contains("<a href=\"#p1\">prt I, &#8220;Part One&#8221;</a>"), "{html}");
+    // short: "{part-refsig} {roman}"
+    assert!(html.contains("<a href=\"#p1\">prt I</a>"), "{html}");
+
+    // Without :partnums: the part is unnumbered → bare title.
+    let src = "= Doc\n:doctype: book\n:part-refsig: prt\n:xrefstyle: full\n\n\
+               [#p1]\n= Part One\n\n== Chapter\n\nsee <<p1>>";
+    let html = to_html(src);
+    assert!(html.contains("<a href=\"#p1\">Part One</a>"), "{html}");
+}
+
+#[test]
 fn test_article_sect0_toc_sectlevel0_html() {
     // A body sect0 (level-0 section) in an article also lists at TOC
     // sectlevel0 — the list class is the section's real Asciidoctor level.
