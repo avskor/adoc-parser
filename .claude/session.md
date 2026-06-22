@@ -1,5 +1,57 @@
 # Session context
 
+## Сессия (2026-06-22) — ШАГ A: движок покрывает не-QUOTES subs, снят QUOTES-гейт (ветка `refactor/engine-non-quotes-subs`, НЕ закоммичена)
+
+Запрос «начни следующую задачу из TODO.md». Master `fe6c0d1` (все 3 native-фазы СМЕРЖЕНЫ, footnote Phase 3 тоже).
+Единственная `- [ ]` = опциональное удаление legacy (TODO 1134, 0 корпусного выигрыша). **Развилка** → AskUserQuestion;
+выбор пользователя **«Удаление legacy (шаг A)»**. План в `~/.claude/plans/iterative-kindling-perlis.md`.
+
+### Задача
+Снять условие decline №1 (`try_parse → None` при `!subs.has(QUOTES)`), движок обрабатывает subs БЕЗ quotes
+(`[subs=attributes]`/`[subs=+macros]`/`[subs=attributes+]`). Инкрементальный шаг к удалению legacy (decline №2
+sentinel-байт + №3 `DECLINED` остаются → шаги B/C). Цель: байт-в-байт нейтральность (gate 344/344 + frontier 0-diff).
+
+### Корень дивергенции (verified чтением)
+legacy escape катч-олл (inline.rs:1043-1050) снимает `\` с `\* \_ \` \# \^ \~ \{ \[ \< \\ \'` БЕЗУСЛОВНО. Движок
+(`escape::run` blanket-арм) откладывал quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`) в QUOTES-пасс → при
+QUOTES off этот пасс не бежит → движок держал `\*`, legacy давал `*`. **КРИТИЧНО:** при QUOTES=ON движок НАМЕРЕННО
+расходится с legacy (фикс legacy-бага под asciidoctor: `\#nospan` сохраняет `\`; тесты `marker_escape_matches_asciidoctor`
+mod.rs, `escaped_apostrophe_matches_asciidoctor`) → фикс ОБЯЗАН быть под `!quotes_on`, QUOTES-on путь нетронут.
+
+### Реализация (2 файла)
+- **`subst/escape.rs`:** новый арм перед blanket-`else` (escape.rs:268), `!quotes_on && matches!(m, b'*'|b'_'|b'`'|b'#'|b'^'|b'~'|b'\'')`
+  → `out.push_str(&work.literal_sentinel((m as char).to_string())); i += 2;` (coalescing Literal = legacy катч-олл).
+  +модульный docstring + blanket-комментарий обновлены.
+- **`subst/mod.rs`:** `try_parse` гейт `!subs.has(QUOTES)` → `!subs.needs_inline_parsing()` (зеркало parser.rs:151;
+  VERBATIM/NONE→None). +doc-свип (mod.rs:5-8/80-92/187-189).
+- **Тест `reproduces_legacy_on_non_quotes_subs`** (mod.rs): матрица 9 не-QUOTES наборов (ATTRIBUTES/MACROS/REPLACEMENTS/
+  POST_REPLACEMENTS/SPECIALCHARS|ATTRIBUTES/SPECIALCHARS|CALLOUTS|ATTRIBUTES/SPECIALCHARS|MACROS/SPECIALCHARS|REPLACEMENTS/
+  NORMAL.without(QUOTES)) × ~50 входов. Сравнение через локальный `coalesce()` (мёрдж смежных `Text`) — толерантно к
+  HTML-нейтральному re-split (legacy typographic-escape арм эмитит `\--`/`\(C)` отдельным `Text`, движок коалесцирует;
+  предсуществующая разница, есть и на NORMAL), но строго ловит контент/тег/структуру. +хелперы `legacy_subs`/`pipeline_subs`.
+  `try_parse_declines_without_quotes` расширен.
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace зелёное (**parser 638→639**, html/compat неизменны).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (= master `fe6c0d1`, собран в начале; `gate_check.py` 0 diff).
+- **Frontier 250 new-vs-base 0 diff** (`fsweep.py` в scratchpad).
+- CLI-пробы vs asciidoctor 2.0.23: `[subs=attributes]`/`[subs=+macros]`/`[subs=normal]` — NEW==BASE везде.
+- **Эмпирически (флип арма off → rebuild → gate+frontier ВСЁ ЕЩЁ 0):** в корпусе/frontier 0 marker-escapes под
+  non-QUOTES subs → фикс нужен НЕ для нейтральности, а для СОГЛАСОВАННОСТИ (движок единообразно воспроизводит legacy =
+  чистый drop-in для удаления legacy) + сильного differential-теста.
+
+### НАХОДКА (вне scope шага A, занесена в TODO как отд. asciidoctor-parity задача)
+Под non-QUOTES subs движок/legacy снимают `\*`/`\--`/`\link:`/`\{` БЕЗУСЛОВНО, asciidoctor — только при активном
+соотв. subst-пассе (`[subs=attributes]\n\*x*` → asciidoctor `\*x*`, наш движок/base `*x*`). Предсуществующий
+legacy-баг (base имел до шага A, 0 регрессий). Полный per-subst escape-гейтинг = связная отдельная задача.
+
+### NEXT
+- Коммит/merge --no-ff в master + push — **ПО ЗАПРОСУ** (НЕ без спроса). base `/tmp/adoc_base` = master `fe6c0d1`.
+- Шаги B/C удаления legacy: decline №2 (sentinel-байт в исходнике — нужен редизайн представления sentinel'ов),
+  decline №3 (остаточные `DECLINED` punt'ы: char-ref/структурный в verbatim-target, `\++`/`\+++`, `\\link:http://`).
+
+---
+
 ## Сессия (2026-06-21, 152-я) — ФАЗА 1 passthrough-native: seed-tags re-parse label (ветка `refactor/macro-native-sentinel`, закоммичено на ветке)
 
 Запрос «начни следующую задачу из TODO.md». Master чист (`cf79b7c`, F-AQ смержен — session.md 151 устарел, F-AQ давно в master). Все

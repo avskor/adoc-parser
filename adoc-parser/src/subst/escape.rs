@@ -77,16 +77,19 @@
 //!   NOT a verbatim leaf), so it cannot be handled here as a plain literal. A
 //!   doubled (or longer) backslash run (`\\pass:` → `\pass:`) likewise drops only
 //!   the macro-adjacent backslash there.
-//! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — these
-//!   are folded into each quote substitution ([`super::quotes`]), exactly as
-//!   Asciidoctor folds the `\\?` capture: a backslash is only an escape at the
-//!   point a span would open, so a `\` already *inside* an open span (the content
-//!   of `` `\` ``) stays literal content. They CANNOT be handled in this
-//!   escape-FIRST pass, which would hide a span's closing marker and tear it
-//!   apart (`a (`\`) and (`]`) b`). A doubled (or longer) backslash run before a
-//!   single marker (`\\*bold*` → `\*bold*`) is folded there too — only the
-//!   marker-adjacent backslash is consumed, and only when a span would form. The
-//!   doubled-MARKER (`\MM…MM`, e.g. `\**`) form stays deferred.
+//! - **quote/super/sub marker escapes `\*` `\_` `` \` `` `\#` `\^` `\~`** — when
+//!   QUOTES is ON these are folded into each quote substitution
+//!   ([`super::quotes`]), exactly as Asciidoctor folds the `\\?` capture: a
+//!   backslash is only an escape at the point a span would open, so a `\` already
+//!   *inside* an open span (the content of `` `\` ``) stays literal content. They
+//!   CANNOT be handled in this escape-FIRST pass under QUOTES, which would hide a
+//!   span's closing marker and tear it apart (`a (`\`) and (`]`) b`). A doubled
+//!   (or longer) backslash run before a single marker (`\\*bold*` → `\*bold*`) is
+//!   folded there too — only the marker-adjacent backslash is consumed, and only
+//!   when a span would form. The doubled-MARKER (`\MM…MM`, e.g. `\**`) form stays
+//!   deferred. When QUOTES is OFF, no quotes pass runs to consume them, so this
+//!   pass drops the backslash here (the `!quotes_on` arm), mirroring the legacy
+//!   parser's unconditional escape catch-all.
 //! - **`\https://…` (`http`/`https`/`ftp`/`irc`) autolink escape** — folded into
 //!   the [`super::macros`] pass (the autolink's home): the backslash drops only
 //!   where an unescaped autolink could open (a real boundary, or immediately
@@ -262,18 +265,35 @@ pub(super) fn run(work: &mut Work, subs: SubstitutionSet) {
                     // their backslash, matching Asciidoctor.
                     out.push_str(&work.literal_sentinel("'".to_string()));
                     i += 2;
+                } else if !quotes_on && matches!(m, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'\'') {
+                    // QUOTES is OFF for this buffer, so neither the `quotes` pass
+                    // nor its `\\?` escape capture will run to consume these
+                    // markers. Mirror the legacy parser's UNCONDITIONAL escape
+                    // catch-all ([`crate::inline::InlineState::handle_inline_escape`],
+                    // inline.rs the `\* \_ \` \# \^ \~ \'` arm): with the QUOTES-gated
+                    // arms skipped, it drops the backslash for every one of these
+                    // here. A coalescing `Literal` (not a standalone `Macro` leaf):
+                    // legacy leaves the escaped char in the buffer to merge into the
+                    // next text flush, so it must coalesce with surrounding text.
+                    // Gated on `!quotes_on` so the QUOTES-ON path keeps its
+                    // (intentional, Asciidoctor-faithful) handling of these markers
+                    // in the quotes pass untouched — byte-for-byte unchanged.
+                    out.push_str(&work.literal_sentinel((m as char).to_string()));
+                    i += 2;
                 } else {
-                    // Everything else keeps the backslash literal. This includes
-                    // the quote/super/sub markers `\*` `\_` `` \` `` `\#` `\^` `\~`:
-                    // they CANNOT be escaped in a standalone scan, because a `\`
-                    // sitting inside an already-open span (e.g. the content of
-                    // `` `\` ``) is content, not an escape — yet a flat scan would
-                    // hide the span's own closing marker and tear the span apart.
-                    // Their `\\?` capture belongs inside the quote passes
-                    // (Asciidoctor's true model); deferred to a later session. Also
-                    // covers `\+` (deferred to the passthrough pass), `\x`, `\"`
-                    // (no backtick), and the deferred macro/char-ref forms
-                    // (`\pass:` `\link:` `\&#…;` …).
+                    // Everything else keeps the backslash literal. With QUOTES ON
+                    // this includes the quote/super/sub markers `\*` `\_` `` \` ``
+                    // `\#` `\^` `\~`: they CANNOT be escaped in a standalone scan,
+                    // because a `\` sitting inside an already-open span (e.g. the
+                    // content of `` `\` ``) is content, not an escape — yet a flat
+                    // scan would hide the span's own closing marker and tear the
+                    // span apart. Their `\\?` capture belongs inside the quote
+                    // passes (Asciidoctor's true model). (With QUOTES OFF those
+                    // markers are handled by the `!quotes_on` arm above, since no
+                    // quotes pass will run to consume them.) Also covers `\+`
+                    // (deferred to the passthrough pass), `\x`, `\"` (no backtick),
+                    // and the deferred macro/char-ref forms (`\pass:` `\link:`
+                    // `\&#…;` …).
                     out.push('\\');
                     i += 1;
                 }
