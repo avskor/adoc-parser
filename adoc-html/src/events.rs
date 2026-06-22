@@ -48,29 +48,35 @@ impl HtmlRenderer {
         }
     }
 
+    /// Wrap the body content from `start` to the current end of `output` in the
+    /// `<div id="preamble"><div class="sectionbody">` … wrapper Asciidoctor emits
+    /// for content that precedes the first section. Empty content produces no
+    /// wrapper. With `:toc: preamble` the TOC sits between the sectionbody close
+    /// and the preamble close (mirrors Asciidoctor's `convert_preamble`, which
+    /// emits sectionbody, then the toc, then closes the preamble div).
+    pub(crate) fn close_preamble(&mut self, output: &mut String, start: usize) {
+        let preamble_content = output.split_off(start);
+        let want_preamble_toc =
+            self.toc_position == "preamble" && self.toc_insert_position.is_none();
+        if !preamble_content.is_empty() {
+            output.push_str("<div id=\"preamble\">\n<div class=\"sectionbody\">\n");
+            output.push_str(&preamble_content);
+            output.push_str("</div>\n");
+            if want_preamble_toc {
+                self.toc_insert_position = Some(output.len());
+            }
+            output.push_str("</div>\n");
+        } else if want_preamble_toc {
+            self.toc_insert_position = Some(output.len());
+        }
+    }
+
     pub(crate) fn push_event<'a>(&mut self, output: &mut String, event: Event<'a>) {
         // Wrap preamble content when a section starts
         if matches!(event, Event::Start(Tag::Section { .. }))
             && let Some(start) = self.preamble_start.take()
         {
-            let preamble_content = output.split_off(start);
-            let want_preamble_toc =
-                self.toc_position == "preamble" && self.toc_insert_position.is_none();
-            if !preamble_content.is_empty() {
-                output.push_str("<div id=\"preamble\">\n<div class=\"sectionbody\">\n");
-                output.push_str(&preamble_content);
-                // Close the sectionbody, then record the TOC insert offset before
-                // closing the preamble wrapper: with `:toc: preamble` the TOC sits
-                // between the two (mirrors Asciidoctor's `convert_preamble`, which
-                // emits sectionbody, then the toc, then closes the preamble div).
-                output.push_str("</div>\n");
-                if want_preamble_toc {
-                    self.toc_insert_position = Some(output.len());
-                }
-                output.push_str("</div>\n");
-            } else if want_preamble_toc {
-                self.toc_insert_position = Some(output.len());
-            }
+            self.close_preamble(output, start);
         }
 
         match event {
@@ -947,7 +953,12 @@ impl HtmlRenderer {
                     }
                     output.push_str("</div>\n");
                     self.content_start = Some(output.len());
-                    if self.has_document_title {
+                    // Mark where preamble content begins. Asciidoctor creates a
+                    // preamble for any titled document and for every book (with or
+                    // without a title); the section-start path wraps it when a
+                    // section follows, and `finish` wraps a book's leftover content
+                    // when none does.
+                    if self.has_document_title || self.doctype_book {
                         self.preamble_start = Some(output.len());
                     }
                 } else if let Some(pos) = self.header_suppress_start.take() {
@@ -970,7 +981,7 @@ impl HtmlRenderer {
                     {
                         self.toc_insert_position = Some(output.len());
                     }
-                    if self.has_document_title {
+                    if self.has_document_title || self.doctype_book {
                         self.preamble_start = Some(output.len());
                     }
                 }

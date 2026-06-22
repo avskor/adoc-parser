@@ -3986,6 +3986,50 @@ fn test_no_preamble_without_section_html() {
     assert!(html.contains("<p>Content only.</p>"));
 }
 
+#[test]
+fn test_book_preamble_without_section_html() {
+    // Unlike an article, a book wraps its pre-section body content in a
+    // `<div id="preamble">` even when no section follows (Asciidoctor's
+    // `next_section` creates the preamble for every book and keeps it).
+    let html = to_html("= Title\n:doctype: book\n\nContent only.");
+    assert_eq!(
+        html,
+        "<div id=\"preamble\">\n<div class=\"sectionbody\">\n\
+         <div class=\"paragraph\">\n<p>Content only.</p>\n</div>\n</div>\n</div>\n",
+        "book wraps section-less body in preamble"
+    );
+}
+
+#[test]
+fn test_book_preamble_without_title_html() {
+    // A book creates the preamble even without a document title.
+    let html = to_html(":doctype: book\n\nContent only.");
+    assert_eq!(
+        html,
+        "<div id=\"preamble\">\n<div class=\"sectionbody\">\n\
+         <div class=\"paragraph\">\n<p>Content only.</p>\n</div>\n</div>\n</div>\n",
+        "titleless book wraps body in preamble"
+    );
+}
+
+#[test]
+fn test_book_preamble_with_section_unchanged_html() {
+    // With a following section the preamble wraps only the pre-section content;
+    // the section sits outside it (no double wrap, no preamble around sections).
+    let html = to_html("= Title\n:doctype: book\n\nIntro.\n\n== Sec\n\nBody.");
+    assert!(html.contains("<div id=\"preamble\">\n<div class=\"sectionbody\">\n\
+                            <div class=\"paragraph\">\n<p>Intro.</p>\n</div>\n</div>\n</div>"));
+    assert_eq!(html.matches("id=\"preamble\"").count(), 1);
+    assert!(html.contains("class=\"sect1\""));
+}
+
+#[test]
+fn test_book_no_preamble_for_section_only_html() {
+    // No pre-section content → no preamble wrapper, even for a book.
+    let html = to_html("= Title\n:doctype: book\n\n== Sec\n\nBody.");
+    assert!(!html.contains("preamble"), "no preamble without pre-section content. got:\n{html}");
+}
+
 // Appendix section tests
 
 #[test]

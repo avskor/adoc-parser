@@ -70,8 +70,15 @@ pub(crate) fn resolve_sentinels_into(
 
 impl HtmlRenderer {
     pub(crate) fn finish(&mut self, output: &mut String) {
-        // If preamble_start is still set, no section followed — leave content as-is
-        self.preamble_start = None;
+        // `preamble_start` still set here means no section followed (the
+        // section-start path takes it and wraps). Asciidoctor still emits the
+        // `<div id="preamble">` wrapper for a book in that case; an article only
+        // wraps when a section follows, so its leftover content stays unwrapped.
+        if let Some(start) = self.preamble_start.take()
+            && self.doctype_book
+        {
+            self.close_preamble(output, start);
+        }
 
         if let Some(pos) = self.toc_insert_position {
             let toc_html = self.generate_toc(self.toc_levels);
