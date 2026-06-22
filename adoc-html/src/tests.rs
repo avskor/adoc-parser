@@ -2851,10 +2851,15 @@ fn test_asciimath_inline_html() {
 }
 
 #[test]
-fn test_stem_no_escape_html() {
-    let html = to_html("stem:[a < b]");
-    assert!(html.contains("a < b"), "stem content should not be HTML-escaped");
-    assert!(!html.contains("&lt;"), "stem content must not contain &lt;");
+fn test_stem_specialchars_escaped_html() {
+    // Asciidoctor applies the `specialcharacters` substitution to stem content,
+    // so `<`/`>`/`&` are escaped (verified against asciidoctor 2.0.23:
+    // `stem:[a < b]` → `\$a &lt; b\$`).
+    let html = to_html("stem:[a < b & c > d]");
+    assert_eq!(
+        html,
+        "<div class=\"paragraph\">\n<p>\\$a &lt; b &amp; c &gt; d\\$</p>\n</div>\n"
+    );
 }
 
 #[test]
@@ -2864,6 +2869,51 @@ fn test_stem_block_html() {
     assert!(html.contains("<div class=\"content\">"));
     assert!(html.contains("\\$x^2\\$"));
     assert!(html.contains("</div>\n</div>\n"));
+}
+
+#[test]
+fn test_stem_block_specialchars_escaped_html() {
+    // A stem block applies `specialcharacters` like the inline form
+    // (asciidoctor 2.0.23: `a < b & c` → `\$a &lt; b &amp; c\$`).
+    let html = to_html("[stem]\n++++\na < b & c\n++++");
+    assert!(html.contains("\\$a &lt; b &amp; c\\$"), "{html}");
+}
+
+#[test]
+fn test_char_ref_in_verbatim_macros_html() {
+    // A SURVIVED character reference inside a verbatim macro's content is kept
+    // verbatim by the preserving families (image `alt`, icon class, `kbd:`,
+    // `btn:`, `menu:`, `indexterm2:`) — each byte-for-byte vs asciidoctor 2.0.23 —
+    // while a bare `&` still escapes.
+    assert_eq!(
+        to_html("image:f.png[caf&#233;]"),
+        "<div class=\"paragraph\">\n<p><span class=\"image\"><img src=\"f.png\" alt=\"caf&#233;\"></span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html(":icons: font\n\nicon:tags[2x&#167;]"),
+        "<div class=\"paragraph\">\n<p><span class=\"icon\"><i class=\"fa fa-tags fa-2x&#167;\"></i></span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html(":experimental:\n\nkbd:[Ctrl+&#167;]"),
+        "<div class=\"paragraph\">\n<p><span class=\"keyseq\"><kbd>Ctrl</kbd>+<kbd>&#167;</kbd></span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html(":experimental:\n\nbtn:[Save&#8230;]"),
+        "<div class=\"paragraph\">\n<p><b class=\"button\">Save&#8230;</b></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html(":experimental:\n\nmenu:File[Save As&#8230;]"),
+        "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Save As&#8230;</b></span></p>\n</div>\n"
+    );
+    assert_eq!(
+        to_html("indexterm2:[caf&#233;]"),
+        "<div class=\"paragraph\">\n<p>caf&#233;</p>\n</div>\n"
+    );
+    // A bare `&` (not a valid reference) still escapes to `&amp;`.
+    assert_eq!(
+        to_html(":experimental:\n\nkbd:[a & b]"),
+        "<div class=\"paragraph\">\n<p><kbd>a &amp; b</kbd></p>\n</div>\n"
+    );
 }
 
 #[test]

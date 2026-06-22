@@ -1721,12 +1721,69 @@ mod tests {
                 Event::End(TagEnd::Keyboard),
             ]
         );
-        // A char-ref inside a verbatim macro still punts (family-specific) — the
-        // engine declines so the paragraph falls back to legacy.
+        // A SURVIVED char-ref inside a verbatim macro is now spliced natively (was
+        // a punt): the reference reaches the content intact, and the engine
+        // reproduces legacy exactly (legacy also keeps the literal reference here).
+        assert_eq!(
+            pipeline("stem:[caf&#233;]"),
+            vec![
+                Event::Start(Tag::Stem { variant: std::borrow::Cow::Borrowed("stem") }),
+                Event::Text(std::borrow::Cow::Borrowed("caf&#233;")),
+                Event::End(TagEnd::Stem),
+            ]
+        );
+        assert_eq!(
+            pipeline("stem:[caf&#233;]"),
+            legacy("stem:[caf&#233;]"),
+            "native char-ref splice must reproduce legacy events"
+        );
+        // An ESCAPED char-ref (`\&#…;`, raw:false) still punts (its verbatim-vs-
+        // escaped treatment is family-specific — DEFERRED) → engine declines.
         assert!(
-            try_parse("stem:[caf&#233;]", SubstitutionSet::NORMAL, InlineOptions::default())
+            try_parse("stem:[caf\\&#233;]", SubstitutionSet::NORMAL, InlineOptions::default())
                 .is_none()
         );
+    }
+
+    /// A SURVIVED character reference in any verbatim macro content/target is now
+    /// spliced natively rather than punted, and the engine reproduces legacy
+    /// EXACTLY (both keep the literal reference in the verbatim string — the
+    /// renderer decides per family whether to preserve or re-escape it, covered in
+    /// `adoc-html`). Mirrors the per-construct differential of the other ported
+    /// families. The escaped `\&#…;` form is left punting (DEFERRED), so it is not
+    /// asserted here.
+    #[test]
+    fn native_char_ref_in_verbatim_macros_reproduces_legacy() {
+        // Families recognised under NORMAL subs (no `:experimental:` needed).
+        let normal = [
+            "image:i.png[caf&#233;]",      // alt
+            "image:a&#167;b.png[alt]",     // target
+            "icon:tags[caf&#233;]",        // icon attrs → class
+            "indexterm2:[caf&#233;]",      // flow term, rendered in place
+            "stem:[caf&#233;]",            // math content
+            "(((caf&#233;)))",             // concealed index term
+        ];
+        for c in normal {
+            assert!(
+                try_parse(c, SubstitutionSet::NORMAL, InlineOptions::default()).is_some(),
+                "engine should form {c:?} natively (no char-ref punt)"
+            );
+            assert_eq!(pipeline(c), legacy(c), "engine diverged from legacy for {c:?}");
+        }
+        // UI macros need `:experimental:`.
+        let experimental = [
+            "kbd:[caf&#233;]",
+            "btn:[caf&#233;]",
+            "menu:File[Save As&#8230;]",
+            "menu:F&#167;X[Item]",
+        ];
+        for c in experimental {
+            assert_eq!(
+                pipeline_exp(c),
+                legacy_exp(c),
+                "engine diverged from legacy for {c:?}"
+            );
+        }
     }
 
     /// With the leaf macros ported (`icon:name[attrs]` and the STEM family

@@ -93,7 +93,9 @@
 //!   b++]` → `alt="a b"` and `kbd:[++Ctrl++]` → a single `<kbd>Ctrl</kbd>`. Any
 //!   delimiter split (`,` for anchor/index parts, `>` for menus) happens on the
 //!   SOURCE first, so a passthrough's protected delimiter stays inside one part. A
-//!   char-ref still punts (its verbatim-vs-escaped treatment is family-specific).
+//!   survived char-ref (`&#167;`) is spliced in too — the renderer keeps it
+//!   verbatim for the preserving families and re-escapes its `&` for `stem:`; only
+//!   an ESCAPED `\&#…;` still punts (its treatment is family-specific, DEFERRED).
 //! - **Sentinel in a verbatim link/cross-ref TARGET or non-label attribute** (the
 //!   id/URL/email and role/window/subject/body those tags store without
 //!   re-parsing): the verbatim source is gone, so the pass declines the span AND
@@ -841,7 +843,8 @@ fn try_mailto(
 /// `<img>` from the attrs). The tag fields are owned `Cow`s, semantically equal
 /// to the legacy parser's borrowed ones. A passthrough/escape sentinel in the
 /// target or attrlist is restored verbatim ([`restore_verbatim`]) so
-/// `image:i.png[++a b++]` → `alt="a b"`; a char-ref still punts.
+/// `image:i.png[++a b++]` → `alt="a b"`; a survived char-ref is spliced too, only
+/// an escaped `\&#…;` still punts.
 fn try_image(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 6..]; // after "image:"
     let bracket_start = rest.find('[')?;
@@ -878,7 +881,8 @@ fn owned(s: &str) -> Cow<'static, str> {
 /// name becomes the tag and the attrlist text (when non-empty) a single raw
 /// `Text` event — neither is re-parsed through the engine. The closing `]` is the
 /// first one after the `[`; an empty name declines. A passthrough/escape sentinel
-/// in the name or attrs is restored verbatim ([`restore_verbatim`]); a char-ref punts.
+/// in the name or attrs is restored verbatim ([`restore_verbatim`]); a survived
+/// char-ref is spliced too, only an escaped `\&#…;` punts.
 fn try_icon(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "icon:"
     let bracket_start = rest.find('[')?;
@@ -1024,7 +1028,8 @@ fn collapse_footnote_newlines(s: &str) -> Cow<'_, str> {
 /// label renders through the normal text path) and is never re-parsed. A
 /// passthrough/escape sentinel in the content is restored verbatim
 /// ([`restore_verbatim`]) — so `kbd:[++Ctrl++]` yields a single `<kbd>Ctrl</kbd>`
-/// instead of the legacy fallback's `+`-split mangling — while a char-ref punts.
+/// instead of the legacy fallback's `+`-split mangling — and a survived char-ref
+/// is spliced too, while only an escaped `\&#…;` punts.
 /// Caller (dispatch) guarantees the prefix and that `:experimental:` is set.
 fn try_bracket_ui(
     src: &str,
@@ -1071,7 +1076,8 @@ fn try_btn(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>,
 /// become a single raw `Text` (the renderer splits the menu sequence on `>`).
 /// Declines on an empty target or a `]` at/before the `[`. A passthrough/escape
 /// sentinel in the target or items is restored verbatim ([`restore_verbatim`]); a
-/// char-ref punts. Caller (dispatch) guarantees the `menu:` prefix and that
+/// survived char-ref is spliced too, only an escaped `\&#…;` punts. Caller
+/// (dispatch) guarantees the `menu:` prefix and that
 /// `:experimental:` is set.
 fn try_menu(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "menu:"
@@ -1199,7 +1205,9 @@ fn build_menuseq(
 /// escape pass leaves `\]` untouched (its blanket arm keeps the backslash
 /// literal), so the escaped bracket survives intact to here; a passthrough or
 /// escaped `Literal` the earlier passes lifted from inside is restored verbatim
-/// ([`restore_verbatim`]) so `stem:[++x++]` → `\$x\$`, while a char-ref still punts.
+/// ([`restore_verbatim`]) so `stem:[++x++]` → `\$x\$`; a survived char-ref is
+/// spliced too (the renderer `specialcharacters`-escapes its `&`), only an escaped
+/// `\&#…;` still punts.
 fn try_stem(
     src: &str,
     start: usize,
@@ -1229,7 +1237,8 @@ fn try_stem(
 /// trailing whitespace and the label's leading whitespace, dropping an empty label.
 /// The id/label are split on the SOURCE comma (a sentinel never contains one) and
 /// only then restored verbatim ([`restore_verbatim`]) so a passthrough's protected
-/// comma stays inside one part; a char-ref still punts.
+/// comma stays inside one part; a survived char-ref is spliced too, only an
+/// escaped `\&#…;` still punts.
 fn try_anchor(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 2..]; // after "[["
     let close = rest.find("]]")?;
@@ -1977,12 +1986,16 @@ fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
 /// verbatim attribute, so `image:i.png[++a b++]` → `alt="a b"` and
 /// `kbd:[++Ctrl++]` → a single `<kbd>Ctrl</kbd>`.
 ///
-/// Returns `None` (caller punts to legacy) on any OTHER sentinel: a char
-/// reference (`&#…;`), whose verbatim-versus-escaped treatment is family-specific
-/// — stem html-escapes it, an `alt` keeps it literal — and which is rare enough
-/// inside a verbatim macro that the legacy fallback is left to handle it; or an
-/// unexpected structural token (which cannot arise at macros-time anyway). The
-/// no-sentinel fast path returns the input unchanged.
+/// A SURVIVED character reference (`&#167;`/`&copy;`, a `raw: true` leaf) is also
+/// spliced in verbatim: the renderer keeps it as an already-formed entity in the
+/// preserving families (`alt`, icon class, `kbd:`/`btn:`/`menu:`, `indexterm2:`)
+/// and re-escapes its `&` in `stem:` — both correct from the same spliced string.
+///
+/// Returns `None` (caller punts to legacy) on an ESCAPED reference (`\&#…;`, a
+/// `raw: false` leaf), whose verbatim-versus-escaped treatment is family-specific
+/// and left to the legacy fallback (DEFERRED), or an unexpected structural token
+/// (which cannot arise at macros-time anyway). The no-sentinel fast path returns
+/// the input unchanged.
 fn restore_verbatim<'a>(work: &Work, s: Cow<'a, str>) -> Option<Cow<'a, str>> {
     let bytes = s.as_bytes();
     if !bytes.contains(&TAG_LEAD) {
@@ -2005,7 +2018,17 @@ fn restore_verbatim<'a>(work: &Work, s: Cow<'a, str>) -> Option<Cow<'a, str>> {
                     }
                 }
                 TagToken::Literal(t) => out.push_str(t),
-                // char-ref / structural → punt (family-specific or impossible here)
+                // A survived character reference (`&#167;`, `&copy;`) is spliced
+                // back verbatim into the macro's verbatim content. The renderer
+                // then decides per family whether to keep it (preserving escape for
+                // image `alt`, icon class, `kbd:`/`btn:`/`menu:`, `indexterm2:`) or
+                // re-escape its `&` (`stem:` runs `specialcharacters`), so the
+                // string spliced here is uniform either way.
+                TagToken::CharRef { text, raw: true } => out.push_str(text),
+                // An ESCAPED reference (`\&#…;`, `raw: false`) and any structural
+                // token still punt — the escaped form's verbatim-versus-escaped
+                // treatment is family-specific (DEFERRED), and a structural token
+                // cannot arise at macros-time anyway.
                 _ => {
                     flag_punt();
                     return None;

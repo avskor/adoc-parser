@@ -136,7 +136,7 @@ impl HtmlRenderer {
 
         if keys.len() == 1 {
             output.push_str("<kbd>");
-            html_escape(output, &keys[0]);
+            html_escape_preserving_refs(output, &keys[0]);
             output.push_str("</kbd>");
         } else {
             output.push_str("<span class=\"keyseq\">");
@@ -145,7 +145,7 @@ impl HtmlRenderer {
                     output.push('+');
                 }
                 output.push_str("<kbd>");
-                html_escape(output, key);
+                html_escape_preserving_refs(output, key);
                 output.push_str("</kbd>");
             }
             output.push_str("</span>");
@@ -174,22 +174,22 @@ impl HtmlRenderer {
         if items_str.is_empty() {
             // menu:File[] — single menu reference (Asciidoctor: <b class="menuref">…)
             output.push_str("<b class=\"menuref\">");
-            html_escape(output, &target);
+            html_escape_preserving_refs(output, &target);
             output.push_str("</b>");
         } else {
             let parts: Vec<&str> = items_str.split('>').map(|s| s.trim()).collect();
             output.push_str("<span class=\"menuseq\"><b class=\"menu\">");
-            html_escape(output, &target);
+            html_escape_preserving_refs(output, &target);
             output.push_str("</b>");
             for (i, part) in parts.iter().enumerate() {
                 output.push_str("&#160;<b class=\"caret\">&#8250;</b> ");
                 if i < parts.len() - 1 {
                     output.push_str("<b class=\"submenu\">");
-                    html_escape(output, part);
+                    html_escape_preserving_refs(output, part);
                     output.push_str("</b>");
                 } else {
                     output.push_str("<b class=\"menuitem\">");
-                    html_escape(output, part);
+                    html_escape_preserving_refs(output, part);
                     output.push_str("</b>");
                 }
             }
@@ -261,8 +261,8 @@ impl HtmlRenderer {
             }
             output.push('[');
             match alt {
-                Some(ref a) => html_escape(output, a),
-                None => html_escape(output, &adoc_parser::icon_default_alt(&name)),
+                Some(ref a) => html_escape_preserving_refs(output, a),
+                None => html_escape_preserving_refs(output, &adoc_parser::icon_default_alt(&name)),
             }
             output.push_str("&#93;");
             if link.is_some() {
@@ -308,7 +308,7 @@ impl HtmlRenderer {
         }
 
         output.push_str("<i class=\"");
-        html_escape(output, &classes);
+        html_escape_preserving_refs(output, &classes);
         output.push('"');
         if let Some(ref t) = title {
             write_attr(output, "title", t);
@@ -337,14 +337,18 @@ impl HtmlRenderer {
             &variant
         };
 
+        // Asciidoctor applies the `specialcharacters` substitution to stem
+        // content, so `<`/`>`/`&` are escaped (`stem:[a < b]` → `\$a &lt; b\$`)
+        // and a character reference is treated as literal text, not preserved
+        // (`stem:[a&#167;b]` → `\$a&amp;#167;b\$`) — unlike the verbatim UI macros.
         if resolved == "latexmath" {
             output.push_str("\\(");
-            output.push_str(&content);
+            html_escape_text(output, &content);
             output.push_str("\\)");
         } else {
             // stem and asciimath
             output.push_str("\\$");
-            output.push_str(&content);
+            html_escape_text(output, &content);
             output.push_str("\\$");
         }
     }
@@ -365,13 +369,14 @@ impl HtmlRenderer {
             &variant
         };
 
+        // `specialcharacters` subst, as in `render_inline_stem`.
         if resolved == "latexmath" {
             output.push_str("\\[");
-            output.push_str(&content);
+            html_escape_text(output, &content);
             output.push_str("\\]");
         } else {
             output.push_str("\\$");
-            output.push_str(&content);
+            html_escape_text(output, &content);
             output.push_str("\\$");
         }
         output.push_str("\n</div>\n</div>\n");
