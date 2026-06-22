@@ -4,8 +4,10 @@
 //! This is the **default** top-level inline engine: [`crate::inline`] routes
 //! every top-level paragraph through [`try_parse`] first, falling back to the
 //! legacy recursive parser ([`crate::inline::parse_legacy`]) only when this
-//! engine declines (no `quotes` substitution requested, or the input already
-//! contains a reserved sentinel byte).
+//! engine declines (no inline-needing substitution requested, or the input
+//! already contains a reserved sentinel byte). It handles every inline-needing
+//! substitution set, including ones without `quotes` (`[subs=attributes]`,
+//! `[subs=+macros]`, …).
 //!
 //! ## Why a string-rewriting model
 //!
@@ -77,20 +79,29 @@ fn take_decline() -> bool {
 
 /// Attempt to parse top-level inline `text` with the sequential-pass engine.
 ///
-/// Returns `None` only when the engine genuinely cannot run: no `quotes`
-/// substitution is requested (e.g. verbatim blocks), or the input already
-/// contains a reserved sentinel byte. In both cases the caller falls back to
-/// the legacy recursive parser ([`crate::inline::parse_legacy`]). Otherwise the
-/// raw pipeline result is returned and adopted. Only called for top-level
-/// paragraph text, never for inner-span reparses.
+/// Returns `None` only when the engine genuinely cannot run: no inline-needing
+/// substitution is requested (a verbatim block whose `subs` is just
+/// `specialchars`/`callouts` — see [`SubstitutionSet::needs_inline_parsing`]),
+/// or the input already contains a reserved sentinel byte. In both cases the
+/// caller falls back to the legacy recursive parser
+/// ([`crate::inline::parse_legacy`]). Otherwise the raw pipeline result is
+/// returned and adopted. Only called for top-level paragraph text, never for
+/// inner-span reparses.
 pub(crate) fn try_parse<'a>(
     text: &'a str,
     subs: SubstitutionSet,
     options: InlineOptions,
 ) -> Option<Vec<Event<'a>>> {
-    // The engine only performs the `quotes` substitution; without it there is
-    // nothing to do (e.g. verbatim blocks) — defer to legacy.
-    if !subs.has(SubstitutionSet::QUOTES) {
+    // No inline-needing substitution requested (e.g. a verbatim block, whose
+    // `subs` carries only `specialchars`/`callouts`) — the pipeline would be a
+    // no-op, so defer to legacy. This mirrors the caller's own gate
+    // (`SubstitutionSet::needs_inline_parsing`, the condition under which the
+    // parser routes `Text` through inline parsing at all). The engine handles
+    // every inline-needing set, INCLUDING ones without `quotes` (e.g.
+    // `[subs=attributes]`, `[subs=+macros]`): each pass is gated on its own flag
+    // (see [`run_pipeline_with`]), and the escape pass drops quote-marker
+    // backslashes itself when `quotes` is off (no quotes pass would run).
+    if !subs.needs_inline_parsing() {
         return None;
     }
     // A sentinel byte in the source would be indistinguishable from an
@@ -185,8 +196,8 @@ fn run_pipeline_with<'a>(
     // inside `+…+`/`pass:[…]` is literal content, never an escape, so extracting
     // first is what stops `escape` from mangling it (`` `+\{name}+` `` →
     // `<code>\{name}</code>`). Unconditional: the legacy parser runs
-    // `+…+`/`pass:[…]` regardless of the subs flags, and the engine only runs when
-    // QUOTES is present anyway.
+    // `+…+`/`pass:[…]` regardless of the subs flags (the engine matches that, now
+    // that it also handles non-`quotes` inline sets).
     passthrough::extract(&mut work, subs, options);
     // Escapes are neutralised next, before the attribute/quote passes: a
     // recognised `\x` drops the backslash and turns `x` into a literal leaf that
@@ -266,6 +277,17 @@ mod tests {
 
     fn pipeline(text: &str) -> Vec<Event<'_>> {
         run_pipeline(text, SubstitutionSet::NORMAL, InlineOptions::default())
+    }
+
+    /// Like [`legacy`], but with an explicit [`SubstitutionSet`] — for the
+    /// non-`quotes` differential tests (`[subs=attributes]`, `[subs=+macros]`, …).
+    fn legacy_subs(text: &str, subs: SubstitutionSet) -> Vec<Event<'_>> {
+        crate::inline::parse_legacy(text, subs, InlineOptions::default())
+    }
+
+    /// Like [`pipeline`], but with an explicit [`SubstitutionSet`].
+    fn pipeline_subs(text: &str, subs: SubstitutionSet) -> Vec<Event<'_>> {
+        run_pipeline(text, subs, InlineOptions::default())
     }
 
     /// Like [`legacy`], but with `:experimental:` set so the legacy parser
@@ -2595,8 +2617,151 @@ mod tests {
 
     #[test]
     fn try_parse_declines_without_quotes() {
-        // Verbatim subs (no QUOTES) → engine defers to legacy.
+        // Verbatim subs carry no inline-needing flag (`specialchars`/`callouts`
+        // only), so `needs_inline_parsing()` is false → engine defers to legacy.
         assert!(try_parse("*x*", SubstitutionSet::VERBATIM, InlineOptions::default()).is_none());
+        assert!(try_parse("*x*", SubstitutionSet::NONE, InlineOptions::default()).is_none());
+        // But a non-QUOTES set that DOES need inline parsing (e.g. `[subs=macros]`,
+        // `[subs=attributes]`) now runs the engine rather than deferring.
+        let mut macros_only = SubstitutionSet::NONE;
+        macros_only.add(SubstitutionSet::MACROS);
+        assert!(try_parse("link:u[t]", macros_only, InlineOptions::default()).is_some());
+        let mut attrs_only = SubstitutionSet::NONE;
+        attrs_only.add(SubstitutionSet::ATTRIBUTES);
+        assert!(try_parse("\\*x* {n}", attrs_only, InlineOptions::default()).is_some());
+    }
+
+    /// The engine must reproduce the legacy parser byte-for-byte on every
+    /// inline-needing substitution set that does NOT include `quotes`
+    /// (`[subs=attributes]`, `[subs=+macros]`, `[subs=attributes+]`, …). Removing
+    /// the old `!subs.has(QUOTES)` gate routes those blocks through the engine, so
+    /// this pins the parity the corpus gate (`gate_check.py`) also guards.
+    ///
+    /// Quote-marker escapes (`\*` `\_` `` \` `` `\#` `\^` `\~` `\'`) are the one
+    /// construct that needed engine work: with `quotes` off no quotes pass runs to
+    /// consume them, so [`escape::run`]'s `!quotes_on` arm drops the backslash here
+    /// to match the legacy parser's unconditional escape catch-all.
+    ///
+    /// Excluded by design (engine intentionally diverges from legacy even at
+    /// NORMAL, so they are not a non-`quotes` regression): the bare doubled
+    /// backslash (`a\\b`, `\\x` — the engine keeps BOTH backslashes like
+    /// Asciidoctor, the legacy parser drops one) and the deferred `\++`/`\+++`
+    /// forms (which flag a decline and fall back to legacy anyway).
+    #[test]
+    fn reproduces_legacy_on_non_quotes_subs() {
+        fn set(flags: &[u8]) -> SubstitutionSet {
+            let mut s = SubstitutionSet::NONE;
+            for &f in flags {
+                s.add(f);
+            }
+            s
+        }
+        // Compare for HTML-equivalence, not raw event identity: the two parsers
+        // legitimately differ in how they SPLIT a text run into `Text` events (the
+        // legacy typographic-escape arm emits the sealed `\--`/`\(C)` as its own
+        // `Text`, the engine coalesces it into the surrounding run — a pre-existing
+        // structural difference, HTML-identical, present at NORMAL too). Two
+        // adjacent `Text` events render exactly as their concatenation, so merging
+        // them before comparison still catches every content/tag/structure
+        // divergence while tolerating that HTML-neutral re-split. This is the
+        // parity the corpus gate (`gate_check.py`) measures on the HTML directly.
+        fn coalesce(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+            let mut out: Vec<Event> = Vec::with_capacity(events.len());
+            for ev in events {
+                match (&ev, out.last_mut()) {
+                    (Event::Text(t), Some(Event::Text(prev))) => {
+                        prev.to_mut().push_str(t);
+                    }
+                    _ => out.push(ev),
+                }
+            }
+            out
+        }
+        let subs_sets = [
+            set(&[SubstitutionSet::ATTRIBUTES]),
+            set(&[SubstitutionSet::MACROS]),
+            set(&[SubstitutionSet::REPLACEMENTS]),
+            set(&[SubstitutionSet::POST_REPLACEMENTS]),
+            set(&[SubstitutionSet::SPECIALCHARS, SubstitutionSet::ATTRIBUTES]),
+            // `[subs=attributes+]` on a listing block (VERBATIM + attributes).
+            set(&[
+                SubstitutionSet::SPECIALCHARS,
+                SubstitutionSet::CALLOUTS,
+                SubstitutionSet::ATTRIBUTES,
+            ]),
+            set(&[SubstitutionSet::SPECIALCHARS, SubstitutionSet::MACROS]),
+            set(&[SubstitutionSet::SPECIALCHARS, SubstitutionSet::REPLACEMENTS]),
+            // Everything-but-quotes — the stress set.
+            SubstitutionSet::NORMAL.without(SubstitutionSet::QUOTES),
+        ];
+        let inputs = [
+            // Quote/super/sub marker escapes — the `!quotes_on` arm's target.
+            "\\*bold*",
+            "\\_em_",
+            "\\`code`",
+            "\\#mark#",
+            "\\^sup^",
+            "\\~sub~",
+            "\\*nospan",
+            "word\\*here",
+            "a \\* b \\_ c \\` d",
+            // Apostrophe escapes (word-flanked + non-word-flanked).
+            "it\\'s",
+            "\\'word'",
+            "say \\'hi\\'",
+            // Non-marker single escapes (already unconditional in both).
+            "\\{name}",
+            "\\[x]",
+            "\\<tag",
+            // Attribute references.
+            "{author}",
+            "{set:x:1}{x}",
+            "\\{name} {name}",
+            "before {undefined-attr} after",
+            // Inline macros / autolinks (MACROS-gated identically in both).
+            "link:http://x.com[text]",
+            "xref:sec-id[label]",
+            "image:pic.png[alt text]",
+            "mailto:a@b.com[mail]",
+            "\\link:u[t]",
+            "\\link:u[t] more text",
+            "((visible term))",
+            "\\((term))",
+            "see http://example.com now",
+            // Character references.
+            "&#167; section",
+            "&copy; 2026",
+            "\\&#174; mark",
+            "caf&#233; au lait",
+            // Replacements text + escapes.
+            "em -- dash",
+            "(C) and (R) and (TM)",
+            "ellipsis ...",
+            "\\-- kept",
+            "\\(C) kept",
+            "\\... kept",
+            // Passthrough (extracted unconditionally in both).
+            "+single+",
+            "++double++",
+            "pass:[\\{x}]",
+            "pass:q[*bold*]",
+            "pass:a[{author}]",
+            "code +\\{name}+ here",
+            "\\+plus+",
+            "empty pass:[] here",
+            // Mixed / edge.
+            "trailing backslash abc\\",
+            "plain text, nothing special",
+        ];
+        for subs in subs_sets {
+            for input in inputs {
+                assert_eq!(
+                    coalesce(pipeline_subs(input, subs)),
+                    coalesce(legacy_subs(input, subs)),
+                    "engine diverged from legacy for {input:?} under subs {subs:?}",
+                );
+            }
+        }
     }
 
     #[test]

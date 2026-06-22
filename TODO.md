@@ -1135,6 +1135,42 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     (seed-tags re-parse label xref/link/mailto; verbatim-строка image-alt/icon/UI; footnote parser↔renderer) —
     снимает punt'ы, делает new==asciidoctor на синтетических edge. Затем удаление legacy-quotes (требует ещё
     редизайн sentinel-байт-fallback). [Doc-свип «gate»-терминологии — СДЕЛАНО в 103-й, см. выше.]
+  - [x] **ШАГ A: движок покрывает не-QUOTES subs-наборы, снят QUOTES-гейт** (ветка `refactor/engine-non-quotes-subs`,
+    2026-06-22, off master `fe6c0d1`, НЕ закоммичена). Запрос «начни следующую задачу из TODO.md» + выбор пользователя
+    «Удаление legacy (шаг A)» (единственная `- [ ]` опциональная; 3 native-фазы выше СМЕРЖЕНЫ в master). **Цель:**
+    снять условие decline №1 (`try_parse → None` при `!subs.has(QUOTES)`), заставив движок обрабатывать subs-наборы
+    БЕЗ quotes (`[subs=attributes]`, `[subs=+macros]`, `[subs=attributes+]`); инкрементальный шаг к удалению legacy
+    (decline №2 sentinel-байт и №3 `DECLINED` остаются для будущих шагов B/C). **Корень дивергенции (verified
+    чтением кода):** legacy escape катч-олл (inline.rs:1043-1050) снимает `\` с `\* \_ \` \# \^ \~ \{ \[ \< \\ \'`
+    БЕЗУСЛОВНО; движок (`escape::run` blanket-арм) откладывал quote-marker escapes (`\*`/`\_`/`` \` ``/`\#`/`\^`/`\~`)
+    в QUOTES-пасс → при QUOTES off этот пасс не бежит → движок держал `\*` литералом, legacy давал `*`. **Фикс
+    (2 точки):** (A) `subst/escape.rs` — новый арм перед blanket-`else`, гейт `!quotes_on`, matches
+    `\* \_ \` \# \^ \~ \'`, emit `literal_sentinel` (coalescing, как legacy катч-олл). **КРИТИЧНО:** гейт `!quotes_on`
+    сохраняет QUOTES-on путь байт-в-байт — движок там НАМЕРЕННО расходится с legacy (фикс legacy-бага под asciidoctor:
+    `\#nospan` сохраняет `\`, тесты `marker_escape_matches_asciidoctor`/`escaped_apostrophe_matches_asciidoctor`).
+    (B) `subst/mod.rs:try_parse` — `!subs.has(QUOTES)` → `!subs.needs_inline_parsing()` (зеркало гарда вызывающего
+    parser.rs:151; VERBATIM/NONE по-прежнему отступают). +doc-свип (mod.rs:5-8/80-92/187-189, escape.rs модульный +
+    blanket комменты). **Тест:** `reproduces_legacy_on_non_quotes_subs` (mod.rs) — матрица 9 не-QUOTES subs-наборов ×
+    ~50 входов, сравнение через `coalesce()`-нормализацию (смежные `Text` мёрджатся: legacy typographic-escape арм
+    эмитит `\--`/`\(C)` отдельным `Text`, движок коалесцирует — HTML-идентично, предсуществующая структурная разница);
+    ловит любой контент/тег/структуру, толерантен к HTML-нейтральному re-split. +хелперы `legacy_subs`/`pipeline_subs`;
+    `try_parse_declines_without_quotes` расширен (VERBATIM/NONE→None, MACROS-only/ATTRIBUTES-only→Some). clippy 0,
+    **test --workspace зелёное** (parser 638→639, html/compat неизменны). **Гейт 344/344 байт-в-байт** vs master
+    `fe6c0d1` (`gate_check.py` 0 diff; non-QUOTES блоки `pass.adoc`/`attribute-entry-substitutions.adoc` теперь идут
+    через движок). **Frontier 250 new-vs-base 0 diff** (`fsweep.py` в scratchpad). CLI-пробы: `[subs=attributes]`/
+    `[subs=+macros]`/`[subs=normal]` все NEW==BASE. **Эмпирически доказано (флип арма off→gate+frontier всё ещё 0):**
+    в корпусе/frontier 0 marker-escapes под non-QUOTES subs → фикс нужен НЕ для нейтральности, а для
+    СОГЛАСОВАННОСТИ (движок единообразно воспроизводит legacy = чистый drop-in для будущего удаления legacy) + для
+    сильного checked-in differential-теста (engine==legacy). **НАХОДКА (вне scope, см. ниже):** legacy (и движок)
+    под non-QUOTES снимают `\*`/`\--`/`\link:`/`\{` там, где asciidoctor СОХРАНЯЕТ (нет соотв. subst-пасса) —
+    предсуществующий legacy-баг, base имел его до шага A (0 регрессий). Коммит/merge --no-ff/push — ПО ЗАПРОСУ.
+  - [ ] **(asciidoctor-parity, отдельная связная задача, 0 корпусного выигрыша):** под non-QUOTES subs движок снимает
+    `\`-escape БЕЗУСЛОВНО (через legacy-зеркальные арм'ы escape.rs: `\{`/`\[`/`\<`/typographic + новый `\*`-арм), тогда
+    как asciidoctor снимает `\` ТОЛЬКО если соответствующий subst-пасс активен (`\{name}`→`{name}` лишь при
+    ATTRIBUTES; `\*`/`\--`/`\link:` сохраняются без QUOTES/REPLACEMENTS/MACROS). Сделать per-subst-гейтинг escape целиком
+    (не частично) → new==asciidoctor на синтетических non-QUOTES edge. Цена: рассогласование с legacy (legacy-баг),
+    differential-тест шага A надо переписать на asciidoctor-expected векторы. Верифицировано пробой:
+    `[subs=attributes]\n\*x*` → asciidoctor `\*x*`, наш движок/base `*x*`.
   - [x] **ФАЗА 1: seed-tags re-parse label (link/mailto/autolink/xref/`<<>>`)** (ветка
     `refactor/macro-native-sentinel`, 2026-06-21, 152-я). Sentinel в РЕ-ПАРСИМОМ лейбле макроса больше не пантит:
     `reparse_label` гоняет лейбл через `run_pipeline_seeded` (внутренний `Work.tags` = клон внешней таблицы → seeded
