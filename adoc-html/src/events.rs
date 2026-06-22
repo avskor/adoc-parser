@@ -843,7 +843,7 @@ impl HtmlRenderer {
                 }
                 output.push('>');
             }
-            Tag::CrossReference { target, label } => self.start_cross_reference(output, target, label),
+            Tag::CrossReference { target, label, is_macro } => self.start_cross_reference(output, target, label, *is_macro),
             Tag::Keyboard => {
                 self.kbd_mode = true;
             }

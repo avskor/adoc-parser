@@ -5,7 +5,7 @@ use crate::*;
 use std::borrow::Cow;
 
 impl HtmlRenderer {
-    pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>) {
+    pub(crate) fn start_cross_reference(&mut self, output: &mut String, target: &CowStr<'_>, label: &Option<CowStr<'_>>, is_macro: bool) {
         // Resolve attribute references in the target before any xref processing.
         // Asciidoctor runs the global `attributes` pass before `macros`, so an
         // `{name}` written in an xref target (`xref:{rel}.adoc[]`,
@@ -19,45 +19,46 @@ impl HtmlRenderer {
         // byte-for-byte untouched.
         let resolved = self.resolve_inline_attr_value(target);
         let target: &str = resolved.as_ref();
-        let is_interdoc = adoc_render_core::is_interdoc_xref_target(target);
-        // Inter-document target with the .adoc extension rewritten to .html.
-        // Asciidoctor uses this rewritten path both as href and, when the xref
-        // has no explicit text, as the auto-generated link text.
-        let interdoc_href = if is_interdoc {
-            adoc_render_core::interdoc_xref_href(target)
-        } else {
-            String::new()
-        };
-        if is_interdoc {
-            output.push_str("<a href=\"");
-            html_escape(output, &interdoc_href);
-        } else {
-            // Internal xref (anchor reference). The id is resolved lazily in
-            // `finish()` via a placeholder so a forward natural cross reference
-            // (`<<Substitutions>>` before its `== Substitutions` section) can be
-            // rewritten to the section id (`#_substitutions`).
-            output.push_str("<a href=\"#");
-            self.xref_placeholder_counter += 1;
-            let href_placeholder = format!("\x00XREFHREF_{}\x00", self.xref_placeholder_counter);
-            output.push_str(&href_placeholder);
-            self.xref_href_placeholders
-                .push((href_placeholder, target.to_string()));
-        }
-        output.push_str("\">");
-        if label.is_none() {
-            self.in_unlabeled_xref = true;
-            self.xref_placeholder_counter += 1;
-            let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
-            // For an internal xref the stored value is the target id — used as the
-            // lookup key (resolved to a section/block title in `finish`) and as the
-            // fallback. For an inter-document xref it is the rewritten .html path.
-            let fallback = if is_interdoc {
-                interdoc_href
-            } else {
-                target.to_string()
-            };
-            self.xref_placeholders
-                .push((placeholder, fallback, !is_interdoc));
+        // Classify the target into an inter-document or internal reference,
+        // honouring the shorthand/macro form (different extension rules). For an
+        // inter-document ref Asciidoctor uses the rewritten path (extension →
+        // `.html`, `#fragment` only in the href) both as href and, when the xref
+        // has no explicit text, as the auto-generated link text (without the
+        // fragment).
+        match adoc_render_core::resolve_xref(target, is_macro) {
+            adoc_render_core::XrefResolution::Interdoc { href, text } => {
+                output.push_str("<a href=\"");
+                html_escape(output, &href);
+                output.push_str("\">");
+                if label.is_none() {
+                    self.in_unlabeled_xref = true;
+                    self.xref_placeholder_counter += 1;
+                    let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
+                    // The rewritten path is final (no section lookup); the
+                    // placeholder resolves to it verbatim in `finish()`.
+                    self.xref_placeholders.push((placeholder, text, false));
+                }
+            }
+            adoc_render_core::XrefResolution::Internal { id } => {
+                // Internal xref (anchor reference). The id is resolved lazily in
+                // `finish()` via a placeholder so a forward natural cross reference
+                // (`<<Substitutions>>` before its `== Substitutions` section) can be
+                // rewritten to the section id (`#_substitutions`).
+                output.push_str("<a href=\"#");
+                self.xref_placeholder_counter += 1;
+                let href_placeholder = format!("\x00XREFHREF_{}\x00", self.xref_placeholder_counter);
+                output.push_str(&href_placeholder);
+                self.xref_href_placeholders.push((href_placeholder, id.clone()));
+                output.push_str("\">");
+                if label.is_none() {
+                    self.in_unlabeled_xref = true;
+                    self.xref_placeholder_counter += 1;
+                    let placeholder = format!("\x00XREF_{}\x00", self.xref_placeholder_counter);
+                    // The stored value is the target id — the lookup key (resolved
+                    // to a section/block title in `finish`) and the bracketed fallback.
+                    self.xref_placeholders.push((placeholder, id, true));
+                }
+            }
         }
     }
 
