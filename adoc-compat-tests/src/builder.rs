@@ -413,6 +413,7 @@ pub fn build_asg<'a>(
             }
 
             Event::Footnote { .. }
+            | Event::FootnoteParsed { .. }
             | Event::FootnoteRef { .. }
             | Event::CalloutRef { .. }
             | Event::XmlCalloutRef(_)

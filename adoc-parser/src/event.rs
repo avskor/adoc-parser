@@ -94,6 +94,18 @@ pub enum Event<'a> {
         id: Option<CowStr<'a>>,
         text: CowStr<'a>,
     },
+    /// A footnote whose body the parser already parsed into inline events. The
+    /// native (sequential) engine emits this instead of [`Event::Footnote`] only
+    /// when the body carried a passthrough/escape sentinel — `footnote:[++raw++]`
+    /// — that the renderer's render-time re-parse of *raw text* would
+    /// mis-substitute (the passthrough markers are gone by then, so `__x__` would
+    /// turn into emphasis). The renderer renders these pre-parsed events directly.
+    /// Plain footnotes still travel as [`Event::Footnote`] (raw text, re-parsed by
+    /// the renderer), so the common case is byte-for-byte unchanged.
+    FootnoteParsed {
+        id: Option<CowStr<'a>>,
+        events: Vec<Event<'a>>,
+    },
     FootnoteRef {
         id: CowStr<'a>,
     },
@@ -184,6 +196,10 @@ impl<'a> Event<'a> {
             Event::Footnote { id, text } => Event::Footnote {
                 id: id.map(cow_owned),
                 text: cow_owned(text),
+            },
+            Event::FootnoteParsed { id, events } => Event::FootnoteParsed {
+                id: id.map(cow_owned),
+                events: events.into_iter().map(Event::into_static).collect(),
             },
             Event::FootnoteRef { id } => Event::FootnoteRef {
                 id: cow_owned(id),

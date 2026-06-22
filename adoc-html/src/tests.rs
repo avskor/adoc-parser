@@ -1302,6 +1302,39 @@ fn test_footnote_plain_text_unchanged_html() {
 }
 
 #[test]
+fn test_footnote_passthrough_body_native_html() {
+    // A footnote body carrying a passthrough/escape sentinel is parsed by the
+    // engine (Event::FootnoteParsed) and rendered directly, so the renderer does
+    // NOT re-substitute it. Previously such a body forced a punt to legacy; the
+    // output is identical for the verbatim cases and FIXED for `pass:[…]`.
+
+    // Double-plus passthrough: `__x__` stays literal, not emphasis.
+    let html = to_html("X footnote:[++__x__++] y.");
+    assert!(html.contains(". __x__\n</div>"), "got: {html}");
+
+    // Triple-plus passthrough: raw HTML emitted verbatim.
+    let html = to_html("X footnote:[+++<b>raw</b>+++] y.");
+    assert!(html.contains(". <b>raw</b>\n</div>"), "got: {html}");
+
+    // A `pass:[…]` macro inside the body now renders as raw HTML followed by the
+    // trailing text — matching Asciidoctor. (Legacy mangled it to a literal
+    // `pass:[&lt;i&gt;x&lt;/i&gt;]`; this is the genuine fix.)
+    let html = to_html("X footnote:[pass:[<i>x</i>] y] z.");
+    assert!(html.contains(". <i>x</i> y\n</div>"), "got: {html}");
+    assert!(!html.contains("pass:["), "pass macro must not survive literally: {html}");
+
+    // Typographic escapes (`\--`, `\(C)`) are sealed as literals and survive: the
+    // backslash is stripped and no replacement is applied.
+    let html = to_html("X footnote:[a \\-- b \\(C) c] z.");
+    assert!(html.contains(". a -- b (C) c\n</div>"), "got: {html}");
+
+    // A passthrough body spanning two source lines collapses (right-trim + join
+    // with a space) exactly as the raw-text renderer path does.
+    let html = to_html("X footnote:[a ++<b>p</b>++\nsecond] z.");
+    assert!(html.contains(". a &lt;b&gt;p&lt;/b&gt; second\n</div>"), "got: {html}");
+}
+
+#[test]
 fn test_footnotes_outside_content_div_standalone() {
     let html = to_html_with_options(
         "= Doc\n\nText.footnote:[Note here.]\n",

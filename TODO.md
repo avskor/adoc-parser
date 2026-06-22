@@ -1167,11 +1167,33 @@ image.adoc 135→128, id.adoc 49→45. clippy 0, test --workspace зелёное
     asciidoctor 2.0.23** для passthrough/escape во всех семействах; остаточные дивергенции = ПРЕДСУЩЕСТВУЮЩИЕ рендерер-issues
     (escape `\*` в alt не снимается; URL-кодирование пробела в image-src `a%20b`; bibliography-anchor рендерит `[label]`
     инлайн vs asciidoctor `[<a>]`) — все НЕ связаны с passthrough, new ≥ base везде, 0 регрессий.
-  - [ ] **ФАЗА 3 (footnote, ОТЛОЖЕНА):** footnote всё ещё пантит на span-sentinel — рендерер `render_footnote_text`
-    РЕ-ПАРСИТ текст футноута полным inline-проходом, значит ему нужен СЫРОЙ `++raw++`, а `restore_verbatim` даёт контент
-    `raw` (рендерер ре-substitute'нул бы `__`→emphasis = БАГ). Сырьё невосстановимо (маркеры потеряны), legacy хранит сырой
-    текст → punt КОРРЕКТЕН. Конверсия требует parser↔renderer редизайна: Footnote несёт pre-parsed события (крупно).
-    Коммит Фаз 1+2 на ветке (чекпойнт), merge в master --no-ff — ПО ЗАПРОСУ.
+  - [x] **ФАЗА 3 (footnote) — СНЯТ последний span-sentinel punt** (ветка `refactor/footnote-native-events`, 2026-06-22,
+    off master `358bfa6`, НЕ закоммичена). Запрос «начни следующую задачу из TODO.md» + выбор пользователя «делать Фазу 3
+    footnote». **Дизайн — инкрементальный additive-вариант** (НЕ unified «Footnote всегда несёт события», как изначально
+    предполагал TODO): новый `Event::FootnoteParsed { id, events }` эмитится native-движком ТОЛЬКО когда тело футноута несёт
+    sentinel (passthrough/escape); общий путь (без sentinel) остаётся прежним `Event::Footnote { text }` + ре-парс рендерером
+    — **байт-в-байт неизменен, нулевой риск общему случаю**. Legacy-движок не тронут (sentinel'ов не производит). **Корень
+    решения:** рендерер `render_footnote_text` РЕ-ПАРСИТ сырой текст, поэтому тело с поднятыми passthrough-маркерами надо
+    распарсить В ПАРСЕРЕ (до потери маркеров) и отдать готовые события. **Реализация (`subst/macros.rs::try_footnote`):**
+    принимает `work/subs/options`; `restore_verbatim` для id (verbatim-anchor, fast-path для реального id без sentinel); при
+    sentinel в теле — `collapse_footnote_newlines` (зеркало рендерер-склейки многострочного тела) + `reparse_seeded(&work.tags,
+    full subs, MACROS ON)` → `FootnoteParsed`; иначе прежний `Event::Footnote`. Снят `span_has_sentinel`-punt (footnote был
+    последним юзером → функция УДАЛЕНА как мёртвый код; 2 doc-ссылки на неё депортированы). Рендерер (`adoc-html/events.rs`):
+    handler `FootnoteParsed` рендерит события напрямую (без ре-парса), `<sup>`-маркер вынесен в общий `emit_footnote_def`
+    (переиспользован обоими handler'ами, байт-в-байт). `into_static`-arm + ASG-builder no-op-группа + 1 exhaustive-match.
+    +1 parser (`footnote_with_sentinel_body_parses_natively` — `++…++`→Text, `+++…+++`→InlinePassthrough, named, `pass:[]`,
+    typo-escape `\--`/`\(C)`, + общий путь неизменен) +1 html (`test_footnote_passthrough_body_native_html`). clippy 0,
+    **test --workspace зелёное** (parser 637→638, html 492→493, compat 233). **Гейт 344/344 байт-в-байт** vs master `358bfa6`
+    (`gate_check.py` 0 diff — в корпусе 0 footnote-с-passthrough). **Frontier 250 new-vs-base 0 diff** (7 footnote-файлов без
+    таких конструктов). **7/7 CLI-проб == asciidoctor 2.0.23** (`++__x__++`/`+++<b>raw</b>+++`/named/plain/typo-escape/
+    multiline+pass). **Реальный фикс (синтетический edge): `footnote:[pass:[<i>x</i>] y]`** — base даёт literal
+    `pass:[&lt;i&gt;…]` (расходится с asciidoctor), new даёт `<i>x</i> y` == asciidoctor (именно «делает new==asciidoctor на
+    синтетических edge»). **Вне scope (предсуществующее, new==base):** (1) порядок атрибутов в `<sup>`-маркере определения
+    (`<a id=… class=…>` у asciidoctor vs `<a class=… id=…>` у нас) — рендерер, не связан с footnote; (2) footnote-скобки
+    режут по первому `]` без nesting (`footnote:[a [nested]` → cut), когда внутр. `[…]` НЕ извлёкся в sentinel; (3)
+    passthrough с внутренним `\n` в footnote — native сохраняет `\n` в leaf, punt-путь склеил бы (не в корпусе). **Остаток:**
+    удаление мёртвого legacy-quotes-кода (требует редизайна sentinel-байт-fallback — отд. крупная задача). Коммит/merge
+    в master --no-ff — ПО ЗАПРОСУ.
 
 ---
 

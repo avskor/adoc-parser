@@ -2275,6 +2275,86 @@ mod tests {
         );
     }
 
+    /// A footnote body that carried a passthrough/escape sentinel is parsed
+    /// natively into [`Event::FootnoteParsed`] (pre-parsed events) instead of
+    /// punting to legacy. The renderer re-parses the raw text of a plain
+    /// [`Event::Footnote`], so a body whose passthrough markers were already lifted
+    /// must be parsed *here* — before the markers are lost — and handed over as
+    /// finished events. A sentinel-free body keeps the raw-text `Event::Footnote`
+    /// (the common case is unchanged); a marker escape (`\*`) is deferred into the
+    /// quotes pass and so leaves no sentinel, also staying on the common path.
+    #[test]
+    fn footnote_with_sentinel_body_parses_natively() {
+        // Double-plus passthrough → escaped `Text` leaf; the renderer emits it
+        // literally instead of re-substituting `__x__` into emphasis (the bug the
+        // old punt avoided, now handled without falling back to legacy).
+        assert_eq!(
+            pipeline("footnote:[++__x__++]"),
+            vec![Event::FootnoteParsed {
+                id: None,
+                events: vec![Event::Text("__x__".into())],
+            }]
+        );
+        // Triple-plus passthrough → raw `InlinePassthrough` leaf (verbatim HTML).
+        assert_eq!(
+            pipeline("footnote:[+++<b>raw</b>+++]"),
+            vec![Event::FootnoteParsed {
+                id: None,
+                events: vec![Event::InlinePassthrough("<b>raw</b>".into())],
+            }]
+        );
+        // Named definition with a passthrough body.
+        assert_eq!(
+            pipeline("footnote:fn1[++raw++]"),
+            vec![Event::FootnoteParsed {
+                id: Some("fn1".into()),
+                events: vec![Event::Text("raw".into())],
+            }]
+        );
+        // A `pass:[…]` macro inside the body is extracted as a passthrough leaf
+        // before the footnote forms; the seeded re-parse restores it as raw HTML
+        // followed by the trailing text — what Asciidoctor's global restore yields.
+        // (Legacy mangled this to a literal `pass:[…]`; this is a genuine fix.)
+        assert_eq!(
+            pipeline("footnote:[pass:[<b>x</b>] y]"),
+            vec![Event::FootnoteParsed {
+                id: None,
+                events: vec![
+                    Event::InlinePassthrough("<b>x</b>".into()),
+                    Event::Text(" y".into()),
+                ],
+            }]
+        );
+        // A typographic escape (`\--`, `\(C)`) IS sealed by the escape pass into a
+        // `Literal`, so it too travels as `FootnoteParsed`; the backslash is gone.
+        match &pipeline("footnote:[a \\-- b \\(C) c]")[..] {
+            [Event::FootnoteParsed { id: None, events }] => {
+                let text: String = events
+                    .iter()
+                    .map(|e| match e {
+                        Event::Text(t) | Event::InlinePassthrough(t) => t.as_ref(),
+                        _ => "",
+                    })
+                    .collect();
+                assert_eq!(text, "a -- b (C) c");
+            }
+            other => panic!("expected FootnoteParsed, got {other:?}"),
+        }
+
+        // Common case — a sentinel-free body — is unchanged: raw text on
+        // `Event::Footnote`, re-parsed by the renderer.
+        assert_eq!(
+            pipeline("footnote:[plain _em_ text]"),
+            vec![Event::Footnote { id: None, text: "plain _em_ text".into() }]
+        );
+        // A marker escape (`\*`) is deferred into the quotes pass — no sentinel —
+        // so it also stays on the raw-text common path.
+        assert_eq!(
+            pipeline("footnote:[\\*x*]"),
+            vec![Event::Footnote { id: None, text: "\\*x*".into() }]
+        );
+    }
+
     /// With the `:experimental:`-gated UI macros ported, the pipeline (run with
     /// `experimental` set) must reproduce the legacy parser on every form: the
     /// bracket-only `kbd:[keys]`/`btn:[label]` (incl. mid-word, inside a span, and
@@ -2831,3 +2911,4 @@ mod tests {
         );
     }
 }
+
