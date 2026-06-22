@@ -252,6 +252,11 @@ struct HtmlRenderer {
     sect0_stack: Vec<bool>,
     sectionbody_stack: Vec<bool>,
     section_style_stack: Vec<Option<String>>,
+    /// Per-open-section flag: `true` when the section is a non-numbered special
+    /// section (preface/colophon/…, but not appendix) or any descendant of one.
+    /// Mirrors Asciidoctor's inherited `special` (section.rb `@special =
+    /// parent.special`): such sections emit no section number.
+    section_unnumbered_stack: Vec<bool>,
     standalone: bool,
     last_updated: Option<String>,
     content_start: Option<usize>,
@@ -430,6 +435,7 @@ impl HtmlRenderer {
             sect0_stack: Vec::new(),
             sectionbody_stack: Vec::new(),
             section_style_stack: Vec::new(),
+            section_unnumbered_stack: Vec::new(),
             standalone: false,
             last_updated: None,
             content_start: None,

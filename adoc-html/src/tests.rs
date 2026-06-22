@@ -3961,6 +3961,61 @@ fn test_part_xref_partnums_html() {
 }
 
 #[test]
+fn test_special_section_subsection_unnumbered_html() {
+    // A non-numbered special section (preface, colophon, …) is unnumbered, and
+    // so is its entire descendant subtree: Asciidoctor inherits `special` to
+    // children (section.rb `@special = parent.special`), so a plain `===`
+    // subsection under `[preface]` gets no number even though it carries no
+    // special style of its own. The surrounding chapters keep numbering, and
+    // the preface does not consume a chapter ordinal.
+    let src = "= Book\n:doctype: book\n:sectnums:\n\n\
+               == Chapter One\n\n[preface]\n== Our Preface\n\nIntro.\n\n\
+               === Preface Subsection\n\nBody.\n\n== Chapter Two\n\n=== Chapter Two Sub";
+    let html = to_html(src);
+    assert!(html.contains("<h2 id=\"_chapter_one\">1. Chapter One</h2>"), "{html}");
+    // Special section itself: no number.
+    assert!(html.contains("<h2 id=\"_our_preface\">Our Preface</h2>"), "{html}");
+    // Subsection inherits the unnumbered status — no "1.1." prefix.
+    assert!(html.contains("<h3 id=\"_preface_subsection\">Preface Subsection</h3>"), "{html}");
+    // The preface did not consume a chapter ordinal: next chapter is "2.".
+    assert!(html.contains("<h2 id=\"_chapter_two\">2. Chapter Two</h2>"), "{html}");
+    assert!(html.contains("<h3 id=\"_chapter_two_sub\">2.1. Chapter Two Sub</h3>"), "{html}");
+
+    // An appendix is a *numbered* special section, so its subsections stay
+    // numbered ("A.1") — the inherited-unnumbered rule must not catch it.
+    let src = "= Book\n:doctype: book\n:sectnums:\n\n\
+               == Chapter One\n\n[appendix]\n== Extras\n\nx\n\n=== Detail";
+    let html = to_html(src);
+    assert!(html.contains("<h2 id=\"_extras\">Appendix A: Extras</h2>"), "{html}");
+    assert!(html.contains("<h3 id=\"_detail\">A.1. Detail</h3>"), "{html}");
+}
+
+#[test]
+fn test_book_abstract_numbered_chapter_html() {
+    // `[abstract]` in a book doctype is reclassified as a numbered level-1
+    // chapter (Asciidoctor parser.rb): it renders as a plain numbered `sect1`
+    // (no `abstract` class) and consumes a chapter number, shifting the
+    // following chapters.
+    let src = "= Book\n:doctype: book\n:sectnums:\n\n\
+               == Chapter One\n\n[abstract]\n== My Abstract\n\nAbstract body.\n\n== Chapter Three";
+    let html = to_html(src);
+    assert!(html.contains("<h2 id=\"_chapter_one\">1. Chapter One</h2>"), "{html}");
+    // Numbered like a chapter; no `abstract` class on the section div.
+    assert!(html.contains("<div class=\"sect1\">\n<h2 id=\"_my_abstract\">2. My Abstract</h2>"), "{html}");
+    assert!(!html.contains("class=\"sect1 abstract\""), "{html}");
+    // The abstract consumed chapter 2, so the next chapter is "3.".
+    assert!(html.contains("<h2 id=\"_chapter_three\">3. Chapter Three</h2>"), "{html}");
+
+    // In an *article*, `[abstract]` stays a special (unnumbered) section.
+    let src = "= Doc\n:sectnums:\n\n== Section One\n\n[abstract]\n== Summary\n\nx\n\n== Section Three";
+    let html = to_html(src);
+    assert!(html.contains("<h2 id=\"_section_one\">1. Section One</h2>"), "{html}");
+    assert!(html.contains("<h2 id=\"_summary\">Summary</h2>"), "{html}");
+    // Article abstract is unnumbered and does not consume an ordinal.
+    assert!(html.contains("<h2 id=\"_section_three\">2. Section Three</h2>"), "{html}");
+}
+
+#[test]
 fn test_article_sect0_toc_sectlevel0_html() {
     // A body sect0 (level-0 section) in an article also lists at TOC
     // sectlevel0 — the list class is the section's real Asciidoctor level.

@@ -1068,6 +1068,7 @@ impl HtmlRenderer {
                 let is_sect0 = self.sect0_stack.pop().unwrap_or(false);
                 let needs_sectionbody_close = self.sectionbody_stack.pop().unwrap_or(false);
                 self.section_style_stack.pop();
+                self.section_unnumbered_stack.pop();
                 if !is_sect0 {
                     if needs_sectionbody_close {
                         output.push_str("</div>\n");
