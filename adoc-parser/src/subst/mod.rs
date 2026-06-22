@@ -2175,6 +2175,43 @@ mod tests {
         }
     }
 
+    /// Asciidoctor's `InlineLinkRx` left-boundary class admits `"` and `'`
+    /// (`[>\(\)\[\];"']`), but those two open ONLY the macro form (`url[…]`): a
+    /// quoted bare URL is left literal (`"https://x"`), a quoted macro URL links
+    /// (`"https://x[]"` / `'https://x[t]'`). Both engines must agree and apply the
+    /// form gate (verified against Asciidoctor 2.0.23). The `(` boundary already
+    /// links the bare form, so it is the regression guard that the quote gate did
+    /// not widen the bare path.
+    #[test]
+    fn quoted_boundary_links_macro_form_only_matches_asciidoctor() {
+        fn has_link(events: &[Event]) -> bool {
+            events.iter().any(|e| matches!(e, Event::Start(Tag::Link { .. })))
+        }
+        // Macro form after a quote boundary → links (both `"` and `'`, empty and
+        // labelled bracket, and a `(` "/`'"` nest as in the corpus `("url[]")`).
+        let macro_links = [
+            "Type \"https://asciidoctor.org[]\" here",
+            "Type 'https://asciidoctor.org[]' here",
+            "(\"https://asciidoctor.org[label]\")",
+            "x \"https://example.org/a[Doc]\" y",
+        ];
+        for c in macro_links {
+            assert!(has_link(&pipeline(c)), "expected a link for {c:?}");
+            assert_eq!(pipeline(c), legacy(c), "engines diverged for {c:?}");
+        }
+        // Bare form after a quote boundary → NOT a link (the quote opens the macro
+        // form only); regression guard: the `(` boundary still links the bare form.
+        let bare_no_link = [
+            "x \"https://asciidoctor.org\" y",
+            "x 'https://asciidoctor.org' y",
+        ];
+        for c in bare_no_link {
+            assert!(!has_link(&pipeline(c)), "expected NO link for {c:?}");
+            assert_eq!(pipeline(c), legacy(c), "engines diverged for {c:?}");
+        }
+        assert!(has_link(&pipeline("x (https://asciidoctor.org) y")), "paren boundary still links bare");
+    }
+
     /// The spec'd pass macro `pass:SPEC[…]` re-runs exactly its spec'd
     /// substitutions over the bracketed content and seals the result as one opaque
     /// leaf (so the later passes cannot reach inside). The pipeline must reproduce
