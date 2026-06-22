@@ -385,7 +385,10 @@ pub enum Tag<'a> {
 
     // Links and references
     Link { url: CowStr<'a>, window: Option<CowStr<'a>>, nofollow: bool, is_bare: bool, role: Option<CowStr<'a>> },
-    CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>> },
+    /// `is_macro` distinguishes the formal `xref:target[]` macro (`true`) from
+    /// the `<<target>>` shorthand (`false`); the two forms apply different
+    /// inter-document extension rules (see `adoc_render_core::resolve_xref`).
+    CrossReference { target: CowStr<'a>, label: Option<CowStr<'a>>, is_macro: bool },
 
     // UI macros
     Keyboard,
@@ -567,9 +570,10 @@ impl<'a> Tag<'a> {
                 is_bare,
                 role: role.map(|r| Cow::Owned(r.into_owned())),
             },
-            Tag::CrossReference { target, label } => Tag::CrossReference {
+            Tag::CrossReference { target, label, is_macro } => Tag::CrossReference {
                 target: Cow::Owned(target.into_owned()),
                 label: label.map(|l| Cow::Owned(l.into_owned())),
+                is_macro,
             },
             Tag::Keyboard => Tag::Keyboard,
             Tag::Button => Tag::Button,

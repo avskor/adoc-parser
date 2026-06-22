@@ -2068,6 +2068,7 @@ impl<'a> InlineState<'a> {
         events.push(Event::Start(Tag::CrossReference {
             target: Cow::Borrowed(target),
             label: label.clone(),
+            is_macro: false,
         }));
         match label {
             Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
@@ -2285,6 +2286,7 @@ impl<'a> InlineState<'a> {
         events.push(Event::Start(Tag::CrossReference {
             target: Cow::Borrowed(target),
             label: label.clone(),
+            is_macro: true,
         }));
         match label {
             Some(Cow::Borrowed(l)) => self.push_macro_label(l, events),
@@ -3316,6 +3318,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("my-section"),
                 label: None,
+                is_macro: false,
             }),
             Event::Text(Cow::Borrowed("my-section")),
             Event::End(TagEnd::CrossReference),
@@ -3330,6 +3333,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("my-section"),
                 label: None,
+                is_macro: false,
             }),
             Event::Text(Cow::Borrowed("my-section")),
             Event::End(TagEnd::CrossReference),
@@ -3344,6 +3348,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("my-section"),
                 label: Some(Cow::Borrowed("My Section")),
+                is_macro: false,
             }),
             Event::Text(Cow::Borrowed("My Section")),
             Event::End(TagEnd::CrossReference),
@@ -3358,6 +3363,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("my-section"),
                 label: Some(Cow::Borrowed("My Section")),
+                is_macro: false,
             }),
             Event::Text(Cow::Borrowed("My Section")),
             Event::End(TagEnd::CrossReference),
@@ -3468,6 +3474,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("attribute's value")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("attribute\u{2019}s value")),
             Event::End(TagEnd::CrossReference),
@@ -3477,6 +3484,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("sec"),
                 label: Some(Cow::Borrowed("group's charter")),
+                is_macro: false,
             }),
             Event::Text(Cow::Borrowed("group\u{2019}s charter")),
             Event::End(TagEnd::CrossReference),
@@ -3505,6 +3513,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("see `partnums`")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("see ")),
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
@@ -3535,6 +3544,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("sec"),
                 label: Some(Cow::Borrowed("`mono` label")),
+                is_macro: false,
             }),
             Event::Start(Tag::Monospace { id: None, roles: Vec::new() }),
             Event::Text(Cow::Borrowed("mono")),
@@ -3547,6 +3557,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("with {myattr} ref")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("with ")),
             Event::AttributeReference {
@@ -3563,6 +3574,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("t.adoc"),
                 label: Some(Cow::Borrowed("see <<other>>")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("see <<other>>")),
             Event::End(TagEnd::CrossReference),
@@ -5710,6 +5722,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("chapter1"),
                 label: None,
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("chapter1")),
             Event::End(TagEnd::CrossReference),
@@ -5723,6 +5736,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("file.adoc#anchor"),
                 label: Some(Cow::Borrowed("Link Text")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("Link Text")),
             Event::End(TagEnd::CrossReference),
@@ -5737,6 +5751,7 @@ mod tests {
             Event::Start(Tag::CrossReference {
                 target: Cow::Borrowed("intro"),
                 label: Some(Cow::Borrowed("Introduction")),
+                is_macro: true,
             }),
             Event::Text(Cow::Borrowed("Introduction")),
             Event::End(TagEnd::CrossReference),
@@ -5751,6 +5766,26 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Borrowed("xref:target")),
         ]);
+    }
+
+    #[test]
+    fn cross_reference_carries_form_for_interdoc_extension_rules() {
+        // The `<<…>>` shorthand and the formal `xref:…[]` macro apply different
+        // inter-document extension rules (Asciidoctor #2740), so the parser tags
+        // each `CrossReference` with its form (the engine/legacy agreement on the
+        // field is covered by `subst::tests::reproduces_legacy_on_cross_reference_inputs`).
+        let shorthand = parse("<<file.adoc#sec,t>>");
+        assert_eq!(shorthand[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("file.adoc#sec"),
+            label: Some(Cow::Borrowed("t")),
+            is_macro: false,
+        }));
+        let macro_form = parse("xref:file.adoc#sec[t]");
+        assert_eq!(macro_form[0], Event::Start(Tag::CrossReference {
+            target: Cow::Borrowed("file.adoc#sec"),
+            label: Some(Cow::Borrowed("t")),
+            is_macro: true,
+        }));
     }
 
     // Arrow replacement tests

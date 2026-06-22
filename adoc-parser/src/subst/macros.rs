@@ -556,7 +556,7 @@ fn try_xref(
     // Empty brackets → no explicit label (legacy `None`); a non-empty label is an
     // explicit one.
     let label = (!label_text.is_empty()).then_some(label_text.as_ref());
-    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
+    Some((build_cross_reference(target, label, true, &work.tags, subs, options), end))
 }
 
 /// Whether `content` begins with a character Asciidoctor accepts as the first
@@ -614,7 +614,7 @@ fn try_cross_ref(
     if target_has_sentinel(target) {
         return None;
     }
-    Some((build_cross_reference(target, label, &work.tags, subs, options), end))
+    Some((build_cross_reference(target, label, false, &work.tags, subs, options), end))
 }
 
 /// Build the `Start(CrossReference) … End` event sequence. `label` is the raw
@@ -628,6 +628,7 @@ fn try_cross_ref(
 fn build_cross_reference(
     target: &str,
     label: Option<&str>,
+    is_macro: bool,
     seed: &[TagToken],
     subs: SubstitutionSet,
     options: InlineOptions,
@@ -641,6 +642,7 @@ fn build_cross_reference(
         // raw `TAG_LEAD … TAG_TAIL` control sequence. No-sentinel labels are
         // byte-unchanged (the helper fast-paths them).
         label: label.map(|l| Cow::Owned(desentinelize(seed, l))),
+        is_macro,
     }));
     match label {
         None => events.push(Event::Text(Cow::Owned(target.to_string()))),

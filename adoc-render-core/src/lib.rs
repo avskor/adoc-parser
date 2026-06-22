@@ -234,27 +234,114 @@ pub fn unresolved_xref_label(target: &str) -> String {
     format!("[{target}]")
 }
 
-/// True when an xref target refers to another document (a path containing a
-/// dot) rather than an in-document anchor.
-pub fn is_interdoc_xref_target(target: &str) -> bool {
-    target.contains('.') && !target.starts_with('#')
+/// Known AsciiDoc source file extensions (Asciidoctor's `ASCIIDOC_EXTENSIONS`).
+/// A shorthand inter-document xref rewrites any of these to the output suffix;
+/// the formal `xref:` macro only rewrites `.adoc` (see [`resolve_xref`]).
+const ASCIIDOC_EXTENSIONS: [&str; 5] = [".adoc", ".asciidoc", ".asc", ".ad", ".txt"];
+
+/// Whether `path` carries a file extension in its last segment — a `.` that is
+/// not followed by a `/`. Mirrors Asciidoctor's `Helpers.extname?`
+/// (`(last_dot = path.rindex '.') && !(path.index '/', last_dot)`).
+fn has_extname(path: &str) -> bool {
+    match path.rfind('.') {
+        Some(dot) => !path[dot..].contains('/'),
+        None => false,
+    }
 }
 
-/// Rewrite an inter-document xref target for HTML conversion: the `.adoc`
-/// extension becomes `.html` (Asciidoctor's default `outfilesuffix`),
-/// preserving a `#fragment`; other targets pass through unchanged. The
-/// rewritten path doubles as the auto-generated link text when the xref has
-/// no explicit label.
-pub fn interdoc_xref_href(target: &str) -> String {
-    if let Some(base) = target.strip_suffix(".adoc") {
-        format!("{base}.html")
-    } else if let Some((file_part, anchor)) = target.split_once('#')
-        && let Some(base) = file_part.strip_suffix(".adoc")
-    {
-        format!("{base}.html#{anchor}")
+/// Strip a trailing AsciiDoc source extension from `path`, returning the base
+/// (everything before the last `.`). Mirrors Asciidoctor's shorthand branch
+/// `path.slice 0, (path.rindex '.')` guarded by `path.end_with?(*ASCIIDOC_EXTENSIONS)`.
+fn strip_asciidoc_ext(path: &str) -> Option<&str> {
+    if ASCIIDOC_EXTENSIONS.iter().any(|ext| path.ends_with(ext)) {
+        path.rfind('.').map(|dot| &path[..dot])
     } else {
-        target.to_string()
+        None
     }
+}
+
+/// The classification of an xref target into an inter-document reference (a link
+/// to another converted document) or an internal anchor reference.
+#[derive(Debug, PartialEq, Eq)]
+pub enum XrefResolution {
+    /// Inter-document reference. `href` is the link target including any
+    /// `#fragment`; `text` is the rewritten path *without* the fragment, used as
+    /// the auto-generated link text when the xref has no explicit label.
+    Interdoc { href: String, text: String },
+    /// Internal anchor reference. `id` is the lookup key (the href is `#id`,
+    /// resolved lazily so a forward natural reference can find its section id).
+    Internal { id: String },
+}
+
+/// Resolve an xref target the way Asciidoctor's `InlineXrefMacroRx` handler does
+/// (`substitutors.rb`), distinguishing the shorthand `<<…>>` form from the formal
+/// `xref:…[]` macro (`is_macro`). The rules differ:
+///
+/// * **shorthand** treats the target as inter-document only when a `#` is present;
+///   the path before the `#` has any known AsciiDoc extension rewritten to `.html`
+///   (`.adoc`/`.asciidoc`/`.asc`/`.ad`/`.txt`), and a path with a non-AsciiDoc or
+///   absent extension still gets `.html` appended (`foo.pdf#` → `foo.pdf.html`).
+///   Without a `#`, the target is an internal id (`<<other.adoc>>` → `#other.adoc`).
+/// * **macro** treats a target as inter-document when it ends in `.adoc` (rewritten
+///   to `.html`) or otherwise carries a file extension (passed through verbatim,
+///   e.g. `foo.asciidoc#sec`); a plain word is an internal id. A `.adoc` path is
+///   rewritten with or without a `#`.
+///
+/// A trailing `#` with no fragment is dropped from both the href and the text. A
+/// leading `#` (`#id`) and a `#` immediately preceded by `&` (an entity like
+/// `&#8217;`) are treated as internal / not a fragment separator, mirroring
+/// `refid[hash_idx - 1] != '&'`.
+pub fn resolve_xref(target: &str, is_macro: bool) -> XrefResolution {
+    // Locate the fragment separator: the first `#` not immediately preceded by
+    // `&` (so a numeric character reference is not mistaken for a fragment).
+    let hash_idx = match target.find('#') {
+        Some(0) => {
+            // Leading `#id`: an explicit-anchor internal reference.
+            return XrefResolution::Internal { id: target[1..].to_string() };
+        }
+        Some(i) if target.as_bytes()[i - 1] != b'&' => Some(i),
+        _ => None,
+    };
+
+    // `base` is the path with its AsciiDoc extension already stripped (if any);
+    // `src2src` marks a source-to-source link that gets the `.html` output suffix.
+    let (base, fragment, src2src): (&str, Option<&str>, bool) = if let Some(hi) = hash_idx {
+        let raw_path = &target[..hi];
+        let frag = &target[hi + 1..];
+        let fragment = (!frag.is_empty()).then_some(frag);
+        if is_macro {
+            if let Some(stripped) = raw_path.strip_suffix(".adoc") {
+                (stripped, fragment, true)
+            } else if has_extname(raw_path) {
+                (raw_path, fragment, false)
+            } else {
+                (raw_path, fragment, true)
+            }
+        } else if let Some(stripped) = strip_asciidoc_ext(raw_path) {
+            (stripped, fragment, true)
+        } else {
+            (raw_path, fragment, true)
+        }
+    } else if is_macro {
+        if let Some(stripped) = target.strip_suffix(".adoc") {
+            (stripped, None, true)
+        } else if has_extname(target) {
+            (target, None, false)
+        } else {
+            // A plain word in a macro target is an internal id.
+            return XrefResolution::Internal { id: target.to_string() };
+        }
+    } else {
+        // Shorthand with no `#` is an internal id.
+        return XrefResolution::Internal { id: target.to_string() };
+    };
+
+    let text = if src2src { format!("{base}.html") } else { base.to_string() };
+    let href = match fragment {
+        Some(f) => format!("{text}#{f}"),
+        None => text.clone(),
+    };
+    XrefResolution::Interdoc { href, text }
 }
 
 /// Strip a leading URI scheme from `s`, returning the remainder. Mirrors
@@ -968,16 +1055,52 @@ mod tests {
     }
 
     #[test]
-    fn interdoc_xref_targets() {
-        assert!(is_interdoc_xref_target("other.adoc"));
-        assert!(is_interdoc_xref_target("docs/guide.html"));
-        assert!(!is_interdoc_xref_target("_section"));
-        assert!(!is_interdoc_xref_target("#frag.with.dot"));
+    fn resolve_xref_classification() {
+        use XrefResolution::*;
+        let interdoc = |href: &str, text: &str| Interdoc { href: href.into(), text: text.into() };
+        let internal = |id: &str| Internal { id: id.into() };
 
-        assert_eq!(interdoc_xref_href("other.adoc"), "other.html");
-        assert_eq!(interdoc_xref_href("dir/other.adoc#sec"), "dir/other.html#sec");
-        assert_eq!(interdoc_xref_href("page.html"), "page.html");
-        assert_eq!(interdoc_xref_href("page.html#sec"), "page.html#sec");
+        // --- formal `xref:…[]` macro ---
+        // .adoc → .html, with or without a fragment.
+        assert_eq!(resolve_xref("other.adoc", true), interdoc("other.html", "other.html"));
+        assert_eq!(
+            resolve_xref("dir/other.adoc#sec", true),
+            interdoc("dir/other.html#sec", "dir/other.html")
+        );
+        // A trailing `#` (empty fragment) is dropped.
+        assert_eq!(resolve_xref("other.adoc#", true), interdoc("other.html", "other.html"));
+        // Non-.adoc extensions pass through verbatim in the macro form.
+        assert_eq!(resolve_xref("page.html", true), interdoc("page.html", "page.html"));
+        assert_eq!(resolve_xref("page.html#sec", true), interdoc("page.html#sec", "page.html"));
+        assert_eq!(
+            resolve_xref("foo.asciidoc#sec", true),
+            interdoc("foo.asciidoc#sec", "foo.asciidoc")
+        );
+        // A plain word target in the macro form is an internal id.
+        assert_eq!(resolve_xref("_section", true), internal("_section"));
+
+        // --- shorthand `<<…>>` ---
+        // Any AsciiDoc extension is rewritten to .html when a `#` is present.
+        assert_eq!(resolve_xref("target.asciidoc#", false), interdoc("target.html", "target.html"));
+        assert_eq!(resolve_xref("readme.txt#", false), interdoc("readme.html", "readme.html"));
+        assert_eq!(resolve_xref("tigers.adoc#", false), interdoc("tigers.html", "tigers.html"));
+        assert_eq!(
+            resolve_xref("tigers.adoc#id", false),
+            interdoc("tigers.html#id", "tigers.html")
+        );
+        // Non-AsciiDoc extension still gets .html appended.
+        assert_eq!(resolve_xref("foo.pdf#", false), interdoc("foo.pdf.html", "foo.pdf.html"));
+        // No extension + `#` → .html appended.
+        assert_eq!(resolve_xref("intro#sec", false), interdoc("intro.html#sec", "intro.html"));
+        // No `#` → internal id (even with a dot).
+        assert_eq!(resolve_xref("target.adoc", false), internal("target.adoc"));
+        assert_eq!(resolve_xref("plainid", false), internal("plainid"));
+
+        // --- shared: leading `#id` and entity guard ---
+        assert_eq!(resolve_xref("#frag", false), internal("frag"));
+        assert_eq!(resolve_xref("#frag", true), internal("frag"));
+        // A `#` preceded by `&` (a character reference) is not a fragment separator.
+        assert_eq!(resolve_xref("a&#167;b", false), internal("a&#167;b"));
     }
 
     #[test]

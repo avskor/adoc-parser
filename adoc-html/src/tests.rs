@@ -4089,6 +4089,36 @@ fn test_resolved_internal_xref_not_bracketed() {
 }
 
 #[test]
+fn test_interdoc_xref_extension_rules_html() {
+    // Inter-document xref extension handling, matching Asciidoctor #2740. Each
+    // assertion was verified byte-for-byte against `asciidoctor` 2.0.23.
+    let cases: &[(&str, &str)] = &[
+        // Shorthand: a trailing `#` (empty fragment) is dropped from href and text.
+        ("<<tigers.adoc#>>", "<a href=\"tigers.html\">tigers.html</a>"),
+        // Shorthand: any AsciiDoc extension (.asciidoc/.asc/.ad/.txt) → .html.
+        ("<<target.asciidoc#,text>>", "<a href=\"target.html\">text</a>"),
+        ("<<readme.txt#>>", "<a href=\"readme.html\">readme.html</a>"),
+        ("<<doc.asc#x>>", "<a href=\"doc.html#x\">doc.html</a>"),
+        // Shorthand auto-label omits the fragment (only the path is shown).
+        ("<<tigers.adoc#id>>", "<a href=\"tigers.html#id\">tigers.html</a>"),
+        // Shorthand: a non-AsciiDoc extension still gets .html appended.
+        ("<<foo.pdf#>>", "<a href=\"foo.pdf.html\">foo.pdf.html</a>"),
+        // Shorthand: no extension + `#` → .html appended.
+        ("<<intro#sec>>", "<a href=\"intro.html#sec\">intro.html</a>"),
+        // Shorthand without `#` is an internal id (NOT inter-document).
+        ("<<target.adoc>>", "<a href=\"#target.adoc\">[target.adoc]</a>"),
+        // Formal macro: only `.adoc` is rewritten; other extensions pass through.
+        ("xref:foo.asciidoc#sec[]", "<a href=\"foo.asciidoc#sec\">foo.asciidoc</a>"),
+        ("xref:tigers.adoc#[]", "<a href=\"tigers.html\">tigers.html</a>"),
+        ("xref:NOTICE.adoc[text]", "<a href=\"NOTICE.html\">text</a>"),
+    ];
+    for (input, expected) in cases {
+        let html = to_html(input);
+        assert!(html.contains(expected), "input {input:?}\nexpected: {expected}\ngot: {html}");
+    }
+}
+
+#[test]
 fn test_colophon_section_html() {
     let html = to_html("[colophon]\n== Colophon\n\nPublishing info.");
     assert!(html.contains("class=\"sect1\""));
