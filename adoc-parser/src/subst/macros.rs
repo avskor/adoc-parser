@@ -102,14 +102,14 @@
 //!   [`passthrough_url`] reconstruction instead); [`super::try_parse`] falls back
 //!   to legacy for the whole paragraph.
 //!
-//! The one family still punting on any span sentinel via [`span_has_sentinel`] is
-//! **footnote**: the renderer (`render_footnote_text`) RE-PARSES the footnote text
-//! through the full inline pass, so it needs the *raw* source (`++raw++`), not the
-//! restored content — which the sentinel cannot reproduce (the passthrough marker
-//! count is lost). Legacy keeps the raw text, so the punt renders correctly;
-//! converting it needs the parser↔renderer redesign that carries pre-parsed
-//! footnote events. The common case — plain targets and text/quote labels — carries
-//! no sentinels and is extracted normally.
+//! **footnote** is handled like the verbatim-label families, with a twist: a body
+//! with no sentinel keeps the legacy raw-text [`Event::Footnote`] (re-parsed by the
+//! renderer), but a body that carried a sentinel is parsed here — seeded against the
+//! outer tag table — onto [`Event::FootnoteParsed`] (pre-parsed events the renderer
+//! emits directly), because the renderer re-parses *raw text* and the passthrough
+//! markers cannot be reconstructed once lifted. This retires footnote's old
+//! whole-span sentinel punt. The common case — plain targets and text/quote labels
+//! — carries no sentinels and is extracted normally.
 
 use std::borrow::Cow;
 
@@ -286,7 +286,7 @@ pub(super) fn extract(work: &mut Work, subs: SubstitutionSet, options: InlineOpt
         // arm below; `footnote:` never satisfies `scheme_at`, so the order is only
         // for clarity.
         if bytes[i] == b'f' && src[i..].starts_with("footnote:") {
-            if let Some((events, end)) = try_footnote(&src, i) {
+            if let Some((events, end)) = try_footnote(&src, i, work, subs, options) {
                 out.push_str(&work.macro_sentinel(events));
                 i = end;
                 continue;
@@ -917,17 +917,31 @@ fn try_icon(src: &str, start: usize, work: &Work) -> Option<(Vec<Event<'static>>
 /// engine deliberately mirrors the legacy form there, so those rare forms match
 /// legacy (and, like legacy, diverge from Asciidoctor).
 ///
-/// Unlike the other verbatim leaves, footnote still declines on ANY span sentinel
-/// (the [`span_has_sentinel`] guard) rather than restoring it: the renderer
-/// (`render_footnote_text`) RE-PARSES the stored text through the full inline pass,
-/// so it needs the *raw* source (`footnote:[++raw++]` must reach the renderer as
-/// `++raw++` for the passthrough to survive). [`restore_verbatim`] would hand back
-/// the restored *content* (`raw`), which the renderer would then re-substitute
-/// (`__` → emphasis) — wrong. The raw markers cannot be reconstructed from the
-/// passthrough leaf, so the punt (legacy keeps the raw text) is the correct
-/// behaviour until footnotes carry pre-parsed events across the parser↔renderer
-/// boundary.
-fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)> {
+/// The body splits two ways. A body with **no** sentinel keeps the legacy
+/// representation exactly — raw text on [`Event::Footnote`], re-parsed by the
+/// renderer (`render_footnote_text`) — so the common footnote is byte-for-byte
+/// unchanged. A body that **carried a passthrough/escape sentinel** (an earlier
+/// pass lifted `++raw++` / `\*` out of `footnote:[…]`) is parsed here, seeded
+/// against the outer tag table ([`reparse_seeded`]), into pre-parsed events on
+/// [`Event::FootnoteParsed`] that the renderer emits directly — the native
+/// replacement for the old "sentinel in the body → punt to legacy" guard. That
+/// guard existed because the renderer re-parses *raw text*: restoring the body to
+/// `raw` (via [`restore_verbatim`]) would let the renderer re-substitute it
+/// (`__x__` → emphasis) — wrong — and the passthrough markers cannot be
+/// reconstructed from the leaf, so the body must be parsed before the markers are
+/// lost. The newline-collapse the renderer applies to a multi-line body is done
+/// here too ([`collapse_footnote_newlines`]) so the parsed events match.
+///
+/// The id is a verbatim anchor: a sentinel in it (the pathological
+/// `footnote:++x++[…]`) is restored like any macro target, or punts on a char-ref;
+/// a real id has none, so that is the borrowed fast path.
+fn try_footnote(
+    src: &str,
+    start: usize,
+    work: &Work,
+    subs: SubstitutionSet,
+    options: InlineOptions,
+) -> Option<(Vec<Event<'static>>, usize)> {
     let after_prefix = start + 9; // after "footnote:"
     let rest = src.get(after_prefix..)?;
     if rest.is_empty() {
@@ -949,21 +963,57 @@ fn try_footnote(src: &str, start: usize) -> Option<(Vec<Event<'static>>, usize)>
     let content = unescape_close_bracket(&bracket_rest[1..bracket_end]);
     let id_len = id.map_or(0, str::len);
     let end = after_prefix + id_len + 1 + bracket_end;
-    if span_has_sentinel(src, start, end) {
-        return None;
-    }
-    let events: Vec<Event<'static>> = match (id, content.is_empty()) {
-        // `footnote:id[]` — a reference to an existing definition.
-        (Some(id_str), true) => vec![Event::FootnoteRef {
-            id: Cow::Owned(id_str.to_string()),
-        }],
-        // `footnote:[text]` / `footnote:id[text]` — defines a footnote.
-        _ => vec![Event::Footnote {
-            id: id.map(|s| Cow::Owned(s.to_string())),
+
+    let id: Option<String> = match id {
+        Some(s) => Some(restore_verbatim(work, Cow::Borrowed(s))?.into_owned()),
+        None => None,
+    };
+
+    let events: Vec<Event<'static>> = if content.is_empty() {
+        match id {
+            // `footnote:id[]` — a reference to an existing definition.
+            Some(id_str) => vec![Event::FootnoteRef {
+                id: Cow::Owned(id_str),
+            }],
+            // `footnote:[]` — an anonymous footnote with an empty body (legacy
+            // still emits a `Footnote` here, not a reference).
+            None => vec![Event::Footnote {
+                id: None,
+                text: Cow::Owned(String::new()),
+            }],
+        }
+    } else if content.as_bytes().contains(&TAG_LEAD) {
+        // Body carried a sentinel — parse it now (the renderer can no longer
+        // recover the raw markers) and hand the renderer finished events.
+        let collapsed = collapse_footnote_newlines(&content);
+        let body = reparse_seeded(&collapsed, &work.tags, subs, options);
+        vec![Event::FootnoteParsed {
+            id: id.map(Cow::Owned),
+            events: body,
+        }]
+    } else {
+        // Common case — no sentinel — unchanged: raw text the renderer re-parses.
+        vec![Event::Footnote {
+            id: id.map(Cow::Owned),
             text: Cow::Owned(content.into_owned()),
-        }],
+        }]
     };
     Some((events, end))
+}
+
+/// Collapse a multi-line footnote body the way the renderer's
+/// `render_footnote_text` does before parsing: right-trim each line and join with
+/// a single space (Asciidoctor folds a footnote spanning source lines onto one).
+/// A single-line body is returned borrowed unchanged. Applied to the
+/// sentinel-bearing body so the natively parsed [`Event::FootnoteParsed`] matches
+/// the renderer's collapse; sentinels carry no `\n`, so a passthrough is never
+/// split.
+fn collapse_footnote_newlines(s: &str) -> Cow<'_, str> {
+    if s.contains('\n') {
+        Cow::Owned(s.split('\n').map(str::trim_end).collect::<Vec<_>>().join(" "))
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 /// Shared body for the two bracket-only UI macros `kbd:[keys]` and `btn:[label]`.
@@ -1779,19 +1829,6 @@ fn reparse_seeded(
     }
 }
 
-/// Whether `src[start..end]` (a candidate macro span) contains a tag sentinel —
-/// i.e. an earlier pass already lifted a passthrough/escape/char-ref out of it,
-/// so the raw text the legacy parser would re-parse is gone. Every caller treats
-/// `true` as a decline, so this records the punt ([`flag_punt`]) on the way out,
-/// signalling [`super::try_parse`] to fall back to legacy for the paragraph.
-fn span_has_sentinel(src: &str, start: usize, end: usize) -> bool {
-    let has = src.as_bytes()[start..end].contains(&TAG_LEAD);
-    if has {
-        flag_punt();
-    }
-    has
-}
-
 /// Whether a macro *target* substring (a verbatim id / URL / email the tag stores
 /// without re-parsing) carries a sentinel. Unlike a label — which the engine can
 /// now re-parse natively against the seeded tag table — a target's lost verbatim
@@ -1842,7 +1879,7 @@ fn attr_has_sentinel(attr: Option<&str>) -> bool {
 /// regress the far more common resolved-attribute form).
 ///
 /// Returns `None` — signalling the caller to punt to legacy, preserving the
-/// previous [`span_has_sentinel`] decline — when the span carries any sentinel
+/// previous whole-span sentinel decline — when the span carries any sentinel
 /// that is NOT a `Literal`: passthrough / attribute-reference / char-ref / macro
 /// targets are out of scope and still fall back.
 fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {

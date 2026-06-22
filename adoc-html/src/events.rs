@@ -322,19 +322,23 @@ impl HtmlRenderer {
                     let mut rendered = String::new();
                     self.render_footnote_text(&mut rendered, &text);
                     let num = self.footnote_registry.define(id.as_deref(), &rendered);
-                    output.push_str("<sup class=\"footnote\"");
-                    if let Some(ref id) = id {
-                        output.push_str(" id=\"_footnote_");
-                        html_escape(output, id);
-                        output.push('"');
+                    emit_footnote_def(output, id.as_deref(), num);
+                }
+            }
+            Event::FootnoteParsed { id, events } => {
+                // Same as `Event::Footnote`, but the parser already parsed the body
+                // into events (its raw form carried a passthrough/escape sentinel
+                // the renderer's re-parse would mangle), so render those directly
+                // instead of re-parsing text.
+                if let Some(num) = id.as_deref().and_then(|i| self.footnote_registry.lookup(i)) {
+                    push_footnote_ref(output, num);
+                } else {
+                    let mut rendered = String::new();
+                    for ev in events {
+                        self.push_event(&mut rendered, ev);
                     }
-                    output.push_str(">[<a class=\"footnote\" id=\"_footnoteref_");
-                    output.push_str(&num.to_string());
-                    output.push_str("\" href=\"#_footnotedef_");
-                    output.push_str(&num.to_string());
-                    output.push_str("\" title=\"View footnote.\">");
-                    output.push_str(&num.to_string());
-                    output.push_str("</a>]</sup>");
+                    let num = self.footnote_registry.define(id.as_deref(), &rendered);
+                    emit_footnote_def(output, id.as_deref(), num);
                 }
             }
             Event::FootnoteRef { id } => {
@@ -1413,6 +1417,25 @@ impl HtmlRenderer {
 /// definition), `footnoteref` class on the sup.
 fn push_footnote_ref(output: &mut String, num: usize) {
     output.push_str("<sup class=\"footnoteref\">[<a class=\"footnote\" href=\"#_footnotedef_");
+    output.push_str(&num.to_string());
+    output.push_str("\" title=\"View footnote.\">");
+    output.push_str(&num.to_string());
+    output.push_str("</a>]</sup>");
+}
+
+/// Emit the `<sup class="footnote">…</sup>` marker for a footnote *definition*
+/// (the first occurrence, after it has been registered as `num`). Shared by the
+/// raw-text [`Event::Footnote`] and pre-parsed [`Event::FootnoteParsed`] paths.
+fn emit_footnote_def(output: &mut String, id: Option<&str>, num: usize) {
+    output.push_str("<sup class=\"footnote\"");
+    if let Some(id) = id {
+        output.push_str(" id=\"_footnote_");
+        html_escape(output, id);
+        output.push('"');
+    }
+    output.push_str(">[<a class=\"footnote\" id=\"_footnoteref_");
+    output.push_str(&num.to_string());
+    output.push_str("\" href=\"#_footnotedef_");
     output.push_str(&num.to_string());
     output.push_str("\" title=\"View footnote.\">");
     output.push_str(&num.to_string());
