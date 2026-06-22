@@ -1262,6 +1262,59 @@ mod tests {
         );
     }
 
+    /// A `++`/`+++` run that fails to close as a double/triple passthrough is not
+    /// a passthrough — Asciidoctor's `InlinePassRx` single-`+` form then claims it
+    /// (its `InlinePassMacroRx` multi-plus phase having declined). The engine
+    /// reproduces this by falling through to the single-plus form from the same
+    /// `+`, with the constrained close allowing an adjacent `+` (`\S` before,
+    /// non-word after). The legacy parser left these runs literal (`+++` → `+++`),
+    /// so the engine diverges from legacy here and is pinned against the
+    /// Asciidoctor 2.0.23 reference instead.
+    #[test]
+    fn unclosed_plus_run_reparses_as_single_plus_matches_asciidoctor() {
+        // `+++` → single-plus with content `+` (asciidoctor renders `+`).
+        assert_eq!(pipeline("+++"), vec![Event::Text("+".into())]);
+        // `+x++` → `+x+` passthrough (`x`) then a literal trailing `+`.
+        assert_eq!(
+            pipeline("+x++"),
+            vec![Event::Text("x".into()), Event::Text("+".into())]
+        );
+        // `+text++more` → `text` then `+more`.
+        assert_eq!(
+            pipeline("+text++more"),
+            vec![Event::Text("text".into()), Event::Text("+more".into())]
+        );
+        // `note +++ here` → the run reparses to a single `+`.
+        assert_eq!(
+            pipeline("note +++ here"),
+            vec![
+                Event::Text("note ".into()),
+                Event::Text("+".into()),
+                Event::Text(" here".into()),
+            ]
+        );
+        // The frontier mdbasics line: `+*+`/`+++`/`+-+` each a single-plus form
+        // (asciidoctor `(*, +, and -)`).
+        assert_eq!(
+            pipeline("(+*+, +++, and +-+)"),
+            vec![
+                Event::Text("(".into()),
+                Event::Text("*".into()),
+                Event::Text(", ".into()),
+                Event::Text("+".into()),
+                Event::Text(", and ".into()),
+                Event::Text("-".into()),
+                Event::Text(")".into()),
+            ]
+        );
+        // Regression guard: a single-plus span must NOT claim a `+` that belongs
+        // to a real `++…++`/`+++…+++` passthrough — the leading `+x` stays literal.
+        assert_eq!(
+            pipeline("+x ++y++"),
+            vec![Event::Text("+x ".into()), Event::Text("y".into())]
+        );
+    }
+
     /// With the character-reference survival pass (and the `\&#…;` escape) ported,
     /// the pipeline must reproduce legacy on valid references (kept as raw
     /// `InlinePassthrough`), invalid `&`s (left as escaped `Text`), references

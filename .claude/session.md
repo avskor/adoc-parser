@@ -1,5 +1,56 @@
 # Session context
 
+## Сессия (2026-06-22) — F-AR: незакрытый `++`/`+++`-run → одиночный `+…+` (ветка `fix/plus-run-single-plus-fallback`, off master `d053acb`, НЕ закоммичена)
+
+Запрос «начни следующую задачу из TODO.md». Master `d053acb` чист (DEFERRED (a) СМЕРЖЕН — прошлая session-запись «не
+закоммичена» устарела). Открытых `[ ]` 3, ВСЕ синтетические «0 корпусного выигрыша» (DEFERRED b/c TODO:1226; per-subst
+escape-гейтинг TODO:1228). **Вместо синтетики — frontier-триаж** (`frontier_parity.py`): 227 identical, 6 clean-div.
+Проверил diff=1 случаи сам (память `feedback_frontier_triage`: не доверять меткам прошлой сессии): doctime-localtime
+(текущее время, не-баг), migration (`{asciidoctor-version}` встроенный атрибут, не-баг), **mdbasics.adoc = РЕАЛЬНЫЙ баг**.
+
+### Задача (НЕ из TODO-списка — найдена триажем; реальный frontier-выигрыш > синтетика)
+`mdbasics.adoc` [123-124] `(+*+,\n+++, and +-+)`: мы `(*, ++, and +-)`, asciidoctor `(*, +, and -)`. `+++`/`+-+`/`+x++` —
+незакрытые `++`/`+++`-run, которые должны переразбираться как одиночный `+…+` passthrough.
+
+### Корень (`subst/passthrough.rs`, выведен из `rx.rb:584-598` + 20+ проб asciidoctor 2.0.23)
+asciidoctor извлекает passthrough в ДВА прохода: `InlinePassMacroRx`(`+++…+++`/`++…++`) ПЕРВЫМ, затем
+`InlinePassRx`(одиночный `+…+`). `++`/`+++`-run без multi-plus-close = НЕ passthrough → одиночный `+` его забирает
+(`+++`→`+`, `+x++`→`x`+`+`). Наш `try_plus` при провале triple+double возвращал `None`; `try_single_plus` close-правило
+имело ЛИШНИЕ `!preceded_by_plus`/`!followed_by_plus` (у asciidoctor close = только `\S` перед + `(?!CG_WORD)` после).
+
+### Реализация (1 файл, `adoc-parser/src/subst/passthrough.rs`)
+- `try_plus`: triple/double ветки → `.or_else(try_single_plus)` (вне compat; compat не тронут — single/double в quotes).
+- `try_single_plus` close-loop: сняты `!preceded_by_plus`/`!followed_by_plus`; добавлен пропуск настоящих `++…++`/`+++…+++`
+  (новый `multi_plus_span_len`, triple-then-double как `try_plus`) → зеркало двухфазности: одиночный `+` не поглощает `+`
+  реального multi-plus (`+x ++y++`→`+x y`). +docstring-свип (try_plus/try_single_plus/multi_plus_span_len).
+
+### КЛЮЧ
+Движок НАМЕРЕННО ≠ legacy (legacy держит `+++` литералом — баг) → тест сверяет с asciidoctor-эталоном, не с legacy
+(как `marker_escape_matches_asciidoctor`). multi-plus skip ОБЯЗАТЕЛЕН: без него снятие `+`-adjacency дало бы регресс
+`+x ++y++`→`x ++y+`.
+
+### Тесты
++1 parser `unclosed_plus_run_reparses_as_single_plus_matches_asciidoctor` (subst/mod.rs:1265: `+++`/`+x++`/`+text++more`/
+`note +++ here`/mdbasics-строка == asciidoctor + регресс-гард `+x ++y++`). +1 html
+`test_unclosed_plus_run_reparses_as_single_plus_html` (tests.rs: `<p>(*, +, and -)</p>` байт-в-байт + 4 формы).
+
+### Верификация (AIRTIGHT)
+- clippy 0 (`--workspace`); test --workspace зелёное (**parser 641→642, html 499→500**, compat 233).
+- **Гейт 344/344 байт-в-байт** vs `/tmp/adoc_base` (=master `d053acb`; `gate_check.py` 0 diff).
+- **Frontier 250 new-vs-base = РОВНО 1 файл** (mdbasics IMPROVED → байт-в-байт с asciidoctor; identical 227→228), 0 регрессий
+  (`fsweep.py` в scratchpad).
+- 20+ CLI-проб == asciidoctor 2.0.23 (реальные формы + регресс-гарды).
+
+### NEXT
+- Коммит/merge --no-ff в master + push — **ПО ЗАПРОСУ** (НЕ без спроса). base `/tmp/adoc_base` = master `d053acb`.
+- **Вне scope (предсуществующее, НЕ регрессия, синтетика):** одиночный `+`, охватывающий placeholder извлечённого `++…++`
+  (`+a ++b++ c+` → ad `a b c`, мы `a ++b++ c` = байт-в-байт base) — требует истинно-двухфазной архитектуры.
+- Остаток frontier clean-div 5: manpage [146] doctype, multi-special-ex [87] book-деградация, CHANGELOG [2] (xref-ext +
+  non-escaped эллипсис в URL), doctime/migration (не-баги). Остаток `[ ]`: DEFERRED (b/c) escaped `\&#…;`/`\++`, per-subst
+  escape-гейтинг (все синтетика «0 корпусного выигрыша»).
+
+---
+
 ## Сессия (2026-06-22) — DEFERRED (a): char-ref в VERBATIM-target + stem (ветка `fix/char-ref-verbatim-target-stem`, off master `e493ba1`, НЕ закоммичена)
 
 Запрос «начни следующую задачу из TODO.md». Master `e493ba1` чист (decline №3 СМЕРЖЕН). Открытых `[ ]`: DEFERRED-блок
