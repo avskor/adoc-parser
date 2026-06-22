@@ -135,10 +135,15 @@ impl HtmlRenderer {
                 } else if self.kbd_mode {
                     self.render_kbd_keys(output, &text);
                 } else if self.button_mode {
-                    // A `btn:[…]` label is verbatim content; preserve an
-                    // already-formed character reference (`btn:[a&#167;b]` →
-                    // `a&#167;b`) while a bare `&` still escapes.
-                    html_escape_text_preserving_refs(output, &text);
+                    // A `btn:[…]` label carries the line's inline substitutions
+                    // (Asciidoctor runs quotes/replacements before the macros pass
+                    // extracts the button): `btn:[~Ok~]` → `<sub>Ok</sub>`. Render
+                    // through the current subs; clearing `button_mode` keeps any
+                    // nested text events on the normal path. A plain label takes the
+                    // no-markup fast path (still preserving `a&#167;b` char refs).
+                    self.button_mode = false;
+                    self.render_ui_macro_inline(output, &text, false);
+                    self.button_mode = true;
                 } else if self.menu_target.is_some() {
                     self.menu_items = Some(text.to_string());
                 } else if self.icon_name.is_some() {

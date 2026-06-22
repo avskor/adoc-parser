@@ -607,6 +607,41 @@ impl HtmlRenderer {
         }
     }
 
+    /// Render an experimental UI-macro segment (a `btn:[…]` label, or a `menu:`
+    /// caption/submenu/item) through the current block's inline substitutions.
+    /// Asciidoctor runs quotes/replacements over the whole line BEFORE the macros
+    /// pass extracts the macro, so `btn:[~Ok~]` arrives as `<sub>Ok</sub>` and
+    /// `menu:View[_Zoom_ > Reset]` carries `<em>Zoom</em>`. The no-markup fast path
+    /// uses a character-reference-preserving escape (so `menu:File[Save As&#8230;]`
+    /// keeps the entity) — `escape_quotes` picks the attribute-style (`"`→`&quot;`,
+    /// menu parts) vs text-style (`"` left literal, button label) variant, matching
+    /// the previous non-substituted output byte-for-byte when there is no markup.
+    pub(crate) fn render_ui_macro_inline(
+        &mut self,
+        output: &mut String,
+        value: &str,
+        escape_quotes: bool,
+    ) {
+        let options =
+            adoc_parser::InlineOptions::from_attr_lookup(|name| self.document_attrs.contains_key(name));
+        let events =
+            adoc_parser::InlineParser::parse_str_with_subs_options(value, self.current_subs(), options);
+        if events.len() == 1
+            && let Event::Text(ref t) = events[0]
+            && t.as_ref() == value
+        {
+            if escape_quotes {
+                html_escape_preserving_refs(output, value);
+            } else {
+                html_escape_text_preserving_refs(output, value);
+            }
+            return;
+        }
+        for event in events {
+            self.push_event(output, event);
+        }
+    }
+
     /// Render footnote text through inline parsing with the surrounding block's
     /// substitutions, mirroring Asciidoctor, which substitutes the footnote
     /// macro's text as part of the inline pass (quotes, replacements, macros …).

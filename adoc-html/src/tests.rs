@@ -2710,6 +2710,41 @@ fn test_menu_no_items_html() {
 }
 
 #[test]
+fn test_btn_inline_subst_html() {
+    // The button label carries the line's inline substitutions (Asciidoctor runs
+    // quotes/replacements before the macros pass extracts the button):
+    // `~_Ok_~` → `<sub><em>Ok</em></sub>`, `*Bold*` → `<strong>Bold</strong>`.
+    let sub = to_html(":experimental:\n\nbtn:[~_Ok_~]");
+    assert_eq!(sub, "<div class=\"paragraph\">\n<p><b class=\"button\"><sub><em>Ok</em></sub></b></p>\n</div>\n");
+    let bold = to_html(":experimental:\n\nbtn:[*Bold*]");
+    assert_eq!(bold, "<div class=\"paragraph\">\n<p><b class=\"button\"><strong>Bold</strong></b></p>\n</div>\n");
+    // A plain label keeps the no-markup fast path: char refs preserved, `"` literal.
+    let refs = to_html(":experimental:\n\nbtn:[a&#167;b]");
+    assert_eq!(refs, "<div class=\"paragraph\">\n<p><b class=\"button\">a&#167;b</b></p>\n</div>\n");
+    let quote = to_html(":experimental:\n\nbtn:[\"q\"]");
+    assert_eq!(quote, "<div class=\"paragraph\">\n<p><b class=\"button\">\"q\"</b></p>\n</div>\n");
+}
+
+#[test]
+fn test_menu_segment_inline_subst_html() {
+    // Each menu caption/segment carries the line's inline substitutions; the `>`
+    // split happens on the raw items first, then each part is rendered through the
+    // current subs. `_Zoom_` → `<em>Zoom</em>` inside `<b class="submenu">`.
+    let html = to_html(":experimental:\n\nmenu:View[_Zoom_ > Reset]");
+    assert_eq!(
+        html,
+        "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">View</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"submenu\"><em>Zoom</em></b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Reset</b></span></p>\n</div>\n"
+    );
+    // A menu item's `...` is curled by replacements (Asciidoctor; raw UTF-8 here vs
+    // its NCR `&#8230;&#8203;`, the universal typographic-encoding background diff).
+    let ellipsis = to_html(":experimental:\n\nmenu:File[Save As...]");
+    assert_eq!(
+        ellipsis,
+        "<div class=\"paragraph\">\n<p><span class=\"menuseq\"><b class=\"menu\">File</b>&#160;<b class=\"caret\">&#8250;</b> <b class=\"menuitem\">Save As\u{2026}\u{200b}</b></span></p>\n</div>\n"
+    );
+}
+
+#[test]
 fn test_icon_basic_html() {
     // Glyph path requires `:icons: font`; without it the renderer emits the
     // literal text fallback (see test_icon_text_fallback_*).
