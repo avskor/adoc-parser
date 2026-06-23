@@ -7139,3 +7139,41 @@ fn test_block_xref_reftext_and_suppressed_caption_html() {
     );
     assert!(sup.contains("<a href=\"#f2\">Plain</a>"), "suppressed caption → title: {sup}");
 }
+
+#[test]
+fn test_section_id_from_substituted_title_html() {
+    // Asciidoctor derives the auto-id from the *substituted* title, so the
+    // typographic replacements run before sanitization. The em-dash and
+    // ellipsis emit glyphs that the id sanitizer drops, and the spaced em-dash
+    // form consumes its flanking spaces — collapsing the neighbours together.
+
+    // Spaced em-dash: " -- " is consumed whole → `_ab`, not `_a_b`.
+    let spaced = to_html("== A -- B\n\nx");
+    assert!(spaced.contains("<h2 id=\"_ab\">"), "spaced em-dash id: {spaced}");
+
+    // Word em-dash `pre--post`: the two words fuse; the later space stays a sep.
+    let word = to_html("== pre--post word\n\nx");
+    assert!(word.contains("<h2 id=\"_prepost_word\">"), "word em-dash id: {word}");
+
+    // Ellipsis `...` collapses to nothing (no flanking spaces to keep) → `_ab`.
+    let ell = to_html("== a...b\n\nx");
+    assert!(ell.contains("<h2 id=\"_ab\">"), "ellipsis id: {ell}");
+
+    // `(C)` becomes the © glyph, which is dropped (would have leaked a `c`).
+    let copy = to_html("== Foo (C) Bar\n\nx");
+    assert!(copy.contains("<h2 id=\"_foo_bar\">"), "copyright id: {copy}");
+
+    // Attribute reference resolved first, then the spaced em-dash fuses the
+    // Cyrillic word to the expanded value (the real-world case that surfaced this).
+    let attr = to_html(":product: FORSed Architect\n\n== Решение -- {product}\n\nx");
+    assert!(
+        attr.contains("<h2 id=\"_решениеforsed_architect\">"),
+        "attr + em-dash id: {attr}"
+    );
+
+    // Regression: a lone hyphen and a lone dot stay separators (no replacement).
+    let plain = to_html("== well-known\n\nx");
+    assert!(plain.contains("<h2 id=\"_well_known\">"), "lone hyphen id: {plain}");
+    let triple = to_html("== a---b\n\nx");
+    assert!(triple.contains("<h2 id=\"_a_b\">"), "triple hyphen (no em-dash) id: {triple}");
+}

@@ -627,6 +627,20 @@ impl<'a> BlockScanner<'a> {
         }
     }
 
+    /// Auto-generate a section/heading id, mirroring Asciidoctor's
+    /// `Section.generate_id`, which slugifies the title *after* the normal
+    /// substitutions have run (`Section#title` returns `apply_title_subs @title`).
+    /// We resolve attribute references and then apply the typographic
+    /// `:replacements` substitution before sanitizing. This matters because the
+    /// em-dash and ellipsis replacements emit Unicode glyphs that `generate_id`
+    /// drops, and the spaced em-dash form consumes its flanking spaces: `A -- B`
+    /// becomes `_ab` (not `_a_b`), `a...b` becomes `_ab`, matching Asciidoctor.
+    fn generate_title_id(&self, title: &str) -> String {
+        let resolved = self.resolve_title_attr_refs(title);
+        let substituted = crate::inline::apply_typographic_replacements(&resolved, true, true);
+        scanner::generate_id(&substituted, &self.idprefix, &self.idseparator)
+    }
+
     fn is_in_list_context(&self) -> bool {
         self.context_stack.iter().rev().any(|ctx| {
             matches!(ctx, BlockContext::ListItem | BlockContext::DescriptionListEntry { .. } | BlockContext::CalloutListItem)
@@ -1506,7 +1520,7 @@ impl<'a> BlockScanner<'a> {
         self.header_emitted = true;
         self.advance();
 
-        let id = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
+        let id = self.generate_title_id(title);
 
         // Collect header content lines first
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -1703,7 +1717,7 @@ impl<'a> BlockScanner<'a> {
         title: &'a str,
         pre_attrs: Vec<Event<'a>>,
     ) -> Option<Event<'a>> {
-        let id = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
+        let id = self.generate_title_id(title);
 
         // Collect header content lines after the title
         let mut header_events: Vec<Event<'a>> = Vec::new();
@@ -1846,7 +1860,7 @@ impl<'a> BlockScanner<'a> {
                 explicit
             }
             None => {
-                let base = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
+                let base = self.generate_title_id(title);
                 self.unique_auto_id(base)
             }
         };
@@ -1904,7 +1918,7 @@ impl<'a> BlockScanner<'a> {
             match attrs.id.clone() {
                 Some(explicit) => self.register_explicit_id(&explicit),
                 None => {
-                    let base = scanner::generate_id(&self.resolve_title_attr_refs(title), &self.idprefix, &self.idseparator);
+                    let base = self.generate_title_id(title);
                     attrs.id = Some(self.unique_auto_id(base));
                 }
             }
