@@ -7476,3 +7476,32 @@ fn test_section_id_from_substituted_title_html() {
     let triple = to_html("== a---b\n\nx");
     assert!(triple.contains("<h2 id=\"_a_b\">"), "triple hyphen (no em-dash) id: {triple}");
 }
+
+#[test]
+fn test_section_id_strips_inline_formatting_html() {
+    // A formatted section title slugifies on its visible text — the inline
+    // quote/role markers are dropped before the id is generated, mirroring
+    // Asciidoctor deriving the id from the tag-stripped substituted title.
+    // The rendered heading still carries the formatting.
+    let role = to_html("== [underline]#Basic formats#\n\nx");
+    assert!(role.contains("<h2 id=\"_basic_formats\">"), "role span id: {role}");
+    assert!(
+        role.contains("<span class=\"underline\">Basic formats</span>"),
+        "role span still rendered: {role}"
+    );
+    assert!(!role.contains("_underline"), "marker leaked into id: {role}");
+
+    // Constrained emphasis: `_Sidebar_ block` → `_sidebar_block`, not the
+    // double-underscore `__sidebar_block` the raw marker would produce.
+    let em = to_html("=== _Sidebar_ block\n\nx");
+    assert!(em.contains("<h3 id=\"_sidebar_block\">"), "emphasis id: {em}");
+
+    // Strong / monospace / superscript markers are stripped; superscript fuses
+    // its neighbours with no separator (`Super^script^` → `superscript`).
+    let bold = to_html("== *Bold* title\n\nx");
+    assert!(bold.contains("<h2 id=\"_bold_title\">"), "strong id: {bold}");
+    let code = to_html("== A `code` here\n\nx");
+    assert!(code.contains("<h2 id=\"_a_code_here\">"), "monospace id: {code}");
+    let sup = to_html("== Super^script^ x\n\nx");
+    assert!(sup.contains("<h2 id=\"_superscript_x\">"), "superscript id: {sup}");
+}
