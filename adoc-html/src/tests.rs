@@ -5564,6 +5564,24 @@ fn test_monospace_replacements_and_char_refs_html() {
 }
 
 #[test]
+fn test_copyright_registered_letter_adjacent_html() {
+    // Asciidoctor `(C)`/`(R)` (type `:none`) curl even between letters, with no
+    // surrounding-context guard. Verified vs asciidoctor 2.0.23:
+    // `a(C)b` → `a©b`, `x(R)y` → `x®y`, `m(TM)n` → `m™n`.
+    let html = to_html("a(C)b and x(R)y and m(TM)n");
+    assert!(
+        html.contains("a\u{00A9}b and x\u{00AE}y and m\u{2122}n"),
+        "(C)/(R)/(TM) should curl adjacent to letters. Got: {html}"
+    );
+    // The escaped forms stay literal regardless of adjacency.
+    let html = to_html("a\\(C)b and x\\(R)y");
+    assert!(
+        html.contains("a(C)b and x(R)y"),
+        "escaped (C)/(R) stay literal. Got: {html}"
+    );
+}
+
+#[test]
 fn test_apostrophe_unicode_word_char_html() {
     // Asciidoctor's apostrophe replacement `(\p{Alnum})'(?=\p{Alpha})` is
     // Unicode-aware, so a multi-byte letter beside the apostrophe still curls

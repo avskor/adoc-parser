@@ -1,68 +1,62 @@
 # Session context
 
-## Сессия (2026-06-23, 4-я) — F-BG: `replacements` в inline-link TARGET (`...`/`--` курлятся в href)
+## Сессия (2026-06-23, 5-я) — F-BH: `(C)`/`(R)` курлятся рядом с буквой
 
-Запрос «начни следующую задачу». master `a8bdd1c` (F-BF смержен). Триаж frontier (parity по обоим корпусам):
-frontier исчерпан — 229 identical, остаток CLEAN = manpage (146, др. бэкенд) + 2 env-intrinsic single-diff
-(`{docdate}`/`{asciidoctor-version}`, нестабильны) + **`CHANGELOG.adoc` (1 token-diff, ЕДИНСТВЕННЫЙ стабильный)**.
-adoc2docx — 45 identical / 4 крупных мульти-root (test 1105 / source 681 / xml 291 / callouts 195 = Rouge/sequential-quotes).
+Запрос «начни следующую задачу» → пользователь выбрал направление **«дефернутые остатки»** (AskUserQuestion,
+т.к. корпуса исчерпаны). master `85a7a72` (F-BG смержен).
 
-Ветка `fix/replacements-in-link-target` (от master `a8bdd1c`, **НЕ закоммичена** — паттерн F-*: коммит ПО ЗАПРОСУ).
+### Триаж: корпуса ИСЧЕРПАНЫ (verified фактом, не меткой)
+- **Гейт** (`/mnt/c/tmp/adoc-test/`, 344): **344/344** byte-identical (регресс-гард чист).
+- **Frontier** (250): **230 identical**, 3 CLEAN — все нерешаемы: `manpage.adoc` (146 diff, ДРУГОЙ бэкенд),
+  `migration.adoc` (1 diff = `{asciidoctor-version}`→`2.0.23`, мы не asciidoctor — нерешаемо),
+  `doctime-localtime.adoc` (1 diff = `{localtime}` — мы УЖЕ поддерживаем, diff = артефакт времени снятия refcache).
+- **adoc2docx** (52): **45 identical**, 4 CLEAN — **ВСЕ Rouge-подсветка** (verified showdiff: первый diff в каждом
+  файле = `<span class="kd/nc/na/nb/s1">` для Java/XML/Ruby/YAML; обёрточные классы `linenums`/`lineno`/`linenos gl`
+  тоже часть Rouge-форматтера). test 1105 / source 681 / xml 291 / callouts 195. Реализация Rouge = многосессионная
+  задача, byte-parity без неё недостижим.
+- **Вывод:** лёгких single-root near-miss больше НЕТ. Развилка → AskUserQuestion → «дефернутые остатки».
 
-### Корень (verified)
-CHANGELOG строка 1173: `compare/v1.5.6.1...v1.5.6.2[full diff]`. asciidoctor курлит `...`→`&#8230;&#8203;` в href
-(showdiff показывал raw `…​` т.к. python HTMLParser декодирует charref'ы в значениях атрибутов). asciidoctor гонит
-`replacements` ДО `macros` → `...` в URL курлится до автолинковки. Наш движок (`subst/mod.rs run_pipeline`) гонит
-`macros` ДО `replacements` (зеркало legacy) → URL извлекается в leaf-токен, `...` не виден replacements.
-Метрика (`frontier_parity.py`/`showdiff.py` через `normalize_html`) NCR-нейтрализована (HTMLParser декодирует
-`&#8230;`↔`…`), поэтому raw UTF-8 `…​` у нас == их `&#8230;&#8203;` → token-identical.
-
-### Сделано — фикс (4 файла, движок + рендерер)
-- **`adoc-parser/src/inline.rs`**: поле `InlineOptions.link_target_pre_substituted: bool` (default false = курлим);
-  добавлено в `from_attr_lookup` literal (false, не attribute-derived — контекстный флаг).
-- **`adoc-parser/src/subst/macros.rs`**: `reconstruct_link_target(work, span, options)` — прогоняет СЫРЫЕ сегменты
-  таргета через `crate::inline::apply_typographic_replacements(seg, false, false)` (URL без пробелов → spaced em-dash
-  невозможен; `false,false` = embedded mid-line). Sealed Literal/CharRef leaves сплайсятся VERBATIM → escaped `\...`
-  (запечатан escape-пассом как `Literal("...")`) остаётся литералом, как asciidoctor `/\\?\.\.\./`. Новый helper
-  `maybe_curl_link_target(seg, curl)`. `try_link` no-sentinel ветка теперь `reconstruct_link_target(...)?` (курлит,
-  infallible). 4 caller'а (try_link + 3× try_autolink) прокидывают `options`. Курлинг ПОДАВЛЕН при флаге.
-- **`adoc-html/src/lib.rs`**: `render_inline_value_with_subs_flag(..., link_target_pre_substituted)` (старый
-  `_with_subs` делегирует false).
-- **`adoc-html/src/events.rs`**: `AttributeReference` Document-ветка, combined `{attr}value[text]` реинлайн (строка
-  ~278) ставит флаг **true** → НЕ курлит повторно. Корень: новый движок гонит escape ДО attributes, поэтому `\...` в
-  захваченных trailing_brackets уже потерял backslash к моменту реинлайна → курлинг defeated бы escape. Гард — тест 605.
-- **+2 теста**: `unescaped_ellipsis_in_url_target_curls` (parser, event-уровень: top-level курлит, флаг подавляет);
-  `test_unescaped_ellipsis_in_link_target_curls_html` (html: link:/bare/URL[text] `...`→`…​`, `--`→`—​`).
+### Сделано — F-BH (ветка `fix/copyright-registered-letter-adjacent` от master `85a7a72`, НЕ закоммичена)
+Взят дефернутый остаток F-BG(1): `(C)`/`(R)` рядом с буквой не курлились.
+- **Корень:** `apply_typographic_replacements` (`adoc-parser/src/inline.rs`) гейтил `(C)`/`(R)` условием
+  `&& !matches!(bytes.get(i+3), Some(b'A'..=b'Z' | b'a'..=b'z'))` — курлил только если ЗА маркером НЕ буква.
+  asciidoctor `REPLACEMENTS` `/\\?\(C\)/`/`/\\?\(R\)/` тип `:none` → замена ВЕЗДЕ, без контекстного гейта
+  (как `(TM)`, у которого guard'а и не было — асимметрия). Проба asciidoctor 2.0.23: `a(C)b`→`a©b`, `x(R)y`→`x®y`,
+  `prefix(C)suffix`→`prefix©suffix`, `(C) standalone`→`© standalone`.
+- **Фикс (2 файла):**
+  - `adoc-parser/src/inline.rs`: убран followed-by-letter guard из арм'ов `(C)` и `(R)` (+ комментарий о правиле
+    asciidoctor). ЕДИНСТВЕННАЯ реализация — оба движка делегируют сюда (`subst/replacements.rs:64,95` + legacy
+    `inline.rs:1095` + `subst/macros.rs:2091` link-target). Escaped `\(C)` запечатан escape-пассом в Literal leaf ДО
+    replacements → соседство с буквой НЕ воскрешает курлинг (verified asciidoctor: `a\(C)b`→`a(C)b` литерал).
+  - +2 теста: `test_typographic_copyright_registered_letter_adjacent` (parser, event-уровень + escaped-гард через
+    конкатенацию — escaped splits в отдельные Text-leaves), `test_copyright_registered_letter_adjacent_html` (html).
 
 ### Верификация
 - clippy `--workspace` **0**.
-- **test --workspace 1297, 0 упавших** (html 531→**532**, parser 645→**646**, compat 233, render-core 25; интеграционные зелёные).
-- **Гейт 344/344 байт-в-байт** vs master `a8bdd1c` (база `/tmp/adoc_base` пересобрана из чистого master через stash;
-  gate_check.py 0 diff — ни один gate-URL не содержит `...`/`--`).
-- **Sweep frontier(250)+adoc2docx(52)=302 new-vs-base: РОВНО 1 файл** (CHANGELOG), **0 регрессий** (inline python
-  `/tmp/sweep_bvn.py`).
-- **frontier Identical 229→230**; CHANGELOG.adoc token-identical (showdiff пуст), ушёл из CLEAN (4→3).
-- CLI-пробы == asciidoctor 2.0.23: link:/bare/URL[text] `...`→`…​`, `--`→`—​` (token-equal через NCR-нейтрализацию).
-- Edge-кейсы ПРОВЕРЕНЫ изолированно vs base: ВСЕ пред-существующие (BASE==NEW), НЕ регрессии (см. ниже).
+- **test --workspace 0 упавших** (parser 646→**647**, html 532→**533**, compat 233, render-core 25, html-compat зелёные).
+- **Гейт 344/344 байт-в-байт** vs master `85a7a72` (база `/tmp/adoc_base` пересобрана из master через stash;
+  `gate_check.py` 0 diff — паттерн `(C)`/`(R)`+буква НЕ встречается в гейте).
+- **Sweep frontier(250)+adoc2docx(52)=302 new-vs-base: 0 расхождений** (`/tmp/sweep_bvn.py`). Ожидаемо для
+  дефернутого остатка — паттерн не в корпусах, метрика parity не двигается, но реальная дивергенция устранена.
+- CLI-пробы == asciidoctor 2.0.23 байт-в-байт (NCR-нейтрализация ©=&#169; ®=&#174; ™=&#8482;):
+  `a(C)b/x(R)y/m(TM)n`, `prefix(C)suffix`, `(C) standalone`, escaped `a\(C)b`/`\(C)x` (литерал).
 
 ### Состояние репо
-- Ветка `fix/replacements-in-link-target` (от master `a8bdd1c`, НЕ закоммичена). master чист == origin.
-- Изменены: `adoc-parser/src/{inline.rs, subst/macros.rs, subst/mod.rs[+test]}`, `adoc-html/src/{lib.rs, events.rs, tests.rs[+test]}`.
+- Ветка `fix/copyright-registered-letter-adjacent` (от master `85a7a72`, **НЕ закоммичена** — паттерн F-*: коммит ПО ЗАПРОСУ).
+- Изменены: `adoc-parser/src/inline.rs` (фикс + тест), `adoc-html/src/tests.rs` (+тест). TODO.md + session.md обновлены.
 
-### Остаток / следующая работа (всё вне scope, пред-существующее, BASE==NEW — НЕ регрессии)
-- **`(C)`-после-буквы**: `a(C)b`→`©` у asciidoctor, у нас литерал. Лимит `apply_typographic_replacements` (guard
-  `!followed-by-letter`), есть и в плейн-тексте. Отд. задача.
-- **mailto/email таргеты не курлятся**: `try_mailto` строит url из `base`+encoded subject/body, НЕ через reconstruct.
-  asciidoctor курлит email. Деферно (mailto-url сложнее, не в корпусе).
+### Остаток / следующая работа (дефернутые остатки F-BG/F-BF, все «не в корпусе»)
+- **mailto/email таргеты не курлятся**: `try_mailto` строит url из base+encoded, НЕ через reconstruct. asciidoctor курлит.
 - **resolved-attr `{u}/path...[t]` Document-реинлайн**: unescaped `...` НЕ курлится (флаг подавляет ради защиты
-  escaped `\...`, чей backslash потерян в pass 1). Дивергенция от asciidoctor (курлит). Полный паритет = сохранить
-  escape через реинлайн (preserve backslash в trailing_brackets нового движка) — отд. редизайн.
-- **undefined-attr `\...` в trailing (MissingSkip path)**: курлит плейн-текстом (нет link). Деферно.
-- **`->`/arrow в bare URL**: ломает границу (URL-скан стопает на `>`, `x->y`→`x-`+`&gt;y`). Отд. autolink-boundary баг.
-- **Крупные adoc2docx** (мульти-root): test 1105, source 681, xml 291, callouts 195 — Rouge / sequential-quotes.
+  escaped, escape потерян в pass 1). Полный паритет = preserve backslash через реинлайн — отд. редизайн.
+- **undefined-attr `\...` в trailing (MissingSkip path)**: курлит плейн-текстом.
+- **`->`/arrow в bare URL**: ломает границу (URL-скан стопает на `>`). Отд. autolink-boundary баг.
+- **Пустая концевая секция** (F-BF остаток): `=== sub` без тела → у asciidoctor `<h3>…</h3>\n\n</div>` (шаблон
+  `\n#{content}\n`), у нас без пустой строки. Чистый рендер-слой, token-невидимо/байт-видимо.
+- **Крупное:** Rouge-подсветка (4 adoc2docx-файла) — многосессионно; расширение корпуса новыми репо (паттерн 106-й).
 
 ### Методология (без изменений)
-`frontier_parity.py /mnt/c/tmp/adoc2docx` (и `/adoc-frontier`), `showdiff.py <file>`, `gate_check.py` (база
-`/tmp/adoc_base` — пересобирать из текущего master через stash!), base-vs-new sweep (`/tmp/sweep_bvn.py` — find
-frontier+adoc2docx, diff base vs new бинарей; asciidoctor НЕ звать вживую в ad-hoc — через refcache). Бинарь:
-`cargo build --release -p adoc-cli` (имя — `adoc`). asciidoctor 2.0.23 не читает stdin через `-o - -s` — нужен файл.
+`frontier_parity.py <корпус>`, `showdiff.py <file>`, `gate_check.py` (база `/tmp/adoc_base` — пересобирать из
+текущего master через stash!), `/tmp/sweep_bvn.py` (base-vs-new по frontier+adoc2docx). Бинарь:
+`cargo build --release -p adoc-cli` (имя `adoc`, НЕ поддерживает `-s`/stdin — нужен файл, выводит полный документ).
+asciidoctor 2.0.23 для проб (НЕ в ad-hoc для корпуса — через refcache). NCR-нейтрализация: наш raw UTF-8 == их `&#NNN;`.

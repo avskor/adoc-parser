@@ -72,18 +72,15 @@ pub(crate) fn apply_typographic_replacements<'a>(
             b'.' if i + 2 < len && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' => {
                 Some(("\u{2026}\u{200B}", 3)) // ellipsis + zero-width space
             }
-            b'(' if i + 2 < len
-                && bytes[i + 1] == b'C'
-                && bytes[i + 2] == b')'
-                && !matches!(bytes.get(i + 3), Some(b'A'..=b'Z' | b'a'..=b'z')) =>
-            {
+            // (C)/(R)/(TM) (Asciidoctor REPLACEMENTS `/\\?\(C\)/` etc., type `:none`):
+            // replaced everywhere, with no surrounding-context guard. `a(C)b` →
+            // `a©b`, `prefix(R)suffix` → `prefix®suffix` (verified vs asciidoctor
+            // 2.0.23). The escaped form `\(C)` is sealed into a literal by the
+            // escape pass before we run, so adjacency to letters never resurrects it.
+            b'(' if i + 2 < len && bytes[i + 1] == b'C' && bytes[i + 2] == b')' => {
                 Some(("\u{00A9}", 3)) // copyright
             }
-            b'(' if i + 2 < len
-                && bytes[i + 1] == b'R'
-                && bytes[i + 2] == b')'
-                && !matches!(bytes.get(i + 3), Some(b'A'..=b'Z' | b'a'..=b'z')) =>
-            {
+            b'(' if i + 2 < len && bytes[i + 1] == b'R' && bytes[i + 2] == b')' => {
                 Some(("\u{00AE}", 3)) // registered
             }
             b'(' if i + 4 <= len
@@ -4152,6 +4149,27 @@ mod tests {
         assert_eq!(events, vec![
             Event::Text(Cow::Owned("Brand\u{2122}".to_string())),
         ]);
+    }
+
+    #[test]
+    fn test_typographic_copyright_registered_letter_adjacent() {
+        // Asciidoctor 2.0.23: `(C)`/`(R)` are type `:none` replacements with no
+        // surrounding-context guard, so they curl even when wedged between
+        // letters. `a(C)b` → `a©b`, `x(R)y` → `x®y`, `m(TM)n` → `m™n`.
+        let events = parse("a(C)b x(R)y m(TM)n");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Owned("a\u{00A9}b x\u{00AE}y m\u{2122}n".to_string())),
+        ]);
+        // The escaped form stays a literal regardless of letter adjacency
+        // (the escape pass splits it into its own leaf, so concatenate to check).
+        let text: String = parse("a\\(C)b")
+            .iter()
+            .map(|e| match e {
+                Event::Text(s) => s.as_ref(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(text, "a(C)b");
     }
 
     #[test]
