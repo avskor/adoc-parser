@@ -158,13 +158,14 @@ pub fn is_page_break(line: &str) -> bool {
 
 pub fn is_block_title(line: &str) -> Option<&str> {
     let trimmed = line.trim_end();
-    if trimmed.starts_with('.') && !trimmed.starts_with("..") {
-        let rest = &trimmed[1..];
-        if !rest.is_empty() && !rest.starts_with(' ') {
-            return Some(rest);
-        }
+    let rest = trimmed.strip_prefix('.')?;
+    // Asciidoctor BlockTitleRx `^\.([^\s.].*)$`: the char after the leading `.`
+    // must be neither whitespace (space/tab/…) nor another `.`. This keeps the
+    // ordered-list marker `.\tItem` (and `. Item`, nested `.. x`) out of titles.
+    match rest.chars().next() {
+        Some(c) if c != '.' && !c.is_whitespace() => Some(rest),
+        _ => None,
     }
-    None
 }
 
 pub fn is_block_attribute(line: &str) -> Option<&str> {
@@ -222,6 +223,22 @@ pub fn is_attribute_entry(line: &str) -> Option<(&str, &str)> {
     Some((name, value))
 }
 
+/// Asciidoctor's `AnyListRx` requires every list marker to be followed by a
+/// single space OR tab (`[ \t]`); the item text is everything after, with
+/// leading whitespace trimmed. Returns `None` if `rest` does not begin with a
+/// space/tab or the resulting text is empty (so e.g. `.text` and a bare `*`
+/// stay non-markers). Accepting tab is what lets `.\tItem` / `*\tItem` parse as
+/// list items the same way `. Item` does.
+fn marker_content(rest: &str) -> Option<&str> {
+    let rest = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('\t'))?;
+    let text = rest.trim_start();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
     // The returned number is a MARKER IDENTITY, not a nesting level: Asciidoctor
@@ -231,46 +248,37 @@ pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     // The hyphen `-` is a SEPARATE marker family, so it gets identity 0 (out of
     // band below the star counts) — otherwise `- x` under `* y` would collide
     // with `*` at 1 and render flat instead of nesting (probes /tmp/p_un*).
-    if let Some(rest) = trimmed.strip_prefix("- ") {
-        let text = rest.trim_start();
-        if text.is_empty() {
-            return None;
-        }
+    if let Some(rest) = trimmed.strip_prefix('-')
+        && let Some(text) = marker_content(rest)
+    {
         return Some((0, text));
     }
     let stars = count_leading(trimmed, '*');
     if stars == 0 {
         return None;
     }
-    let rest = &trimmed[stars..];
-    if !rest.starts_with(' ') {
-        return None;
-    }
-    let text = rest[1..].trim_start();
-    if text.is_empty() {
-        return None;
-    }
+    let text = marker_content(&trimmed[stars..])?;
     Some((stars as u8, text))
 }
 
 pub fn is_list_marker_ordered(line: &str) -> Option<(u8, &str)> {
     let trimmed = line.trim_start();
-    // Numbered marker: `N. text` (depth 1)
-    if let Some(dot_pos) = trimmed.find(". ") {
+    // Numbered marker: `N. text` (depth 1) — digits, then `.`, then space/tab.
+    if let Some(dot_pos) = trimmed.find('.') {
         let prefix = &trimmed[..dot_pos];
-        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
-            return Some((1, trimmed[dot_pos + 2..].trim_start()));
+        if !prefix.is_empty()
+            && prefix.bytes().all(|b| b.is_ascii_digit())
+            && let Some(text) = marker_content(&trimmed[dot_pos + 1..])
+        {
+            return Some((1, text));
         }
     }
     let dots = count_leading(trimmed, '.');
     if dots == 0 {
         return None;
     }
-    let rest = &trimmed[dots..];
-    if !rest.starts_with(' ') {
-        return None;
-    }
-    Some((dots as u8, rest[1..].trim_start()))
+    let text = marker_content(&trimmed[dots..])?;
+    Some((dots as u8, text))
 }
 
 pub fn is_admonition(line: &str) -> Option<(&str, &str)> {
@@ -1721,12 +1729,22 @@ mod tests {
         // the `*`-count identities, so `- x` nests under `* y`).
         assert_eq!(is_list_marker_unordered("- item"), Some((0, "item")));
         assert_eq!(is_list_marker_unordered("-no-space"), None);
+        // Asciidoctor AnyListRx separates the marker with `[ \t]` — a tab works
+        // exactly like a space.
+        assert_eq!(is_list_marker_unordered("*\titem"), Some((1, "item")));
+        assert_eq!(is_list_marker_unordered("-\titem"), Some((0, "item")));
     }
 
     #[test]
     fn test_is_list_marker_ordered() {
         assert_eq!(is_list_marker_ordered(". item"), Some((1, "item")));
         assert_eq!(is_list_marker_ordered(".. nested"), Some((2, "nested")));
+        // Tab separator (`[ \t]`), dotted and numbered markers alike.
+        assert_eq!(is_list_marker_ordered(".\titem"), Some((1, "item")));
+        assert_eq!(is_list_marker_ordered("..\tnested"), Some((2, "nested")));
+        assert_eq!(is_list_marker_ordered("1.\titem"), Some((1, "item")));
+        // `.text` (no separator) stays a non-marker (it is a block title).
+        assert_eq!(is_list_marker_ordered(".text"), None);
     }
 
     #[test]
@@ -1934,6 +1952,9 @@ mod tests {
         assert_eq!(is_block_title(".My Title"), Some("My Title"));
         assert_eq!(is_block_title("..not"), None);
         assert_eq!(is_block_title(". space"), None);
+        // BlockTitleRx `[^\s.]` rejects a tab after the dot too — that line is an
+        // ordered-list marker, not a title.
+        assert_eq!(is_block_title(".\ttab"), None);
     }
 
     #[test]
@@ -2819,3 +2840,4 @@ mod tests {
         assert!(!is_valid_anchor_id("a b"));
     }
 }
+
