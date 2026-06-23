@@ -1,59 +1,65 @@
 # Session context
 
-## Сессия (2026-06-23, 2-я) — F-BE: атрибутированный span `[.role]#…#` в метке link-семейства (links.adoc корень A)
+## Сессия (2026-06-23, 3-я) — F-BF: `[partintro]` вне book-части исключается (multi-special-ex.adoc)
 
-Запрос «начни следующую задачу». master `1a3f15c` (F-BD смержен). Взят документированный остаток F-BD — **корень A**
-links.adoc (строки 17, 19): `[.overline]#overline#` внутри метки autolink. Сканер метки закрывал label на ПЕРВОМ `]`
-(после `[.overline`) → `[.overline</a><mark>overline</mark>]`. asciidoctor гонит quotes ДО macros → `[.overline]#…#`
-становится `<span>` ДО того, как inline-link regex ищет `]` (внутренние скобки съедены). Мы гоним macros ДО quotes
-(зеркало legacy) → баг.
+Запрос «начни следующую задачу». master `afef333` (F-BE смержен). Триаж frontier (parity по обоим корпусам):
+adoc2docx — 45 identical / 4 крупных мульти-root (test 1105 / source 681 / xml 291 / callouts 195 = Rouge/sequential-quotes);
+frontier — 228 identical, ближайший ценный clean-div **`multi-special-ex.adoc` (87 token-diff)**. Остальные frontier-div
+out-of-scope: manpage (146, др. бэкенд), `{docdate}`/`{asciidoctor-version}` intrinsics (1+1, env-зависимы),
+CHANGELOG (1, replacements-before-macros).
 
-Ветка `fix/link-label-inner-span-macro` (от master `1a3f15c`, **НЕ закоммичена** — паттерн F-*: коммит ПО ЗАПРОСУ).
+Ветка `fix/partintro-exclude-outside-book` (от master `afef333`, **НЕ закоммичена** — паттерн F-*: коммит ПО ЗАПРОСУ).
 
-### Сделано — корень A (links.adoc → байт-в-байт с asciidoctor 2.0.23)
-**Фикс (4 файла):**
-- **subst/quotes.rs**: `pub(super) fn attributed_span_end(tags, src, bytes, lbrack)` — при `bytes[lbrack]=='['`
-  детектит, открывается ли тут атрибутированный span (`[attrlist]` + `*`/`` ` ``/`_`/`#`, constrained ИЛИ unconstrained),
-  возвращает индекс СРАЗУ ЗА закрывающим маркером. Переиспользует `attrlist_unconstrained`/`attrlist_constrained`
-  (приватные в quotes.rs). Гейтинг как в pass_*: unconstrained — без open-boundary, constrained — требует
-  `!is_word(bytes[lbrack-1])`. Superscript `~`/subscript `^` НЕ берут attrlist → не пробуются.
-- **subst/macros.rs**: `pub(super) fn find_link_label_close(tags, s, open)` — как `find_macro_close_bracket`, но `]`,
-  закрывающий attrlist атрибутированного span, НЕ терминатор метки: на внутреннем `[` зовёт `attributed_span_end` и
-  ПРОПУСКАЕТ весь span. `\]` экранируется идентично. Проводка: try_link / try_mailto / try_autolink(URL[text]) →
-  `find_link_label_close(&work.tags, …)`.
-- **subst/mod.rs**: `pub(crate) fn link_label_close(s, open)` = обёртка `find_link_label_close(&[], …)` (легаси работает
-  на сыром тексте без сентинелов; `TagToken` приватен → не светим в pub(crate)-сигнатуре).
-- **inline.rs** (легаси, симметрия): 4 сайта (`try_link_macro` ×2 [++url++ и обычный], `try_mailto_macro`,
-  `try_autolink`) → `crate::subst::link_label_close(…)` вместо `rest.find(']')`.
+### Корень (single-root, verified)
+difflib на multi-special-ex: РОВНО 1 insert, 9 токенов = `<div class="openblock partintro">…</div>`, delta +9.
+Harness гоняет `_includes`-фрагмент книги как **standalone article** (без `-d book`). asciidoctor `html5.rb convert_open`
+ИСКЛЮЧАЕТ `[partintro]` блок (возвращает `''` + error в лог), если
+`node.level > 0 || node.parent.context != :section || node.document.doctype != 'book'`. В article срабатывает
+`doctype != book`. Мы рендерили `<div class="openblock partintro">` → +9 токенов сдвига.
+
+### Сделано — фикс (4 файла, чистый рендер-слой adoc-html)
+- **lib.rs**: поле `partintro_suppress: Vec<(usize, usize)>` = `(глубина delimited_block_stack ДО push Open, длина output ДО блока)`; init в `new()`.
+- **blocks.rs** `start_delimited_block`, ветка `DelimitedBlockKind::Open`: `style==Some("partintro") && !self.doctype_book`
+  → push `(stack.len(), output.len())` в `partintro_suppress`, **очистка `block_title_inner_html` = None** (title тоже
+  исключается), НЕ эмитим контент. Иначе прежняя логика (abstract / open_block_with_title).
+- **events.rs** `TagEnd::DelimitedBlock`: pop стек; если `partintro_suppress.last()` имеет глубину == stack.len() после
+  pop → `partintro_suppress.pop()`, `output.truncate(pos)`, **`output.push('\n')`**, `return`. Один `\n` = лидирующий
+  join-LF asciidoctor (`blocks.map(&:convert).join(LF)`: пустой partintro перед сиблингом → пустая строка на его месте).
+- **tests.rs**: +1 тест `test_partintro_excluded_outside_book` (open-block+title excluded, масочный параграф excluded,
+  book-режим рендерит — регресс-гард).
+
+Оба вида partintro (explicit `[partintro]\n--…--` И масочный `[partintro]`-параграф, block.rs:2751) приходят как
+`DelimitedBlockKind::Open` со стилем в meta → один гейт в Open-ветке покрывает оба. Гейт по `doctype_book` (залатан на
+конце хедера, как asciidoctor) → book-режим не затронут (0 риска для существующих book-тестов).
 
 ### Верификация
-- clippy `--workspace` **0** (3 warning'а только под `--all-targets` — пред-существующие в тестах, есть на master).
-- **test --workspace: 0 упавших, 1294 passed** (html 529→530 +test_attributed_span_in_link_label_html; parser 645
-  [+7 кейсов в reproduces_legacy_on_link_inputs — pipeline==legacy для span-in-label]; compat 233).
-- **Гейт 344/344 байт-в-байт** vs master `1a3f15c` (база `/tmp/adoc_base` = свежий master-бинарь; gate_check.py 0 diff —
-  ни один гейт-файл не ставит span в метку ссылки).
-- **Sweep frontier(250)+adoc2docx(52) new-vs-base: РОВНО 1 файл** — links.adoc (целевой). 0 регрессий.
-- **links.adoc теперь БАЙТ-В-БАЙТ == asciidoctor 2.0.23** (newline-normalized; adoc2docx Identical 44→45). Корень B
-  (F-BD) + корень A (эта сессия) = вся divergence снята.
-- CLI-пробы == asciidoctor: целевой autolink (строки 17/19), link:/mailto со span, границы `[a [b] c]`→`a [b`,
-  `[label]*next*`, leading span `[[.role]*bold*…]`.
+- clippy `--workspace` **0**.
+- **test --workspace: 0 упавших** (html 530→**531** +test_partintro_excluded_outside_book; parser 645; compat 233;
+  render-core 25; html-compat/integration/author — все зелёные).
+- **Гейт 344/344 байт-в-байт** vs master `afef333` (база `/tmp/adoc_base` пересобрана из чистого master через stash;
+  gate_check.py 0 diff — ни один гейт-файл не ставит partintro вне book).
+- **Sweep frontier(250)+adoc2docx(52)=302 new-vs-base: РОВНО 1 файл** (multi-special-ex), **0 регрессий**.
+- **frontier Identical 228→229**; multi-special-ex ушёл из clean-div списка (token-identical 158==158).
+- **multi-special-ex байт-в-байт == asciidoctor** КРОМЕ 1 строки = пустая концевая секция `=== Appendix sub` (отдельный
+  предсуществующий корень, token-невидимо, НЕ partintro).
+- 5/5 CLI-проб == asciidoctor 2.0.23: open-block+title excluded, параграф excluded, id+role excluded, book рендерит,
+  mid-позиция partintro между параграфами (join-LF корректен).
 
 ### Состояние репо
-- Ветка `fix/link-label-inner-span-macro` (от master `1a3f15c`, НЕ закоммичена). master чист == origin.
-- Изменены: adoc-parser/src/subst/{quotes.rs, macros.rs, mod.rs}, adoc-parser/src/inline.rs,
-  adoc-html/src/tests.rs (+1 тест), adoc-parser/src/subst/mod.rs (тест-кейсы).
+- Ветка `fix/partintro-exclude-outside-book` (от master `afef333`, НЕ закоммичена). master чист == origin.
+- Изменены: adoc-html/src/{lib.rs, blocks.rs, events.rs, tests.rs}.
 
 ### Остаток / следующая работа
-- **Unconstrained `[.role]##span##` в метке URL-макроса** — РАСХОЖДЕНИЕ (синтетическое, НЕ в корпусе): asciidoctor
-  при отсутствии open-boundary матчит unconstrained-attrlist `[^\]]+` на САМОЙ скобке макроса (после URL стоит word-char),
-  поглощая `[pre [.role]##span##` целиком → URL становится bare (`class="bare"`), `<span class="pre [.role">`. Наш
-  `find_link_label_close` детектит span только на ВНУТРЕННЕМ `[` (после макро-`[`), даёт «разумный» но не-идентичный
-  результат. Constrained защищён boundary (char перед макро-`[` = URL word-char → constrained-attrlist там не открывается),
-  поэтому корпусный случай совпадает. Чтобы покрыть unconstrained — надо детектить, что unconstrained-span,
-  начинающийся НА/ДО макро-`[`, поглощает его → тогда отклонять link целиком (другой слой, высокий риск). Дефернуто.
-- **Крупные adoc2docx** (НЕ триажены, вероятно мульти-root): test 1105, source 681, xml 291, callouts 195 — упираются
-  в Rouge syntax-highlighter / sequential-quotes / нумерацию спец-секций.
-- frontier single-diffs архитектурны (CHANGELOG replacements-before-macros, migration {asciidoctor-version} intrinsic).
-- Методология: `frontier_parity.py /mnt/c/tmp/adoc2docx`, `showdiff.py <file>`, gate_check.py (база `/tmp/adoc_base`),
-  base-vs-new sweep (inline bash: find frontier+adoc2docx, diff base vs new). Бинарь: `cargo build --release -p adoc-cli`
-  (имя бинаря — `adoc`, НЕ adoc-cli). asciidoctor 2.0.23: `/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/converter/html5.rb`.
+- **multi-special-ex остаток (отдельный корень):** пустая концевая секция `=== Appendix sub` без тела → asciidoctor
+  `<h3>…</h3>\n\n</div>` (шаблон `\n#{content}\n`, content пуст), у нас без пустой строки. Token-невидимо. Слайс
+  «empty-section trailing blank line», затронет др. файлы — отдельная задача.
+- **Вырожденный edge (НЕ в корпусе):** partintro как единственный блок части → наш безусловный `\n` даёт лишнюю пустую
+  строку (asciidoctor `join([''])` без сепаратора). Условный `\n` = lookahead/deferred-separator, не стоит риска.
+- **Крупные adoc2docx** (мульти-root): test 1105, source 681, xml 291, callouts 195 — Rouge syntax-highlighter /
+  sequential-quotes / нумерация спец-секций.
+- frontier single-diffs архитектурны: CHANGELOG replacements-before-macros, migration `{asciidoctor-version}` intrinsic,
+  doctime-localtime `{docdate}` intrinsic, manpage (др. бэкенд).
+- Методология: `frontier_parity.py /mnt/c/tmp/adoc2docx` (и `/adoc-frontier`), `showdiff.py <file>`, gate_check.py
+  (база `/tmp/adoc_base` — пересобирать из текущего master через stash!), base-vs-new sweep (inline python: find
+  frontier+adoc2docx, diff base vs new). Бинарь: `cargo build --release -p adoc-cli` (имя — `adoc`). asciidoctor 2.0.23:
+  `/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/converter/html5.rb`.

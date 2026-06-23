@@ -4140,6 +4140,38 @@ fn test_part_intro_implicit_wrap() {
 }
 
 #[test]
+fn test_partintro_excluded_outside_book() {
+    // Asciidoctor's `convert_open` EXCLUDES a `[partintro]` block (returns '')
+    // unless it is a child of a book part — i.e. unless the doctype is book.
+    // In an article the block, its content AND its title, contribute nothing.
+    // The excluded block still participates in the parent's
+    // `blocks.map(&:convert).join(LF)`, so when it has a following sibling one
+    // join newline survives — leaving a blank line where the block stood.
+    let html = to_html("= Doc\n\n= Part\n\n[partintro]\n.Ignored\n--\nIntro text.\n--\n\n== Chapter\n\nbody");
+    assert!(!html.contains("partintro"), "{html}");
+    assert!(!html.contains("Intro text."), "{html}");
+    assert!(!html.contains("Ignored"), "{html}");
+    assert!(
+        html.contains("<h1 id=\"_part\" class=\"sect0\">Part</h1>\n\n<div class=\"sect1\">\n<h2 id=\"_chapter\">"),
+        "{html}"
+    );
+
+    // A `[partintro]` paragraph masquerades as an open block; it is excluded
+    // identically.
+    let html = to_html("= Doc\n\n= Part\n\n[partintro]\nIntro para.\n\n== Chapter\n\nbody");
+    assert!(!html.contains("partintro"), "{html}");
+    assert!(!html.contains("Intro para."), "{html}");
+    assert!(
+        html.contains("<h1 id=\"_part\" class=\"sect0\">Part</h1>\n\n<div class=\"sect1\">\n<h2 id=\"_chapter\">"),
+        "{html}"
+    );
+
+    // In a book the part intro renders as usual (regression guard).
+    let html = to_html("= Book\n:doctype: book\n\n= Part\n\n[partintro]\n--\nIntro text.\n--\n\n== Chapter\n\nbody");
+    assert!(html.contains("<div class=\"openblock partintro\">\n<div class=\"content\">\n<div class=\"paragraph\">\n<p>Intro text.</p>"), "{html}");
+}
+
+#[test]
 fn test_special_section_level_zero_coerced() {
     // A special-styled level-0 section ([preface] = T) is displayed at
     // level 1: sect1/h2 with a sectionbody; its subsection nests inside.

@@ -163,6 +163,12 @@ struct HtmlRenderer {
     pending_subs: Option<SubstitutionSet>,
     document_attrs: HashMap<String, String>,
     delimited_block_stack: Vec<(DelimitedBlockKind, bool)>,
+    // Open blocks whose content Asciidoctor's `convert_open` excludes (returns
+    // ''): a `[partintro]` block outside a book part. One entry per suppressed
+    // block: `(delimited_block_stack depth before the Open was pushed, output
+    // length before any of its HTML was written)`. The matching
+    // `TagEnd::DelimitedBlock` truncates `output` back to that length.
+    partintro_suppress: Vec<(usize, usize)>,
     // One entry per open Admonition: true = block form (delimited; children get
     // normal paragraph wrappers), false = paragraph form (bare content in the td).
     admonition_block_stack: Vec<bool>,
@@ -375,6 +381,7 @@ impl HtmlRenderer {
                 ("prewrap".to_string(), String::new()),
             ]),
             delimited_block_stack: Vec::new(),
+            partintro_suppress: Vec::new(),
             admonition_block_stack: Vec::new(),
             interactive_ulist_stack: Vec::new(),
             footnote_registry: FootnoteRegistry::new(),
