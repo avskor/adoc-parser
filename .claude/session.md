@@ -1,62 +1,71 @@
 # Session context
 
-## Сессия (2026-06-23, 9-я) — F-BL: TAB-разделитель после list-маркера + `.\t…` ловился как block-title
+## Сессия (2026-06-23, 10-я) — F-BM: sub/superscript `~…~`/`^…^` ложно матчили содержимое с пробелами
 
-Запрос «начни следующую задачу». master `c9a9b58` (F-BK смержен).
+Запрос «начни следующую задачу». master `6a39972` (F-BL смержен).
 
 ### Триаж (notes-корпус, метрика семантического DOM)
-- `frontier_parity.py /mnt/c/Work/docs/notes/modules` → 74 identical, 7 чистых расхождений (по убыванию diff):
-  plan(230)/qwen(194)/sbertech-index(134)/wsl(95)/keycloak(52)/tips(41)/**synapse(23)**.
-- Взял самое чистое — `sbertech/synapse.adoc` (23 token-diff). НЕ доверял метке прошлой сессии,
-  проверил исходник + showdiff: ordered-список с маркером `.` + **TAB** тихо пропадал.
+- Скрипты потерялись из /tmp прошлой сессии → нашлись в `/mnt/c/tmp/adoc-test/` (frontier_parity.py, showdiff.py,
+  gate_check.py, refcache.py, compare_full.py и др.). Бинарь пересобран: `cargo build --release -p adoc-cli` → `target/release/adoc`.
+- `frontier_parity.py /mnt/c/Work/docs/notes/modules` → 75 identical, 6 чистых расхождений:
+  plan(230)/qwen(194)/sbertech-index(134)/wsl(95)/keycloak(52)/tips(41).
+- НЕ доверял метке прошлой сессии — прогнал showdiff по ВСЕМ 6, классифицировал каждый (см. остаток ниже).
+  Взял `qwen` (194) — самое чистое ПРАВИЛО (не самый маленький diff): один корень дал весь каскад.
 
-### Сделано — F-BL (ветка `fix/list-marker-tab-separator` от master `c9a9b58`)
-**Баг:** `synapse.adoc` — `.\tПолучение данных из SOAP сервиса` (маркер `.` + TAB) у asciidoctor → `<ol class="arabic">`,
-у нас весь список исчезал (выдавали только ведущий параграф, затем закрывали секцию).
-**Корень (2 места в scanner.rs, verified `rx.rb` + пробы asciidoctor 2.0.23):**
-1. asciidoctor `AnyListRx` разделяет маркер и текст через `[ \t]` (пробел ИЛИ таб). Наши
-   `is_list_marker_unordered`/`is_list_marker_ordered` принимали ТОЛЬКО пробел (`!rest.starts_with(' ')` → None для TAB).
-2. `is_block_title` (`BlockTitleRx ^\.([^\s.].*)$`) исключал лишь пробел после `.` → `.\t…` ловился как block-title в
-   `scan_header_constructs` (раньше list-детектора). Поэтому `.\tItem` в НАЧАЛЕ документа исчезал полностью, тогда как
-   `*\t`/`-\t`/`1.\t` доходили до list-детектора (но тоже не распознавались из-за п.1).
-   В synapse `.\t` шёл после параграфа — block-title тоже срабатывал, но эффект тот же (список терялся).
+### Сделано — F-BM (ветка `fix/subscript-superscript-whitespace` от master `6a39972`)
+**Баг:** `qwen.adoc` — `При INT4 (~33 ГБ VRAM) … обеспечивает ~40% стоимости.` у нас →
+`(<sub>33 ГБ VRAM) обеспечивает </sub>40%`, у asciidoctor остаётся литералом (тильды с пробелами внутри).
+**Корень (verified пробами asciidoctor 2.0.23):** asciidoctor `SubscriptRx`/`SuperscriptRx` = `~(\S+?)~` / `^(\S+?)^` —
+содержимое между маркерами НЕ должно содержать whitespace. Активный путь — **subst/quotes.rs `simple_pair_open_close`**
+(string-rewriting движок, дефолтный после рерайта — см. [[proj_sequential_quotes_rewrite]]), НЕ legacy `inline.rs`
+`try_simple_pair`! Сначала по ошибке правил inline.rs (поведение бинаря не изменилось → понял что это мёртвый путь,
+откатил).
 
-**Фикс (1 файл, ТОЛЬКО adoc-parser/scanner.rs):**
-- новый хелпер `marker_content(rest)` = `strip_prefix(' ').or_else(strip_prefix('\t'))` → `trim_start` → non-empty
-  (зеркало `[ \t]`); обе list-функции переведены на него (`is_list_marker_unordered`: hyphen-арм через `strip_prefix('-')`
-  + `marker_content`, star-арм через `marker_content`; `is_list_marker_ordered`: numbered-арм `find('.')`+digits+
-  `marker_content`, dotted-арм `marker_content`).
-- `is_block_title` переписан под `[^\s.]`: `strip_prefix('.')` → первый символ не `.` и не `is_whitespace()`.
+**Фикс (1 файл, adoc-parser/src/subst/quotes.rs, ~6 строк):**
+- в `simple_pair_open_close` добавлен bail `return None` на первом `bytes[j].is_ascii_whitespace()` перед закрывающим
+  маркером. Проверка на СЫРЫХ байтах ДО прохода attributes (в asciidoctor quotes идут раньше attributes), поэтому:
+  - `^a{sp}b^` → `<sup>a b</sup>` сохранён (literal `{sp}` без whitespace-байтов, пробел появляется ПОСЛЕ).
+  - passthrough/charref-сентинел `^+a b+^` → `<sup>a b</sup>` сохранён (сентинел opaque, пропускается = non-whitespace).
+- backtracking: при None pass_simple_pair продолжает скан с след. позиции (как asciidoctor non-greedy `\S+?`).
 
-**Тесты:** scanner.rs — +6 assert'ов в `test_is_list_marker_unordered`/`_ordered`/`test_is_block_title` (TAB-кейсы +
-regression `.text`→None как block-title). adoc-html/src/tests.rs — +1 `test_list_marker_tab_separator_html`
-(`.\t`/`1.\t`/`*\t`/`-\t` дают списки + regression `.My Title` остаётся `<div class="title">`).
+**Тесты:** +1 `subscript_superscript_require_non_whitespace_content` (subst::tests, хелпер `pipeline` = АКТИВНЫЙ движок;
+inline.rs `parse()` = legacy, там тест бесполезен). Проверяет: `H~2~O and ~a b~`, `E^2^ and x^a b^`, `(~33 ГБ) ~40%`.
 
 ### Верификация
-- clippy `--workspace` **0**. **test --workspace 0 упавших** (html 537→**538**, parser 647, compat 233, render-core 25,
+- clippy `--workspace` **0**. **test --workspace 0 упавших** (parser 647→**648**, html 538, compat 233, render-core 25,
   integration 29, html-compat 1).
-- **БАЙТ-НЕЙТРАЛЬНО на старых корпусах** (паттерн «маркер+TAB» отсутствует — `grep -rlP '^\s*([.*-]+|\d+\.)\t'` гейт = 0):
-  - gate 344 — `gate_check.py` **0 diff** vs base `/tmp/adoc_base` (ПЕРЕСОБРАН от master `c9a9b58`).
+- **БАЙТ-НЕЙТРАЛЬНО на старых корпусах:** база `/tmp/adoc_base` ПЕРЕСОБРАНА от текущего master `6a39972`
+  (stash→checkout master→clean+build→cp→checkout branch→pop→rebuild).
+  - gate 344 — `gate_check.py` **0 diff**.
   - frontier(250)+adoc2docx(52)=302 — `/tmp/sweep_bvn.py` **0 diff**.
-- **notes Identical 74→75** (synapse → identical, выпал из списка расхождений).
-- 5 CLI-проб тела (`/tmp/p_ot|p_ut|p_ht|p_nt|p_ddt.adoc`) == asciidoctor 2.0.23 байт-в-байт.
+- **notes Identical 75→76** (qwen → identical, выпал из расхождений).
+- 4 CLI-пробы (`~33 ГБ~`/`H~2~O`/`^a{sp}b^`/`^+a b+^`) == asciidoctor 2.0.23 байт-в-байт.
 
 ### Состояние репо
-- Ветка `fix/list-marker-tab-separator` от master `c9a9b58`, НЕ закоммичена (ждёт запроса коммит/merge/push).
-- Изменено: `adoc-parser/src/scanner.rs` (2 функции переписаны + хелпер + 6 test-assert'ов),
-  `adoc-html/src/tests.rs` (+1 тест), TODO.md (+F-BL), session.md.
-- `/tmp/adoc_base` = бинарь master `c9a9b58` (актуальная база регресс-гарда этой сессии).
+- Ветка `fix/subscript-superscript-whitespace` от master `6a39972`, НЕ закоммичена (ждёт запроса коммит/merge/push).
+- Изменено: `adoc-parser/src/subst/quotes.rs` (bail в `simple_pair_open_close`),
+  `adoc-parser/src/subst/mod.rs` (+1 тест), TODO.md (+F-BM), session.md.
+- `/tmp/adoc_base` = бинарь master `6a39972` (актуальная база регресс-гарда этой сессии).
 
-### Остаток notes (6 чистых расхождений — кандидаты на следующие сессии)
-plan(230)/qwen(194)/sbertech-index(134)/wsl(95)/keycloak(52)/tips(41). По убыванию diff; tips(41) самый чистый из
-оставшихся. Известные классы: ordered-list десинк, ложная Rouge-подсветка `[source,yaml]` без `:source-highlighter:`,
-admonition-в-списке.
+### Остаток notes (5 чистых расхождений — классы верифицированы showdiff, кандидаты на след. сессии)
+По убыванию diff. Классы РАЗНЫЕ (не один корень):
+- **plan (230)** — `•` (U+2022) bullet-символы: asciidoctor распознаёт как `<ul>`, у нас остаются literal `•` в `<p>`.
+- **sbertech/index (134)** — ordered-list `. Выполняем раздел …` десинк (item выпадает/неверная вложенность).
+- **wsl (95)** — автолинк URL внутри backtick inline-кода захватывает ЗАКРЫВАЮЩИЙ backtick в href
+  (`<a href="https://rubygems.org\`">`), граница code неверная.
+- **keycloak/index (52)** — автолинк URL `http://<host>:<port>/…` (со спецсимволами `<>`) внутри inline-кода: asciidoctor
+  делает `<a class="bare">` внутри `<code>`, мы НЕ автолинкуем (URL остаётся текстом).
+- **tips (41)** — `[source,yaml]` примыкает к list-item БЕЗ пустой строки → asciidoctor ТЕРЯЕТ source-роль (plain `<pre>`),
+  у нас остаётся `<pre class="highlight"><code class="language-yaml">`. Корень изолирован пробами pA/pB/pC/pD/pE:
+  список+source без пустой строки = plain; параграф+source без пустой = highlighted; список+пустая+source = highlighted.
 
 ### Методология (без изменений)
 `frontier_parity.py <roots>` / `showdiff.py <file>` (семантический DOM, ПРАВИЛЬНАЯ метрика для не-verbatim — байт только
 ВНУТРИ `<pre>`, см. [[feedback_html_byte_parity_scope]]). `gate_check.py` + `/tmp/sweep_bvn.py` — байт регресс-гард
-(база `/tmp/adoc_base` пересобирать от текущего master: stash → build → cp → pop → rebuild). Бинарь:
-`cargo build --release -p adoc-cli`. ⚠ mtime на /mnt/c НЕ всегда обновляется — если сборка не подхватила правку, форсировать
-`cargo test -p adoc-parser <name>` (перекомпилит) или touch. asciidoctor 2.0.23 для проб. НЕ доверять метке прошлой
-сессии — bisect-матрица проб (см. [[feedback_frontier_triage]]). Источник реальных корпусов:
-`/mnt/c/Work/docs/notes/modules/` (81 .adoc).
+(база `/tmp/adoc_base` пересобирать от текущего master). Бинарь: `cargo build --release -p adoc-cli`.
+⚠ **mtime на /mnt/c НЕ обновляется надёжно** — `touch` НЕ всегда форсит пересборку crate; надёжно только
+`cargo clean --release -p adoc-parser` перед build (см. [[feedback_wsl_build_staleness]]). asciidoctor 2.0.23 для проб.
+⚠ **inline разбор идёт через subst/ (string-rewriting), inline.rs InlineState — LEGACY/мёртвый путь** для дефолтного
+режима (см. [[proj_sequential_quotes_rewrite]]); правки inline-конструктов делать в `subst/quotes.rs` и т.п., тесты —
+через `pipeline()` в subst::tests, НЕ через `parse()` в inline::tests. НЕ доверять метке прошлой сессии — showdiff каждый
+кандидат (см. [[feedback_frontier_triage]]). Источник реальных корпусов: `/mnt/c/Work/docs/notes/modules/` (81 .adoc).
