@@ -240,6 +240,40 @@ fn test_ordered_list() {
 }
 
 #[test]
+fn test_list_marker_tab_separator_html() {
+    // Asciidoctor AnyListRx separates a marker from its text with `[ \t]`, so a
+    // TAB works exactly like a space (probe-verified vs asciidoctor 2.0.23).
+    // `.\tItem` previously matched as a block title (BlockTitleRx only excluded
+    // a space) and the list silently vanished — real case: notes/sbertech/synapse.
+    let ol = to_html(".\tfirst\n.\tsecond");
+    assert!(
+        ol.contains("<div class=\"olist arabic\">\n<ol class=\"arabic\">"),
+        "tab-separated dotted marker must be an ordered list. Got:\n{ol}"
+    );
+    assert!(ol.contains("<li>\n<p>first</p>\n</li>"));
+    assert!(ol.contains("<li>\n<p>second</p>\n</li>"));
+
+    let num = to_html("1.\tone\n2.\ttwo");
+    assert!(
+        num.contains("<div class=\"olist arabic\">\n<ol class=\"arabic\">"),
+        "tab-separated numbered marker must be an ordered list. Got:\n{num}"
+    );
+
+    let ul = to_html("*\tstar\n-\tdash");
+    assert!(
+        ul.contains("<div class=\"ulist\">\n<ul>"),
+        "tab-separated unordered marker must be a list. Got:\n{ul}"
+    );
+
+    // Regression: `.Title` with no separator is still a block title, not a list.
+    let title = to_html(".My Title\n\nbody");
+    assert!(
+        title.contains("<div class=\"title\">My Title</div>"),
+        "dot immediately followed by text stays a block title. Got:\n{title}"
+    );
+}
+
+#[test]
 fn test_mixed_marker_list_nesting() {
     // Probe-verified vs asciidoctor (/tmp/p_subs/p6, p8): a marker that
     // doesn't match any OPEN list nests inside the current item; a marker
