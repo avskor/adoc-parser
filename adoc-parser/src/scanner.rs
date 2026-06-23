@@ -101,7 +101,27 @@ pub fn strip_section_marker(line: &str) -> Option<(u8, &str)> {
     if title.is_empty() {
         return None;
     }
-    Some((level as u8, title))
+    Some((level as u8, strip_closed_atx_trailer(title, b'=', level)))
+}
+
+/// Strip a closed-ATX trailing marker run from an already-trimmed heading title.
+/// Asciidoctor's `SectionTitleRx` permits an optional trailing run of the SAME
+/// markers as the opener (`== Title ==`, `## Title ##`), captured by `(?:\s+\1)?`
+/// and discarded. The trailing run must be exactly `level` `marker` bytes preceded
+/// by ASCII whitespace; an asymmetric (`== Title =`) or unspaced (`== Title==`)
+/// trailing run stays literal. Markers are ASCII (`=`/`#`), so byte indexing is
+/// codepoint-safe.
+fn strip_closed_atx_trailer(title: &str, marker: u8, level: usize) -> &str {
+    let bytes = title.as_bytes();
+    let run = bytes.iter().rev().take_while(|&&b| b == marker).count();
+    if run != level {
+        return title;
+    }
+    let before = bytes.len() - run;
+    if before == 0 || !bytes[before - 1].is_ascii_whitespace() {
+        return title;
+    }
+    title[..before].trim_end()
 }
 
 pub fn is_thematic_break(line: &str) -> bool {
@@ -1116,7 +1136,7 @@ pub fn strip_markdown_heading(line: &str) -> Option<(u8, &str)> {
     if title.is_empty() {
         return None;
     }
-    Some((level as u8, title))
+    Some((level as u8, strip_closed_atx_trailer(title, b'#', level)))
 }
 
 pub fn is_markdown_code_fence(line: &str) -> Option<(usize, Option<&str>)> {
@@ -1695,6 +1715,26 @@ mod tests {
         assert_eq!(strip_section_marker(" == Indented"), None);
         assert_eq!(strip_section_marker("  = Two spaces"), None);
         assert_eq!(strip_section_marker("\t== Tab"), None);
+    }
+
+    #[test]
+    fn test_strip_closed_atx_section_title() {
+        // Closed-ATX: a trailing run matching the opener (count + char) preceded by
+        // whitespace is stripped (Asciidoctor `SectionTitleRx` `(?:\s+\1)?`).
+        assert_eq!(strip_section_marker("= Title ="), Some((1, "Title")));
+        assert_eq!(strip_section_marker("== Title =="), Some((2, "Title")));
+        assert_eq!(strip_section_marker("=== Three ==="), Some((3, "Three")));
+        assert_eq!(strip_section_marker("==== master ===="), Some((4, "master")));
+        // Asymmetric trailing run (fewer / more markers) stays literal.
+        assert_eq!(strip_section_marker("== Asym ="), Some((2, "Asym =")));
+        assert_eq!(strip_section_marker("== Over ==="), Some((2, "Over ===")));
+        // No whitespace before the trailing run: literal.
+        assert_eq!(strip_section_marker("== NoSpace=="), Some((2, "NoSpace==")));
+        // Equals sign inside the title is untouched.
+        assert_eq!(strip_section_marker("== a = b"), Some((2, "a = b")));
+        // Markdown headings strip a matching trailing `#` run likewise.
+        assert_eq!(strip_markdown_heading("## MD Two ##"), Some((2, "MD Two")));
+        assert_eq!(strip_markdown_heading("## Keep #"), Some((2, "Keep #")));
     }
 
     #[test]
