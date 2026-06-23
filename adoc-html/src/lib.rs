@@ -263,6 +263,15 @@ struct HtmlRenderer {
     /// Mirrors Asciidoctor's inherited `special` (section.rb `@special =
     /// parent.special`): such sections emit no section number.
     section_unnumbered_stack: Vec<bool>,
+    /// Per-open-section output position marking where the section's content slot
+    /// begins (right after `<div class="sectionbody">\n` for a sect1, or after
+    /// `</hN>\n` for a deeper section), set at `TagEnd::SectionTitle`. At
+    /// `TagEnd::Section`, an unchanged `output.len()` means the body emitted
+    /// nothing — Asciidoctor's section template still wraps content in
+    /// `\n#{content}\n`, so an empty body yields a blank line before `</div>`
+    /// that the (absent) last child block would otherwise have supplied.
+    /// `usize::MAX` is the pre-title placeholder (treated as non-empty).
+    section_content_start: Vec<usize>,
     standalone: bool,
     last_updated: Option<String>,
     content_start: Option<usize>,
@@ -443,6 +452,7 @@ impl HtmlRenderer {
             sectionbody_stack: Vec::new(),
             section_style_stack: Vec::new(),
             section_unnumbered_stack: Vec::new(),
+            section_content_start: Vec::new(),
             standalone: false,
             last_updated: None,
             content_start: None,

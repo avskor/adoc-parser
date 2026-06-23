@@ -132,6 +132,59 @@ fn test_section() {
 }
 
 #[test]
+fn test_empty_section_emits_blank_content_slot_html() {
+    // Asciidoctor's section template wraps content in `\n#{content}\n`; an empty
+    // body collapses that to a single blank line before the closing `</div>` —
+    // the trailing newline the (absent) last child block would otherwise have
+    // supplied. A sect1 blanks inside its `sectionbody`; a deeper section blanks
+    // right after its heading. Matches asciidoctor 2.0.23 (sections/examples
+    // section.adoc, part.adoc, outline.adoc flipped to byte-parity).
+
+    // Empty trailing sect1: blank line inside the otherwise-empty sectionbody.
+    let html = to_html("== Empty\n");
+    assert!(
+        html.contains(
+            "<div class=\"sect1\">\n<h2 id=\"_empty\">Empty</h2>\n\
+             <div class=\"sectionbody\">\n\n</div>\n</div>"
+        ),
+        "{html}"
+    );
+
+    // Empty nested sect2 (the parent's body is the child, so only the child is
+    // empty): blank line right after the <h3>, before the sect2 `</div>`.
+    let html = to_html("== Parent\n\n=== Empty Child\n");
+    assert!(
+        html.contains(
+            "<div class=\"sect2\">\n<h3 id=\"_empty_child\">Empty Child</h3>\n\n</div>"
+        ),
+        "{html}"
+    );
+
+    // A section whose only child produces no output (a line comment) is empty
+    // too — the content slot wrote nothing, so it still blanks.
+    let html = to_html("== Only Comment\n\n// nothing\n");
+    assert!(
+        html.contains("<div class=\"sectionbody\">\n\n</div>\n</div>"),
+        "{html}"
+    );
+
+    // Regression: a non-empty section is untouched — the trailing newline comes
+    // from the paragraph's own `</div>\n`, so no spurious blank line is added.
+    let html = to_html("== Filled\n\nbody\n");
+    assert!(
+        html.contains(
+            "<div class=\"sectionbody\">\n<div class=\"paragraph\">\n\
+             <p>body</p>\n</div>\n</div>\n</div>"
+        ),
+        "{html}"
+    );
+    assert!(
+        !html.contains("<div class=\"sectionbody\">\n\n"),
+        "no blank content slot when the body is present: {html}"
+    );
+}
+
+#[test]
 fn test_section_marker_does_not_interrupt_paragraph() {
     // Asciidoctor's read_paragraph_lines (StartOfBlockProc) breaks a paragraph
     // only on a block delimiter or block-attribute line — never a section
