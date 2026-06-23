@@ -193,6 +193,17 @@ pub struct InlineOptions {
     /// extracted as single/double-plus passthroughs — mirroring Asciidoctor's
     /// `QUOTE_SUBS[true]` table. Triple-plus `+++…+++` stays a raw passthrough.
     pub compat_mode: bool,
+    /// Whether the text being parsed has ALREADY been through the `replacements`
+    /// substitution in an earlier pass, so the `macros` pass must NOT curl a bare
+    /// `...`/`--`/`(C)` in a link TARGET a second time. Set only when the renderer
+    /// re-parses a resolved `{attr}value[text]` combination: the new engine runs
+    /// `escape` before `attributes`, so a `\...` in the captured trailing brackets
+    /// already lost its backslash before this re-parse sees it — curling the now
+    /// bare `...` would defeat the user's escape. Top-level text (and every other
+    /// re-parse, where the escape survives) leaves this false so the target is
+    /// curled, mirroring Asciidoctor's `replacements`-before-`macros` order. See
+    /// [`crate::subst::macros`]'s `reconstruct_link_target`.
+    pub link_target_pre_substituted: bool,
 }
 
 impl InlineOptions {
@@ -220,6 +231,10 @@ impl InlineOptions {
         Self {
             experimental: is_set("experimental"),
             compat_mode: is_set("compat-mode"),
+            // Not attribute-derived: a context flag the renderer sets explicitly
+            // for the `{attr}value[text]` re-parse, so this constructor (used for
+            // top-level cell parsing too) leaves it at the curling default.
+            link_target_pre_substituted: false,
         }
     }
 }

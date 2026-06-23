@@ -1690,6 +1690,55 @@ mod tests {
     }
 
     #[test]
+    fn unescaped_ellipsis_in_url_target_curls() {
+        // A bare `...` in a top-level link target is curled into the href (and the
+        // bare link's repeated text), mirroring Asciidoctor's `replacements` pass
+        // running before `macros`. The raw `\u{2026}\u{200B}` equals Asciidoctor's
+        // `&#8230;&#8203;` modulo entity encoding.
+        let ell = "\u{2026}\u{200B}";
+        let bare = pipeline("https://ex.com/a...b");
+        assert_eq!(bare, vec![
+            Event::Start(Tag::Link {
+                url: format!("https://ex.com/a{ell}b").into(),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+                id: None,
+                title: None,
+            }),
+            Event::Text(format!("https://ex.com/a{ell}b").into()),
+            Event::End(TagEnd::Link),
+        ]);
+        // `link:` and URL[text] forms curl the href too.
+        assert_eq!(pipeline("link:https://ex.com/a...b[t]")[0], Event::Start(Tag::Link {
+            url: format!("https://ex.com/a{ell}b").into(),
+            window: None,
+            nofollow: false,
+            is_bare: false,
+            role: None,
+            id: None,
+            title: None,
+        }));
+
+        // With `link_target_pre_substituted` set — the renderer's resolved
+        // `{attr}value[text]` re-parse — the target is NOT curled, so a `\...` whose
+        // escape was already consumed in the first pass is not re-curled. (The HTML
+        // end-to-end guard is `test_escaped_ellipsis_in_link_target_html`.)
+        let opts = InlineOptions { link_target_pre_substituted: true, ..Default::default() };
+        let reparsed = run_pipeline("https://ex.com/a...b", SubstitutionSet::NORMAL, opts);
+        assert_eq!(reparsed[0], Event::Start(Tag::Link {
+            url: "https://ex.com/a...b".to_string().into(),
+            window: None,
+            nofollow: false,
+            is_bare: true,
+            role: None,
+            id: None,
+            title: None,
+        }));
+    }
+
+    #[test]
     fn escaped_macro_prefix_file_scheme_and_anchor_id() {
         // `file://` is an autolink scheme (Asciidoctor `(?:https?|file|ftp|irc)://`):
         // a bare `file://` URL links as `class="bare"`, exactly like `ftp`/`irc`.

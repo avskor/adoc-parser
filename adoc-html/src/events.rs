@@ -275,7 +275,18 @@ impl HtmlRenderer {
                             match trailing_brackets {
                                 Some(br) => {
                                     let combined = format!("{value}{br}");
-                                    self.render_inline_value(output, &combined);
+                                    // The trailing brackets were captured AFTER the
+                                    // `escape` pass already consumed a `\...` in the
+                                    // path, so re-parse with the link target marked
+                                    // pre-substituted: the `macros` pass must not curl
+                                    // the now-bare `...` a second time (test
+                                    // `test_escaped_ellipsis_in_link_target_html`).
+                                    self.render_inline_value_with_subs_flag(
+                                        output,
+                                        &combined,
+                                        self.current_subs(),
+                                        true,
+                                    );
                                 }
                                 None => self.render_inline_value(output, &value),
                             }

@@ -740,14 +740,17 @@ fn try_link(
     let url: Cow<str> = if url_part.as_bytes().contains(&TAG_LEAD) {
         if let Some(u) = passthrough_url(work, url_part) {
             Cow::Owned(u)
-        } else if let Some(u) = reconstruct_link_target(work, url_part) {
+        } else if let Some(u) = reconstruct_link_target(work, url_part, options) {
             Cow::Owned(u)
         } else {
             flag_punt();
             return None;
         }
     } else {
-        Cow::Borrowed(url_part)
+        // No sentinel: still run the raw target through `replacements` (curl a bare
+        // `...` etc. into the href), reusing `reconstruct_link_target`'s fast path —
+        // infallible here, so the `?` never trips.
+        Cow::Owned(reconstruct_link_target(work, url_part, options)?)
     };
     if url.is_empty() {
         return None;
@@ -1668,7 +1671,7 @@ fn try_autolink(
     if preceded_by_angle && !bracket_follows {
         if rest.as_bytes().get(url_end) == Some(&b'>') {
             let end = start + url_end + 1; // consume the closing `>`
-            let Some(target) = reconstruct_link_target(work, url) else {
+            let Some(target) = reconstruct_link_target(work, url, options) else {
                 flag_punt();
                 return None;
             };
@@ -1712,7 +1715,7 @@ fn try_autolink(
         let content = unescape_close_bracket(&after_url[1..close]);
         // The URL part may carry an escaped-typographic `Literal` sentinel
         // (`a\...b`) or a plain `...` Asciidoctor would have curled; reconstruct it.
-        let Some(target) = reconstruct_link_target(work, url) else {
+        let Some(target) = reconstruct_link_target(work, url, options) else {
             flag_punt();
             return None;
         };
@@ -1747,7 +1750,7 @@ fn try_autolink(
 
     // Bare form.
     let end = start + url_len;
-    let Some(target) = reconstruct_link_target(work, url) else {
+    let Some(target) = reconstruct_link_target(work, url, options) else {
         flag_punt();
         return None;
     };
@@ -1995,41 +1998,46 @@ fn attr_has_sentinel(attr: Option<&str>) -> bool {
     has
 }
 
-/// Reconstruct an inline-link target that carries an escaped-typographic
-/// `Literal` sentinel, restoring the backslash-stripped literal Asciidoctor's
-/// `replacements` pass leaves for `\...` / `\--` / `\(C)` / … inside a URL.
+/// Reconstruct an inline-link target, running its plain runs through the
+/// `replacements` substitution and splicing escaped/survived sentinels back in.
 ///
-/// The earlier `escape` pass seals an escaped typographic pattern as a
-/// [`TagToken::Literal`] whose content is the pattern WITHOUT the backslash
-/// (`\...` → `Literal("...")`) — exactly what Asciidoctor's `/\\?\.\.\./`-style
-/// rules produce (strip the leading `\`, keep the literal). Because this pipeline
-/// extracts macros before that sentinel would otherwise force a punt, the link
-/// previously fell back to legacy and kept the raw `\...`; here we splice the
-/// `Literal` content back into the target so `compare/v1.5.6\...v1.5.6.1` links
-/// with the byte-for-byte `compare/v1.5.6...v1.5.6.1` Asciidoctor emits.
+/// Asciidoctor runs `replacements` over the whole line BEFORE `macros` detects a
+/// URL, so a bare `...` / `--` / `(C)` / `->` inside a link target is curled into
+/// the `href` (`compare/v1.5.6.1...v1.5.6.2` → `compare/v1.5.6.1…​v1.5.6.2`). This
+/// pipeline extracts `macros` first, so the curling never reached the target; we
+/// reproduce it here by passing each plain run through
+/// [`apply_typographic_replacements`](crate::inline::apply_typographic_replacements)
+/// (a URL has no spaces, so the edge-sensitive spaced em-dash cannot form — both
+/// edges are reported as non-boundaries). The bare link's visible text repeats the
+/// target, so it picks up the same curling.
 ///
-/// Plain runs are copied VERBATIM. An unescaped `...` is deliberately NOT curled
-/// to an ellipsis here: a URL synthesised from a resolved attribute reference is
-/// re-parsed after its surrounding text has already been through `replacements`
-/// once, so curling again would double-substitute (`v2.0.25\...` →
-/// `v2.0.25…​`). Leaving plain runs untouched keeps those (already-substituted)
-/// targets correct; the only cost is that a top-level literal URL with an
-/// unescaped `...` is not curled (rare, and Asciidoctor-faithful curling would
-/// regress the far more common resolved-attribute form).
+/// An ESCAPED typographic pattern is left literal: the earlier `escape` pass seals
+/// `\...` as a [`TagToken::Literal`] whose content is the backslash-stripped
+/// pattern (`Literal("...")`), and a sealed leaf is spliced back VERBATIM (no
+/// re-curling), so `compare/v1.5.6\...v1.5.6.1` stays literal dots — exactly what
+/// Asciidoctor's `/\\?\.\.\./` rule leaves. A survived character reference
+/// (`&#167;`, a `raw: true` leaf) is likewise spliced verbatim (the URL keeps the
+/// already-formed entity, which the renderer's href escape preserves), so
+/// `link:a&#167;b[t]` no longer punts.
 ///
-/// A survived character reference (`&#167;`, a `raw: true` leaf) is likewise
-/// spliced back verbatim — the URL keeps the already-formed entity, which the
-/// renderer's href escape preserves — so `link:a&#167;b[t]` no longer punts.
+/// Curling is SUPPRESSED when `options.link_target_pre_substituted` is set — the
+/// renderer's re-parse of a resolved `{attr}value[text]` combination. There the
+/// new engine's `escape`-before-`attributes` order already stripped a `\...`
+/// escape from the captured trailing brackets before this re-parse runs, so the
+/// `...` arrives bare; curling it would defeat the user's escape (the surrounding
+/// text having effectively been through `replacements` once already). Leaving
+/// plain runs untouched in that path keeps the resolved-attribute form correct.
 ///
 /// Returns `None` — signalling the caller to punt to legacy, preserving the
 /// previous whole-span sentinel decline — when the span carries any OTHER sentinel:
 /// passthrough / attribute-reference / an escaped (`raw: false`) char-ref / macro
 /// targets are out of scope and still fall back.
-fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
+fn reconstruct_link_target(work: &Work, span: &str, options: InlineOptions) -> Option<String> {
+    let curl = !options.link_target_pre_substituted;
     let bytes = span.as_bytes();
     if !bytes.contains(&TAG_LEAD) {
-        // Fast path: no sentinel — the raw target is already final.
-        return Some(span.to_string());
+        // Fast path: no sentinel — curl the raw target (unless suppressed).
+        return Some(maybe_curl_link_target(span, curl).into_owned());
     }
     let mut out = String::with_capacity(span.len());
     let mut seg_start = 0;
@@ -2038,7 +2046,9 @@ fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
         if bytes[i] == TAG_LEAD {
             let end = sentinel_end(bytes, i);
             if seg_start < i {
-                out.push_str(&span[seg_start..i]);
+                // Plain run between sentinels: curl it (the sealed Literal/CharRef
+                // leaves between such runs are spliced verbatim below).
+                out.push_str(&maybe_curl_link_target(&span[seg_start..i], curl));
             }
             // Parse the decimal token index between TAG_LEAD and TAG_TAIL.
             let mut idx = 0usize;
@@ -2066,9 +2076,22 @@ fn reconstruct_link_target(work: &Work, span: &str) -> Option<String> {
         }
     }
     if seg_start < bytes.len() {
-        out.push_str(&span[seg_start..]);
+        out.push_str(&maybe_curl_link_target(&span[seg_start..], curl));
     }
     Some(out)
+}
+
+/// Run a plain run of a link target through the `replacements` substitution when
+/// `curl` is set, otherwise return it untouched. A URL never contains a space, so
+/// the only edge-sensitive replacement (the spaced em-dash ` -- `) can never fire;
+/// both edges are reported as non-boundaries (the run is embedded mid-line, not at
+/// a real `^`/`$`). The common no-trigger run borrows unchanged.
+fn maybe_curl_link_target(segment: &str, curl: bool) -> Cow<'_, str> {
+    if curl {
+        crate::inline::apply_typographic_replacements(segment, false, false)
+    } else {
+        Cow::Borrowed(segment)
+    }
 }
 
 /// Restore a verbatim macro content/target (image alt & target, icon name &
