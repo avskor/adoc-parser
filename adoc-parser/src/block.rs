@@ -4024,6 +4024,10 @@ impl<'a> BlockScanner<'a> {
         }
         self.push_title_then_events(title_events);
 
+        // Mirror scan_unordered_list_item: clear the blank-line flag a leading
+        // block may have set, so a `+` continuation immediately after the item
+        // (no intervening blank line) attaches to THIS item, not an ancestor.
+        self.had_blank_line = false;
         self.event_buffer.pop()
     }
 

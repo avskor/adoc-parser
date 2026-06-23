@@ -1872,6 +1872,48 @@ fn test_callout_item_with_continuation_note_html() {
 }
 
 #[test]
+fn test_ordered_nested_continuation_after_leading_block_html() {
+    // Regression: a `+` continuation directly after the deepest item of a
+    // NESTED ordered list must attach the block to THAT item — even when a
+    // leading block (paragraph/section) precedes the list. The leading block
+    // sets the blank-line flag; scan_ordered_list_item must clear it (as the
+    // unordered scanner does) so the flag does not leak to the `+` handler and
+    // wrongly hoist the block to the outer item.
+    let input = "Intro para\n\n. Outer\n.. Inner a\n.. Inner b\n+\nNOTE: attached note\n";
+    let html = to_html(input);
+    // Admonition sits inside the inner item, right after its principal <p>.
+    assert!(
+        html.contains("<p>Inner b</p>\n<div class=\"admonitionblock note\">"),
+        "note must attach to deepest item:\n{html}"
+    );
+    // The inner list must NOT close before the admonition (the old bug hoisted
+    // it to the outer item).
+    assert!(
+        !html.contains("</li>\n</ol>\n</div>\n<div class=\"admonitionblock note\">"),
+        "inner list closed before admonition (hoisted to outer item):\n{html}"
+    );
+    // After the admonition: close inner item, inner list, then outer item/list.
+    assert!(
+        html.contains("</table>\n</div>\n</li>\n</ol>\n</div>\n</li>\n</ol>"),
+        "wrong close sequence after admonition:\n{html}"
+    );
+}
+
+#[test]
+fn test_ordered_nested_continuation_blank_before_plus_stays_outer_html() {
+    // Counterpart: with a blank line *immediately* before `+`, both engines
+    // hoist the block to the outer ancestor item. The fix above must not break
+    // this — the blank line re-sets the flag right before the `+`.
+    let input = ". Outer\n.. Inner a\n.. Inner b\n\n+\nNOTE: hoisted note\n";
+    let html = to_html(input);
+    // Inner list closes, THEN the admonition (attached to the outer item).
+    assert!(
+        html.contains("</li>\n</ol>\n</div>\n<div class=\"admonitionblock note\">"),
+        "blank-before-+ must hoist note to outer item:\n{html}"
+    );
+}
+
+#[test]
 fn test_callout_font_verbatim_conum_html() {
     // `:icons: font` → verbatim conum is `<i class="conum" data-value="N"></i><b>(N)</b>`
     // (parens kept), not the legacy `<b class="conum">(N)</b>`.
