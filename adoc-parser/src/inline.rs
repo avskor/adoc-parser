@@ -2104,7 +2104,8 @@ impl<'a> InlineState<'a> {
             if !after_close.starts_with('[') {
                 return false;
             }
-            let bracket_end = match after_close.find(']') {
+            let bracket_end = match crate::subst::link_label_close(after_close, 0)
+            {
                 Some(p) => p,
                 None => return false,
             };
@@ -2144,7 +2145,8 @@ impl<'a> InlineState<'a> {
             Some(p) => p,
             None => return false,
         };
-        let bracket_end = match rest.find(']') {
+        let bracket_end = match crate::subst::link_label_close(rest, bracket_start)
+        {
             Some(p) => p,
             None => return false,
         };
@@ -2196,7 +2198,8 @@ impl<'a> InlineState<'a> {
             Some(p) => p,
             None => return false,
         };
-        let bracket_end = match rest.find(']') {
+        let bracket_end = match crate::subst::link_label_close(rest, bracket_start)
+        {
             Some(p) => p,
             None => return false,
         };
@@ -2607,7 +2610,7 @@ impl<'a> InlineState<'a> {
         // Check for [link text] immediately after the URL
         let after_url = &rest[url_end..];
         if after_url.starts_with('[')
-            && let Some(close) = after_url.find(']')
+            && let Some(close) = crate::subst::link_label_close(after_url, 0)
         {
             let bracket_content = &after_url[1..close];
             let link_attrs = parse_link_attrs(bracket_content, LinkKind::Link);
