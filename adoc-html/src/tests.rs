@@ -369,6 +369,69 @@ fn test_unordered_bullet_marker_html() {
 }
 
 #[test]
+fn test_list_does_not_interrupt_paragraph_html() {
+    // A list marker directly following paragraph text (no intervening blank line)
+    // does NOT start a list at top level — Asciidoctor's read_paragraph_lines uses
+    // break_at_list = (skipped == 0 && options[:list_type]); outside a list
+    // (list_type nil) the marker is absorbed as plain paragraph text.
+    // Real case: notes/projects/sbertech/index (`. Выполняем …` line directly under
+    // a paragraph silently dropped the whole following ordered list).
+
+    // Ordered `.` absorbed into the open paragraph.
+    let html = to_html("Para text.\n. item one\n. item two");
+    assert!(
+        html.contains("<div class=\"paragraph\">\n<p>Para text.\n. item one\n. item two</p>"),
+        "`. ` marker after paragraph text is absorbed, not a list. Got:\n{html}"
+    );
+    assert!(!html.contains("<ol"), "no list must be produced. Got:\n{html}");
+
+    // Unordered `*` absorbed.
+    let html = to_html("Para text.\n* item one\n* item two");
+    assert!(
+        html.contains("<div class=\"paragraph\">\n<p>Para text.\n* item one\n* item two</p>"),
+        "`* ` marker after paragraph text is absorbed. Got:\n{html}"
+    );
+    assert!(!html.contains("<ul"), "no list must be produced. Got:\n{html}");
+
+    // Description-list marker absorbed.
+    let html = to_html("Para text.\nterm:: definition");
+    assert!(
+        html.contains("<div class=\"paragraph\">\n<p>Para text.\nterm:: definition</p>"),
+        "`term:: ` after paragraph text is absorbed. Got:\n{html}"
+    );
+    assert!(!html.contains("<dl"), "no dlist must be produced. Got:\n{html}");
+
+    // The admonition principal paragraph follows the same rule.
+    let html = to_html("NOTE: Some note text.\n* item");
+    assert!(
+        html.contains("Some note text.\n* item"),
+        "admonition paragraph absorbs the `* ` line. Got:\n{html}"
+    );
+    assert!(!html.contains("<ul"), "no list after the admonition. Got:\n{html}");
+
+    // Regression: a blank line before the marker still starts a real list, and the
+    // marker on the line touching the paragraph is absorbed into it.
+    let html = to_html("Para text.\n. absorbed item\n\n. real list item");
+    assert!(
+        html.contains("<p>Para text.\n. absorbed item</p>"),
+        "first marker absorbed. Got:\n{html}"
+    );
+    assert!(
+        html.contains("<ol class=\"arabic\">\n<li>\n<p>real list item</p>\n</li>\n</ol>"),
+        "the post-blank line starts a one-item list. Got:\n{html}"
+    );
+
+    // Regression: a list that begins a block (after a blank, or first in a section)
+    // is unaffected, and nested-item detection inside the list still works.
+    let html = to_html("Para text.\n\n* outer\n** inner\n* outer2");
+    assert!(html.contains("<p>Para text.</p>"), "Got:\n{html}");
+    assert!(
+        html.contains("<li>\n<p>outer</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>inner</p>"),
+        "nested list inside an item still parses. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_unordered_list_marker_style_class() {
     // An explicit block style on a `*`/`-` list (`[square]`, `[circle]`, or any
     // keyword) is the marker class on BOTH the wrapper div (`ulist {style}
