@@ -1069,6 +1069,15 @@ impl HtmlRenderer {
                 {
                     output.push_str("<div class=\"sectionbody\">\n");
                 }
+                // Mark where this section's content slot begins, so an empty body
+                // can be detected at `TagEnd::Section`. The top of the stack is the
+                // section opened by the enclosing `Tag::Section` (its
+                // `start_section_div` pushed the placeholder); the document title's
+                // own `SectionTitle` lives in the header with no `Tag::Section`
+                // wrapper, so the stack is empty there and this is a no-op.
+                if let Some(slot) = self.section_content_start.last_mut() {
+                    *slot = output.len();
+                }
             }
             TagEnd::Heading { level } => {
                 let h = section_level_to_h(*level);
@@ -1090,7 +1099,16 @@ impl HtmlRenderer {
                 let needs_sectionbody_close = self.sectionbody_stack.pop().unwrap_or(false);
                 self.section_style_stack.pop();
                 self.section_unnumbered_stack.pop();
+                let content_start = self.section_content_start.pop().unwrap_or(usize::MAX);
                 if !is_sect0 {
+                    // An empty body wrote nothing past the content-slot start, so
+                    // the `\n#{content}\n` wrapper Asciidoctor emits collapsed to a
+                    // single `\n` here; supply the trailing newline the (absent)
+                    // last child block would have produced, yielding the blank line
+                    // Asciidoctor renders for an empty section.
+                    if output.len() == content_start {
+                        output.push('\n');
+                    }
                     if needs_sectionbody_close {
                         output.push_str("</div>\n");
                     }

@@ -549,6 +549,11 @@ impl HtmlRenderer {
         let parent_unnumbered = self.section_unnumbered_stack.last().copied().unwrap_or(false);
         let unnumbered_subtree = parent_unnumbered || (is_special && style != Some("appendix"));
         self.section_unnumbered_stack.push(unnumbered_subtree);
+        // Placeholder for the content-slot start; the real position is recorded at
+        // `TagEnd::SectionTitle` once the heading (and, for a sect1, the
+        // `sectionbody` open) has been emitted. `usize::MAX` reads as non-empty if
+        // a title close never fires (no such case for a real section).
+        self.section_content_start.push(usize::MAX);
         // Section kind for `xrefstyle` reference text (Asciidoctor `sectname`):
         // `[appendix]` → Appendix; a level-0 body section (book part / article
         // sect0) → Part; a book chapter (level 2, not special) → Chapter; every
