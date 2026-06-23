@@ -137,6 +137,24 @@ fn test_nested_sections_html() {
 }
 
 #[test]
+fn test_literal_paragraph_absorbs_following_lines_html() {
+    // An indented opener turns the run into one literal block; the following
+    // non-indented lines are absorbed verbatim (not split into a paragraph), and
+    // the opener's leading whitespace is kept when the common indent is 0. This
+    // matches Asciidoctor for indented diagram-source open-block content
+    // (e.g. `  node1 -> node2\n}\n@enddot`).
+    let input = "  node1 -> node2\n}\n@enddot\n";
+    let html = to_html(input);
+    assert!(
+        html.contains("<pre>  node1 -&gt; node2\n}\n@enddot</pre>"),
+        "literal block must absorb non-indented continuation lines verbatim: {html}"
+    );
+    // Exactly one literal block, no stray paragraph for `}`/`@enddot`.
+    assert_eq!(html.matches("class=\"literalblock\"").count(), 1, "{html}");
+    assert!(!html.contains("<p>}"), "`}}` must not split into its own paragraph: {html}");
+}
+
+#[test]
 fn test_block_image_html() {
     let html = to_html("image::photo.jpg[My Photo]");
     assert!(html.contains("<img src=\"photo.jpg\" alt=\"My Photo\">"));

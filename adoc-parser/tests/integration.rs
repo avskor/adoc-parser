@@ -430,3 +430,53 @@ fn test_indented_section_marker_is_literal_paragraph() {
         "column-0 section marker must still open a section: {sec:?}"
     );
 }
+
+#[test]
+fn test_literal_paragraph_absorbs_following_lines() {
+    // Once an indented line opens a literal paragraph, Asciidoctor extends it
+    // over every following non-blank line — regardless of indentation — until a
+    // blank line or block boundary. Non-indented plain lines are absorbed
+    // verbatim, NOT split into a separate paragraph. The common minimum indent is
+    // stripped: here the flush-left lines make it 0, so the opener keeps its two
+    // leading spaces.
+    let events = parse("Intro.\n\n  literal first\nnot indented\nalso not\n\nAfter.\n");
+    assert_eq!(events, vec![
+        Event::Start(Tag::Paragraph),
+        Event::Text(Cow::Borrowed("Intro.")),
+        Event::End(TagEnd::Paragraph),
+        Event::Start(Tag::LiteralParagraph),
+        Event::Text(Cow::Borrowed("  literal first")),
+        Event::SoftBreak,
+        Event::Text(Cow::Borrowed("not indented")),
+        Event::SoftBreak,
+        Event::Text(Cow::Borrowed("also not")),
+        Event::End(TagEnd::LiteralParagraph),
+        Event::Start(Tag::Paragraph),
+        Event::Text(Cow::Borrowed("After.")),
+        Event::End(TagEnd::Paragraph),
+    ]);
+
+    // Common-indent stripping over the absorbed lines preserves relative indent:
+    // min indent is 4, so `      ccc` (6) keeps two spaces.
+    let stripped = parse("    aaa\n    bbb\n      ccc\n");
+    assert_eq!(stripped, vec![
+        Event::Start(Tag::LiteralParagraph),
+        Event::Text(Cow::Borrowed("aaa")),
+        Event::SoftBreak,
+        Event::Text(Cow::Borrowed("bbb")),
+        Event::SoftBreak,
+        Event::Text(Cow::Borrowed("  ccc")),
+        Event::End(TagEnd::LiteralParagraph),
+    ]);
+
+    // A delimited-block opener DOES terminate the literal paragraph (it is a
+    // genuine block boundary, unlike a section/list/admonition marker).
+    let terminated = parse("  literal line\n----\nlisting\n----\n");
+    assert_eq!(terminated[0], Event::Start(Tag::LiteralParagraph));
+    assert_eq!(terminated[1], Event::Text(Cow::Borrowed("literal line")));
+    assert_eq!(terminated[2], Event::End(TagEnd::LiteralParagraph));
+    assert_eq!(
+        terminated[3],
+        Event::Start(Tag::DelimitedBlock { kind: DelimitedBlockKind::Listing })
+    );
+}
