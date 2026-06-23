@@ -115,6 +115,25 @@ fn run(cli: Cli) -> Result<(), String> {
     seed("localdate", localdate);
     seed("localtime", localtime);
     seed("localyear", now.format("%Y").to_string());
+
+    // Backend intrinsics set by Asciidoctor when rendering to HTML5. The CLI
+    // always targets the html5 backend, so these are fixed regardless of the
+    // document. Seeding them into `initial_attrs` lets the preprocessor evaluate
+    // `ifdef::backend-html5[]` / `ifdef::filetype-html[]` etc., and seeding them
+    // into `html_attrs` resolves the matching `{basebackend}`/`{filetype}`/
+    // `{outfilesuffix}` references in the renderer. Empty-valued names are "set"
+    // flags (defined but blank), matching Asciidoctor. `doctype-<value>` is NOT
+    // seeded here: its suffix tracks the doctype, which a header `:doctype:` entry
+    // can change, and we don't recompute the intrinsic — seeding `doctype-article`
+    // unconditionally would wrongly leave it set for book/manpage documents.
+    seed("backend", "html5".to_string());
+    seed("backend-html5", String::new());
+    seed("basebackend", "html".to_string());
+    seed("basebackend-html", String::new());
+    seed("filetype", "html".to_string());
+    seed("filetype-html", String::new());
+    seed("outfilesuffix", ".html".to_string());
+
     if let Some(path) = &cli.input {
         let abs = path.canonicalize().unwrap_or_else(|_| path.clone());
         if let Some(stem) = abs.file_stem() {
