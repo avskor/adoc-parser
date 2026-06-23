@@ -40,25 +40,26 @@ class="sectionbody">\n</div>` вместо `…\n\n</div>`; sect2+ `</h3>\n</div
     **identical**; callouts 37→36 (остаток = Rouge-подсветка).
 - gate_check.py: 5 файлов new≠base — ВСЕ улучшения (base→new diff = только добавленные пустые строки `>`, 0 удалений).
 
-### Важный методологический вывод
-Прошлая «корпуса исчерпаны» опиралась на НОРМАЛИЗОВАННУЮ метрику (`frontier_parity.py`/`showdiff.py` гонят
-`normalize_html`, схлопывают whitespace → СЛЕПЫ к пустым строкам). **Байт-паритет НЕ был исчерпан.** Для поиска
-байт-остатков нужно байтовое сравнение content-региона (см. `scratchpad/difcount.py`,`bytecmp.py`), не нормализованное.
+### ⚠ ПОПРАВКА ПОЛЬЗОВАТЕЛЯ (2026-06-23) — F-BI РАБОТА ВНЕ ЦЕЛИ
+После merge/push пользователь: «для html байт паритет нужен только в листингах и примерах». То есть байт-паритет
+значим ТОЛЬКО в verbatim `<pre>` (listing/source/literal/примеры); пустая строка между блочными тегами (`<div>` и т.п.)
+браузером СХЛОПЫВАЕТСЯ → на рендеринг не влияет. html-compat (семантический DOM) её игнорировал — и это ПРАВИЛЬНО,
+нормализованная метрика НЕ «слепа», а корректно не видит неважное. F-BI технически совпал с asciidoctor, но эффект
+нулевой. Решение пользователя — **ОСТАВИТЬ** F-BI (безвреден, 0 регрессий), принцип применять к будущим задачам.
+Память: [[feedback_html_byte_parity_scope]]; [[compat_corpus_methodology]] исправлена.
 
-### Новый найденный остаток (НЕ в scope F-BI)
-**sect0 blank-between-siblings:** asciidoctor даёт пустую строку МЕЖДУ двумя соседними `<h1 class="sect0">` (level-0
-секции / книжные части). Мы — нет (appendix/section residual: `…</h1>\n\n<h1 class=sect0>` vs наш `…</h1>\n<h1>`).
-Отдельный sect0-баг (мой фикс намеренно его не трогает — гард `!is_sect0`, sect0 без wrapper-div). Кандидат на след.
-задачу + потенциально целый класс byte-only расхождений (искать байтовым sweep).
+### НЕ кандидат на задачу: sect0 blank-between-siblings
+asciidoctor даёт пустую строку между соседними `<h1 class="sect0">` (appendix/section residual). Это ТОТ ЖЕ класс —
+whitespace вне `<pre>`, рендерингу безразличен → **НЕ браться** (по поправке выше). Не гнаться за байтовыми
+whitespace-остатками; compat-триаж: байт-паритет только внутри verbatim-блоков, прочее — семантикой DOM.
 
 ### Состояние репо
-- Ветка `fix/empty-section-blank-line` (от `8001e22`). **НЕ закоммичена** (коммит/merge — ПО ЗАПРОСУ).
-- Изменены: `adoc-html/src/lib.rs`, `adoc-html/src/blocks.rs`, `adoc-html/src/events.rs` (+тест в `tests.rs`).
-  TODO.md (+F-BI) и session.md обновлены.
-- `/tmp/adoc_base` = бинарь master `8001e22` (для gate_check/sweep). `/tmp/adoc_fixed` = бинарь с фиксом.
+- master `27ba193` (F-BI смержен `--no-ff`, запушен в origin; ветка `fix/empty-section-blank-line` удалена).
+- Изменено: `adoc-html/src/{lib,blocks,events,tests}.rs`. TODO.md (+F-BI с поправкой) и session.md обновлены.
+- `/tmp/adoc_base` = бинарь master `8001e22` (СТАРЫЙ — пересобрать из `27ba193` перед след. gate_check/sweep!).
 
-### Методология (без изменений)
+### Методология
 `gate_check.py` (base=`/tmp/adoc_base`, пересобирать из master через stash!), `/tmp/sweep_bvn.py` (frontier+adoc2docx
-base-vs-new), `frontier_parity.py`/`showdiff.py` (НОРМАЛИЗОВАННАЯ метрика — НЕ видит whitespace!). Бинарь:
-`cargo build --release -p adoc-cli` (имя `adoc`, нужен файл, `-a nofooter`). asciidoctor 2.0.23 для проб.
-Байт-сравнение: см. `scratchpad/difcount2.py` (difflib opcode-diff, NCR-нейтрализация).
+base-vs-new) — БАЙТОВЫЕ, держать как РЕГРЕСС-гард, не parity-таргет для не-verbatim. `frontier_parity.py`/`showdiff.py`
+(нормализованная, семантический DOM — ПРАВИЛЬНАЯ метрика для не-verbatim). Бинарь: `cargo build --release -p adoc-cli`
+(`adoc`, нужен файл, `-a nofooter`). asciidoctor 2.0.23 для проб. Байт-сравнение verbatim: `scratchpad/difcount2.py`.
