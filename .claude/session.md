@@ -1,65 +1,63 @@
 # Session context
 
-## Сессия (2026-06-23, 14-я) — F-BQ: closed-ATX заголовок секции (`== Title ==` → трейлинг-маркеры не отбрасывались)
+## Сессия (2026-06-23, 15-я) — F-BR: section-title внутри list-continuation (`=== T`/setext после `+` → секция вместо параграфа)
 
-Запрос «начни следующую задачу». master `8dc6539` (F-BP смержен — session.md 13-й сессии устарел, писался ДО коммита/мержа F-BP).
+Запрос «начни следующую задачу». master `c5f0d8b` (F-BQ смержен).
 
-### Триаж — РАСШИРЕНИЕ КОРПУСА (ключевой результат сессии)
-Старые корпуса исчерпаны на чистых блочных фиксах:
-- **notes** (`/mnt/c/Work/docs/notes/modules`, 81 .adoc) — 79 identical, остаток = 2 архитектурных автолинка (windows/wsl 95,
-  keycloak/index 52; оба `macros` до `quotes`, см. [[proj_sequential_quotes_rewrite]] — НЕ single-session).
-- **frontier** (`/mnt/c/tmp/adoc-frontier`, 250) — 230 identical, остаток = manpage др. бэкенд + `{asciidoctor-version}`
-  интринсик (migration.adoc) + localtime (non-bug).
-- **adoc2docx** (`/mnt/c/tmp/adoc2docx`, 34) — 45 identical, остаток = rouge-подсветка ruby/yaml (source/xml/test/callouts;
-  крупная фича, не блочный фикс).
-- **НОВОЕ: `/mnt/c/Work/docs` целиком** — 96 .adoc ВНЕ notes (http-api-design, mgp, kubernetes-best-practices…) ранее не
-  майнились. `frontier_parity.py /mnt/c/Work/docs` → **200 identical, 9 чистых расхождений**. Свежие мелкие кандидаты!
+### Триаж (метка прошлой сессии устарела, см. [[feedback_frontier_triage]])
+session.md 14-й сессии указывал на `_responses`/`_artifacts` в `http-api-design/src/main/asciidoc` — но showdiff показал их 0-diff
+(уже починены F-BP/F-BQ). Свежий `frontier_parity.py /mnt/c/Work/docs` → **202 identical, 7 clean**. Реальные кандидаты d=8 —
+**`.deploy`-версии** (`http-api-design.deploy/src/main/adoc/_responses.adoc` + `_artifacts.adoc`). Выбран как чистый single-root.
 
-### Сделано — F-BQ (ветка `fix/closed-atx-section-title` от master `8dc6539`)
-**Баг:** Release.adoc / BranchesInPTS.adoc в «closed-ATX» стиле (`= T =`, `== T ==`, `=== T ===`, `==== T ====`). asciidoctor
-отбрасывает закрывающий run, равный ведущему; мы оставляли как текст (`Выпуск версии ==`) + портили auto-id.
+### Корень (verified asciidoctor 2.0.23, пробы A–G + S_plus/S_tilde)
+Секция НИКОГДА не ребёнок list-item. При list-continuation `+` следующий блок парсится в контексте элемента; section-title там
+**ДЕГРАДИРУЕТ в литеральный параграф** `<p>=== T</p>` внутри `<li>`:
+- **ATX** (`* x` / `+` / `=== T`): `=== T` → параграф (кейсы A=cont+blank+heading, C=cont+adjacent, F=1 item) — БАЙТ-в-байт asciidoctor.
+- **setext** (`* x` / `+` / `на` / `~~`): `на\n~~` → параграф (а на section-level `на` над `+`/`~~`/`^^` = setext sect4/sect2/sect3,
+  ПОДТВЕРЖДЕНО S_plus1/S_tilde3 — `strip_setext_title` маппинг `=`1/`-`2/`~`3/`^`4/`+`5 КОРРЕКТЕН, не трогать).
+- БЕЗ `+` (кейс B): пустая строка закрывает список, секция создаётся нормально (уже верно).
 
-**Корень (verified asciidoctor `SectionTitleRx` `/^((?:=|#){1,6})(?!\1[=#])\s+(\S.*?)(?:\s+\1)?$/`):**
-опциональная группа `(?:\s+\1)?` — трейлинг run, ТОЧНО равный ведущему (тот же символ + тот же count), с whitespace перед
-ним, отбрасывается ДО генерации id. Асимметричный (`== T =`) или беспробельный (`== T==`) трейлинг остаётся литералом.
-Markdown ATX `## T ##` ведёт себя так же (проверено пробой) → фикс в обеих функциях.
+Тип триггера — наш флаг `self.in_continuation`.
 
-**Фикс (1 файл, only adoc-parser/src/scanner.rs):**
-- новый хелпер `strip_closed_atx_trailer(title, marker, level) -> &str` (zero-copy суб-слайс): считает трейлинг run байта
-  `marker`, если `run == level` И перед run есть whitespace И остаток непуст → обрезает + trim_end; иначе title как есть.
-- вызывается в `strip_section_marker` (marker `b'='`) и `strip_markdown_heading` (marker `b'#'`) после `rest[1..].trim()`.
+### Фикс (1 файл, only adoc-parser/src/block.rs)
+`scan_leaf_blocks`: guard `!self.in_continuation` на ОБА детекта секции:
+- ATX `if !self.in_continuation && let Some((level,title)) = strip_any_section_marker(line)` (был безусловный).
+- setext-ветка: добавлен `!self.in_continuation &&` в начало цепочки условий.
+Строка проваливается в `scan_paragraph_fallback` (в continuation `is_directly_in_list_context && !in_continuation` ложно →
+не закрывает список → читается как контент параграфа li).
 
-**Тесты:** +1 scanner unit `test_strip_closed_atx_section_title` (симметрия/асимметрия/беспробел/`=`-в-title/markdown);
-+1 html `test_closed_atx_section_title_html` (adoc-html: `Closed`/h4 `master`/`Asym =` kept/`NoSpace==` kept).
+**Тесты:** +1 parser event `test_list_continuation_demotes_section_title` (block.rs), +1 html
+`test_section_title_demoted_in_list_continuation_html` (adoc-html, ATX + setext + негативы no-`<h3>`/`<h5>`/`sect`).
 
 ### Верификация
-- clippy `--workspace` **0**. **test --workspace 0 упавших** (html **542** (+1), parser 649, compat 233, render-core 25,
-  integration 29, html-compat).
-- **БАЙТ-НЕЙТРАЛЬНО:** база `/tmp/adoc_base` ПЕРЕСОБРАНА от текущего master `8dc6539` (stash→checkout master→`cargo clean
-  --release -p adoc-parser`→build→cp→checkout branch→pop→clean+rebuild; md5 base `ad31ee7`, new `1fed8ba`).
-  - gate 344 — `gate_check.py` **0 diff**.
-  - **свип ВСЕХ корпусов** (`scratchpad/sweep_all.py`, 860 файлов raw-байт base-vs-new: gate+frontier+adoc2docx+docs) —
-    изменились **ТОЛЬКО 2 целевых файла** (Release.adoc, BranchesInPTS.adoc).
-- Семантически без регрессий: frontier 230, adoc2docx 45, notes 79 СТАБИЛЬНЫ; **docs Identical 200→202** (оба флипнули).
-- 5 CLI-проб байт-в-байт == asciidoctor 2.0.23: `== Title ==`→`Title`, `== Asym =`→`Asym =`, `==== master ====`→h4 `master`,
-  `== NoSpace==`→`NoSpace==`, `## MD Two ##`→`MD Two`.
+- clippy `--workspace` **0**. **test --workspace 0 упавших** (html 542→**543**, parser 649→**650**, compat **233/233**,
+  html-compat, integration 29, render-core 25).
+- **БАЙТ-НЕЙТРАЛЬНО:** база `/tmp/adoc_base` ПЕРЕСОБРАНА от master `c5f0d8b` (md5 base `1fed8ba`, new `447ced4`).
+  - gate 344 (`gate_check.py`) — **0 diff**.
+  - свип 860 файлов (`scratchpad/sweep_all.py` пересоздан в session-scratchpad: gate+frontier+adoc2docx+docs) — изменились
+    **5**: 2 целевых `.deploy` (`_responses`,`_artifacts`) + 2 vue (`vue_ts_springboot` ×2) + родитель `http-api-design.adoc`
+    (через include). Все улучшились.
+- Семантически: **docs Identical 202→206** (+4: 2 `.deploy` + 2 vue к 0-diff vs asciidoctor); родитель `http-api-design.adoc`
+  3926→3712 diff-lines (улучшение, остаток — несвязанный include-шум). frontier/adoc2docx/notes/gate стабильны.
+- **vue флипнул через setext-демотацию, НЕ ATX** (`на` над `+`-маркером continuation): один upstream-рассинхрон раздувался
+  позиционным differ'ом до 273 + ложная преамбула (документ «обзаводился секциями» через ложные sect4 `на` ×6). Классика
+  [[feedback_frontier_triage]] — починка upstream обнуляет downstream.
 
 ### Состояние репо
-- Ветка `fix/closed-atx-section-title` от master `8dc6539`, **НЕ закоммичена** (ждёт запроса коммит/merge/push).
-- Изменено: `adoc-parser/src/scanner.rs` (+хелпер `strip_closed_atx_trailer`, 2 вызова, +1 unit-тест),
-  `adoc-html/src/tests.rs` (+1 тест), TODO.md (+F-BQ), session.md.
-- `/tmp/adoc_base` = бинарь master `8dc6539` (актуальная база регресс-гарда этой сессии).
+- Ветка `fix/section-title-in-list-continuation` от master `c5f0d8b`, коммит **`b522081`** (`fix(lists): demote section title in
+  list continuation to paragraph (F-BR)`). **Merge/push — ПО ЗАПРОСУ** (ещё не смержено).
+- Изменено: `adoc-parser/src/block.rs` (2 guard'а + 1 unit-тест), `adoc-html/src/tests.rs` (+1 тест), TODO.md (+F-BR), session.md.
+- `/tmp/adoc_base` = бинарь master `c5f0d8b` (md5 `1fed8ba`, актуальная база регресс-гарда).
 
-### Остаток docs-корпуса (кандидаты след. сессий, по возрастанию diff)
-- `_responses.adoc` / `_artifacts.adoc` (8 каждый) — `=== heading` ВНУТРИ list-item: asciidoctor вливает как параграф в
-  элемент, у нас → отдельная секция. Родственно `read_paragraph_lines`/F-BO (контекст списка). Чистый блочный кандидат.
-- vue_ts_springboot ×2 (273/270), cheatsheet (659) — крупнее, требуют showdiff-триажа на single/multi-root.
-- windows/wsl (95) + keycloak/index (52) — 2 архитектурных автолинка (`macros` до `quotes`/specialchars), реордер.
+### Остаток docs-корпуса (кандидаты след. сессий)
+- `cheatsheet.adoc` (659) — крупный, требует showdiff-триажа на single/multi-root.
+- `windows/wsl` (95) + `keycloak/index` (52) — те же 2 архитектурных автолинка (`macros` до `quotes`/specialchars, реордер;
+  НЕ single-session, см. [[proj_sequential_quotes_rewrite]]).
+- Если docs исчерпан — РАСШИРЯТЬ КОРПУС (см. [[compat_corpus_methodology]]): `frontier_parity.py <новый-root>`.
 
 ### Методология (без изменений, см. [[compat_corpus_methodology]] + [[feedback_html_byte_parity_scope]])
-`frontier_parity.py <root>` / `showdiff.py <file>` (семантический DOM). **РАСШИРЯТЬ КОРПУС когда старые исчерпаны:
-`/mnt/c/Work/docs` целиком даёт свежие кандидаты.** Регресс-гард: `gate_check.py` (база `/tmp/adoc_base` пересобирать от
-текущего master) + `scratchpad/sweep_all.py` (raw-байт свип всех 4 корпусов). Бинарь: `cargo build --release -p adoc-cli`
-(НЕ adoc-html — иначе stale). ⚠ mtime на /mnt/c ненадёжен → `cargo clean --release -p adoc-parser` перед build
-(см. [[feedback_wsl_build_staleness]]). asciidoctor 2.0.23, наш `--no-standalone`/CLI body ≈ `asciidoctor -s`.
-НЕ доверять метке прошлой сессии — showdiff каждый кандидат (см. [[feedback_frontier_triage]]).
+`frontier_parity.py <root>` / `showdiff.py <file>` (семантический DOM, скрипты в `/mnt/c/tmp/adoc-test/`). Регресс-гард:
+`gate_check.py` (база `/tmp/adoc_base` пересобирать от текущего master) + `scratchpad/sweep_all.py` (raw-байт свип всех 4
+корпусов; пересоздавать в session-scratchpad). Бинарь: `cargo build --release -p adoc-cli` (НЕ adoc-html — stale). ⚠ mtime на
+/mnt/c ненадёжен → `cargo clean --release -p adoc-parser` перед build (см. [[feedback_wsl_build_staleness]]). НЕ доверять метке
+прошлой сессии — showdiff каждый кандидат.
