@@ -132,6 +132,24 @@ fn test_section() {
 }
 
 #[test]
+fn test_closed_atx_section_title_html() {
+    // Closed-ATX titles: a trailing run matching the opener (`== Title ==`,
+    // `==== T ====`) is stripped from both the heading text and the auto-id
+    // (Asciidoctor `SectionTitleRx` `(?:\s+\1)?`).
+    let html = to_html("== Closed ==\n\ntext");
+    assert!(html.contains("<h2 id=\"_closed\">Closed</h2>"), "symmetric closed-ATX stripped: {html}");
+
+    let deep = to_html("==== master ====\n\ntext");
+    assert!(deep.contains("<h4 id=\"_master\">master</h4>"), "deep closed-ATX stripped: {deep}");
+
+    // Asymmetric / unspaced trailing markers stay literal in the title.
+    let asym = to_html("== Asym =\n\ntext");
+    assert!(asym.contains("<h2 id=\"_asym\">Asym =</h2>"), "asymmetric trailing run kept: {asym}");
+    let tight = to_html("== NoSpace==\n\ntext");
+    assert!(tight.contains(">NoSpace==</h2>"), "unspaced trailing run kept: {tight}");
+}
+
+#[test]
 fn test_empty_section_emits_blank_content_slot_html() {
     // Asciidoctor's section template wraps content in `\n#{content}\n`; an empty
     // body collapses that to a single blank line before the closing `</div>` —
