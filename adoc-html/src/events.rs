@@ -1114,7 +1114,27 @@ impl HtmlRenderer {
                 output.push_str("</pre>\n</div>\n</div>\n");
             }
             TagEnd::DelimitedBlock => {
-                match self.delimited_block_stack.pop() {
+                let popped = self.delimited_block_stack.pop();
+                // A suppressed `[partintro]` block (Asciidoctor excludes it
+                // outside a book part): truncate everything its content wrote.
+                // The depth recorded at the start equals the stack length now
+                // that this block's entry has been popped.
+                if let Some(&(depth, pos)) = self.partintro_suppress.last()
+                    && depth == self.delimited_block_stack.len()
+                {
+                    self.partintro_suppress.pop();
+                    // Asciidoctor's `convert_open` returns '' for the excluded
+                    // block, but that '' still participates in the parent's
+                    // `blocks.map(&:convert).join(LF)` — so an excluded block
+                    // sandwiched between siblings contributes exactly one join
+                    // LF. Mirror it: drop the block's HTML but keep one trailing
+                    // newline (our per-block separator), reproducing the blank
+                    // line Asciidoctor leaves where the partintro stood.
+                    output.truncate(pos);
+                    output.push('\n');
+                    return;
+                }
+                match popped {
                     Some((DelimitedBlockKind::Listing | DelimitedBlockKind::Literal, _)) => {
                         // Trim leading/trailing blank lines in verbatim content (matches Asciidoctor)
                         Self::trim_verbatim_content(output);

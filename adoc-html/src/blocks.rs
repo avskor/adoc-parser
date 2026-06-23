@@ -758,10 +758,27 @@ impl HtmlRenderer {
                 // (Asciidoctor's `convert_open`). The stack flag records it so
                 // the matching close emits `</blockquote>` instead of the open
                 // block's content div.
-                let is_abstract =
-                    meta.as_ref().and_then(|m| m.style.as_deref()) == Some("abstract");
+                let style = meta.as_ref().and_then(|m| m.style.as_deref());
+                let is_abstract = style == Some("abstract");
+                // Asciidoctor's `convert_open` EXCLUDES a `[partintro]` block
+                // (returns '') unless it is a direct child of a book part —
+                // i.e. unless the doctype is book. (The valid book-part case is
+                // produced by the parser's implicit wrap / explicit-style pass
+                // and rendered below.) Outside a book the whole block, title and
+                // all, contributes nothing; record the pre-block output position
+                // and emit nothing — `TagEnd::DelimitedBlock` truncates back.
+                let suppress_partintro = style == Some("partintro") && !self.doctype_book;
+                if suppress_partintro {
+                    self.partintro_suppress
+                        .push((self.delimited_block_stack.len(), output.len()));
+                    // The block's `.title` is excluded too — drop it so it can't
+                    // leak onto the next block.
+                    self.block_title_inner_html = None;
+                }
                 self.delimited_block_stack.push((*kind, is_abstract));
-                if is_abstract {
+                if suppress_partintro {
+                    // Content renders into `output` but is truncated at the close.
+                } else if is_abstract {
                     self.start_abstract_block(output, meta);
                 } else {
                     self.open_block_with_title(output, meta, "openblock");
