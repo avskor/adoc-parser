@@ -629,16 +629,53 @@ impl<'a> BlockScanner<'a> {
 
     /// Auto-generate a section/heading id, mirroring Asciidoctor's
     /// `Section.generate_id`, which slugifies the title *after* the normal
-    /// substitutions have run (`Section#title` returns `apply_title_subs @title`).
-    /// We resolve attribute references and then apply the typographic
-    /// `:replacements` substitution before sanitizing. This matters because the
-    /// em-dash and ellipsis replacements emit Unicode glyphs that `generate_id`
-    /// drops, and the spaced em-dash form consumes its flanking spaces: `A -- B`
-    /// becomes `_ab` (not `_a_b`), `a...b` becomes `_ab`, matching Asciidoctor.
+    /// substitutions have run (`Section#title` returns `apply_title_subs @title`)
+    /// and `InvalidSectionIdCharsRx` has stripped the resulting HTML tags.
+    /// We resolve attribute references, strip inline formatting markup (so a
+    /// formatted title slugifies on its *visible text* — `[underline]#Basic
+    /// formats#` → `_basic_formats`, `_Sidebar_ block` → `_sidebar_block`, not
+    /// `_underlinebasic_formats`/`__sidebar_block`), and then apply the
+    /// typographic `:replacements` substitution before sanitizing. The
+    /// replacements matter because the em-dash and ellipsis emit Unicode glyphs
+    /// that `generate_id` drops, and the spaced em-dash form consumes its
+    /// flanking spaces: `A -- B` becomes `_ab` (not `_a_b`), `a...b` becomes
+    /// `_ab`, matching Asciidoctor.
     fn generate_title_id(&self, title: &str) -> String {
         let resolved = self.resolve_title_attr_refs(title);
-        let substituted = crate::inline::apply_typographic_replacements(&resolved, true, true);
+        let unformatted = Self::strip_inline_formatting(&resolved);
+        let substituted = crate::inline::apply_typographic_replacements(&unformatted, true, true);
         scanner::generate_id(&substituted, &self.idprefix, &self.idseparator)
+    }
+
+    /// Drop inline formatting markup from a title, keeping only its visible
+    /// text. Asciidoctor generates the section id from the *substituted* title
+    /// with its HTML tags removed, so quote/role spans contribute their content
+    /// but not their markers: `*Bold*` → `Bold`, `` A `code` `` → `A code`,
+    /// `Super^script^` → `Superscript`, `[.role]#text#` → `text`. We run only the
+    /// `quotes` substitution and concatenate the resulting text leaves; inline
+    /// macros (`link:`/`icon:`/bare URLs) stay literal here so `generate_id`'s
+    /// own url/icon handling still applies, and the typographic replacements run
+    /// afterwards as before. A title with no formatting marker is returned
+    /// untouched (borrowed).
+    fn strip_inline_formatting(title: &str) -> Cow<'_, str> {
+        if !title
+            .bytes()
+            .any(|b| matches!(b, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'['))
+        {
+            return Cow::Borrowed(title);
+        }
+        let mut subs = SubstitutionSet::NONE;
+        subs.add(SubstitutionSet::QUOTES);
+        let events = crate::inline::InlineParser::parse_str_with_subs(title, subs);
+        let mut out = String::with_capacity(title.len());
+        for ev in &events {
+            match ev {
+                Event::Text(s) | Event::Code(s) | Event::InlinePassthrough(s) => out.push_str(s),
+                Event::SoftBreak | Event::HardBreak => out.push(' '),
+                _ => {}
+            }
+        }
+        Cow::Owned(out)
     }
 
     fn is_in_list_context(&self) -> bool {
@@ -6487,6 +6524,31 @@ mod tests {
                 "_deep_x_bar_baz_y",
                 "_with_undefined_ref",
                 "_gone_foo",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_section_id_strips_inline_formatting() {
+        // Asciidoctor derives the id from the substituted, tag-stripped title, so
+        // inline formatting contributes its visible text but not its markers.
+        // Verified against asciidoctor 2.0.23.
+        let input = "== [underline]#Basic formats#\n\nx\n\n== _Sidebar_ block\n\ny\n\n== *Bold* title\n\nz\n\n== A `code` here\n\nw\n\n== Super^script^ x\n\nv\n\n== Mixed [.role]#text# and _em_ end";
+        let ids: Vec<String> = BlockScanner::new(input)
+            .filter_map(|ev| match ev {
+                Event::Start(Tag::SectionTitle { id, level }) if level > 0 => Some(id.into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "_basic_formats",
+                "_sidebar_block",
+                "_bold_title",
+                "_a_code_here",
+                "_superscript_x",
+                "_mixed_text_and_em_end",
             ]
         );
     }
