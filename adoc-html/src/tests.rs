@@ -432,6 +432,83 @@ fn test_list_does_not_interrupt_paragraph_html() {
 }
 
 #[test]
+fn test_list_discards_abutting_block_attr_html() {
+    // A block-metadata line (`[...]` / `.Title`) that abuts a list item with NO
+    // blank line is read into the item's own lines (Asciidoctor
+    // read_lines_for_list_item, parser.rb 1499-1501). A delimited block with no
+    // preceding `+` continuation then breaks the list (1453-1456), leaving the
+    // metadata with no in-item block to attach to — so Asciidoctor drops it and
+    // parses the block fresh at the top level WITHOUT it.
+    // Real case: notes/ansible/tips (`[source, yaml]` directly under a list item
+    // rendered a highlighted source listing instead of a plain `<pre>`).
+
+    // `[source,yaml]` abutting → the source role is discarded (plain `<pre>`,
+    // no `highlight`/`language-yaml`), and the listing is a sibling of the list.
+    let html = to_html(". item\n[source,yaml]\n----\nx: 1\n----");
+    assert!(
+        html.contains("</ol>\n</div>\n<div class=\"listingblock\">\n<div class=\"content\">\n<pre>x: 1</pre>"),
+        "abutting [source,yaml] is discarded → plain sibling listing. Got:\n{html}"
+    );
+    assert!(
+        !html.contains("highlight") && !html.contains("language-yaml"),
+        "no source role survives. Got:\n{html}"
+    );
+
+    // A block title `.Title` is NOT a block-attribute line: it does not
+    // interrupt a paragraph (it is absent from Asciidoctor's StartOfBlockProc),
+    // so abutting it is absorbed into the item's paragraph as literal text — it
+    // never becomes a block-title div, and the listing stays plain.
+    let html = to_html(". item\n.My Title\n----\nx: 1\n----");
+    assert!(
+        html.contains("<p>item\n.My Title</p>"),
+        "abutting .Title is absorbed as paragraph text. Got:\n{html}"
+    );
+    assert!(
+        !html.contains("<div class=\"title\">"),
+        ".Title must not render as a block title here. Got:\n{html}"
+    );
+
+    // `[#id.role]` abutting → id and role are discarded.
+    let html = to_html(". item\n[#bid.brole]\n----\nx: 1\n----");
+    assert!(
+        !html.contains("bid") && !html.contains("brole"),
+        "abutting [#id.role] is discarded. Got:\n{html}"
+    );
+
+    // A `[quote]` style abutting a listing `----` is also discarded — the block
+    // stays a plain listing (NOT a quoteblock).
+    let html = to_html(". item\n[quote]\n----\nx\n----");
+    assert!(
+        html.contains("listingblock") && !html.contains("quoteblock"),
+        "abutting [quote] on a listing delimiter is discarded. Got:\n{html}"
+    );
+
+    // Regression: a `+` continuation rescues the metadata — the source role
+    // survives and the listing nests INSIDE the list item.
+    let html = to_html(". item\n[source,yaml]\n+\n----\nx: 1\n----");
+    assert!(
+        html.contains("<li>\n<p>item</p>\n<div class=\"listingblock\">")
+            && html.contains("language-yaml"),
+        "a continuation keeps the source role and nests the block. Got:\n{html}"
+    );
+
+    // Regression: a blank line between the item and the metadata closes the list
+    // first, so the metadata belongs to the following top-level block (role kept).
+    let html = to_html(". item\n\n[source,yaml]\n----\nx: 1\n----");
+    assert!(
+        html.contains("language-yaml"),
+        "a blank line keeps the metadata for the sibling block. Got:\n{html}"
+    );
+
+    // Regression: outside any list, `[source]` + listing keeps the source role.
+    let html = to_html("[source,yaml]\n----\nx: 1\n----");
+    assert!(
+        html.contains("language-yaml"),
+        "top-level [source,yaml] is unaffected. Got:\n{html}"
+    );
+}
+
+#[test]
 fn test_unordered_list_marker_style_class() {
     // An explicit block style on a `*`/`-` list (`[square]`, `[circle]`, or any
     // keyword) is the marker class on BOTH the wrapper div (`ulist {style}
