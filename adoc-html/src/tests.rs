@@ -610,6 +610,44 @@ fn test_escaped_ellipsis_in_link_target_html() {
     assert!(!attr.contains('\u{2026}'), "attribute-resolved URL must not double-curl: {attr}");
 }
 
+#[test]
+fn test_unescaped_ellipsis_in_link_target_curls_html() {
+    // Asciidoctor runs `replacements` over the line BEFORE `macros` detects a URL,
+    // so a bare `...`/`--` in a top-level link target is curled into the href (and
+    // a bare link's repeated visible text). `reconstruct_link_target` reproduces it;
+    // the raw UTF-8 ellipsis / em-dash equals Asciidoctor's `&#8230;&#8203;` /
+    // `&#8212;&#8203;` modulo entity encoding. Verified vs Asciidoctor 2.0.23 (this
+    // is the CHANGELOG.adoc `compare/vX...vY[full diff]` line).
+    const ELL: &str = "\u{2026}\u{200B}"; // … + zero-width space
+    const EMD: &str = "\u{2014}\u{200B}"; // — + zero-width space
+
+    // `link:` macro form — ellipsis in the href, label untouched.
+    let mac = to_html("link:https://github.com/x/compare/v1.5.6.1...v1.5.6.2[full diff]");
+    assert!(
+        mac.contains(&format!(
+            "<a href=\"https://github.com/x/compare/v1.5.6.1{ELL}v1.5.6.2\">full diff</a>"
+        )),
+        "{mac}"
+    );
+
+    // Bare-URL autolink — both the href and the repeated visible text curl.
+    let bare = to_html("https://ex.com/a...b");
+    assert!(
+        bare.contains(&format!(
+            "<a href=\"https://ex.com/a{ELL}b\" class=\"bare\">https://ex.com/a{ELL}b</a>"
+        )),
+        "{bare}"
+    );
+
+    // URL[text] autolink form.
+    let urltext = to_html("https://ex.com/a...b[link]");
+    assert!(urltext.contains(&format!("<a href=\"https://ex.com/a{ELL}b\">link</a>")), "{urltext}");
+
+    // word--word em-dash inside the href.
+    let dash = to_html("https://ex.com/a--b[d]");
+    assert!(dash.contains(&format!("<a href=\"https://ex.com/a{EMD}b\">d</a>")), "{dash}");
+}
+
 // A character reference in a link/image URL (a survived `&#NNN;`/`&name;`) is an
 // already-formed entity Asciidoctor keeps verbatim in the `href`/`alt`/`src`; the
 // engine reconstructs it natively (no legacy punt) and the renderer's href escape

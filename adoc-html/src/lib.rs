@@ -651,8 +651,26 @@ impl HtmlRenderer {
         value: &str,
         subs: SubstitutionSet,
     ) {
-        let options =
+        self.render_inline_value_with_subs_flag(output, value, subs, false);
+    }
+
+    /// As [`Self::render_inline_value_with_subs`], plus a flag marking that the
+    /// value's link TARGETS were already through `replacements` in an earlier
+    /// pass — set when re-parsing a resolved `{attr}value[text]` combination, where
+    /// the new engine's `escape`-before-`attributes` order already stripped a
+    /// `\...` escape from the captured trailing brackets. The `macros` pass then
+    /// leaves a bare `...` in the URL uncurled (so the escape is honoured); see
+    /// [`adoc_parser::InlineOptions::link_target_pre_substituted`].
+    pub(crate) fn render_inline_value_with_subs_flag(
+        &mut self,
+        output: &mut String,
+        value: &str,
+        subs: SubstitutionSet,
+        link_target_pre_substituted: bool,
+    ) {
+        let mut options =
             adoc_parser::InlineOptions::from_attr_lookup(|name| self.document_attrs.contains_key(name));
+        options.link_target_pre_substituted = link_target_pre_substituted;
         let events = adoc_parser::InlineParser::parse_str_with_subs_options(value, subs, options);
         // If inline parsing produced only a single Text event identical to the input,
         // there is no inline markup — just escape and output directly.
