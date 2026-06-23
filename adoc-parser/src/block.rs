@@ -1075,8 +1075,14 @@ impl<'a> BlockScanner<'a> {
             return Some(Some(Event::PageBreak));
         }
 
-        // Section heading `== Title` or `## Title`
-        if let Some((level, title)) = scanner::strip_any_section_marker(line) {
+        // Section heading `== Title` or `## Title`. A section can never be the
+        // child of a list item, so when a section-title-shaped line is read as a
+        // block attached to a list item via continuation (`+`), Asciidoctor
+        // demotes it to a literal paragraph (`<p>=== Title</p>`). Skip the
+        // section check here and fall through to the paragraph fallback.
+        if !self.in_continuation
+            && let Some((level, title)) = scanner::strip_any_section_marker(line)
+        {
             return Some(self.scan_section(level, title, false));
         }
 
@@ -1092,7 +1098,8 @@ impl<'a> BlockScanner<'a> {
         let pending_discrete = self.pending_block_attrs.as_ref().is_some_and(|a| {
             a.positional.first().is_some_and(|s| is_discrete_style(s))
         });
-        if (!self.is_inside_delimited_block() || pending_discrete)
+        if !self.in_continuation
+            && (!self.is_inside_delimited_block() || pending_discrete)
             && !is_bracketed_attr_line(line)
             && let Some(next) = self.lines.get(self.pos + 1).copied()
             && !self.line_closes_open_delimited_block(next)
@@ -4892,6 +4899,25 @@ mod tests {
             Event::Start(Tag::DelimitedBlock { kind: crate::event::DelimitedBlockKind::Listing }),
             Event::Text(Cow::Borrowed("code")),
             Event::End(TagEnd::DelimitedBlock),
+            Event::End(TagEnd::ListItem),
+            Event::End(TagEnd::UnorderedList),
+        ]);
+    }
+
+    #[test]
+    fn test_list_continuation_demotes_section_title() {
+        // A section can never be the child of a list item, so a `=== T` line
+        // attached via `+` continuation is demoted to a literal paragraph,
+        // not a Section (mirrors Asciidoctor; verified vs 2.0.23).
+        let input = "* item\n+\n=== Demoted";
+        let events: Vec<_> = BlockScanner::new(input).collect();
+        assert_eq!(events, vec![
+            Event::Start(Tag::UnorderedList { has_checklist: false }),
+            Event::Start(Tag::ListItem { depth: 1, checked: None }),
+            Event::Text(Cow::Borrowed("item")),
+            Event::Start(Tag::Paragraph),
+            Event::Text(Cow::Borrowed("=== Demoted")),
+            Event::End(TagEnd::Paragraph),
             Event::End(TagEnd::ListItem),
             Event::End(TagEnd::UnorderedList),
         ]);

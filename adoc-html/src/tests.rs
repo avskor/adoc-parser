@@ -1526,6 +1526,39 @@ fn test_description_list_continuation_html() {
 }
 
 #[test]
+fn test_section_title_demoted_in_list_continuation_html() {
+    // A section can never be the child of a list item, so a section-title-shaped
+    // line attached to a list item via `+` continuation is demoted by Asciidoctor
+    // to a literal paragraph inside the `<li>` (verified byte-identical to
+    // Asciidoctor 2.0.23). Both the ATX (`=== T`) and setext forms demote.
+    let html = to_html("* one\n* two\n+\n=== Demoted\n\nAfter para.");
+    assert!(
+        html.contains("<p>two</p>\n<div class=\"paragraph\">\n<p>=== Demoted</p>\n</div>\n</li>"),
+        "ATX heading after `+` must be a literal paragraph inside the li:\n{html}"
+    );
+    assert!(
+        !html.contains("<h3") && !html.contains("sect2"),
+        "no section may be created for the demoted heading:\n{html}"
+    );
+    // The blank line after the demoted heading ends the list; the trailing
+    // paragraph is a sibling outside it.
+    assert!(
+        html.contains("</ul>\n</div>\n<div class=\"paragraph\">\n<p>After para.</p>\n</div>"),
+        "trailing paragraph must be a sibling outside the list:\n{html}"
+    );
+
+    // Setext form: a short line over an underline would be a level-4 section
+    // title at section level, but in continuation it stays a literal paragraph.
+    let setext = to_html("* x\n+\nна\n~~");
+    assert!(
+        setext.contains("<p>x</p>\n<div class=\"paragraph\">\n<p>на\n~~</p>\n</div>")
+            && !setext.contains("<h5")
+            && !setext.contains("sect4"),
+        "setext-shaped line in continuation must not become a section:\n{setext}"
+    );
+}
+
+#[test]
 fn test_dlist_continuation_openblock_multiple_children_html() {
     // A `+` continuation attaching a `--` open block must keep scanning the
     // open block's content past internal blank lines. Previously a blank line
