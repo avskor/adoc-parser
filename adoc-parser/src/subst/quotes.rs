@@ -253,6 +253,16 @@ pub(super) fn simple_pair_open_close(bytes: &[u8], i: usize, marker: u8) -> Opti
             j = sentinel_end(bytes, j);
             continue;
         }
+        // Asciidoctor's SubscriptRx/SuperscriptRx are `~(\S+?)~` / `^(\S+?)^`:
+        // the content must contain no whitespace. Bail on the first
+        // space/tab/newline so `(~33 ГБ VRAM)…~40%` stays literal instead of
+        // becoming `<sub>`. This runs before the attributes pass, so a literal
+        // `{sp}` (no whitespace bytes) still forms a valid pair and expands to a
+        // space only afterwards. An extracted span (passthrough/char-ref) is an
+        // opaque sentinel, skipped above, so it counts as non-whitespace content.
+        if bytes[j].is_ascii_whitespace() {
+            return None;
+        }
         if bytes[j] == marker && j > content_start {
             return Some(j);
         }

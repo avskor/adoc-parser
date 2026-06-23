@@ -3364,5 +3364,38 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn subscript_superscript_require_non_whitespace_content() {
+        // Asciidoctor's `SubscriptRx`/`SuperscriptRx` are `~(\S+?)~` / `^(\S+?)^`:
+        // a space inside the span makes the markers literal, while a
+        // whitespace-free span still forms the pair.
+        assert_eq!(
+            pipeline("H~2~O and ~a b~"),
+            vec![
+                Event::Text("H".into()),
+                Event::Start(Tag::Subscript),
+                Event::Text("2".into()),
+                Event::End(TagEnd::Subscript),
+                Event::Text("O and ~a b~".into()),
+            ]
+        );
+        assert_eq!(
+            pipeline("E^2^ and x^a b^"),
+            vec![
+                Event::Text("E".into()),
+                Event::Start(Tag::Superscript),
+                Event::Text("2".into()),
+                Event::End(TagEnd::Superscript),
+                Event::Text(" and x^a b^".into()),
+            ]
+        );
+        // Regression for the qwen.adoc miss: two tildes spanning prose with
+        // spaces must stay literal, not become one big `<sub>`.
+        assert_eq!(
+            pipeline("(~33 ГБ) ~40%"),
+            vec![Event::Text("(~33 ГБ) ~40%".into())],
+        );
+    }
 }
 
