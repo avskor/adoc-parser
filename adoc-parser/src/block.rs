@@ -714,6 +714,30 @@ impl<'a> BlockScanner<'a> {
         events
     }
 
+    /// Discard block metadata (`[...]` attributes / `.Title`) that a list item
+    /// absorbed but no in-item block consumed.
+    ///
+    /// Asciidoctor reads a block-metadata line that abuts a list item's content
+    /// into the item's own line buffer (`read_lines_for_list_item`, parser.rb
+    /// 1499-1501: `buffer << this_line`). A delimited block with no preceding
+    /// list continuation then *breaks* the list (1453-1456: "a delimited block
+    /// immediately breaks the list unless preceded by a list continuation"),
+    /// leaving that metadata with no block inside the item to attach to — so it
+    /// is dropped, and the delimited block is parsed fresh at the top level
+    /// WITHOUT it. (`. item` / `[source,yaml]` / `----` → plain `<pre>`, not a
+    /// highlighted source listing.)
+    ///
+    /// Reachable only when the metadata abutted the item with NO blank line: a
+    /// blank line closes the list at the `[...]`/`.Title` scan instead (see
+    /// `scan_header_constructs`), keeping the metadata for the following
+    /// top-level block. So whenever pending metadata survives to here while the
+    /// list is still open and we are not in a continuation, it was absorbed and
+    /// must be discarded.
+    fn discard_list_absorbed_metadata(&mut self) {
+        self.pending_block_attrs = None;
+        self.pending_block_title = None;
+    }
+
     /// When the current block sits directly inside a list item, is separated
     /// from it by a blank line, and is NOT a `+` continuation, close the open
     /// list so the block renders as a sibling. Returns the first close event to
@@ -1245,8 +1269,11 @@ impl<'a> BlockScanner<'a> {
 
         // Delimited block
         if let Some((delim_type, delim_len)) = scanner::is_delimiter(line) {
-            // If in list context (and not via list continuation), close list first
+            // A delimited block with no preceding `+` continuation breaks the
+            // list; any metadata the item absorbed is dropped, not carried onto
+            // this block (see `discard_list_absorbed_metadata`).
             if self.is_directly_in_list_context() && !self.in_continuation {
+                self.discard_list_absorbed_metadata();
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
@@ -1259,8 +1286,10 @@ impl<'a> BlockScanner<'a> {
 
         // Markdown code fence ``` or ```lang
         if let Some((backtick_count, language)) = scanner::is_markdown_code_fence(line) {
-            // If in list context (and not via list continuation), close list first
+            // A fenced block (a delimited block) breaks the list the same way —
+            // absorbed metadata is dropped, not carried onto the fence.
             if self.is_directly_in_list_context() && !self.in_continuation {
+                self.discard_list_absorbed_metadata();
                 let close_events = self.close_list_contexts();
                 for ev in close_events.into_iter().rev() {
                     self.push_event(ev);
