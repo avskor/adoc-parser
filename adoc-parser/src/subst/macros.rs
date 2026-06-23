@@ -723,10 +723,14 @@ fn try_link(
         return None;
     }
     let attrs = parse_link_attrs(&content, LinkKind::Link);
-    // A sentinel in a non-label attribute (role/window) is stored verbatim on the
-    // tag with no native reconstruction, so it still punts; one confined to the
-    // label text is re-parsed natively (seeded) by `build_link`.
-    if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+    // A sentinel in a non-label attribute (role/window/id/title) is stored verbatim
+    // on the tag with no native reconstruction, so it still punts; one confined to
+    // the label text is re-parsed natively (seeded) by `build_link`.
+    if attr_has_sentinel(attrs.window)
+        || attr_has_sentinel(attrs.role)
+        || attr_has_sentinel(attrs.id)
+        || attr_has_sentinel(attrs.title)
+    {
         return None;
     }
     // An empty attrlist text marks a "bare" link (visible text = the target).
@@ -737,6 +741,8 @@ fn try_link(
         attrs.window,
         attrs.nofollow,
         attrs.role,
+        attrs.id,
+        attrs.title,
         is_bare,
         label,
         &url,
@@ -804,13 +810,15 @@ fn try_mailto(
     }
     let base = &src[start..start + 7 + bracket_start]; // "mailto:email"
     let attrs = parse_link_attrs(&content, LinkKind::Mailto);
-    // `subject`/`body` are URL-encoded verbatim and `role`/`window` stored verbatim,
-    // none with native reconstruction — a sentinel in any of them still punts. Only
-    // the label text (`attrs.text`) gains the seeded native re-parse.
+    // `subject`/`body` are URL-encoded verbatim and `role`/`window`/`id`/`title`
+    // stored verbatim, none with native reconstruction — a sentinel in any of them
+    // still punts. Only the label text (`attrs.text`) gains the seeded native re-parse.
     if attr_has_sentinel(attrs.subject)
         || attr_has_sentinel(attrs.body)
         || attr_has_sentinel(attrs.window)
         || attr_has_sentinel(attrs.role)
+        || attr_has_sentinel(attrs.id)
+        || attr_has_sentinel(attrs.title)
     {
         return None;
     }
@@ -839,6 +847,8 @@ fn try_mailto(
         attrs.window,
         attrs.nofollow,
         attrs.role,
+        attrs.id,
+        attrs.title,
         false,
         label,
         email,
@@ -1637,6 +1647,8 @@ fn try_autolink(
                 None,
                 false,
                 None,
+                None,
+                None,
                 true,
                 None,
                 &target,
@@ -1675,9 +1687,13 @@ fn try_autolink(
             return None;
         };
         let attrs = parse_link_attrs(&content, LinkKind::Link);
-        // A sentinel in a non-label attribute (role/window) still punts; one in the
-        // label text is re-parsed natively (seeded), mirroring `try_link`.
-        if attr_has_sentinel(attrs.window) || attr_has_sentinel(attrs.role) {
+        // A sentinel in a non-label attribute (role/window/id/title) still punts;
+        // one in the label text is re-parsed natively (seeded), mirroring `try_link`.
+        if attr_has_sentinel(attrs.window)
+            || attr_has_sentinel(attrs.role)
+            || attr_has_sentinel(attrs.id)
+            || attr_has_sentinel(attrs.title)
+        {
             return None;
         }
         let is_bare = attrs.text.is_empty();
@@ -1687,6 +1703,8 @@ fn try_autolink(
             attrs.window,
             attrs.nofollow,
             attrs.role,
+            attrs.id,
+            attrs.title,
             is_bare,
             label,
             &target,
@@ -1707,6 +1725,8 @@ fn try_autolink(
         target.clone(),
         None,
         false,
+        None,
+        None,
         None,
         true,
         None,
@@ -1779,6 +1799,8 @@ fn try_email(
         None,
         false,
         None,
+        None,
+        None,
         false,
         None,
         email,
@@ -1800,6 +1822,8 @@ fn build_link(
     window: Option<&str>,
     nofollow: bool,
     role: Option<&str>,
+    id: Option<&str>,
+    title: Option<&str>,
     is_bare: bool,
     label: Option<&str>,
     bare_text: &str,
@@ -1813,6 +1837,8 @@ fn build_link(
         nofollow,
         is_bare,
         role: role.map(|r| Cow::Owned(r.to_string())),
+        id: id.map(|i| Cow::Owned(i.to_string())),
+        title: title.map(|t| Cow::Owned(t.to_string())),
     })];
     match label {
         Some(l) => push_label(l, seed, subs, options, &mut events),

@@ -805,7 +805,7 @@ impl HtmlRenderer {
             Tag::Subscript => {
                 output.push_str("<sub>");
             }
-            Tag::Link { url, window, nofollow, is_bare, role } => {
+            Tag::Link { url, window, nofollow, is_bare, role, id, title } => {
                 output.push_str("<a");
                 // The `macros` pass runs before `attributes`, so an attribute
                 // reference in the target (`link:{u}[…]`) survives unresolved into
@@ -820,7 +820,14 @@ impl HtmlRenderer {
                 if *is_bare {
                     self.bare_link_pending = true;
                 }
-                // class comes right after href (asciidoctor order); bare
+                // Asciidoctor anchor order for a :link is href, id, class (role),
+                // title, then the constraint attrs (target/rel) — see
+                // `convert_inline_anchor`. `id`/`title` are resolved like the role
+                // (the macros-before-attributes order leaves any `{attr}` literal).
+                if let Some(i) = id {
+                    write_attr(output, "id", self.resolve_inline_attr_value(i).as_ref());
+                }
+                // class comes right after id (asciidoctor order); bare
                 // precedes the role: class="bare green".
                 if *is_bare || role.is_some() {
                     output.push_str(" class=\"");
@@ -834,6 +841,9 @@ impl HtmlRenderer {
                         html_escape(output, self.resolve_inline_attr_value(r).as_ref());
                     }
                     output.push('"');
+                }
+                if let Some(t) = title {
+                    write_attr(output, "title", self.resolve_inline_attr_value(t).as_ref());
                 }
                 if let Some(w) = window {
                     write_attr(output, "target", w);

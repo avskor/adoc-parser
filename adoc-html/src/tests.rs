@@ -418,6 +418,31 @@ fn test_link_with_window_and_nofollow_html() {
 }
 
 #[test]
+fn test_link_id_and_title_attrs_html() {
+    // Named `id=`/`title=` render as `<a>` attributes in Asciidoctor's anchor
+    // order: href, id, class (role), title, then target/rel.
+    let html = to_html("https://asciidoctor.org[Home,id=home,title=Project home page]");
+    assert!(
+        html.contains("<a href=\"https://asciidoctor.org\" id=\"home\" title=\"Project home page\">Home</a>"),
+        "{html}"
+    );
+    // Full ordering with a role and a blank-window caret.
+    let full = to_html("link:https://x.org[Text,id=myid,title=My Title,role=cls,window=_blank]");
+    assert!(
+        full.contains(
+            "<a href=\"https://x.org\" id=\"myid\" class=\"cls\" title=\"My Title\" target=\"_blank\" rel=\"noopener\">Text</a>"
+        ),
+        "{full}"
+    );
+    // A named-only attrlist leaves the link bare; `id` still precedes class="bare".
+    let bare = to_html("link:https://x.org[,id=only]");
+    assert!(bare.contains("<a href=\"https://x.org\" id=\"only\" class=\"bare\">"), "{bare}");
+    // mailto carries id/title too.
+    let m = to_html("mailto:a@b.org[Sub,id=mid,title=MT]");
+    assert!(m.contains("<a href=\"mailto:a@b.org\" id=\"mid\" title=\"MT\">Sub</a>"), "{m}");
+}
+
+#[test]
 fn test_link_no_attrs_unchanged_html() {
     let html = to_html("link:https://example.com[Example]");
     assert!(html.contains("<a href=\"https://example.com\">Example</a>"));
