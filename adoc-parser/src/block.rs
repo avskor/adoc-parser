@@ -2608,8 +2608,21 @@ impl<'a> BlockScanner<'a> {
                 // continuation line is plain paragraph text.
                 || scanner::is_delimiter(line).is_some()
                 || scanner::is_markdown_code_fence(line).is_some()
-                || scanner::is_list_marker_unordered(line).is_some()
-                || scanner::is_list_marker_ordered(line).is_some()
+                // A list marker (unordered/ordered) terminates an open paragraph
+                // ONLY when we are scanning directly in list-item content.
+                // Asciidoctor's read_paragraph_lines uses break_at_list =
+                // (skipped == 0 && options[:list_type]); at top level (list_type
+                // nil) a list marker directly following paragraph text — with no
+                // intervening blank line — is absorbed as plain paragraph text, NOT
+                // the start of a list. Inside a list item the marker still breaks
+                // (sibling/nested-item detection). A delimited block nested in a
+                // list does NOT inherit list_type (Asciidoctor parses its body in a
+                // fresh context), so `is_directly_in_list_context` — false when a
+                // delimited block sits between us and the list item — is the precise
+                // analog: inside such a block the marker is absorbed too.
+                || (self.is_directly_in_list_context()
+                    && (scanner::is_list_marker_unordered(line).is_some()
+                        || scanner::is_list_marker_ordered(line).is_some()))
                 || scanner::is_admonition(line).is_some()
                 || scanner::is_block_image(line).is_some()
                 || scanner::is_block_video(line).is_some()
@@ -2624,7 +2637,10 @@ impl<'a> BlockScanner<'a> {
                 // paragraph after the opening `---` boundary.
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || scanner::is_description_list_marker(line).is_some()
+                // A description-list marker likewise interrupts an open paragraph
+                // only inside a list context (same break_at_list rule as above).
+                || (self.is_directly_in_list_context()
+                    && scanner::is_description_list_marker(line).is_some())
                 // A callout-list marker (`<1>`) interrupts an open paragraph ONLY
                 // when we are already inside a callout list — there it ends the
                 // current item's continuation text and opens the next sibling item.
@@ -2632,8 +2648,6 @@ impl<'a> BlockScanner<'a> {
                 // text: Asciidoctor recognizes a *new* callout list only at a block
                 // boundary (after a blank line) via the scan_leaf_blocks dispatcher,
                 // never as a paragraph continuation (cf. `|=== <1>` then `<2>`).
-                // (Unordered/ordered markers above remain a known pre-existing
-                // divergence: Asciidoctor absorbs those into an open paragraph too.)
                 || (self.is_in_callout_list()
                     && scanner::is_callout_list_item(line).is_some())
                 || scanner::is_list_continuation(line)
@@ -3017,8 +3031,21 @@ impl<'a> BlockScanner<'a> {
                 // follows the same Asciidoctor rule.
                 || scanner::is_delimiter(line).is_some()
                 || scanner::is_markdown_code_fence(line).is_some()
-                || scanner::is_list_marker_unordered(line).is_some()
-                || scanner::is_list_marker_ordered(line).is_some()
+                // A list marker (unordered/ordered) terminates an open paragraph
+                // ONLY when we are scanning directly in list-item content.
+                // Asciidoctor's read_paragraph_lines uses break_at_list =
+                // (skipped == 0 && options[:list_type]); at top level (list_type
+                // nil) a list marker directly following paragraph text — with no
+                // intervening blank line — is absorbed as plain paragraph text, NOT
+                // the start of a list. Inside a list item the marker still breaks
+                // (sibling/nested-item detection). A delimited block nested in a
+                // list does NOT inherit list_type (Asciidoctor parses its body in a
+                // fresh context), so `is_directly_in_list_context` — false when a
+                // delimited block sits between us and the list item — is the precise
+                // analog: inside such a block the marker is absorbed too.
+                || (self.is_directly_in_list_context()
+                    && (scanner::is_list_marker_unordered(line).is_some()
+                        || scanner::is_list_marker_ordered(line).is_some()))
                 || scanner::is_admonition(line).is_some()
                 || scanner::is_block_image(line).is_some()
                 || scanner::is_block_video(line).is_some()
@@ -3029,7 +3056,10 @@ impl<'a> BlockScanner<'a> {
                 // follows the same Asciidoctor rule.
                 || scanner::is_page_break(line)
                 || scanner::is_block_attribute(line).is_some()
-                || scanner::is_description_list_marker(line).is_some()
+                // A description-list marker likewise interrupts an open paragraph
+                // only inside a list context (same break_at_list rule as above).
+                || (self.is_directly_in_list_context()
+                    && scanner::is_description_list_marker(line).is_some())
                 // A callout-list marker interrupts an open paragraph only inside a
                 // callout list — see the note in scan_paragraph.
                 || (self.is_in_callout_list()
