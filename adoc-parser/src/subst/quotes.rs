@@ -479,6 +479,52 @@ fn attrlist_constrained(
     Some((id, roles, content_start, close_pos))
 }
 
+/// At an inner `[` (byte index `lbrack`, `bytes[lbrack] == b'['`) inside a
+/// link-family macro label, detect whether an *attributed* inline span opens
+/// there — an `[attrlist]` immediately followed by a constrained or unconstrained
+/// `*`/`` ` ``/`_`/`#` quoted run — and, if so, return the byte index just past the
+/// span's closing marker(s).
+///
+/// Asciidoctor runs `quotes` before `macros`, so such a span is rewritten to a
+/// `<span>`/`<strong>`/… (its brackets consumed) before the inline-link regex
+/// scans for the label's closing `]`. We run `macros` first, so
+/// [`super::macros::find_link_label_close`] calls this to skip past the whole span
+/// and keep scanning for the real `]`. The marker set and gating mirror
+/// [`pass_unconstrained`]/[`pass_constrained`]: an unconstrained `[attr]MM…MM`
+/// needs no open boundary, while a constrained `[attr]M…M` requires the byte
+/// before `[` to be a non-word boundary (superscript `^`/subscript `~` take no
+/// attrlist, so they are not tried). `tags` resolves any extracted sentinel in
+/// the attrlist.
+pub(super) fn attributed_span_end(
+    tags: &[TagToken],
+    src: &str,
+    bytes: &[u8],
+    lbrack: usize,
+) -> Option<usize> {
+    // Unconstrained `[attrlist]MM…MM` — no open-boundary requirement. The close is
+    // the first of the doubled markers, so the span ends two bytes past it.
+    for &marker in b"*`_#" {
+        if let Some((_, _, _, close_pos)) = attrlist_unconstrained(tags, src, bytes, lbrack, marker)
+        {
+            return Some(close_pos + 2);
+        }
+    }
+    // Constrained `[attrlist]M…M` — requires an open boundary (mirrors the gate in
+    // `pass_constrained`). The close is a single marker, so the span ends one byte
+    // past it.
+    let open_boundary = lbrack == 0 || !is_word(bytes[lbrack - 1]);
+    if open_boundary {
+        for &marker in b"*`_#" {
+            if let Some((_, _, _, close_pos)) =
+                attrlist_constrained(tags, src, bytes, lbrack, marker)
+            {
+                return Some(close_pos + 1);
+            }
+        }
+    }
+    None
+}
+
 /// Find the `]` that closes an attrlist opened at `lbrack` (`[`), refusing to
 /// cross a newline (mirrors `try_inline_attr_span`).
 fn find_attr_close(bytes: &[u8], lbrack: usize) -> Option<usize> {

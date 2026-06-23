@@ -443,6 +443,48 @@ fn test_link_id_and_title_attrs_html() {
 }
 
 #[test]
+fn test_attributed_span_in_link_label_html() {
+    // An attributed inline span (`[attrlist]#…#`, `*`, `_`, `` ` ``) inside a
+    // link-family label: the `]` closing the span's attrlist must NOT end the
+    // label. Asciidoctor runs `quotes` before `macros`, so the span is rendered
+    // to a `<span>`/`<strong>`/… before the inline-link regex scans for `]`; the
+    // whole span stays inside the link text. Byte-for-byte against Asciidoctor
+    // 2.0.23 (the `links.adoc` corpus root).
+    let auto = to_html("Ask in https://chat.asciidoc.org[community [.overline]#overline#].");
+    assert!(
+        auto.contains(
+            "<a href=\"https://chat.asciidoc.org\">community <span class=\"overline\">overline</span></a>."
+        ),
+        "{auto}"
+    );
+    // Multiple spans plus a sub before the attributed span (corpus line 17).
+    let multi =
+        to_html("https://chat.asciidoc.org[*community* ~chat~ [.overline]#overline#]");
+    assert!(
+        multi.contains(
+            "<a href=\"https://chat.asciidoc.org\"><strong>community</strong> <sub>chat</sub> <span class=\"overline\">overline</span></a>"
+        ),
+        "{multi}"
+    );
+    // `link:` macro with a span mid-label.
+    let link = to_html("link:links.pdf[Read [.big]#big text# now]");
+    assert!(
+        link.contains("<a href=\"links.pdf\">Read <span class=\"big\">big text</span> now</a>"),
+        "{link}"
+    );
+    // mailto label carries a span too.
+    let mail = to_html("mailto:a@b.org[Mail [.role]#me# today]");
+    assert!(
+        mail.contains("<a href=\"mailto:a@b.org\">Mail <span class=\"role\">me</span> today</a>"),
+        "{mail}"
+    );
+    // A plain inner `[b]` (no following span marker) still closes the label at the
+    // first `]`, leaving `c]` outside the link — exactly as before the fix.
+    let plain = to_html("link:u.pdf[a [b] c]");
+    assert!(plain.contains("<a href=\"u.pdf\">a [b</a> c]"), "{plain}");
+}
+
+#[test]
 fn test_link_no_attrs_unchanged_html() {
     let html = to_html("link:https://example.com[Example]");
     assert!(html.contains("<a href=\"https://example.com\">Example</a>"));

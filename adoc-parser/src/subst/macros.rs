@@ -514,6 +514,36 @@ pub(super) fn find_macro_close_bracket(s: &str, open: usize) -> Option<usize> {
     }
 }
 
+/// Like [`find_macro_close_bracket`], but for a LINK-FAMILY macro label (the
+/// `link:`/`mailto:` macros and the autolink `URL[…]` form). A `]` that merely
+/// closes the attrlist of an *attributed inline span* inside the label
+/// (`[attrlist]#…#`, `*`, `_`, `` ` ``, constrained or unconstrained) is NOT a
+/// label terminator: Asciidoctor runs `quotes` before `macros`, so that span is
+/// rewritten to a `<span>`/`<strong>`/… (its inner brackets consumed) before the
+/// inline-link regex scans for `]`. We run `macros` first, so we skip past the
+/// whole span here ([`super::quotes::attributed_span_end`]) and keep scanning.
+/// Plain (non-span) inner brackets still terminate the label, so `link:u[a [b] c]`
+/// closes at the first `]` exactly as [`find_macro_close_bracket`] would. `\]` is
+/// honoured as an escaped (non-closing) bracket identically. `tags` resolves any
+/// extracted sentinel in an attrlist (the legacy parser, whose raw text carries
+/// none, reaches this via the tag-free [`super::link_label_close`] wrapper).
+pub(super) fn find_link_label_close(tags: &[TagToken], s: &str, open: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            // An escaped `\]` is part of the content (mirrors `find_macro_close_bracket`).
+            b'\\' if bytes.get(i + 1) == Some(&b']') => i += 2,
+            b']' => return Some(i),
+            // An inner `[` that opens an attributed span is consumed whole, so the
+            // span's own attrlist `]` never closes the label.
+            b'[' => i = super::quotes::attributed_span_end(tags, s, bytes, i).unwrap_or(i + 1),
+            b => i += utf8_char_len(b),
+        }
+    }
+    None
+}
+
 /// Unescape `\]` → `]` in extracted bracketed-macro content. No-op (and no
 /// allocation) when no escaped bracket is present. Mirrors Asciidoctor unescaping
 /// the captured attrlist/label/verbatim text before any further processing
@@ -695,7 +725,7 @@ fn try_link(
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 5..]; // after "link:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
+    let bracket_end = find_link_label_close(&work.tags, rest, bracket_start)?;
     let url_part = &rest[..bracket_start];
     let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     if url_part.is_empty() {
@@ -797,7 +827,7 @@ fn try_mailto(
 ) -> Option<(Vec<Event<'static>>, usize)> {
     let rest = &src[start + 7..]; // after "mailto:"
     let bracket_start = rest.find('[')?;
-    let bracket_end = find_macro_close_bracket(rest, bracket_start)?;
+    let bracket_end = find_link_label_close(&work.tags, rest, bracket_start)?;
     let email = &rest[..bracket_start];
     let content = unescape_close_bracket(&rest[bracket_start + 1..bracket_end]);
     if email.is_empty() {
@@ -1676,7 +1706,7 @@ fn try_autolink(
 
     // URL[text] form.
     if after_url.starts_with('[')
-        && let Some(close) = find_macro_close_bracket(after_url, 0)
+        && let Some(close) = find_link_label_close(&work.tags, after_url, 0)
     {
         let end = start + url_len + close + 1;
         let content = unescape_close_bracket(&after_url[1..close]);

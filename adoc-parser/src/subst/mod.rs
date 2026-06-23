@@ -57,6 +57,15 @@ use tokenize::{Work, TAG_LEAD, TAG_TAIL};
 /// validator to avoid re-escaping an already-formed entity in a URL/attribute.
 pub(crate) use char_refs::char_ref_len;
 
+/// Find the `]` that closes a link-family macro label whose opening `[` is at
+/// byte `open` in `s`, skipping a `]` that only closes an attributed inline span's
+/// attrlist (see [`macros::find_link_label_close`]). Tag-free wrapper for the
+/// legacy parser ([`crate::inline`]), whose raw label text carries no extracted
+/// sentinels, so the two engines scan the label identically.
+pub(crate) fn link_label_close(s: &str, open: usize) -> Option<usize> {
+    macros::find_link_label_close(&[], s, open)
+}
+
 thread_local! {
     /// Set by a pass that recognises a construct it cannot yet form faithfully and
     /// must defer to the legacy recursive parser: a macro whose span swallowed an
@@ -1533,6 +1542,19 @@ mod tests {
             // email autolink beside a span and a cross reference
             "*x* user@example.com",
             "user@example.com and xref:t[]",
+            // attributed inline span inside a link-family label: the `]` that
+            // closes the span's attrlist must NOT terminate the label (Asciidoctor
+            // rewrites the span before the link regex scans for `]`). Constrained
+            // `#`/`*`, leading span, the corpus autolink forms, and mailto.
+            "link:u.pdf[Read [.big]#big text# now]",
+            "link:u.pdf[[.role]*bold* tail]",
+            "https://chat.asciidoc.org[community [.overline]#overline#]",
+            "https://chat.asciidoc.org[*community* ~chat~ [.overline]#overline#]",
+            "mailto:a@b.org[Mail [.role]#me# today]",
+            // plain inner brackets (no following span marker) still close at the
+            // first `]`; a `]` with no inner `[` before it closes normally too.
+            "link:u.pdf[a [b] c]",
+            "link:u.pdf[label]*next*",
         ];
         for c in cases {
             assert_eq!(
