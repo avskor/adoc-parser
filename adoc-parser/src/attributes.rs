@@ -747,6 +747,10 @@ pub struct LinkAttrs<'a> {
     pub window: Option<&'a str>,
     pub nofollow: bool,
     pub role: Option<&'a str>,
+    /// Named `id=` — rendered as the `<a>`'s `id` attribute (Asciidoctor `node.id`).
+    pub id: Option<&'a str>,
+    /// Named `title=` — rendered as the `<a>`'s `title` attribute.
+    pub title: Option<&'a str>,
     /// Positional attrs 2 and 3 — mailto subject/body (other macros ignore them).
     pub subject: Option<&'a str>,
     pub body: Option<&'a str>,
@@ -775,6 +779,8 @@ pub fn parse_link_attrs(bracket_content: &str, kind: LinkKind) -> LinkAttrs<'_> 
             window: None,
             nofollow: false,
             role: None,
+            id: None,
+            title: None,
             subject: None,
             body: None,
         };
@@ -783,6 +789,8 @@ pub fn parse_link_attrs(bracket_content: &str, kind: LinkKind) -> LinkAttrs<'_> 
     let mut window: Option<&str> = None;
     let mut nofollow = false;
     let mut role: Option<&str> = None;
+    let mut id: Option<&str> = None;
+    let mut title: Option<&str> = None;
     let mut positional = Vec::new();
     let mut found_named = false;
 
@@ -810,6 +818,8 @@ pub fn parse_link_attrs(bracket_content: &str, kind: LinkKind) -> LinkAttrs<'_> 
                 "window" => window = Some(value),
                 "opts" if value == "nofollow" => nofollow = true,
                 "role" => role = Some(value),
+                "id" => id = Some(value),
+                "title" => title = Some(value),
                 _ => {}
             }
         } else {
@@ -852,7 +862,7 @@ pub fn parse_link_attrs(bracket_content: &str, kind: LinkKind) -> LinkAttrs<'_> 
         }
     }
 
-    LinkAttrs { text, window, nofollow, role, subject, body }
+    LinkAttrs { text, window, nofollow, role, id, title, subject, body }
 }
 
 pub fn parse_subs_value(value: &str, default: SubstitutionSet) -> SubstitutionSet {

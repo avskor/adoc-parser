@@ -1,55 +1,57 @@
 # Session context
 
-## Сессия (2026-06-23) — F-BC: нумерация спец-секций (special-section) + abstract-в-book → sections.adoc identical
+## Сессия (2026-06-23) — F-BD: именованные атрибуты ссылок `id=`/`title=` на `<a>` (adoc2docx links.adoc корень B)
 
-Запрос «начни следующую задачу». master `e7abf3a` (F-BB смержен; прошлый session.md устарел — говорил
-«не закоммичено», фактически смержено `1076083`/`e7abf3a`). Триаж: frontier исчерпан (228 identical; остаток —
-manpage-backend out-of-scope, multi-special-ex 87 multi-root, CHANGELOG=substitution-ordering replacements-before-macros,
-migration={asciidoctor-version} intrinsic — оба небезопасны). adoc2docx ближайший — `sections.adoc` (20 diff).
-Ветка `feat/special-section-numbering` (изменения НЕ закоммичены — паттерн F-*: коммит ПО ЗАПРОСУ).
+Запрос «начни следующую задачу». master `1c85cd2` (F-BC смержен; прошлый session.md устарел — описывал F-BC как
+«не закоммичено», фактически смержено `49252b7`/`1c85cd2`). Триаж: adoc2docx ближайший clean-divergence —
+`links.adoc` (62 позиц. diff). Разбор: позиционный differ раздут (после первого десинка @[58] всё смещено на 1).
+**Два реальных корня:**
+- **Корень A** (строки 17, 19): `[.role]#text#` (атрибутированный span) внутри метки ссылки. Сканер метки макроса
+  закрывает label на ПЕРВОМ `]` (после `[.overline`). asciidoctor гонит quotes ДО macros → `[.overline]#overline#`
+  становится `<span>` раньше, чем link-макрос хватает метку. У нас порядок macros-ПЕРЕД-quotes (зеркало legacy) →
+  баг воспроизводится. **Архитектурный, НЕ взят** — см. остаток.
+- **Корень B** (строка 30): именованные `id=`/`title=` ссылки НЕ рендерились на `<a>`. **СДЕЛАН.**
 
-### Сделано — 2 связанных корня (sections.adoc: 20 diff → 0, identical)
-Изучено правило asciidoctor (parser.rb `initialize_section` + section.rb:49 `@special = parent.special` +
-abstract_block.rb `assign_numeral` + html5 `convert_section`):
+Ветка `fix/link-label-span-and-named-attrs` (от master `1c85cd2`, НЕ закоммичена — паттерн F-*: коммит ПО ЗАПРОСУ).
 
-**Корень A — наследование non-numbered у потомков спец-секций.** Asciidoctor наследует `special` детям
-(`@special = parent.special`); спец-секция нумеруется только если appendix (или `sectnums=all`, мы не трекаем).
-Значит non-appendix спец-секция (preface/colophon/dedication/glossary/bibliography/index) И ВЕСЬ её subtree —
-unnumbered: `=== Sub` под `[preface]` без номера, хотя своего стиля не несёт. Раньше мы нумеровали («1.1.»).
-- **adoc-html/lib.rs** новое поле `section_unnumbered_stack: Vec<bool>` (+init).
-- **adoc-html/blocks.rs** `start_section_div`: push `parent_unnumbered || (is_special && style != appendix)`.
-  `start_section_title`: в условие нумерации добавлено `section_unnumbered_stack.last() != Some(&true)`
-  (короткозамыкает ДО `number_prefix` → счётчик не бампится). **events.rs** TagEnd::Section: парный pop.
-
-**Корень B — `[abstract]` в book → numbered chapter.** parser.rb:1612 `if book && sect_style=='abstract'` →
-`sect_name='chapter', sect_level=1`, теряет special: рендерится как обычный numbered `sect1` (БЕЗ класса
-`abstract`) и СЪЕДАЕТ номер главы → сдвигает следующие главы (это чинит ВСЕ offset-диффы 3..6 и xref «Opa 4»).
-В article остаётся special (unnumbered). Раньше мы трактовали abstract как special (без номера) во всех doctype.
-- **adoc-html/blocks.rs** `start_section_div`: `let book_abstract = doctype_book && style==Some("abstract")`;
-  `is_special = !book_abstract && matches!(...)`. Очистка стиля div: `if is_special || book_abstract { m.style=None }`
-  (чтобы div был чистый `sect1`). sectname=Chapter получается автоматически (ветка `book && level==2 && !is_special`).
+### Сделано — корень B (links.adoc: строка 30 → байт-в-байт)
+Изучено правило asciidoctor (html5.rb `convert_inline_anchor` тип `:link` + `append_link_constraint_attrs`):
+порядок атрибутов `<a>` = **href, id, class(role), title, target, rel**. Эмпирически подтверждено на link:/bare-URL/mailto.
+- **attributes.rs** `LinkAttrs`: +поля `id`/`title` (`Option<&str>`); `parse_link_attrs` ловит `"id"`/`"title"` в named-арме.
+- **event.rs** `Tag::Link`: +поля `id`/`title` (`Option<CowStr>`) в def + clone-impl (`into_owned`).
+- **adoc-html/events.rs** рендер `Tag::Link`: `id` (после href, до class) + `title` (после class, до target) через
+  `write_attr` + `resolve_inline_attr_value` (как role/href — macros-до-attributes оставляет `{attr}` литералом).
+- **adoc-parser/subst/macros.rs** (новый движок, дефолт): `build_link` +параметры `id`/`title`; проводка в `try_link`,
+  `try_mailto`, autolink-`url[text]` (из `attrs.id/title`); 3 bare-сайта (`<url>`/bare/email) → None. Sentinel-guard
+  расширен на id/title (verbatim-хранение → punt при сентинеле, как role/window).
+- **adoc-parser/inline.rs** (legacy fallback): 4 link_attrs-сайта проводят id/title; bare/autolink/email → None;
+  24+2 тест-сайта → `id: None, title: None`. **subst/mod.rs**: 8 тест-сайтов; **adoc-html/tests.rs**: +1 тест.
 
 ### Верификация
-- clippy 0; **test --workspace: 0 упавших** (html 526→528: +test_special_section_subsection_unnumbered_html,
-  +test_book_abstract_numbered_chapter_html; parser 645, compat 233, html-compat ok).
-- **Гейт 344/344 байт-в-байт** vs master `e7abf3a` (gate_check.py 0 diff; база `/tmp/adoc_base` = свежий master-бинарь,
-  рабочее дерево было чистым == master). Ни один гейт-файл не использует спец-нумерацию/abstract-в-book.
-- **Sweep base-vs-new (frontier 250 + adoc2docx 52 = 302): РОВНО 1 изменённый** — sections.adoc (целевой).
-  0 регрессий. adoc2docx Identical **43→44**; frontier **228 стабильно**.
-- CLI-пробы vs asciidoctor 2.0.23 байт-в-байт: preface-subsection unnumbered, abstract-в-book numbered chapter,
-  appendix subsection «A.1» numbered (не задет правилом A), article-abstract unnumbered.
+- clippy `--workspace` 0 (3 warning'а только под `--all-targets` — пред-существующие в тестах, есть на master).
+- **test --workspace: 0 упавших** (html 528→**529** +test_link_id_and_title_attrs_html; parser 645, compat 233, html-compat ok).
+- **Гейт 344/344 байт-в-байт** vs master `1c85cd2` (база `/tmp/adoc_base` = свежий master-бинарь; gate_check.py 0 diff).
+  Ни один гейт-файл не использует link id/title.
+- **Sweep base-vs-new (frontier 250 + adoc2docx 52 = 304): РОВНО 1 изменённый** — links.adoc (целевой). 0 регрессий.
+- links.adoc строка 30: `<a href=... id="home" title="Project home page">Home</a>` — байт-в-байт с asciidoctor 2.0.23.
+  CLI-пробы (link:/bare-URL/mailto/named-only-bare с id/title) все совпали.
 
 ### Состояние репо
-- Ветка `feat/special-section-numbering` (от master `e7abf3a`, НЕ закоммичена). master чист == origin.
-- 4 файла: adoc-html/blocks.rs (+~20), adoc-html/lib.rs (+поле/+init), adoc-html/events.rs (+pop),
-  adoc-html/tests.rs (+2 теста, ~55 строк).
+- Ветка `fix/link-label-span-and-named-attrs` (от master `1c85cd2`, НЕ закоммичена). master чист == origin.
+- Изменены: adoc-parser/{attributes.rs, event.rs, subst/macros.rs, subst/mod.rs(тесты), inline.rs},
+  adoc-html/{src/events.rs, src/tests.rs(+1 тест)}.
 
 ### Остаток / следующая работа
-- **compat-mode кавычки** (` ``…'' ` вместо `&#8220;…&#8221;`) в xreftext (`@document.compat_mode`) — без корпус-файла.
-- **multi-special-ex.adoc** (frontier, 87 diff, _includes-фрагмент, вероятно нужен doctype/multi-root).
-- Крупные adoc2docx: test 1105, source 681, xml 291, callouts 195, links 62 — НЕ триажены (вероятно мульти-root).
-- frontier single-diffs архитектурны: CHANGELOG (replacements-before-macros: `...`→ellipsis внутри URL-href),
-  migration ({asciidoctor-version} intrinsic — матчить «2.0.23» семантически некорректно).
+- **links.adoc корень A** — `[.role]#text#` в метке ссылки (строки 17, 19). Архитектурный: macros-до-quotes vs
+  asciidoctor quotes-до-macros. Правило фикса ПОНЯТО и подтверждено на asciidoctor: при поиске закрывающего `]`
+  метки link/url-макроса ПРОПУСКАТЬ `]`, который (а) закрывает ВНУТРЕННИЙ `[…]` (есть unescaped `[` строго между
+  открывающей скобкой макроса и кандидатом) И (б) сразу за ним идёт constrained/unconstrained quote-маркер,
+  формирующий ВАЛИДНЫЙ span. Граничные случаи проверены: `[a [b] c]`→close на первом `]` (нет маркера);
+  `[label]*next*`→close на `]` (нет ВНУТРЕННЕГО `[`); `[a [.role]#span# b]`→skip→финальный `]`. Требует детекции
+  валидности спана (quotes.rs `constrained_open_close`/`simple_pair_open_close` уже `pub(super)`) на сыром src в
+  macros.rs — отдельный осторожный инкремент (затрагивает критичное сканирование скобок макроса). Флипнет links.adoc → Identical.
+- **Крупные adoc2docx** (НЕ триажены, вероятно мульти-root): test 1105, source 681, xml 291, callouts 195.
+- frontier single-diffs архитектурны (CHANGELOG replacements-before-macros, migration {asciidoctor-version} intrinsic).
 - Методология: `frontier_parity.py /mnt/c/tmp/adoc2docx`, `showdiff.py <file>`, gate_check.py (база `/tmp/adoc_base`),
-  sweep base-vs-new (`scratchpad/sweep_bn.py`). Бинарь: `cargo build --release -p adoc-cli`.
-  asciidoctor 2.0.23 gem: `/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/`.
+  base-vs-new sweep (inline в bash: find frontier+adoc2docx, diff base vs new). Бинарь: `cargo build --release -p adoc-cli`.
+  asciidoctor 2.0.23 gem: `/usr/share/rubygems-integration/all/gems/asciidoctor-2.0.23/lib/asciidoctor/converter/html5.rb`.
