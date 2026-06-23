@@ -253,6 +253,16 @@ pub fn is_list_marker_unordered(line: &str) -> Option<(u8, &str)> {
     {
         return Some((0, text));
     }
+    // The Unicode bullet `•` (U+2022) is its own SINGLE-character marker family:
+    // Asciidoctor `UnorderedListRx` = `(-|\*\**|•)` matches exactly one `•`
+    // (never `••`, which stays a paragraph). It nests independently of `-`/`*`
+    // (probes: `* a` + `• b` nests, and vice versa), so it gets identity 255 —
+    // out of band ABOVE the star counts (mirrors the hyphen's 0 out of band below).
+    if let Some(rest) = trimmed.strip_prefix('\u{2022}')
+        && let Some(text) = marker_content(rest)
+    {
+        return Some((255, text));
+    }
     let stars = count_leading(trimmed, '*');
     if stars == 0 {
         return None;
@@ -1733,6 +1743,12 @@ mod tests {
         // exactly like a space.
         assert_eq!(is_list_marker_unordered("*\titem"), Some((1, "item")));
         assert_eq!(is_list_marker_unordered("-\titem"), Some((0, "item")));
+        // Unicode bullet `•` (U+2022) — its own marker family, identity 255.
+        // A SINGLE `•` matches (space or tab); `••` and `•`-no-space do not.
+        assert_eq!(is_list_marker_unordered("\u{2022} item"), Some((255, "item")));
+        assert_eq!(is_list_marker_unordered("\u{2022}\titem"), Some((255, "item")));
+        assert_eq!(is_list_marker_unordered("\u{2022}\u{2022} double"), None);
+        assert_eq!(is_list_marker_unordered("\u{2022}no-space"), None);
     }
 
     #[test]

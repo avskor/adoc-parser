@@ -337,6 +337,38 @@ fn test_unordered_dash_marker_nests_under_star() {
 }
 
 #[test]
+fn test_unordered_bullet_marker_html() {
+    // Asciidoctor `UnorderedListRx` accepts the Unicode bullet `•` (U+2022) as an
+    // unordered marker alongside `-`/`*` — probe-verified vs asciidoctor 2.0.23.
+    // Real case: notes/projects/ai/plan (a `•`-prefixed list rendered as a flat
+    // paragraph instead of a <ul>).
+    let html = to_html("\u{2022} First\n\u{2022} Second\n\u{2022} Third");
+    assert!(
+        html.contains("<div class=\"ulist\">\n<ul>"),
+        "`• ` lines must form an unordered list. Got:\n{html}"
+    );
+    assert!(html.contains("<li>\n<p>First</p>\n</li>"), "Got:\n{html}");
+    assert!(html.contains("<li>\n<p>Second</p>\n</li>"), "Got:\n{html}");
+    assert!(html.contains("<li>\n<p>Third</p>\n</li>"), "Got:\n{html}");
+
+    // `•` is a distinct marker family: it nests independently of `*`
+    // (probe p_mix1: `* a` + `• b` → ulist nested in the star item).
+    let nested = to_html("* a\n\u{2022} b");
+    assert!(
+        nested.contains("<p>a</p>\n<div class=\"ulist\">\n<ul>\n<li>\n<p>b</p>"),
+        "`• ` nests inside the `* ` item. Got:\n{nested}"
+    );
+
+    // Regression: `••` (double bullet) and `•`-no-space stay paragraphs — only a
+    // SINGLE `•` followed by space/tab is a marker.
+    let dbl = to_html("\u{2022}\u{2022} double");
+    assert!(
+        dbl.contains("<div class=\"paragraph\">\n<p>\u{2022}\u{2022} double</p>"),
+        "`••` is not a list marker. Got:\n{dbl}"
+    );
+}
+
+#[test]
 fn test_unordered_list_marker_style_class() {
     // An explicit block style on a `*`/`-` list (`[square]`, `[circle]`, or any
     // keyword) is the marker class on BOTH the wrapper div (`ulist {style}
