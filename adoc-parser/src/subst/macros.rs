@@ -1578,26 +1578,68 @@ fn autolink_open_boundary(work: &Work, bytes: &[u8], i: usize) -> bool {
 }
 
 /// As [`autolink_open_boundary`], but on success also reports the exclusive byte
-/// offset at which the URL scan must stop. A plain boundary (start / whitespace /
-/// `<>()[];`) imposes no extra limit and returns `Some(bytes.len())`. A
-/// constrained-span open returns `Some(close)` — the span's closing-marker offset
-/// — because `macros` runs before `quotes`, so the URL would otherwise swallow the
-/// still-literal closing marker (`` `http://x` `` must link only `http://x`, not
-/// `` http://x` ``). This is the pre-`quotes` stand-in for the `<` of `</code>`
-/// that bounds the URL in Asciidoctor's later `macros` pass.
+/// offset at which the URL scan must stop. A URL not inside any constrained span
+/// imposes no extra limit and returns `Some(bytes.len())`. A URL inside a
+/// constrained span returns `Some(close)` — the *innermost* enclosing span's
+/// closing-marker offset — because `macros` runs before `quotes`, so the URL would
+/// otherwise swallow the still-literal closing marker (`` `http://x` `` must link
+/// only `http://x`, not `` http://x` ``). This is the pre-`quotes` stand-in for the
+/// `<` of `</code>` that bounds the URL in Asciidoctor's later `macros` pass.
+///
+/// Two open positions are admitted: a plain left boundary (start / whitespace /
+/// `<>()[];`, via [`at_autolink_boundary`]) and the byte immediately after a
+/// constrained-span marker that opens a span here (`` `http… ``). In BOTH cases the
+/// enclosing-span cap is applied, so a URL sitting deeper inside a span after a
+/// space (`` `a http://x` `` → cap at the closing `` ` ``) is bounded too, not only
+/// a URL flush against the opening marker.
 fn autolink_url_limit(work: &Work, bytes: &[u8], i: usize) -> Option<usize> {
-    if at_autolink_boundary(bytes, i) {
-        return Some(bytes.len());
-    }
-    if i == 0 {
+    let opens_here = at_autolink_boundary(bytes, i)
+        || (i > 0
+            && match bytes[i - 1] {
+                b'`' | b'*' | b'_' | b'#' => {
+                    super::quotes::constrained_open_close(&work.tags, bytes, i - 1, bytes[i - 1]).is_some()
+                }
+                b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, i - 1, bytes[i - 1]).is_some(),
+                _ => false,
+            });
+    if !opens_here {
         return None;
     }
-    let marker = bytes[i - 1];
-    match marker {
-        b'`' | b'*' | b'_' | b'#' => super::quotes::constrained_open_close(&work.tags, bytes, i - 1, marker),
-        b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, i - 1, marker),
-        _ => None,
+    Some(enclosing_constrained_close(work, bytes, i).unwrap_or(bytes.len()))
+}
+
+/// The closing-marker offset of the innermost constrained span (or super/subscript
+/// pair) that encloses byte `url_start`, or `None` when the URL is not inside any
+/// span. Scans candidate opening markers left of `url_start` and keeps the smallest
+/// close that still lies past the URL (the innermost enclosing span closes first, so
+/// it is the one whose marker the URL must not cross). Sentinel regions (extracted
+/// passthroughs / char-refs) are opaque and skipped.
+///
+/// This is the general form of the F-BW span cap: the old code only capped a URL
+/// flush against the opening marker (`` `http… ``); here a URL anywhere inside the
+/// span (`` `a http… ``) is capped at the same close, matching Asciidoctor, where
+/// `quotes` has already wrapped the whole span in `<code>` before the URL is linked.
+fn enclosing_constrained_close(work: &Work, bytes: &[u8], url_start: usize) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    let mut j = 0;
+    while j < url_start {
+        if bytes[j] == TAG_LEAD {
+            j = sentinel_end(bytes, j);
+            continue;
+        }
+        let close = match bytes[j] {
+            b'`' | b'*' | b'_' | b'#' => super::quotes::constrained_open_close(&work.tags, bytes, j, bytes[j]),
+            b'^' | b'~' => super::quotes::simple_pair_open_close(bytes, j, bytes[j]),
+            _ => None,
+        };
+        if let Some(close) = close
+            && close > url_start
+        {
+            best = Some(best.map_or(close, |b| b.min(close)));
+        }
+        j += 1;
     }
+    best
 }
 
 /// At an autolink scheme (caller guarantees `scheme_at`), try to match a bare URL
@@ -1634,10 +1676,12 @@ fn try_autolink(
         None => return None,
     };
     let rest = &src[start..];
-    // When `start` opens a constrained span, cap the scan at the span's closing
-    // marker (`limit`): `macros` runs before `quotes`, so that marker is still a
-    // literal byte the URL terminator set (whitespace / `[` `]` `<` `>`) would not
-    // stop on. The cap is the pre-`quotes` stand-in for the `<` of `</code>`.
+    // When `start` sits inside a constrained span, cap the scan at the *innermost*
+    // enclosing span's closing marker (`limit`): `macros` runs before `quotes`, so
+    // that marker is still a literal byte the URL terminator set (whitespace / `[`
+    // `]`) would not stop on. The cap is the pre-`quotes` stand-in for the `<` of
+    // `</code>`, and it applies whether the URL is flush against the opening marker
+    // (`` `http… ``) or deeper inside the span after a space (`` `a http… ``).
     let scan_end = (limit - start).min(rest.len());
     // Asciidoctor escapes `<`/`>` to `&lt;`/`&gt;` BEFORE the `macros` pass, so a
     // literal `<`/`>` inside a URL body (`http://<host>:<port>/x`) is URL CONTENT,

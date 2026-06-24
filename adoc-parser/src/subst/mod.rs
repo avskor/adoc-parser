@@ -2303,6 +2303,46 @@ mod tests {
         }
     }
 
+    /// A bare URL sitting deeper inside a constrained span — after leading content
+    /// and a space, not flush against the opening marker — must still link only up
+    /// to the span's closing marker, not swallow it. `macros` runs before `quotes`,
+    /// so the closing marker is still a literal byte; the autolink cap
+    /// ([`super::macros`]'s `enclosing_constrained_close`) is the pre-`quotes`
+    /// stand-in for the `<` of the `</code>`/`</strong>`/… that bounds the URL once
+    /// `quotes` has wrapped the whole span. Verified against Asciidoctor 2.0.23
+    /// across all four constrained markers (`` ` `` `*` `_` `#`).
+    #[test]
+    fn autolink_capped_at_enclosing_span_close() {
+        fn link_url(events: &[Event]) -> Option<String> {
+            events.iter().find_map(|e| match e {
+                Event::Start(Tag::Link { url, .. }) => Some(url.to_string()),
+                _ => None,
+            })
+        }
+        // (input, expected linked target) — the closing marker is NOT part of the
+        // URL even though a space, not the marker, precedes it.
+        let cases = [
+            ("x `a https://x.org`:", "https://x.org"),
+            ("x *a https://x.org*:", "https://x.org"),
+            ("x _a https://x.org_:", "https://x.org"),
+            ("x #a https://x.org#:", "https://x.org"),
+            // nested: the innermost (monospace) close bounds the URL, not the outer
+            // strong close further right.
+            ("x *a `b https://x.org` c*:", "https://x.org"),
+            // regression: a bare URL NOT inside any span keeps running to
+            // whitespace; a monospace span AFTER the URL is no enclosing cap.
+            ("see https://x.org `code` end", "https://x.org"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(pipeline(input), legacy(input), "engines diverged for {input:?}");
+            assert_eq!(
+                link_url(&pipeline(input)).as_deref(),
+                Some(want),
+                "wrong linked target for {input:?}"
+            );
+        }
+    }
+
     /// Asciidoctor's `InlineLinkRx` left-boundary class admits `"` and `'`
     /// (`[>\(\)\[\];"']`), but those two open ONLY the macro form (`url[…]`): a
     /// quoted bare URL is left literal (`"https://x"`), a quoted macro URL links

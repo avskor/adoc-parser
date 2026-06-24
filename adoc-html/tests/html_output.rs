@@ -801,3 +801,27 @@ fn test_autolink_keeps_angle_bracket_placeholders_in_url() {
         "angle brackets of the `<url>` form must not survive in the link. Got: {html}"
     );
 }
+
+#[test]
+fn test_autolink_capped_at_enclosing_monospace_span_close() {
+    // A URL at the END of a constrained monospace span, preceded by span content and
+    // a space (not flush against the opening backtick), must link only up to the
+    // closing backtick — the span wraps in `<code>` and the URL stops before the
+    // marker. Regression: previously the URL swallowed the closing backtick into its
+    // href and the span never formed. Verified against Asciidoctor 2.0.23
+    // (corpus: wsl.adoc `vagrant plugin install ... https://rubygems.org`).
+    let html = to_html("Pass `--plugin-source https://rubygems.org` to vagrant.");
+    assert!(
+        html.contains(
+            "<code>--plugin-source <a href=\"https://rubygems.org\" \
+             class=\"bare\">https://rubygems.org</a></code>"
+        ),
+        "URL at end of monospace span must link inside <code>, capped before the \
+         closing backtick. Got: {html}"
+    );
+    // The closing backtick must not leak into the href or the link text.
+    assert!(
+        !html.contains("rubygems.org`"),
+        "closing backtick must not be swallowed into the URL. Got: {html}"
+    );
+}
