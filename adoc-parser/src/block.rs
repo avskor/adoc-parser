@@ -3031,15 +3031,36 @@ impl<'a> BlockScanner<'a> {
         let mut lines: Vec<&'a str> = Vec::new();
 
         while let Some(line) = self.current_line() {
-            if scanner::is_blank(line) {
-                break;
-            }
-            // A line comment continuing an indented literal paragraph is kept as
-            // content (verbatim), matching Asciidoctor; any other non-indented
-            // line terminates the paragraph.
-            if !line.starts_with(' ')
-                && !line.starts_with('\t')
-                && !scanner::is_line_comment(line)
+            // The opener is always collected: the dispatcher routes here only for
+            // an indented, non-blank line, and none of the block-boundary checks
+            // below match a leading-whitespace line — so the guard merely keeps a
+            // lone indented `+` (a list-continuation under `trim`) as content.
+            //
+            // Once started, a literal (indented) paragraph extends over every
+            // subsequent non-blank line — regardless of its indentation — until a
+            // genuine block boundary. This mirrors Asciidoctor's read of an
+            // indented paragraph (StartOfBlockProc / read_paragraph_lines): it
+            // breaks ONLY on a blank line, a list continuation (`+`), a block
+            // attribute line (`[...]`), or a delimited-block opener (`----`,
+            // `====`, `....`, `--`, table `|===`, markdown fence). A non-indented
+            // plain line, a section marker (`== T`), an admonition (`NOTE:`), a
+            // list marker, or a line comment are NOT block boundaries here and are
+            // absorbed verbatim (probe-verified vs asciidoctor 2.0.23). List and
+            // callout markers DO break, but only inside their own list context
+            // (Asciidoctor's break_at_list), matching scan_paragraph.
+            if !lines.is_empty()
+                && (scanner::is_blank(line)
+                    || scanner::is_list_continuation(line)
+                    || scanner::is_block_attribute(line).is_some()
+                    || scanner::is_delimiter(line).is_some()
+                    || scanner::is_markdown_code_fence(line).is_some()
+                    || scanner::is_table_delimiter(line)
+                    || (self.is_directly_in_list_context()
+                        && (scanner::is_list_marker_unordered(line).is_some()
+                            || scanner::is_list_marker_ordered(line).is_some()
+                            || scanner::is_description_list_marker(line).is_some()))
+                    || (self.is_in_callout_list()
+                        && scanner::is_callout_list_item(line).is_some()))
             {
                 break;
             }

@@ -1,65 +1,69 @@
 # Session context
 
-## Сессия (2026-06-23, 17-я) — F-BT: CLI сеет html5 backend-intrinsics (ifdef::backend-html5 + inline {basebackend}/{filetype}/{outfilesuffix})
+## Сессия (2026-06-24, 18-я) — F-BU: литеральный (indented) параграф поглощает последующие строки до границы блока
 
-Запрос «начни следующую задачу». master `bdb5355` (F-BS смержен; session.md прошлой сессии устарел — писался ДО мержа,
-git показал Merge уже сделан). Выбран кандидат **F-BT** из TODO (чистый, узкий, CLI-слой — рекомендация прошлой сессии).
+Запрос «начни следующую задачу». master `de8d3fa` (F-BT смержен). Прошлая сессия рекомендовала F-BU как «PlantUML
+@dot/@enddot», но методология [[feedback_frontier_triage]] требует свежего триажа → **метка оказалась ОШИБОЧНОЙ**.
 
-### Триаж (verified asciidoctor 2.0.23, прямые пробы через CLI)
-Asciidoctor при html5-рендере ставит intrinsics: `backend=html5`, `backend-html5`(set), `basebackend=html`,
-`basebackend-html`(set), `filetype=html`, `filetype-html`(set), `outfilesuffix=.html`, `doctype=article`, `doctype-article`(set).
-Наш `adoc-cli` сеял docname/docdate-семейство, но НЕ backend → проба подтвердила: `ifdef::backend-html5[]`→**NO**,
-`{basebackend}`/`{filetype}`/`{outfilesuffix}` оставались **литералом**. **Корень:** `ifdef`/`ifndef` вычисляются в
-ПРЕПРОЦЕССОРЕ (`preprocess_with_attrs`, до html-рендера) — CLI не клал backend-intrinsics в `initial_attrs`; html-слой
-(`adoc-html/src/lib.rs:371-373`) сеет `backend`/`doctype` в `document_attrs` ТОЛЬКО для inline `{backend}`, не для препроцессора.
+### Триаж (свежий, не доверяя метке)
+`frontier_parity.py` по 4 корпусам: **docs** 206 ident / 3 clean (cheatsheet 125 = F-BU; wsl 95 + keycloak 52 =
+архитектурный автолинк-реордер, НЕ single-session); **frontier** 230 ident / 3 clean (manpage 146; doctime-localtime 1 =
+недетерминированный `{localtime}` = НЕ баг; migration 1 = `{asciidoctor-version}` интринсик = спорно, мы не asciidoctor);
+**adoc2docx** 45 ident / 4 крупных (1105/681/291/195, переплетённые). Выбран **cheatsheet (F-BU)** — узкий, single-root.
 
-### Фикс F-BT (1 файл, only adoc-cli/src/main.rs)
-После блока date/local-семейства (перед docname-блоком) через существующий `seed`-хелпер (кладёт в `initial_attrs` ДЛЯ
-препроцессора + `html_attrs` ДЛЯ рендера) засеяны: `backend=html5`, `backend-html5`(пусто=set), `basebackend=html`,
-`basebackend-html`(set), `filetype=html`, `filetype-html`(set), `outfilesuffix=.html`.
-- **`doctype-<value>` СОЗНАТЕЛЬНО НЕ сеется:** проба `:doctype: book` → asciidoctor даёт `doctype-book`(set), НЕ
-  `doctype-article`; суффикс трекает значение doctype (header `:doctype:` может сменить), а intrinsic мы не пересчитываем →
-  жёсткий `doctype-article` остался бы ложно set для book/manpage. Вынесено в отложенный остаток (TODO под F-BT).
-- seed НЕ локает → header `:outfilesuffix: .adoc`/`:doctype: book` по-прежнему ПОБЕЖДАЕТ (проба ✓, `doctype` обновляется
-  препроцессором, `ifndef::backend-html5[]` корректно дропает PDF-only контент).
+showdiff [1056] + рендер региона: `[uml]` open-блок (`--`) с `@startdot…@enddot`. Диаграммного расширения НЕТ — asciidoctor
+рендерит контент как обычные параграфы. В source-стр. 355-364: после пустой строки idented `  node1 -> node2 -> node3`
+(стр.362) стартует **литеральный параграф**, а НЕ-idented `}` (363) и `@enddot` (364) asciidoctor поглощает в ТОТ ЖЕ `<pre>`
+(сохраняя ведущие 2 пробела первой строки). Мы рвали на `}` → `}\n@enddot` в отдельный параграф + стрип индентации opener'а.
 
-**Тесты:** новый файл `adoc-cli/tests/cli.rs` (+2 integration, гоняют бинарь через `env!("CARGO_BIN_EXE_adoc")` +
-`CARGO_TARGET_TMPDIR`, без доп. зависимостей): `seeds_backend_intrinsics` (ifdef + inline) + `header_can_override_outfilesuffix`.
+### Правило (verified 12 проб A-L vs asciidoctor 2.0.23 = `StartOfBlockProc`)
+Литеральный параграф (открыт indented-строкой) продолжается на ВСЕ смежные непустые строки независимо от отступа. Обрыв
+ТОЛЬКО на: пустой строке / делимитере (`----`,`====`,`....`,`--`,`++++`,`____`,`****`,`////`) / md-fence ` ``` ` / table
+`|===` / block-attr `[...]` / list-continuation `+`; (в list-контексте — list/dlist/callout-маркеры). НЕ обрывают
+(поглощаются verbatim): не-idented текст, секция `== T`, admonition `NOTE:`, list-маркер ВНЕ списка, line-comment `//`.
+Индентация: общий минимальный отступ стрипается (min=0 если есть flush-left строка → сохраняется всё). Уже было корректно.
+
+### Фикс F-BU (1 файл, only adoc-parser/src/block.rs)
+`scan_literal_paragraph`: цикл-сборщик (был `break` на любой не-idented-не-comment строке) → заменён на набор терминаторов
+выше. Guard `!lines.is_empty()` гарантирует поглощение opener'а (защита от одиночного idented `+`: `is_list_continuation`
+ловит его через `trim`). Спец-кейс line-comment удалён — комментарии теперь поглощаются естественно (probe J ✓).
+scanner-функции (`is_delimiter`/`is_block_attribute`) отвергают ведущие пробелы → idented `  ----` остаётся литералом (probe L ✓).
+
+**Тесты:** +1 parser `test_literal_paragraph_absorbs_following_lines` (поглощение + min-indent strip + обрыв на делимитере),
++1 html `test_literal_paragraph_absorbs_following_lines_html` (adoc-html/tests/html_output.rs).
 
 ### Верификация
-- clippy `--workspace` **0**. **test --workspace 0 упавших** (html **544**, parser **651**, cli **+2** новых, compat 233/233,
-  html-compat 47, integration 29, render-core 25, author 7).
-- **БАЙТ-НЕЙТРАЛЬНО (где ожидалось):** база `/tmp/adoc_base` ПЕРЕСОБРАНА от master `bdb5355` (md5 base `5b7323a`, new `0b70065`).
-  - gate 344 (`gate_check.py`) — **0 diff** (gate-корпус не использует backend-html5).
-  - свип 860 файлов (`scratchpad/sweep_all.py` пересоздан в session-scratchpad: gate+frontier+adoc2docx+docs) — изменился
-    **ТОЛЬКО 1**: целевой `cheatsheet.adoc` (backend-html5 в корпусах редок → фикс предельно узкий).
-- Семантически (vs asciidoctor 2.0.23): cheatsheet **659→125 БЕЗ ручного `-a backend-html5`** — элементы 0..1055 идентичны
-  (passthrough/backend-html5 секции больше НЕ выпадают, все heading-id совпадают); первое расхождение [1056] = PlantUML
-  `@dot/@enddot` (F-BU). Set-сравнение (ref 1192 / our 1198): по существу различаются **~6 элементов, ВСЕ = F-BU**
-  (PlantUML/диаграммы + контекст: `#...#` highlight внутри passthrough — базовый `#mark#` сам == asciidoctor; literal-дерево).
-  НЕ внесены F-BT.
+- clippy `--workspace` **0**. **test --workspace 0 упавших** (parser **651**, html **544**, integration 29→**30**,
+  compat 233/233, html-compat, render-core 25, author 7, cli 2).
+- **БАЙТ-НЕЙТРАЛЬНО:** база `/tmp/adoc_base` пересобрана от master `de8d3fa` (md5 `0b70065`); gate 344 (`gate_check.py`)
+  **0 diff**; свип 860 файлов (`scratchpad/sweep_all.py` пересоздан в session-scratchpad) — изменился **ТОЛЬКО 1** (целевой cheatsheet).
+- Семантически (vs asciidoctor 2.0.23): cheatsheet **125→58** позиционно. Set-diff Counter: base 13→**7** уникальных, причём
+  ВСЕ 7 были и в базе (`#mark#`/tree = F-BV) — фикс удалил ровно 6 элементов (весь dot-diagram split) и **0 новых**.
+  dot-diagram блок теперь БАЙТ-в-байт == asciidoctor (`<pre>  node1 -&gt; node2 -&gt; node3\n}\n@enddot</pre>`).
 
 ### Состояние репо
-- Ветка `fix/cli-seed-backend-intrinsics` от master `bdb5355`. Коммит `200867c`. **Merge/push — ПО ЗАПРОСУ** (ещё не смержено).
-- Изменено: `adoc-cli/src/main.rs` (seed backend-intrinsics), `adoc-cli/tests/cli.rs` (НОВЫЙ, +2 теста), TODO.md (F-BT→[x] +
-  отложенный doctype-intrinsics остаток), session.md.
-- `/tmp/adoc_base` = бинарь master `bdb5355` (md5 `5b7323a`, актуальная база регресс-гарда).
+- Ветка `fix/literal-paragraph-continuation` от master `de8d3fa`. Коммит `1b18515`. **Merge/push — ПО ЗАПРОСУ (ещё не смержено).**
+- Изменено: `adoc-parser/src/block.rs` (терминаторы literal-параграфа), `adoc-parser/tests/integration.rs` (+1 тест),
+  `adoc-html/tests/html_output.rs` (+1 тест), TODO.md (F-BU→[x] + F-BV follow-up), session.md.
+- `/tmp/adoc_base` = бинарь master `de8d3fa` (md5 `0b70065`, актуальная база регресс-гарда).
 
 ### Кандидаты след. сессий
-- **F-BU (PlantUML `@dot/@enddot`)** — остаток cheatsheet 125 (set-diff ~6 элементов); первое расхождение [1056], source-стр.
-  ~303 «PlantUML Extension». Нужен showdiff-триаж: как asciidoctor рендерит diagram-блок (вероятно literal/listing fallback
-  без расширения). Также внутри: `#...#` highlight в passthrough-контексте, literal-дерево разбито иначе.
-- **Отложенный doctype-intrinsics** (под F-BT в TODO): `ifdef::doctype-book/manpage/inline[]` — пересчёт `doctype-<value>` при
-  смене `:doctype:`. Малочастотный.
-- Прочее (из прошлых session.md, ещё актуально): `windows/wsl`(95)+`keycloak/index`(52) — 2 архитектурных автолинка
-  (`macros` до `quotes`/specialchars, реордер; НЕ single-session, см. [[proj_sequential_quotes_rewrite]]).
-- Если docs исчерпан — РАСШИРЯТЬ КОРПУС (см. [[compat_corpus_methodology]]): `frontier_parity.py <новый-root>`.
+- **F-BV (остаток cheatsheet 58):** `#…#` mark/highlight внутри `[tree]` open-блоков — ОТДЕЛЬНЫЙ inline-слой
+  (string-rewriting движок [[proj_sequential_quotes_rewrite]]), глубокий `#`/`##` corner через мультистрочный параграф +
+  ASCII-дерево `root\n|-- …` разбито иначе. Низкоценно (tree-extension garbage-in, сам asciidoctor выдаёт артефакт).
+- **migration.adoc (frontier, diff=1):** `{asciidoctor-version}` интринсик → `2.0.23`. Узко, но спорно (мы не asciidoctor;
+  семантически «врать» о версии). Если делать — сеять как compat-таргет 2.0.23 в CLI/html-слое (как F-BT backend-intrinsics).
+- **manpage.adoc (frontier, 146):** manpage backend — специализированный, крупный, отдельный триаж.
+- **windows/wsl(95)+keycloak/index(52):** 2 архитектурных автолинка (`macros` до `quotes`/specialchars, реордер; НЕ
+  single-session, см. [[proj_sequential_quotes_rewrite]]).
+- **adoc2docx (4 крупных: 1105/681/291/195):** переплетённые дефекты, нужен showdiff-триаж изолировать доминирующий.
+- **Отложенный doctype-intrinsics** (под F-BT): `ifdef::doctype-book/manpage/inline[]` — пересчёт при смене `:doctype:`. Малочастотно.
 
 ### Методология (без изменений, см. [[compat_corpus_methodology]] + [[feedback_html_byte_parity_scope]] + [[feedback_frontier_triage]])
-`frontier_parity.py <root>` / `showdiff.py <file>` (семантический ПОЗИЦИОННЫЙ DOM-differ; скрипты в `/mnt/c/tmp/adoc-test/`).
-⚠ showdiff раздувает один upstream-рассинхрон в хвост — сверять SET элементов (Counter), не позиции. Корни корпусов:
-gate `/mnt/c/tmp/adoc-test`(344), frontier `/mnt/c/tmp/adoc-frontier`(250), adoc2docx `/mnt/c/tmp/adoc2docx`(52),
-docs `/mnt/c/Work/docs`(214). Регресс-гард: `gate_check.py` (база `/tmp/adoc_base` пересобирать от ТЕКУЩЕГО master через
-checkout master→clean→build→cp→checkout branch) + `scratchpad/sweep_all.py` (raw-байт свип всех 4 корпусов; пересоздавать в
-session-scratchpad). Бинарь: `cargo build --release -p adoc-cli`. ⚠ mtime на /mnt/c ненадёжен → `cargo clean --release -p
-adoc-cli` перед build (см. [[feedback_wsl_build_staleness]]). НЕ доверять метке прошлой сессии — git log + showdiff каждый кандидат.
+`frontier_parity.py <root>` / `showdiff.py <file>` (семантический ПОЗИЦИОННЫЙ DOM-differ; скрипты `/mnt/c/tmp/adoc-test/`).
+⚠ showdiff раздувает один upstream-рассинхрон в хвост — сверять SET элементов (Counter), не позиции (см. set-diff выше).
+Корни: gate `/mnt/c/tmp/adoc-test`(344), frontier `/mnt/c/tmp/adoc-frontier`(250), adoc2docx `/mnt/c/tmp/adoc2docx`(52),
+docs `/mnt/c/Work/docs`(214). Регресс-гард: `gate_check.py` (база `/tmp/adoc_base` пересобирать от ТЕКУЩЕГО master:
+checkout master→`cargo clean --release -p adoc-cli`→build→cp→checkout branch) + `scratchpad/sweep_all.py` (raw-байт свип всех
+4 корпусов). ⚠ mtime на /mnt/c ненадёжен → `cargo clean --release -p adoc-cli` перед каждым build (см. [[feedback_wsl_build_staleness]]).
+НЕ доверять метке прошлой сессии — git log + showdiff + минимальные пробы каждый кандидат (эта сессия: метка «PlantUML» = ошибка).
