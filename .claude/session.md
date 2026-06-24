@@ -1,69 +1,70 @@
 # Session context
 
-## Сессия (2026-06-24, 18-я) — F-BU: литеральный (indented) параграф поглощает последующие строки до границы блока
+## Сессия (2026-06-24, 19-я) — F-BW: автолинк рвался на `<`/`>` в теле URL (angle-bracket плейсхолдеры)
 
-Запрос «начни следующую задачу». master `de8d3fa` (F-BT смержен). Прошлая сессия рекомендовала F-BU как «PlantUML
-@dot/@enddot», но методология [[feedback_frontier_triage]] требует свежего триажа → **метка оказалась ОШИБОЧНОЙ**.
+Запрос «начни следующую задачу». master `fe8742b` (F-BU смержен). Метку прошлой сессии «архитектурный реордер
+macros/quotes» НЕ принимал на веру ([[feedback_frontier_triage]]) — и она оказалась **ОШИБОЧНОЙ**.
 
-### Триаж (свежий, не доверяя метке)
-`frontier_parity.py` по 4 корпусам: **docs** 206 ident / 3 clean (cheatsheet 125 = F-BU; wsl 95 + keycloak 52 =
-архитектурный автолинк-реордер, НЕ single-session); **frontier** 230 ident / 3 clean (manpage 146; doctime-localtime 1 =
-недетерминированный `{localtime}` = НЕ баг; migration 1 = `{asciidoctor-version}` интринсик = спорно, мы не asciidoctor);
-**adoc2docx** 45 ident / 4 крупных (1105/681/291/195, переплетённые). Выбран **cheatsheet (F-BU)** — узкий, single-root.
+### Триаж (свежий, 4 корпуса)
+`frontier_parity.py`: **docs** 206 ident / 3 clean (wsl 95, cheatsheet 58=F-BV, keycloak 52); **frontier** 230 ident / 3
+(manpage 146 = спец-бэкенд; doctime 1 = недетерм.; migration 1 = `{asciidoctor-version}` интринсик); **adoc2docx** 45 ident /
+4 крупных (1105/681/291/195). showdiff всех adoc2docx → единый корень = **rouge-подсветка** (asciidoctor токенизирует
+Ruby/XML/Java в `<span class=…>`, мы выдаём сырой код) — полноценный хайлайтер, НЕ single-session → снят. wsl+keycloak:
+прошлая метка «macros до quotes». **12 проб vs asciidoctor 2.0.23 ОПРОВЕРГЛИ метку:** backtick-URL без плейсхолдеров уже
+линкуется идентично — реальный корень узкий: `<`/`>` в теле URL.
 
-showdiff [1056] + рендер региона: `[uml]` open-блок (`--`) с `@startdot…@enddot`. Диаграммного расширения НЕТ — asciidoctor
-рендерит контент как обычные параграфы. В source-стр. 355-364: после пустой строки idented `  node1 -> node2 -> node3`
-(стр.362) стартует **литеральный параграф**, а НЕ-idented `}` (363) и `@enddot` (364) asciidoctor поглощает в ТОТ ЖЕ `<pre>`
-(сохраняя ведущие 2 пробела первой строки). Мы рвали на `}` → `}\n@enddot` в отдельный параграф + стрип индентации opener'а.
+### Правило (verified 12 проб A-G vs asciidoctor 2.0.23)
+asciidoctor escape'ит `<`→`&lt;`, `>`→`&gt;` ДО `macros`-пасса → литеральные `<`/`>` в теле URL = СОДЕРЖИМОЕ, не терминаторы.
+Bare-URL тянется до пробела / `[` / `]` (и закрытия constrained-спана). Исключение — angle-форма `<scheme://…>`: ведущий `<`
+парится с ПЕРВЫМ `>`, оба съедаются. Пробы: `http://h/<x>/y`→включает `<x>`; `http://h/<x`→`<x`; `http://h/x<y`→`x<y`;
+`http://h/a>b>c`→все `>`; `<http://h/x>`→срез скобок; `` `http://h/<x>/y` ``→линк внутри `<code>`. (Вырожденный `http://h/x>` с
+хвостовым `>` перед пробелом: asciidoctor выдаёт битый `&gt`, у нас корректный `&gt;` — расхождение в 1 редком кейсе, наш вывод
+правильнее.)
 
-### Правило (verified 12 проб A-L vs asciidoctor 2.0.23 = `StartOfBlockProc`)
-Литеральный параграф (открыт indented-строкой) продолжается на ВСЕ смежные непустые строки независимо от отступа. Обрыв
-ТОЛЬКО на: пустой строке / делимитере (`----`,`====`,`....`,`--`,`++++`,`____`,`****`,`////`) / md-fence ` ``` ` / table
-`|===` / block-attr `[...]` / list-continuation `+`; (в list-контексте — list/dlist/callout-маркеры). НЕ обрывают
-(поглощаются verbatim): не-idented текст, секция `== T`, admonition `NOTE:`, list-маркер ВНЕ списка, line-comment `//`.
-Индентация: общий минимальный отступ стрипается (min=0 если есть flush-left строка → сохраняется всё). Уже было корректно.
+### Фикс F-BW (2 движка)
+`subst/macros.rs` `try_autolink` (ДЕФОЛТ) + `inline.rs` `try_autolink` (legacy-оракул, контракт «Mirror of legacy»):
+1. убраны `<`/`>` из find-предиката скана URL (терминаторы теперь только whitespace/`[`/`]`, плюс span-`limit` в subst);
+2. angle-блок (`preceded_by_angle`) ищет закрывающий `>` ВНУТРИ `rest[..url_end]` (первый `>`) вместо проверки `== Some(b'>')`
+   на позиции `url_end` (которая после п.1 уже не указывает на `>`).
 
-### Фикс F-BU (1 файл, only adoc-parser/src/block.rs)
-`scan_literal_paragraph`: цикл-сборщик (был `break` на любой не-idented-не-comment строке) → заменён на набор терминаторов
-выше. Guard `!lines.is_empty()` гарантирует поглощение opener'а (защита от одиночного idented `+`: `is_list_continuation`
-ловит его через `trim`). Спец-кейс line-comment удалён — комментарии теперь поглощаются естественно (probe J ✓).
-scanner-функции (`is_delimiter`/`is_block_attribute`) отвергают ведущие пробелы → idented `  ----` остаётся литералом (probe L ✓).
-
-**Тесты:** +1 parser `test_literal_paragraph_absorbs_following_lines` (поглощение + min-indent strip + обрыв на делимитере),
-+1 html `test_literal_paragraph_absorbs_following_lines_html` (adoc-html/tests/html_output.rs).
+**Тесты:** +2 parser unit (`inline::tests::test_autolink_keeps_angle_bracket_placeholders` +
+`…angle_bracketed_bare_form_strips_brackets`), +1 subst (`reproduces_legacy_on_angle_bracket_url_inputs` — паритет
+subst↔legacy + проверка целевого URL), +1 html (`html_output.rs::test_autolink_keeps_angle_bracket_placeholders_in_url`).
+Пре-существующий `subst::angle_bracket_url_matches_asciidoctor` ПРОШЁЛ (closed/unclosed/`<url[text]>`/`<email>`).
 
 ### Верификация
-- clippy `--workspace` **0**. **test --workspace 0 упавших** (parser **651**, html **544**, integration 29→**30**,
-  compat 233/233, html-compat, render-core 25, author 7, cli 2).
-- **БАЙТ-НЕЙТРАЛЬНО:** база `/tmp/adoc_base` пересобрана от master `de8d3fa` (md5 `0b70065`); gate 344 (`gate_check.py`)
-  **0 diff**; свип 860 файлов (`scratchpad/sweep_all.py` пересоздан в session-scratchpad) — изменился **ТОЛЬКО 1** (целевой cheatsheet).
-- Семантически (vs asciidoctor 2.0.23): cheatsheet **125→58** позиционно. Set-diff Counter: base 13→**7** уникальных, причём
-  ВСЕ 7 были и в базе (`#mark#`/tree = F-BV) — фикс удалил ровно 6 элементов (весь dot-diagram split) и **0 новых**.
-  dot-diagram блок теперь БАЙТ-в-байт == asciidoctor (`<pre>  node1 -&gt; node2 -&gt; node3\n}\n@enddot</pre>`).
+- clippy `--workspace` **0**. **test --workspace 0 упавших** (parser 651→**654**, html_output 48→**49**, html-lib 544,
+  compat 233/233, integration 30, render-core 25, author 7, cli 2).
+- **БАЙТ-НЕЙТРАЛЬНО:** база `/tmp/adoc_base` пересобрана от master `fe8742b` (md5 `faf8cb3e`); gate 344 (`gate_check.py`)
+  **0 diff**; свип 860 файлов (`scratchpad/sweep_all.py` ПЕРЕСОЗДАН — был утерян из прошлого session-scratchpad) — изменился
+  **ТОЛЬКО 1** (целевой keycloak/index.adoc).
+- Семантически (vs asciidoctor 2.0.23): **keycloak 52→0** (frontier_parity: оба файла identical); docs Identical **206→207**.
+
+### ⚠ Ловушка сборки (повтор [[feedback_wsl_build_staleness]])
+`cargo clean --release -p adoc-cli` НЕДОСТАТОЧНО когда менялся adoc-parser — его rlib переиспользуется (грубый mtime /mnt/c).
+Чистить ИМЕННО модифицированные крейты: `cargo clean --release -p adoc-parser -p adoc-html -p adoc-cli`. ТАКЖЕ: коммить фикс
+в ветку ДО пересборки базы — иначе `git checkout master` переносит floating-изменения с собой и база собирается с твоим кодом
+(симптом: base md5 == branch md5).
 
 ### Состояние репо
-- Ветка `fix/literal-paragraph-continuation` от master `de8d3fa`. Коммит `1b18515`. **Merge/push — ПО ЗАПРОСУ (ещё не смержено).**
-- Изменено: `adoc-parser/src/block.rs` (терминаторы literal-параграфа), `adoc-parser/tests/integration.rs` (+1 тест),
-  `adoc-html/tests/html_output.rs` (+1 тест), TODO.md (F-BU→[x] + F-BV follow-up), session.md.
-- `/tmp/adoc_base` = бинарь master `de8d3fa` (md5 `0b70065`, актуальная база регресс-гарда).
+- Ветка `fix/autolink-angle-brackets-in-url` от master `fe8742b`. Коммит `f26dcd5`. **Merge/push — ПО ЗАПРОСУ (ещё не смержено).**
+- Изменено: `adoc-parser/src/subst/macros.rs`, `adoc-parser/src/inline.rs` (оба `try_autolink`),
+  `adoc-parser/src/subst/mod.rs` (+1 тест), `adoc-html/tests/html_output.rs` (+1 тест), TODO.md (F-BW→[x] + wsl follow-up), session.md.
+- `/tmp/adoc_base` = бинарь master `fe8742b` (md5 `faf8cb3e`, актуальная база регресс-гарда).
 
 ### Кандидаты след. сессий
-- **F-BV (остаток cheatsheet 58):** `#…#` mark/highlight внутри `[tree]` open-блоков — ОТДЕЛЬНЫЙ inline-слой
-  (string-rewriting движок [[proj_sequential_quotes_rewrite]]), глубокий `#`/`##` corner через мультистрочный параграф +
-  ASCII-дерево `root\n|-- …` разбито иначе. Низкоценно (tree-extension garbage-in, сам asciidoctor выдаёт артефакт).
-- **migration.adoc (frontier, diff=1):** `{asciidoctor-version}` интринсик → `2.0.23`. Узко, но спорно (мы не asciidoctor;
-  семантически «врать» о версии). Если делать — сеять как compat-таргет 2.0.23 в CLI/html-слое (как F-BT backend-intrinsics).
-- **manpage.adoc (frontier, 146):** manpage backend — специализированный, крупный, отдельный триаж.
-- **windows/wsl(95)+keycloak/index(52):** 2 архитектурных автолинка (`macros` до `quotes`/specialchars, реордер; НЕ
-  single-session, см. [[proj_sequential_quotes_rewrite]]).
-- **adoc2docx (4 крупных: 1105/681/291/195):** переплетённые дефекты, нужен showdiff-триаж изолировать доминирующий.
-- **Отложенный doctype-intrinsics** (под F-BT): `ifdef::doctype-book/manpage/inline[]` — пересчёт при смене `:doctype:`. Малочастотно.
+- **wsl (остаток 95):** URL в КОНЦЕ monospace-спана съедает закрывающий backtick + спан не оборачивается в `<code>`.
+  Пре-существующий, отдельный дефект (constrained-span autolink cap: `autolink_url_limit` для space-boundary возвращает
+  `bytes.len()` вместо капа на закрытие спана). Узкий, но субтильный — нужен аккуратный триаж span-detection.
+- **F-BV (cheatsheet 58):** `#…#` mark/highlight внутри `[tree]` open-блоков — inline tree-extension garbage, низкоценно.
+- **migration.adoc (frontier, diff=1):** `{asciidoctor-version}`→`2.0.23` интринсик. Узко, спорно (мы не asciidoctor).
+- **manpage.adoc (frontier, 146):** manpage backend — спец, крупный, отдельный триаж.
+- **adoc2docx (4 крупных = rouge):** синтаксический хайлайтер Ruby/XML/Java. Крупная фича, не single-session.
+- **Отложенный doctype-intrinsics** (под F-BT): `ifdef::doctype-book/manpage/inline[]`. Малочастотно.
 
-### Методология (без изменений, см. [[compat_corpus_methodology]] + [[feedback_html_byte_parity_scope]] + [[feedback_frontier_triage]])
-`frontier_parity.py <root>` / `showdiff.py <file>` (семантический ПОЗИЦИОННЫЙ DOM-differ; скрипты `/mnt/c/tmp/adoc-test/`).
-⚠ showdiff раздувает один upstream-рассинхрон в хвост — сверять SET элементов (Counter), не позиции (см. set-diff выше).
-Корни: gate `/mnt/c/tmp/adoc-test`(344), frontier `/mnt/c/tmp/adoc-frontier`(250), adoc2docx `/mnt/c/tmp/adoc2docx`(52),
-docs `/mnt/c/Work/docs`(214). Регресс-гард: `gate_check.py` (база `/tmp/adoc_base` пересобирать от ТЕКУЩЕГО master:
-checkout master→`cargo clean --release -p adoc-cli`→build→cp→checkout branch) + `scratchpad/sweep_all.py` (raw-байт свип всех
-4 корпусов). ⚠ mtime на /mnt/c ненадёжен → `cargo clean --release -p adoc-cli` перед каждым build (см. [[feedback_wsl_build_staleness]]).
-НЕ доверять метке прошлой сессии — git log + showdiff + минимальные пробы каждый кандидат (эта сессия: метка «PlantUML» = ошибка).
+### Методология (без изменений; [[compat_corpus_methodology]] + [[feedback_html_byte_parity_scope]] + [[feedback_frontier_triage]])
+`frontier_parity.py <root>` / `showdiff.py <file>` (ПОЗИЦИОННЫЙ DOM-differ — раздувает один upstream-рассинхрон в хвост;
+сверять SET элементов Counter, не позиции). Скрипты `/mnt/c/tmp/adoc-test/`. Корни: gate `/mnt/c/tmp/adoc-test`(344),
+frontier `/mnt/c/tmp/adoc-frontier`(250), adoc2docx `/mnt/c/tmp/adoc2docx`(52), docs `/mnt/c/Work/docs`(214). Регресс-гард:
+`gate_check.py` (база `/tmp/adoc_base` от ТЕКУЩЕГО master) + `scratchpad/sweep_all.py` (raw-байт свип всех 4). НЕ доверять метке
+прошлой сессии — git log + showdiff + минимальные пробы каждый кандидат (эта сессия: метка «реордер macros/quotes» = ошибка).
