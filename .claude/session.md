@@ -1,5 +1,55 @@
 # Session context
 
+## Сессия (2026-06-24, 20-я) — F-BX: автолинк переедал закрывающий маркер спана (constrained-span autolink cap)
+
+Запрос «начни следующую задачу». Старт: F-BW (`fix/autolink-angle-brackets-in-url`, `3cce4f7`) был готов/верифицирован, но
+не смержен. **Пользователь выбрал: смержить F-BW локально (ff, без push) → пересобрать базу → новая ветка под wsl.**
+
+### Выполнено
+1. **Merge F-BW** в master (ff-only) → master `3cce4f7`. **База `/tmp/adoc_base` пересобрана** от master `3cce4f7` (md5
+   `034d9f2a`, с F-BW). `sweep_all.py` снова утерян (session-scratchpad) — ПЕРЕСОЗДАН в текущем scratchpad (4 корпуса, 860).
+2. **F-BX** на ветке `fix/autolink-cap-at-monospace-span-close` от master `3cce4f7`. Коммит `70e1280`.
+
+### Триаж wsl (свежий, метку прошлой сессии «constrained-span autolink cap» проверял — оказалась ВЕРНОЙ, но узкой)
+showdiff(wsl.adoc): позиционный differ раздул ОДИН рассинхрон [193-196] в хвост 95. Исходник стр.82:
+`` `--plugin-clean-sources --plugin-source https://rubygems.org` `` (URL после пробела, в конце monospace-спана).
+**14 проб vs asciidoctor 2.0.23:** баг во ВСЕХ 4 маркерах (`` ` `` `*` `_` `#`), но ТОЛЬКО когда URL после пробела И в конце
+спана. case 2 (`` `https://x` `` — URL flush к маркеру) и case 6 (`` `https://x b` `` — текст после URL) уже работали (F-BW).
+
+### Фикс F-BX (`subst/macros.rs`)
+F-BW капил URL лишь ВПРИТЫК к открывающему маркеру: `autolink_url_limit` при space-boundary (`at_autolink_boundary` true)
+короткозамыкал в `Some(bytes.len())`, игнорируя охватывающий спан. **Новый `enclosing_constrained_close(work, bytes, url_start)`**
+сканирует маркеры слева от URL, для каждого зовёт `constrained_open_close`/`simple_pair_open_close`, берёт min close > url_start
+(innermost охватывающий) — pre-`quotes` стенд-ин для `<` от `</code>` (`macros` до `quotes`, закрывающий маркер ещё литерал).
+`autolink_url_limit` унифицирован: `opens_here` (boundary ИЛИ marker-open) → `Some(enclosing…unwrap_or(len))`. `is_some()`
+неизменён → `autolink_open_boundary`/escaped-arm не затронуты. Только legacy-движок (`inline.rs`) НЕ трогал — он рекурсирует
+в содержимое спана, автолинк там видит ограниченный сегмент (баг — только subst, macros до quotes). Паритет pipeline==legacy
+подтверждён тестом.
+
+### Верификация
+- clippy `--workspace` **0**. **test --workspace 0 упавших** (parser 654→**655**, html_output 49→**50**;
+  html-lib 544, compat 233, integration 30, render-core 25, author 7, cli 2, wasm 3).
+- **БАЙТ-НЕЙТРАЛЬНО:** gate 344 (`gate_check.py`, база `034d9f2a`) **0 diff**; свип 860 (4 корпуса) — изменился **ТОЛЬКО 1**
+  (целевой wsl.adoc). Семантически (vs asciidoctor 2.0.23): docs Identical **207→208** — wsl.adoc байт-identical asciidoctor.
+- 14 проб (mono/strong/emph/mark × space+url; url-only; url+text; nested mono-in-strong; bare-url-plain/EOL; url-then-mono;
+  paren-span; sup; trailing-dot) — ВСЕ совпали с asciidoctor.
+
+### Состояние репо
+- Ветка `fix/autolink-cap-at-monospace-span-close` от master `3cce4f7`. Код-коммит `70e1280`. **Merge/push — ПО ЗАПРОСУ (не смержено).**
+- Изменено: `adoc-parser/src/subst/macros.rs` (фикс + helper), `adoc-parser/src/subst/mod.rs` (+1 тест),
+  `adoc-html/tests/html_output.rs` (+1 тест), TODO.md, session.md.
+- `/tmp/adoc_base` = master `3cce4f7` (md5 `034d9f2a`). `sweep_all.py` в текущем scratchpad (опять утеряется в след. сессии).
+
+### Кандидаты след. сессий
+- **F-BV (cheatsheet 58):** `#…#` mark/highlight внутри `[tree]` open-блоков — inline tree-extension garbage, низкоценно.
+  ЕДИНСТВЕННОЕ оставшееся чистое расхождение в docs-корпусе (Diverging-CLEAN: 1).
+- **migration.adoc (frontier, diff=1):** `{asciidoctor-version}`→`2.0.23` интринсик. Узко, спорно.
+- **manpage.adoc (frontier, 146):** manpage backend — спец, крупный.
+- **adoc2docx (4 крупных = rouge):** синтаксический хайлайтер Ruby/XML/Java. Крупная фича, не single-session.
+- **Отложенный doctype-intrinsics** (под F-BT): `ifdef::doctype-book/manpage/inline[]`. Малочастотно.
+
+---
+
 ## Сессия (2026-06-24, 19-я) — F-BW: автолинк рвался на `<`/`>` в теле URL (angle-bracket плейсхолдеры)
 
 Запрос «начни следующую задачу». master `fe8742b` (F-BU смержен). Метку прошлой сессии «архитектурный реордер
