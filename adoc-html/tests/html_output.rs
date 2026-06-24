@@ -764,3 +764,40 @@ fn test_attr_ref_in_xref_target_resolves() {
         "no extraction sentinel may leak into output. Got: {html:?}"
     );
 }
+
+#[test]
+fn test_autolink_keeps_angle_bracket_placeholders_in_url() {
+    // Asciidoctor escapes `<`/`>` to `&lt;`/`&gt;` before the macros pass, so a URL
+    // containing angle-bracket placeholders (`http://<host>:<port>/x`) is autolinked
+    // with the brackets kept as URL content — not split at the first `<`. Verified
+    // against Asciidoctor 2.0.23. Holds both bare and inside a monospace span.
+    let html = to_html("See http://<host>:<port>/realms/<realm>/token here.");
+    assert!(
+        html.contains(
+            "<a href=\"http://&lt;host&gt;:&lt;port&gt;/realms/&lt;realm&gt;/token\" \
+             class=\"bare\">http://&lt;host&gt;:&lt;port&gt;/realms/&lt;realm&gt;/token</a>"
+        ),
+        "bare URL with angle-bracket placeholders must autolink whole. Got: {html}"
+    );
+
+    let html = to_html("Use `http://<host>:<port>/token` for auth.");
+    assert!(
+        html.contains(
+            "<code><a href=\"http://&lt;host&gt;:&lt;port&gt;/token\" \
+             class=\"bare\">http://&lt;host&gt;:&lt;port&gt;/token</a></code>"
+        ),
+        "URL with placeholders inside a monospace span must autolink whole. Got: {html}"
+    );
+
+    // The angle-bracketed bare form `<scheme://…>` still strips both brackets and
+    // links the URL alone (the leading `<` pairs with the first `>`).
+    let html = to_html("Visit <https://example.com/path> now.");
+    assert!(
+        html.contains("<a href=\"https://example.com/path\" class=\"bare\">https://example.com/path</a>"),
+        "angle-bracketed bare URL must strip brackets. Got: {html}"
+    );
+    assert!(
+        !html.contains("&lt;https://") && !html.contains("/path&gt;"),
+        "angle brackets of the `<url>` form must not survive in the link. Got: {html}"
+    );
+}

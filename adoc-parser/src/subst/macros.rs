@@ -1639,8 +1639,14 @@ fn try_autolink(
     // literal byte the URL terminator set (whitespace / `[` `]` `<` `>`) would not
     // stop on. The cap is the pre-`quotes` stand-in for the `<` of `</code>`.
     let scan_end = (limit - start).min(rest.len());
+    // Asciidoctor escapes `<`/`>` to `&lt;`/`&gt;` BEFORE the `macros` pass, so a
+    // literal `<`/`>` inside a URL body (`http://<host>:<port>/x`) is URL CONTENT,
+    // not a terminator — the bare URL runs to whitespace / `[` / `]` (and the
+    // constrained-span `limit`). The one exception is the angle-bracketed bare form
+    // `<scheme://…>` handled below, where a leading `<` (before the scheme) pairs
+    // with the first `>`, which closes the link and is consumed.
     let url_end = rest[..scan_end]
-        .find(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '<' || c == '>')
+        .find(|c: char| c.is_whitespace() || c == '[' || c == ']')
         .unwrap_or(scan_end);
     let mut url = &rest[..url_end];
     if url.len() <= 8 {
@@ -1669,8 +1675,12 @@ fn try_autolink(
     // keeps its brackets), since this is the URL path only.
     let preceded_by_angle = start > 0 && src.as_bytes()[start - 1] == b'<';
     if preceded_by_angle && !bracket_follows {
-        if rest.as_bytes().get(url_end) == Some(&b'>') {
-            let end = start + url_end + 1; // consume the closing `>`
+        // The leading `<` pairs with the FIRST `>` in the scanned URL body, which
+        // closes the link and is consumed (both brackets dropped). `<`/`>` are no
+        // longer scan terminators, so locate the `>` here rather than at `url_end`.
+        if let Some(gt) = rest[..url_end].find('>') {
+            let url = &rest[..gt];
+            let end = start + gt + 1; // consume the closing `>`
             let Some(target) = reconstruct_link_target(work, url, options) else {
                 flag_punt();
                 return None;

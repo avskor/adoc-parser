@@ -2267,6 +2267,42 @@ mod tests {
         }
     }
 
+    /// A URL body may carry literal `<`/`>` (angle-bracket placeholders like
+    /// `http://<host>:<port>/x`). Asciidoctor escapes them to `&lt;`/`&gt;` before
+    /// the macros pass, so they are URL CONTENT, not terminators — the bare URL runs
+    /// to whitespace (or the constrained-span close). The angle-bracketed bare form
+    /// `<scheme://…>` is the lone exception: the leading `<` pairs with the first
+    /// `>`, both consumed. Both engines must agree, and the link must actually form.
+    /// Verified against Asciidoctor 2.0.23.
+    #[test]
+    fn reproduces_legacy_on_angle_bracket_url_inputs() {
+        fn link_url(events: &[Event]) -> Option<String> {
+            events.iter().find_map(|e| match e {
+                Event::Start(Tag::Link { url, .. }) => Some(url.to_string()),
+                _ => None,
+            })
+        }
+        // (input, expected linked target).
+        let cases = [
+            ("see http://h.com/<host>:<port>/x here", "http://h.com/<host>:<port>/x"),
+            ("a http://h.com/<x bare", "http://h.com/<x"),
+            ("a http://h.com/x<y end", "http://h.com/x<y"),
+            ("a http://h.com/a>b>c end", "http://h.com/a>b>c"),
+            // inside a monospace span (capped by the closing backtick)
+            ("use `http://h.com/<host>/x` now", "http://h.com/<host>/x"),
+            // angle-bracketed bare form strips both brackets
+            ("a <https://example.com/path> b", "https://example.com/path"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(pipeline(input), legacy(input), "engines diverged for {input:?}");
+            assert_eq!(
+                link_url(&pipeline(input)).as_deref(),
+                Some(want),
+                "wrong linked target for {input:?}"
+            );
+        }
+    }
+
     /// Asciidoctor's `InlineLinkRx` left-boundary class admits `"` and `'`
     /// (`[>\(\)\[\];"']`), but those two open ONLY the macro form (`url[…]`): a
     /// quoted bare URL is left literal (`"https://x"`), a quoted macro URL links

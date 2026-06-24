@@ -2558,8 +2558,13 @@ impl<'a> InlineState<'a> {
 
         let rest = &self.input[start_pos..];
 
+        // Asciidoctor escapes `<`/`>` to `&lt;`/`&gt;` BEFORE the macros pass, so a
+        // literal `<`/`>` inside a URL body (`http://<host>:<port>/x`) is URL
+        // CONTENT, not a terminator — the bare URL runs to whitespace / `[` / `]`.
+        // The angle-bracketed bare form `<scheme://…>` (handled below) is the lone
+        // exception: a leading `<` pairs with the first `>`, which closes the link.
         let url_end = rest
-            .find(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '<' || c == '>')
+            .find(|c: char| c.is_whitespace() || c == '[' || c == ']')
             .unwrap_or(rest.len());
 
         let mut url = &rest[..url_end];
@@ -2589,7 +2594,10 @@ impl<'a> InlineState<'a> {
         // (its brackets stay literal); the email autolink is on a separate path.
         let preceded_by_angle = start_pos > 0 && self.input.as_bytes()[start_pos - 1] == b'<';
         if preceded_by_angle && !bracket_follows {
-            if rest.as_bytes().get(url_end) == Some(&b'>') {
+            // The leading `<` pairs with the FIRST `>` in the scanned URL body.
+            // `<`/`>` are no longer scan terminators, so locate the `>` here.
+            if let Some(gt) = rest[..url_end].find('>') {
+                let url = &rest[..gt];
                 // Drop the leading `<` from the flushed text; consume the `>`.
                 self.flush_text(*text_start, start_pos - 1, events);
                 events.push(Event::Start(Tag::Link {
@@ -2603,7 +2611,7 @@ impl<'a> InlineState<'a> {
                 }));
                 events.push(Event::Text(Cow::Borrowed(url)));
                 events.push(Event::End(TagEnd::Link));
-                self.pos = start_pos + url_end + 1;
+                self.pos = start_pos + gt + 1;
                 *text_start = self.pos;
                 return true;
             }
@@ -3861,6 +3869,50 @@ mod tests {
             }),
             Event::Text(Cow::Borrowed("HTTP response code spec")),
             Event::End(TagEnd::Link),
+        ]);
+    }
+
+    #[test]
+    fn test_autolink_keeps_angle_bracket_placeholders() {
+        // `<`/`>` inside a URL body are content, not terminators (Asciidoctor
+        // escapes them to `&lt;`/`&gt;` before the macros pass). The bare URL runs
+        // to whitespace.
+        let events = parse("see http://h.com/<host>:<port>/x here");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("see ")),
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("http://h.com/<host>:<port>/x"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+                id: None,
+                title: None,
+            }),
+            Event::Text(Cow::Borrowed("http://h.com/<host>:<port>/x")),
+            Event::End(TagEnd::Link),
+            Event::Text(Cow::Borrowed(" here")),
+        ]);
+    }
+
+    #[test]
+    fn test_autolink_angle_bracketed_bare_form_strips_brackets() {
+        // `<scheme://…>`: the leading `<` pairs with the first `>`, both consumed.
+        let events = parse("a <https://example.com/path> b");
+        assert_eq!(events, vec![
+            Event::Text(Cow::Borrowed("a ")),
+            Event::Start(Tag::Link {
+                url: Cow::Borrowed("https://example.com/path"),
+                window: None,
+                nofollow: false,
+                is_bare: true,
+                role: None,
+                id: None,
+                title: None,
+            }),
+            Event::Text(Cow::Borrowed("https://example.com/path")),
+            Event::End(TagEnd::Link),
+            Event::Text(Cow::Borrowed(" b")),
         ]);
     }
 
